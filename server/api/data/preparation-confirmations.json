@@ -1,0 +1,94 @@
+{
+  "items": {
+    "roles-permissions": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "taster-data-scope": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "travel-group-fields": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "order-fields": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "marking-rules": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "global-mark-switch": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "qr-sales-slip-template": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "after-sales-flow": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "commission-point-rules": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    },
+    "infrastructure-accounts": {
+      "status": "pending",
+      "owner": null,
+      "notes": "",
+      "evidenceLinks": [],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": null
+    }
+  }
+}
