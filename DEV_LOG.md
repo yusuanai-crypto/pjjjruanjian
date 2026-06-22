@@ -20,3 +20,11 @@
 
 - 未开发登录、权限、旅行团、订单、售后、提成、AI 和 Flutter 页面。
 - 未引入数据库和 Prisma，避免提前进入第 1 阶段之后的工作。
+
+## 2026-06-21
+
+### 第 0 阶段：部署准备信息补充
+
+- 根据阿里云 ECS 控制台截图新增 `docs/08_部署准备信息.md`。
+- 保存截图附件到 `docs/aliyun/ecs-instance-launch-advisor-20260619.png`。
+- 将 `infrastructure-accounts` 确认项更新为 `in_review`，记录云服务器基础信息已收集，域名、Docker、SSH、备份和苹果开发者账号仍待确认。

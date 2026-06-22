@@ -81,7 +81,7 @@
       "confirmedAt": null,
       "updatedAt": null
     },
-    "infrastructure-accounts": {
+    "finance-confirmation-buttons": {
       "status": "pending",
       "owner": null,
       "notes": "",
@@ -89,6 +89,18 @@
       "confirmedBy": null,
       "confirmedAt": null,
       "updatedAt": null
+    },
+    "infrastructure-accounts": {
+      "status": "in_review",
+      "owner": "project-owner",
+      "notes": "已根据阿里云 ECS 控制台截图记录云服务器基础信息；域名、HTTPS、SSH 登录方式、Docker、数据库、备份策略和苹果开发者账号仍待确认。",
+      "evidenceLinks": [
+        "docs/08_部署准备信息.md",
+        "docs/aliyun/ecs-instance-launch-advisor-20260619.png"
+      ],
+      "confirmedBy": null,
+      "confirmedAt": null,
+      "updatedAt": "2026-06-21T00:00:00.000Z"
     }
   }
 }

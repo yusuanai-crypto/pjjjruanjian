@@ -25,7 +25,7 @@ test('lists all default phase 0 confirmation items', () => {
   const service = createTestService();
   const items = service.listItems();
 
-  assert.equal(items.length, 10);
+  assert.equal(items.length, 11);
   assert.equal(items[0].id, 'roles-permissions');
   assert.equal(items.every((item) => item.status === 'pending'), true);
 });
@@ -46,7 +46,7 @@ test('updates an item to confirmed and includes it in summary progress', () => {
 
   const summary = service.getSummary();
   assert.equal(summary.confirmed, 1);
-  assert.equal(summary.progressPercent, 10);
+  assert.equal(summary.progressPercent, 9);
   assert.equal(summary.readyForNextStage, false);
 });
 
