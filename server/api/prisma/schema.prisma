@@ -7,6 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// 第 1 阶段只落库登录权限所需模型。
+// 旅行团、订单、售后、提成、AI 等后续业务模型不要在本迁移中创建，
+// 后续阶段按模块逐步加入 schema 和 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -20,403 +23,26 @@ enum UserRole {
   @@map("user_role")
 }
 
-enum OrderStatus {
-  VALID          @map("valid")
-  PARTIAL_REFUND @map("partial_refund")
-  REFUNDED       @map("refunded")
-  CANCELLED      @map("cancelled")
-
-  @@map("order_status")
-}
-
-enum DeliveryType {
-  SELF_PICKUP @map("self_pickup")
-  SHIPPING    @map("shipping")
-
-  @@map("delivery_type")
-}
-
-enum PackingStatus {
-  PENDING  @map("pending")
-  PACKING  @map("packing")
-  PACKED   @map("packed")
-  ABNORMAL @map("abnormal")
-
-  @@map("packing_status")
-}
-
-enum AfterSalesStatus {
-  NEGOTIATING     @map("negotiating")
-  WAITING_RECEIVE @map("waiting_receive")
-  WAITING_RESEND  @map("waiting_resend")
-  WAITING_REFUND  @map("waiting_refund")
-  COMPLETED       @map("completed")
-
-  @@map("after_sales_status")
-}
-
-enum CommissionTargetType {
-  SALES_COMMISSION    @map("sales_commission")
-  TASTER_COMMISSION   @map("taster_commission")
-  OUTREACH_COMMISSION @map("outreach_commission")
-  LEADER_COMMISSION   @map("leader_commission")
-
-  @@map("commission_target_type")
-}
-
 model User {
-  id            String   @id @default(uuid()) @db.Char(36)
-  name          String   @db.VarChar(100)
-  username      String   @unique @db.VarChar(100)
-  passwordHash  String   @map("password_hash") @db.VarChar(255)
-  role          UserRole
-  phone         String?  @db.VarChar(30)
-  leaderId      String?  @map("leader_id") @db.Char(36)
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+  id           String   @id @default(uuid()) @db.Char(36)
+  name         String   @db.VarChar(100)
+  username     String   @unique @db.VarChar(100)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  role         UserRole
+  phone        String?  @db.VarChar(30)
+  leaderId     String?  @map("leader_id") @db.Char(36)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  leader                    User?                         @relation("UserLeader", fields: [leaderId], references: [id])
-  members                   User[]                        @relation("UserLeader")
-  createdTravelGroups       TravelGroup[]                 @relation("TravelGroupCreatedBy")
-  tastedTravelGroups        TravelGroup[]                 @relation("TravelGroupTaster")
-  markedTravelGroups        TravelGroup[]                 @relation("TravelGroupMarkedBy")
-  markedCustomers           Customer[]                    @relation("CustomerMarkedBy")
-  createdSalesOrders        SalesOrder[]                  @relation("SalesOrderCreatedBy")
-  salesOrders               SalesOrder[]                  @relation("SalesOrderSalesUser")
-  handledAfterSalesOrders   AfterSalesOrder[]             @relation("AfterSalesHandledBy")
-  commissionRecords         CommissionRecord[]            @relation("CommissionTargetUser")
-  confirmedCommissionRecords CommissionRecord[]           @relation("CommissionConfirmedBy")
-  updatedFinanceSummaries   TravelGroupFinanceSummary[]   @relation("FinanceSummaryUpdatedBy")
-  confirmedFinanceSummaries TravelGroupFinanceSummary[]   @relation("FinanceSummaryConfirmedBy")
-  aiChatMessages            AiChatMessage[]
-  updatedSystemSettings     SystemSetting[]               @relation("SystemSettingUpdatedBy")
-  operationLogs             OperationLog[]
+  leader                User?           @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members               User[]          @relation("UserLeader")
+  updatedSystemSettings SystemSetting[] @relation("SystemSettingUpdatedBy")
+  operationLogs         OperationLog[]
 
   @@index([role])
   @@index([leaderId])
   @@map("users")
-}
-
-model TravelAgency {
-  id           String   @id @default(uuid()) @db.Char(36)
-  name         String   @unique @db.VarChar(191)
-  contactName  String?  @map("contact_name") @db.VarChar(100)
-  contactPhone String?  @map("contact_phone") @db.VarChar(30)
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  travelGroups         TravelGroup[]
-  guides               Guide[]
-  deductionRules       AgencyDeductionRule[]
-  rebateRules          AgencyRebateRule[]
-  commissionRecords    CommissionRecord[]
-
-  @@map("travel_agencies")
-}
-
-model Guide {
-  id           String   @id @default(uuid()) @db.Char(36)
-  name         String   @db.VarChar(100)
-  phone        String   @db.VarChar(30)
-  agencyId     String?  @map("agency_id") @db.Char(36)
-  isActive     Boolean  @default(true) @map("is_active")
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  agency       TravelAgency? @relation(fields: [agencyId], references: [id])
-  travelGroups TravelGroup[]
-
-  @@unique([name, phone])
-  @@index([name])
-  @@index([phone])
-  @@index([agencyId])
-  @@map("guides")
-}
-
-model TravelGroup {
-  id                       String    @id @default(uuid()) @db.Char(36)
-  groupNo                  String    @map("group_no") @db.VarChar(100)
-  visitDate                DateTime  @map("visit_date") @db.Date
-  agencyId                 String    @map("agency_id") @db.Char(36)
-  busPlateNo               String    @map("bus_plate_no") @db.VarChar(50)
-  guideId                  String    @map("guide_id") @db.Char(36)
-  guestCount               Int       @map("guest_count")
-  tastingRoomNo            String    @map("tasting_room_no") @db.VarChar(50)
-  tasterId                 String    @map("taster_id") @db.Char(36)
-  entryTime                DateTime  @map("entry_time") @db.DateTime(0)
-  leaveTime                DateTime? @map("leave_time") @db.DateTime(0)
-  wineTastingSummary       String?   @map("wine_tasting_summary") @db.Text
-  tasterReviewSummary      String?   @map("taster_review_summary") @db.Text
-  tasterReviewSubmittedAt  DateTime? @map("taster_review_submitted_at") @db.DateTime(0)
-  tasterReviewUpdatedAt    DateTime? @map("taster_review_updated_at") @db.DateTime(0)
-  groupType                String    @map("group_type") @db.VarChar(100)
-  financeMark              Int       @default(0) @map("finance_mark") @db.TinyInt
-  markedBy                 String?   @map("marked_by") @db.Char(36)
-  markedAt                 DateTime? @map("marked_at") @db.DateTime(0)
-  notes                    String?   @db.Text
-  createdBy                String    @map("created_by") @db.Char(36)
-  createdAt                DateTime  @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt                DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
-
-  agency         TravelAgency @relation(fields: [agencyId], references: [id])
-  guide          Guide        @relation(fields: [guideId], references: [id])
-  taster         User         @relation("TravelGroupTaster", fields: [tasterId], references: [id])
-  creator        User         @relation("TravelGroupCreatedBy", fields: [createdBy], references: [id])
-  marker         User?        @relation("TravelGroupMarkedBy", fields: [markedBy], references: [id])
-  salesOrders    SalesOrder[]
-  financeSummary TravelGroupFinanceSummary?
-
-  @@unique([groupNo, visitDate])
-  @@index([agencyId])
-  @@index([guideId])
-  @@index([visitDate])
-  @@index([tasterId])
-  @@index([financeMark])
-  @@index([markedBy])
-  @@index([tasterReviewSubmittedAt])
-  @@map("travel_groups")
-}
-
-model Customer {
-  id          String   @id @default(uuid()) @db.Char(36)
-  name        String   @db.VarChar(100)
-  phone       String   @db.VarChar(30)
-  address     String?  @db.VarChar(500)
-  financeMark Int      @default(0) @map("finance_mark") @db.TinyInt
-  markedBy    String?  @map("marked_by") @db.Char(36)
-  markedAt    DateTime? @map("marked_at") @db.DateTime(0)
-  notes       String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  salesOrders SalesOrder[]
-  marker      User?        @relation("CustomerMarkedBy", fields: [markedBy], references: [id])
-
-  @@index([phone])
-  @@index([financeMark])
-  @@index([markedBy])
-  @@map("customers")
-}
-
-model SalesOrder {
-  id                 String       @id @default(uuid()) @db.Char(36)
-  orderNo            String       @unique @map("order_no") @db.VarChar(100)
-  orderDate          DateTime     @map("order_date") @db.Date
-  customerId         String       @map("customer_id") @db.Char(36)
-  travelGroupId      String       @map("travel_group_id") @db.Char(36)
-  salesUserId        String       @map("sales_user_id") @db.Char(36)
-  salesFormNo        String?      @map("sales_form_no") @db.VarChar(100)
-  qrCodeToken        String?      @unique @map("qr_code_token") @db.VarChar(191)
-  qrCodeExpiresAt    DateTime?    @map("qr_code_expires_at") @db.DateTime(0)
-  totalAmountCents   Int          @map("total_amount_cents")
-  deliveryType       DeliveryType @map("delivery_type")
-  cashOnDelivery     Boolean      @default(false) @map("cash_on_delivery")
-  logisticsMethod    String?      @map("logistics_method") @db.VarChar(50)
-  packingStatus      PackingStatus @default(PENDING) @map("packing_status")
-  packageCount       Int?         @map("package_count")
-  logisticsFeeCents  Int?         @map("logistics_fee_cents")
-  logisticsNo        String?      @map("logistics_no") @db.VarChar(100)
-  invoiceRequired    Boolean      @default(false) @map("invoice_required")
-  orderStatus        OrderStatus  @default(VALID) @map("order_status")
-  notes              String?      @db.Text
-  createdBy          String       @map("created_by") @db.Char(36)
-  createdAt          DateTime     @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt          DateTime     @updatedAt @map("updated_at") @db.DateTime(0)
-
-  customer          Customer           @relation(fields: [customerId], references: [id])
-  travelGroup       TravelGroup        @relation(fields: [travelGroupId], references: [id])
-  salesUser         User               @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id])
-  creator           User               @relation("SalesOrderCreatedBy", fields: [createdBy], references: [id])
-  items             SalesOrderItem[]
-  afterSalesOrders  AfterSalesOrder[]
-  commissionRecords CommissionRecord[]
-
-  @@index([orderDate])
-  @@index([customerId])
-  @@index([travelGroupId])
-  @@index([salesUserId])
-  @@index([deliveryType])
-  @@index([logisticsMethod])
-  @@index([packingStatus])
-  @@index([logisticsNo])
-  @@map("sales_orders")
-}
-
-model SalesOrderItem {
-  id              String   @id @default(uuid()) @db.Char(36)
-  orderId         String   @map("order_id") @db.Char(36)
-  productName     String   @map("product_name") @db.VarChar(191)
-  quantity        Int
-  unitPriceCents  Int      @map("unit_price_cents")
-  subtotalCents   Int      @map("subtotal_cents")
-  notes           String?  @db.Text
-
-  order SalesOrder @relation(fields: [orderId], references: [id])
-
-  @@index([orderId])
-  @@index([productName])
-  @@map("sales_order_items")
-}
-
-model AfterSalesOrder {
-  id                String           @id @default(uuid()) @db.Char(36)
-  afterSalesNo      String           @unique @map("after_sales_no") @db.VarChar(100)
-  orderId           String           @map("order_id") @db.Char(36)
-  issueType         String?          @map("issue_type") @db.VarChar(100)
-  description       String?          @db.Text
-  refundAmountCents Int?             @map("refund_amount_cents")
-  status            AfterSalesStatus
-  handledBy         String?          @map("handled_by") @db.Char(36)
-  handledAt         DateTime?        @map("handled_at") @db.DateTime(0)
-  createdAt         DateTime         @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt         DateTime         @updatedAt @map("updated_at") @db.DateTime(0)
-
-  order   SalesOrder @relation(fields: [orderId], references: [id])
-  handler User?      @relation("AfterSalesHandledBy", fields: [handledBy], references: [id])
-
-  @@index([orderId])
-  @@index([status])
-  @@map("after_sales_orders")
-}
-
-model AgencyDeductionRule {
-  id                 String   @id @default(uuid()) @db.Char(36)
-  agencyId           String   @map("agency_id") @db.Char(36)
-  productName        String   @map("product_name") @db.VarChar(191)
-  deductionCostCents Int      @map("deduction_cost_cents")
-  isActive           Boolean  @default(true) @map("is_active")
-  effectiveFrom      DateTime @map("effective_from") @db.Date
-  effectiveTo        DateTime? @map("effective_to") @db.Date
-  createdAt          DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  agency TravelAgency @relation(fields: [agencyId], references: [id])
-
-  @@index([agencyId, productName])
-  @@map("agency_deduction_rules")
-}
-
-model AgencyRebateRule {
-  id                String   @id @default(uuid()) @db.Char(36)
-  agencyId          String   @map("agency_id") @db.Char(36)
-  dailyRebateRate   Decimal  @map("daily_rebate_rate") @db.Decimal(10, 4)
-  monthlyRebateRate Decimal? @map("monthly_rebate_rate") @db.Decimal(10, 4)
-  totalRebateRate   Decimal? @map("total_rebate_rate") @db.Decimal(10, 4)
-  isActive          Boolean  @default(true) @map("is_active")
-  effectiveFrom     DateTime @map("effective_from") @db.Date
-  effectiveTo       DateTime? @map("effective_to") @db.Date
-  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  agency TravelAgency @relation(fields: [agencyId], references: [id])
-
-  @@index([agencyId])
-  @@map("agency_rebate_rules")
-}
-
-model SalesDeductionRule {
-  id                 String   @id @default(uuid()) @db.Char(36)
-  productName        String   @map("product_name") @db.VarChar(191)
-  deductionCostCents Int      @map("deduction_cost_cents")
-  isActive           Boolean  @default(true) @map("is_active")
-  effectiveFrom      DateTime @map("effective_from") @db.Date
-  effectiveTo        DateTime? @map("effective_to") @db.Date
-  createdAt          DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  @@index([productName])
-  @@map("sales_deduction_rules")
-}
-
-model CommissionRule {
-  id            String               @id @default(uuid()) @db.Char(36)
-  ruleName      String               @map("rule_name") @db.VarChar(191)
-  targetType    CommissionTargetType @map("target_type")
-  rate          Decimal              @db.Decimal(10, 4)
-  isActive      Boolean              @default(true) @map("is_active")
-  effectiveFrom DateTime             @map("effective_from") @db.Date
-  effectiveTo   DateTime?            @map("effective_to") @db.Date
-  createdAt     DateTime             @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt     DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
-
-  commissionRecords CommissionRecord[]
-
-  @@index([targetType])
-  @@map("commission_rules")
-}
-
-model CommissionRecord {
-  id              String               @id @default(uuid()) @db.Char(36)
-  orderId          String               @map("order_id") @db.Char(36)
-  ruleId           String?              @map("rule_id") @db.Char(36)
-  targetType       CommissionTargetType @map("target_type")
-  targetUserId     String?              @map("target_user_id") @db.Char(36)
-  agencyId         String?              @map("agency_id") @db.Char(36)
-  amountCents      Int?                 @map("amount_cents")
-  points           Decimal?             @db.Decimal(12, 4)
-  baseAmountCents  Int?                 @map("base_amount_cents")
-  manualInput      Boolean              @default(false) @map("manual_input")
-  isConfirmed      Boolean              @default(false) @map("is_confirmed")
-  confirmedBy      String?              @map("confirmed_by") @db.Char(36)
-  confirmedAt      DateTime?            @map("confirmed_at") @db.DateTime(0)
-  calculationNote  String?              @map("calculation_note") @db.Text
-  createdAt        DateTime             @default(now()) @map("created_at") @db.DateTime(0)
-
-  order       SalesOrder      @relation(fields: [orderId], references: [id])
-  rule        CommissionRule? @relation(fields: [ruleId], references: [id])
-  targetUser  User?           @relation("CommissionTargetUser", fields: [targetUserId], references: [id])
-  agency      TravelAgency?   @relation(fields: [agencyId], references: [id])
-  confirmer   User?           @relation("CommissionConfirmedBy", fields: [confirmedBy], references: [id])
-
-  @@index([orderId])
-  @@index([targetType])
-  @@index([targetUserId])
-  @@index([agencyId])
-  @@index([isConfirmed])
-  @@map("commission_records")
-}
-
-model TravelGroupFinanceSummary {
-  id                             String   @id @default(uuid()) @db.Char(36)
-  travelGroupId                  String   @unique @map("travel_group_id") @db.Char(36)
-  totalSalesAmountCents          Int      @default(0) @map("total_sales_amount_cents")
-  totalAgencyDeductionCents      Int      @default(0) @map("total_agency_deduction_cents")
-  agencyDeductionConfirmed       Boolean  @default(false) @map("agency_deduction_confirmed")
-  agencyDeductionConfirmedBy     String?  @map("agency_deduction_confirmed_by") @db.Char(36)
-  agencyDeductionConfirmedAt     DateTime? @map("agency_deduction_confirmed_at") @db.DateTime(0)
-  totalAgencyNetAmountCents      Int      @default(0) @map("total_agency_net_amount_cents")
-  totalDailyRebateCents          Int      @default(0) @map("total_daily_rebate_cents")
-  paidRebateCents                Int      @default(0) @map("paid_rebate_cents")
-  unpaidRebateCents              Int      @default(0) @map("unpaid_rebate_cents")
-  guideInfoSent                  Boolean  @default(false) @map("guide_info_sent")
-  agencyInfoSent                 Boolean  @default(false) @map("agency_info_sent")
-  notes                          String?  @db.Text
-  updatedBy                      String?  @map("updated_by") @db.Char(36)
-  updatedAt                      DateTime @updatedAt @map("updated_at") @db.DateTime(0)
-
-  travelGroup TravelGroup @relation(fields: [travelGroupId], references: [id])
-  updater     User?       @relation("FinanceSummaryUpdatedBy", fields: [updatedBy], references: [id])
-  confirmer   User?       @relation("FinanceSummaryConfirmedBy", fields: [agencyDeductionConfirmedBy], references: [id])
-
-  @@index([agencyDeductionConfirmed])
-  @@map("travel_group_finance_summaries")
-}
-
-model AiChatMessage {
-  id        String   @id @default(uuid()) @db.Char(36)
-  userId    String   @map("user_id") @db.Char(36)
-  question  String   @db.Text
-  answer    String   @db.Text
-  dataScope String?  @map("data_scope") @db.Text
-  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@map("ai_chat_messages")
 }
 
 model SystemSetting {
@@ -426,8 +52,9 @@ model SystemSetting {
   updatedBy    String?  @map("updated_by") @db.Char(36)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  updater User? @relation("SystemSettingUpdatedBy", fields: [updatedBy], references: [id])
+  updater User? @relation("SystemSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
 
+  @@index([updatedBy])
   @@map("system_settings")
 }
 
@@ -442,7 +69,7 @@ model OperationLog {
   ipAddress  String?  @map("ip_address") @db.VarChar(45)
   createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(0)
 
-  user User? @relation(fields: [userId], references: [id])
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([entityType, entityId])

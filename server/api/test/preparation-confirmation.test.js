@@ -1,10 +1,9 @@
 const assert = require('node:assert/strict');
-const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { createApp } = require('../src/app');
+const { withNestApiServer } = require('./helpers/phase1-api');
 const {
   createPreparationConfirmationRepository,
 } = require('../src/modules/preparation-confirmation/preparation-confirmation.repository');
@@ -73,18 +72,7 @@ test('reports blocked items in summary', () => {
 });
 
 test('serves list and update interfaces over HTTP', async () => {
-  const service = createTestService();
-  const server = http.createServer(
-    createApp({
-      preparationConfirmationService: service,
-    }),
-  );
-
-  await new Promise((resolve) => server.listen(0, resolve));
-  const { port } = server.address();
-  const baseUrl = `http://127.0.0.1:${port}`;
-
-  try {
+  await withNestApiServer(async (baseUrl) => {
     const updateResponse = await fetch(`${baseUrl}/api/preparation-confirmation/items/order-fields`, {
       method: 'PUT',
       headers: {
@@ -105,7 +93,5 @@ test('serves list and update interfaces over HTTP', async () => {
     const listBody = await listResponse.json();
     assert.equal(listBody.data.items.length, 1);
     assert.equal(listBody.data.items[0].id, 'order-fields');
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+  });
 });

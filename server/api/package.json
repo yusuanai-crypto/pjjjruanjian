@@ -2,10 +2,38 @@
   "name": "jiangjiu-api",
   "version": "0.1.0",
   "private": true,
-  "description": "Jiangjiu internal business API, phase 0 preparation confirmation module.",
+  "description": "Jiangjiu internal business API, phase 0 preparation confirmation and phase 1 auth modules.",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/main.js",
-    "test": "node --test test/*.test.js"
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "start:legacy": "node src/main.js",
+    "test": "node --test --require ts-node/register test/*.test.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:seed": "prisma db seed",
+    "migrate:legacy-json": "node scripts/migrate-legacy-json.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/core": "^10.4.15",
+    "@nestjs/platform-express": "^10.4.15",
+    "@prisma/client": "^6.19.0",
+    "dotenv": "^17.4.2",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.4.9",
+    "@nestjs/testing": "^10.4.15",
+    "@types/node": "^22.10.2",
+    "prisma": "^6.19.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }
