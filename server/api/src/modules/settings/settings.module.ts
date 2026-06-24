@@ -9,5 +9,6 @@ import { SettingsNestService } from './settings.nest.service';
   imports: [AuthModule, OperationLogsModule],
   controllers: [SettingsNestController],
   providers: [SettingsNestService],
+  exports: [SettingsNestService],
 })
 export class SettingsModule {}

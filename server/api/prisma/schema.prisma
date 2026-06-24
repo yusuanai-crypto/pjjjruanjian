@@ -7,9 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// 第 1 阶段只落库登录权限所需模型。
-// 旅行团、订单、售后、提成、AI 等后续业务模型不要在本迁移中创建，
-// 后续阶段按模块逐步加入 schema 和 migration。
+// 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
+// 已落库业务表：travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
+// sales_order_items、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
+// 独立客户、旅行社、导游、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -35,10 +36,18 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  leader                User?           @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  members               User[]          @relation("UserLeader")
-  updatedSystemSettings SystemSetting[] @relation("SystemSettingUpdatedBy")
+  leader                User?                @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members               User[]               @relation("UserLeader")
+  updatedSystemSettings SystemSetting[]      @relation("SystemSettingUpdatedBy")
   operationLogs         OperationLog[]
+  tasterTravelGroups    TravelGroup[]        @relation("TravelGroupTaster")
+  tasterGuideGroups     GuideCarriedGroup[]  @relation("GuideCarriedGroupTaster")
+  tasterPendingGroups   PendingTravelGroup[] @relation("PendingTravelGroupTaster")
+  salesOrders           SalesOrder[]         @relation("SalesOrderSalesUser")
+  markedTravelGroups    TravelGroup[]        @relation("TravelGroupMarkedBy")
+  markedGuideGroups     GuideCarriedGroup[]  @relation("GuideCarriedGroupMarkedBy")
+  markedPendingGroups   PendingTravelGroup[] @relation("PendingTravelGroupMarkedBy")
+  markedSalesOrders     SalesOrder[]         @relation("SalesOrderMarkedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -75,4 +84,303 @@ model OperationLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("operation_logs")
+}
+
+enum TravelGroupStatus {
+  UNMARKED        @map("unmarked")
+  PENDING_SUMMARY @map("pending_summary")
+  ORDERED         @map("ordered")
+
+  @@map("travel_group_status")
+}
+
+enum SalesOrderType {
+  TRAVEL_GROUP @map("travel_group")
+  BUYBACK      @map("buyback")
+  EXTERNAL     @map("external")
+  INTERNAL     @map("internal")
+  AFTER_SALES  @map("after_sales")
+
+  @@map("sales_order_type")
+}
+
+enum SalesOrderStatus {
+  VALID          @map("valid")
+  PARTIAL_REFUND @map("partial_refund")
+  REFUNDED       @map("refunded")
+  CANCELLED      @map("cancelled")
+
+  @@map("sales_order_status")
+}
+
+enum SalesOrderDeliveryType {
+  SELF_PICKUP @map("self_pickup")
+  SHIPPING    @map("shipping")
+
+  @@map("sales_order_delivery_type")
+}
+
+model TravelGroup {
+  id                       String            @id @default(uuid()) @db.Char(36)
+  groupNo                  String            @unique @map("group_no") @db.VarChar(80)
+  visitDate                DateTime          @map("visit_date") @db.Date
+  travelAgency             String?           @map("travel_agency") @db.VarChar(120)
+  licensePlate             String?           @map("license_plate") @db.VarChar(40)
+  guideName                String?           @map("guide_name") @db.VarChar(80)
+  guidePhone               String?           @map("guide_phone") @db.VarChar(30)
+  guestCount               Int               @default(0) @map("guest_count")
+  tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
+  tasterName               String?           @map("taster_name") @db.VarChar(80)
+  arrivalTime              String?           @map("arrival_time") @db.VarChar(30)
+  groupType                String?           @map("group_type") @db.VarChar(60)
+  wineDetails              String?           @map("wine_details") @db.Text
+  departureTime            String?           @map("departure_time") @db.VarChar(30)
+  remarks                  String?           @db.Text
+  status                   TravelGroupStatus @default(UNMARKED)
+  salesAmountCents         Int               @default(0) @map("sales_amount_cents")
+  paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
+  cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
+  liquorCostDeductionCents Int               @default(0) @map("liquor_cost_deduction_cents")
+  orderAmountCents         Int               @default(0) @map("order_amount_cents")
+  points                   Int               @default(0)
+  returnedPoints           Int               @default(0) @map("returned_points")
+  unreturnedPoints         Int               @default(0) @map("unreturned_points")
+  guideInfoSent            Boolean           @default(false) @map("guide_info_sent")
+  travelAgencyInfoSent     Boolean           @default(false) @map("travel_agency_info_sent")
+  financeMark              Boolean           @default(false) @map("finance_mark")
+  markedById               String?           @map("marked_by") @db.Char(36)
+  markedAt                 DateTime?         @map("marked_at") @db.DateTime(0)
+  tasterId                 String?           @map("taster_id") @db.Char(36)
+  createdById              String?           @map("created_by_id") @db.Char(36)
+  updatedById              String?           @map("updated_by_id") @db.Char(36)
+  createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrders SalesOrder[]
+  taster      User?        @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  markedBy    User?        @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@index([visitDate])
+  @@index([travelAgency])
+  @@index([guideName])
+  @@index([tasterName])
+  @@index([tasterId])
+  @@index([financeMark])
+  @@index([markedById])
+  @@index([status])
+  @@map("travel_groups")
+}
+
+model GuideCarriedGroup {
+  id                       String            @id @default(uuid()) @db.Char(36)
+  groupNo                  String            @unique @map("group_no") @db.VarChar(80)
+  visitDate                DateTime          @map("visit_date") @db.Date
+  travelAgency             String?           @map("travel_agency") @db.VarChar(120)
+  licensePlate             String?           @map("license_plate") @db.VarChar(40)
+  guideName                String?           @map("guide_name") @db.VarChar(80)
+  guidePhone               String?           @map("guide_phone") @db.VarChar(30)
+  guestCount               Int               @default(0) @map("guest_count")
+  tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
+  tasterName               String?           @map("taster_name") @db.VarChar(80)
+  arrivalTime              String?           @map("arrival_time") @db.VarChar(30)
+  groupType                String?           @map("group_type") @db.VarChar(60)
+  wineDetails              String?           @map("wine_details") @db.Text
+  departureTime            String?           @map("departure_time") @db.VarChar(30)
+  remarks                  String?           @db.Text
+  status                   TravelGroupStatus @default(UNMARKED)
+  salesAmountCents         Int               @default(0) @map("sales_amount_cents")
+  paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
+  cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
+  liquorCostDeductionCents Int               @default(0) @map("liquor_cost_deduction_cents")
+  orderAmountCents         Int               @default(0) @map("order_amount_cents")
+  points                   Int               @default(0)
+  returnedPoints           Int               @default(0) @map("returned_points")
+  unreturnedPoints         Int               @default(0) @map("unreturned_points")
+  guideInfoSent            Boolean           @default(false) @map("guide_info_sent")
+  travelAgencyInfoSent     Boolean           @default(false) @map("travel_agency_info_sent")
+  financeMark              Boolean           @default(false) @map("finance_mark")
+  markedById               String?           @map("marked_by") @db.Char(36)
+  markedAt                 DateTime?         @map("marked_at") @db.DateTime(0)
+  tasterId                 String?           @map("taster_id") @db.Char(36)
+  createdById              String?           @map("created_by_id") @db.Char(36)
+  updatedById              String?           @map("updated_by_id") @db.Char(36)
+  createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
+
+  taster   User? @relation("GuideCarriedGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  markedBy User? @relation("GuideCarriedGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@index([visitDate])
+  @@index([travelAgency])
+  @@index([guideName])
+  @@index([tasterName])
+  @@index([tasterId])
+  @@index([financeMark])
+  @@index([markedById])
+  @@index([status])
+  @@map("guide_carried_groups")
+}
+
+model PendingTravelGroup {
+  id                       String            @id @default(uuid()) @db.Char(36)
+  groupNo                  String            @unique @map("group_no") @db.VarChar(80)
+  visitDate                DateTime          @map("visit_date") @db.Date
+  travelAgency             String?           @map("travel_agency") @db.VarChar(120)
+  licensePlate             String?           @map("license_plate") @db.VarChar(40)
+  guideName                String?           @map("guide_name") @db.VarChar(80)
+  guidePhone               String?           @map("guide_phone") @db.VarChar(30)
+  guestCount               Int               @default(0) @map("guest_count")
+  tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
+  tasterName               String?           @map("taster_name") @db.VarChar(80)
+  arrivalTime              String?           @map("arrival_time") @db.VarChar(30)
+  groupType                String?           @map("group_type") @db.VarChar(60)
+  wineDetails              String?           @map("wine_details") @db.Text
+  departureTime            String?           @map("departure_time") @db.VarChar(30)
+  remarks                  String?           @db.Text
+  status                   TravelGroupStatus @default(UNMARKED)
+  salesAmountCents         Int               @default(0) @map("sales_amount_cents")
+  paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
+  cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
+  liquorCostDeductionCents Int               @default(0) @map("liquor_cost_deduction_cents")
+  orderAmountCents         Int               @default(0) @map("order_amount_cents")
+  points                   Int               @default(0)
+  returnedPoints           Int               @default(0) @map("returned_points")
+  unreturnedPoints         Int               @default(0) @map("unreturned_points")
+  guideInfoSent            Boolean           @default(false) @map("guide_info_sent")
+  travelAgencyInfoSent     Boolean           @default(false) @map("travel_agency_info_sent")
+  financeMark              Boolean           @default(false) @map("finance_mark")
+  markedById               String?           @map("marked_by") @db.Char(36)
+  markedAt                 DateTime?         @map("marked_at") @db.DateTime(0)
+  tasterId                 String?           @map("taster_id") @db.Char(36)
+  createdById              String?           @map("created_by_id") @db.Char(36)
+  updatedById              String?           @map("updated_by_id") @db.Char(36)
+  createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
+
+  taster   User? @relation("PendingTravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  markedBy User? @relation("PendingTravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@index([visitDate])
+  @@index([travelAgency])
+  @@index([guideName])
+  @@index([tasterName])
+  @@index([tasterId])
+  @@index([financeMark])
+  @@index([markedById])
+  @@index([status])
+  @@map("pending_travel_groups")
+}
+
+model SalesOrder {
+  id                        String           @id @default(uuid()) @db.Char(36)
+  orderNo                   String           @unique @map("order_no") @db.VarChar(80)
+  orderType                 SalesOrderType   @default(TRAVEL_GROUP) @map("order_type")
+  travelGroupId             String?          @map("travel_group_id") @db.Char(36)
+  customerName              String           @map("customer_name") @db.VarChar(100)
+  customerPhone             String?          @map("customer_phone") @db.VarChar(30)
+  province                  String?          @db.VarChar(60)
+  city                      String?          @db.VarChar(60)
+  district                  String?          @db.VarChar(60)
+  address                   String?          @db.VarChar(255)
+  orderDate                 DateTime         @map("order_date") @db.Date
+  totalAmountCents          Int              @default(0) @map("total_amount_cents")
+  cashOnDeliveryAmountCents Int              @default(0) @map("cash_on_delivery_amount_cents")
+  remark                    String?          @db.Text
+  status                    SalesOrderStatus @default(VALID)
+  financeMark               Boolean          @default(false) @map("finance_mark")
+  markedById                String?          @map("marked_by") @db.Char(36)
+  markedAt                  DateTime?        @map("marked_at") @db.DateTime(0)
+  salesUserId               String?          @map("sales_user_id") @db.Char(36)
+  createdById               String?          @map("created_by_id") @db.Char(36)
+  updatedById               String?          @map("updated_by_id") @db.Char(36)
+  createdAt                 DateTime         @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                 DateTime         @updatedAt @map("updated_at") @db.DateTime(0)
+
+  travelGroup TravelGroup?     @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
+  salesUser   User?            @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
+  markedBy    User?            @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  items       SalesOrderItem[]
+
+  @@index([travelGroupId])
+  @@index([salesUserId])
+  @@index([financeMark])
+  @@index([markedById])
+  @@index([orderType])
+  @@index([orderDate])
+  @@index([customerPhone])
+  @@index([status])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id             String                 @id @default(uuid()) @db.Char(36)
+  salesOrderId   String                 @map("sales_order_id") @db.Char(36)
+  productName    String                 @map("product_name") @db.VarChar(160)
+  quantity       Int                    @default(1)
+  unitPriceCents Int                    @default(0) @map("unit_price_cents")
+  deliveryType   SalesOrderDeliveryType @default(SHIPPING) @map("delivery_type")
+  createdAt      DateTime               @default(now()) @map("created_at") @db.DateTime(0)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  @@index([salesOrderId])
+  @@map("sales_order_items")
+}
+
+model DailyReconciliation {
+  id                    String   @id @default(uuid()) @db.Char(36)
+  businessDate          DateTime @unique @map("business_date") @db.Date
+  travelGroupSalesCents Int      @default(0) @map("travel_group_sales_cents")
+  backOfficeSalesCents  Int      @default(0) @map("back_office_sales_cents")
+  buybackCents          Int      @default(0) @map("buyback_cents")
+  externalSalesCents    Int      @default(0) @map("external_sales_cents")
+  internalPurchaseCents Int      @default(0) @map("internal_purchase_cents")
+  afterSalesCents       Int      @default(0) @map("after_sales_cents")
+  /// Positive refund deduction amount; receivable totals subtract this value.
+  refundsCents          Int      @default(0) @map("refunds_cents")
+  otherReceivableCents  Int      @default(0) @map("other_receivable_cents")
+  notes                 String?  @db.Text
+  createdById           String?  @map("created_by_id") @db.Char(36)
+  updatedById           String?  @map("updated_by_id") @db.Char(36)
+  createdAt             DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  paymentMethods ReconciliationPaymentMethod[]
+
+  @@map("daily_reconciliations")
+}
+
+model ReconciliationPaymentMethod {
+  id               String   @id @default(uuid()) @db.Char(36)
+  reconciliationId String   @map("reconciliation_id") @db.Char(36)
+  name             String   @db.VarChar(80)
+  amountCents      Int      @default(0) @map("amount_cents")
+  sortOrder        Int      @default(0) @map("sort_order")
+  createdAt        DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  reconciliation DailyReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationId])
+  @@map("reconciliation_payment_methods")
+}
+
+model StrikeBonusAward {
+  id               String    @id @default(uuid()) @db.Char(36)
+  bonusDate        DateTime  @map("bonus_date") @db.Date
+  travelAgency     String?   @map("travel_agency") @db.VarChar(120)
+  guideName        String?   @map("guide_name") @db.VarChar(80)
+  tasterName       String?   @map("taster_name") @db.VarChar(80)
+  roomNo           String?   @map("room_no") @db.VarChar(40)
+  salesAmountCents Int       @default(0) @map("sales_amount_cents")
+  bonusAmountCents Int       @default(0) @map("bonus_amount_cents")
+  tasterPaidDate   DateTime? @map("taster_paid_date") @db.Date
+  salesPaidDate    DateTime? @map("sales_paid_date") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  @@index([bonusDate])
+  @@index([travelAgency])
+  @@index([guideName])
+  @@index([tasterName])
+  @@map("strike_bonus_awards")
 }

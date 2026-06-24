@@ -20,6 +20,10 @@ class AuthController {
   AuthSession? session;
   String? restoreMessage;
 
+  ApiClient get apiClient => _apiClient;
+
+  String get token => session?.token ?? '';
+
   Future<void> restore() async {
     apiBaseUrl = AppConfig.normalizeApiBaseUrl(_storage.readApiBaseUrl() ?? AppConfig.defaultApiBaseUrl);
     _apiClient.baseUrl = apiBaseUrl;

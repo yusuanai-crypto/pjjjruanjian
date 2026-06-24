@@ -12,7 +12,7 @@ function createSettingsService(options = {}) {
     },
 
     enableGlobalMarkQuery(actor, metadata = {}) {
-      requireAnyRole(actor, ['admin', 'boss', 'front_desk']);
+      requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'after_sales']);
       const current = settingsRepository.getGlobalMarkQuery();
       const now = new Date().toISOString();
       const nextSettings = {

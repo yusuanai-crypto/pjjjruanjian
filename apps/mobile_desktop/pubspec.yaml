@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   jiangjiu_shared:
     path: ../../packages/shared
   shared_preferences: ^2.3.5
@@ -20,3 +22,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/jiangjiu-app-logo-gold.png

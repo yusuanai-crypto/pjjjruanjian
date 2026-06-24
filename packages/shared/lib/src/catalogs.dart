@@ -15,10 +15,7 @@ enum UserRole {
 }
 
 class RoleDefinition {
-  const RoleDefinition({
-    required this.role,
-    required this.description,
-  });
+  const RoleDefinition({required this.role, required this.description});
 
   final UserRole role;
   final String description;
@@ -28,11 +25,14 @@ const roleDefinitions = <RoleDefinition>[
   RoleDefinition(role: UserRole.admin, description: '维护账号、权限、系统设置和操作日志'),
   RoleDefinition(role: UserRole.boss, description: '查看经营数据、全局标记查询和 AI 助手'),
   RoleDefinition(role: UserRole.frontDesk, description: '录入旅行团并管理前台查询入口'),
-  RoleDefinition(role: UserRole.sales, description: '录入客户订单、生成二维码销售单'),
+  RoleDefinition(
+    role: UserRole.sales,
+    description: '录入客户订单、补充旅行团离店信息、生成二维码销售单',
+  ),
   RoleDefinition(role: UserRole.finance, description: '核对金额、标记信息、物流和提成'),
   RoleDefinition(role: UserRole.warehouse, description: '处理待发货订单、物流方式和打包状态'),
   RoleDefinition(role: UserRole.afterSales, description: '查询订单并创建售后处理记录'),
-  RoleDefinition(role: UserRole.taster, description: '查看本人接待并填写接待总结'),
+  RoleDefinition(role: UserRole.taster, description: '查看本人接待和提成入口'),
 ];
 
 class SharedMenuEntry {
@@ -51,10 +51,20 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'dashboard', label: '首页', phase: 1),
   SharedMenuEntry(id: 'role_menu', label: '角色菜单', phase: 2),
   SharedMenuEntry(id: 'travel_group_form', label: '旅行团录入', phase: 3),
+  SharedMenuEntry(id: 'travel_group_query', label: '旅行团查询', phase: 3),
+  SharedMenuEntry(id: 'pending_travel_groups', label: '待处理旅行团', phase: 3),
+  SharedMenuEntry(
+    id: 'travel_group_finance_supplement',
+    label: '积分表',
+    phase: 6,
+  ),
+  SharedMenuEntry(id: 'travel_group_order_notes', label: '订单绑定与离店备注', phase: 4),
   SharedMenuEntry(id: 'order_form', label: '订单录入', phase: 4),
+  SharedMenuEntry(id: 'order_query', label: '订单管理', phase: 4),
   SharedMenuEntry(id: 'qr_sales_sheet', label: '二维码销售单', phase: 5),
   SharedMenuEntry(id: 'taster_summary', label: '品鉴师接待总结', phase: 3),
   SharedMenuEntry(id: 'finance_query', label: '财务查询', phase: 6),
+  SharedMenuEntry(id: 'reconciliation_table', label: '对账表', phase: 6),
   SharedMenuEntry(id: 'warehouse_packing', label: '库管打包', phase: 6),
   SharedMenuEntry(id: 'after_sales_form', label: '售后开单', phase: 6),
   SharedMenuEntry(id: 'analytics', label: '数据分析', phase: 8),
@@ -66,10 +76,16 @@ const roleMenuIds = <UserRole, List<String>>{
     'dashboard',
     'role_menu',
     'travel_group_form',
+    'travel_group_query',
+    'pending_travel_groups',
+    'travel_group_finance_supplement',
+    'travel_group_order_notes',
     'order_form',
+    'order_query',
     'qr_sales_sheet',
     'taster_summary',
     'finance_query',
+    'reconciliation_table',
     'warehouse_packing',
     'after_sales_form',
     'analytics',
@@ -78,9 +94,11 @@ const roleMenuIds = <UserRole, List<String>>{
   UserRole.boss: [
     'dashboard',
     'role_menu',
-    'travel_group_form',
-    'order_form',
+    'travel_group_query',
+    'pending_travel_groups',
+    'order_query',
     'finance_query',
+    'reconciliation_table',
     'analytics',
     'ai_assistant',
   ],
@@ -88,38 +106,42 @@ const roleMenuIds = <UserRole, List<String>>{
     'dashboard',
     'role_menu',
     'travel_group_form',
+    'travel_group_query',
+    'pending_travel_groups',
   ],
   UserRole.sales: [
     'dashboard',
     'role_menu',
-    'travel_group_form',
+    'travel_group_query',
+    'pending_travel_groups',
+    'travel_group_order_notes',
     'order_form',
+    'order_query',
     'qr_sales_sheet',
   ],
   UserRole.finance: [
     'dashboard',
     'role_menu',
-    'travel_group_form',
-    'order_form',
+    'travel_group_query',
+    'pending_travel_groups',
+    'order_query',
     'finance_query',
-    'after_sales_form',
+    'reconciliation_table',
   ],
   UserRole.warehouse: [
     'dashboard',
     'role_menu',
+    'order_query',
     'warehouse_packing',
   ],
   UserRole.afterSales: [
     'dashboard',
     'role_menu',
     'order_form',
+    'order_query',
     'after_sales_form',
   ],
-  UserRole.taster: [
-    'dashboard',
-    'role_menu',
-    'taster_summary',
-  ],
+  UserRole.taster: ['dashboard', 'role_menu', 'taster_summary'],
 };
 
 enum OrderStatus {
@@ -169,28 +191,16 @@ enum AfterSalesStatus {
   final String label;
 }
 
-const logisticsMethods = <String>[
-  '韵达',
-  '安能',
-  '顺丰',
-  '客户自提',
-  '其他',
-];
+const logisticsMethods = <String>['韵达', '安能', '顺丰', '客户自提', '其他'];
 
-const groupTypes = <String>[
-  'KB团',
-  '保险团',
-  '渠道团',
-  '散客团',
-  '其他',
-];
+const groupTypes = <String>['KB团', 'AB团', '保险团', '渠道团', '散客团', '其他'];
 
 const datePresetLabels = <String>[
   '今日',
   '昨日',
-  '近 10 天',
-  '本月',
+  '最近十天',
+  '最近一个月',
   '上个月',
-  '本年',
+  '本月',
+  '今年',
 ];
-

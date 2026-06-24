@@ -33,7 +33,7 @@ export class SettingsNestService {
   }
 
   async enableGlobalMarkQuery(actor: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk']);
+    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'after_sales']);
     const current = await this.getGlobalMarkQuery();
     const now = new Date().toISOString();
     const nextSettings = {

@@ -7,8 +7,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class OperationLogsNestService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async appendLog(log: any) {
-    const created = await this.prisma.operationLog.create({
+  async appendLog(log: any, prisma: any = this.prisma) {
+    const created = await prisma.operationLog.create({
       data: {
         id: log.id || crypto.randomUUID(),
         userId: log.userId || null,

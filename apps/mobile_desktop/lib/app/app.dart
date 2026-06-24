@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/auth/auth_controller.dart';
 import '../core/storage/session_storage.dart';
@@ -87,6 +88,16 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
       debugShowCheckedModeBanner: false,
       title: '品鉴酱酒中心',
       theme: buildJiangjiuTheme(),
+      locale: const Locale('zh', 'CN'),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('zh', 'CN'),
+        Locale('en', 'US'),
+      ],
       home: _bootstrapping || authController == null
           ? const _BootstrapPage()
           : session == null
@@ -96,6 +107,8 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
                   onLogin: _handleLogin,
                 )
               : AppShell(
+                  apiClient: authController.apiClient,
+                  token: authController.token,
                   role: session.user.role,
                   user: session.user,
                   allowedDestinations: destinations,
@@ -112,11 +125,14 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
       return 'dashboard';
     }
 
-    final destinations = destinationsForBackendMenus(session.menus, session.user.role);
+    final destinations =
+        destinationsForBackendMenus(session.menus, session.user.role);
     if (destinations.isEmpty) {
       return 'dashboard';
     }
-    return destinations.any((item) => item.id == 'dashboard') ? 'dashboard' : destinations.first.id;
+    return destinations.any((item) => item.id == 'dashboard')
+        ? 'dashboard'
+        : destinations.first.id;
   }
 }
 

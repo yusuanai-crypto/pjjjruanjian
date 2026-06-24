@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/config/app_config.dart';
+import '../../shared/widgets/brand_logo.dart';
 
 typedef LoginSubmit = Future<void> Function({
   required String apiBaseUrl,
@@ -131,7 +132,10 @@ class _LoginPageState extends State<LoginPage> {
           children: [
             Text(
               '员工登录',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 18),
             TextField(
@@ -167,8 +171,13 @@ class _LoginPageState extends State<LoginPage> {
                 prefixIcon: const Icon(Icons.lock_rounded),
                 suffixIcon: IconButton(
                   tooltip: _obscurePassword ? '显示密码' : '隐藏密码',
-                  onPressed: _submitting ? null : () => setState(() => _obscurePassword = !_obscurePassword),
-                  icon: Icon(_obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded),
+                  onPressed: _submitting
+                      ? null
+                      : () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
+                  icon: Icon(_obscurePassword
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded),
                 ),
               ),
             ),
@@ -230,7 +239,9 @@ class _LoginMessage extends StatelessWidget {
             Expanded(
               child: Text(
                 message,
-                style: TextStyle(color: scheme.onErrorContainer, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                    color: scheme.onErrorContainer,
+                    fontWeight: FontWeight.w700),
               ),
             ),
           ],
@@ -253,25 +264,26 @@ class _BrandPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: scheme.primary,
-                borderRadius: const BorderRadius.all(Radius.circular(8)),
-              ),
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Icon(Icons.wine_bar_rounded, color: Colors.white, size: 34),
-              ),
+            const SizedBox(
+              width: 156,
+              height: 156,
+              child: BrandLogo(),
             ),
             const SizedBox(height: 22),
             Text(
               '品鉴酱酒中心',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineMedium
+                  ?.copyWith(fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 8),
             Text(
               '内部业务软件',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 24),
             const Wrap(

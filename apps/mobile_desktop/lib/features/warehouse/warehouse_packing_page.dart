@@ -18,6 +18,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   String _filter = '待打包';
   String _logisticsMethod = logisticsMethods.first;
   PackingStatus _packingStatus = PackingStatus.pending;
+  bool _showHideMarkInfoAction = true;
 
   @override
   Widget build(BuildContext context) {
@@ -64,10 +65,19 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
           ),
           secondary: FormSection(
             title: '打包处理',
+            trailing: _showHideMarkInfoAction
+                ? OutlinedButton.icon(
+                    onPressed: () =>
+                        setState(() => _showHideMarkInfoAction = false),
+                    icon: const Icon(Icons.visibility_off_rounded),
+                    label: const Text('隐藏标记信息'),
+                  )
+                : null,
             children: [
               const TextField(
                 readOnly: true,
-                decoration: InputDecoration(labelText: '当前订单', hintText: 'SO-20260622-031'),
+                decoration: InputDecoration(
+                    labelText: '当前订单', hintText: 'SO-20260622-031'),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
@@ -103,7 +113,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                 decoration: InputDecoration(labelText: '打包件数'),
               ),
               const SizedBox(height: 12),
-              const TextField(maxLines: 3, decoration: InputDecoration(labelText: '打包备注')),
+              const TextField(
+                  maxLines: 3, decoration: InputDecoration(labelText: '打包备注')),
               const SizedBox(height: 14),
               SectionActions(
                 primaryLabel: '保存打包',

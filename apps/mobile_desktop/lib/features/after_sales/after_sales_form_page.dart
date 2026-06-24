@@ -18,6 +18,7 @@ class AfterSalesFormPage extends StatefulWidget {
 class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   AfterSalesStatus _status = AfterSalesStatus.negotiating;
   String _filter = '处理中';
+  bool _showHideMarkInfoAction = true;
 
   @override
   Widget build(BuildContext context) {
@@ -64,21 +65,32 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
           ),
           secondary: FormSection(
             title: '售后开单',
+            trailing: _showHideMarkInfoAction
+                ? OutlinedButton.icon(
+                    onPressed: () =>
+                        setState(() => _showHideMarkInfoAction = false),
+                    icon: const Icon(Icons.visibility_off_rounded),
+                    label: const Text('隐藏标记信息'),
+                  )
+                : null,
             children: [
               const TextField(
                 readOnly: true,
-                decoration: InputDecoration(labelText: '关联订单', hintText: 'SO-20260622-031'),
+                decoration: InputDecoration(
+                    labelText: '关联订单', hintText: 'SO-20260622-031'),
               ),
               const SizedBox(height: 12),
               ResponsiveFormGrid(
                 children: [
-                  const TextField(decoration: InputDecoration(labelText: '问题类型')),
+                  const TextField(
+                      decoration: InputDecoration(labelText: '问题类型')),
                   DropdownButtonFormField<AfterSalesStatus>(
                     initialValue: _status,
                     decoration: const InputDecoration(labelText: '售后状态'),
                     items: [
                       for (final status in AfterSalesStatus.values)
-                        DropdownMenuItem(value: status, child: Text(status.label)),
+                        DropdownMenuItem(
+                            value: status, child: Text(status.label)),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -93,7 +105,9 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              const TextField(maxLines: 5, decoration: InputDecoration(labelText: '问题描述和处理内容')),
+              const TextField(
+                  maxLines: 5,
+                  decoration: InputDecoration(labelText: '问题描述和处理内容')),
               const SizedBox(height: 12),
               const Row(
                 children: [

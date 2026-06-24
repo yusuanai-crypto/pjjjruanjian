@@ -51,7 +51,7 @@ class SectionActions extends StatelessWidget {
   });
 
   final String primaryLabel;
-  final VoidCallback onPrimaryPressed;
+  final VoidCallback? onPrimaryPressed;
   final String? secondaryLabel;
   final VoidCallback? onSecondaryPressed;
 
@@ -77,4 +77,3 @@ class SectionActions extends StatelessWidget {
     );
   }
 }
-

@@ -29,7 +29,10 @@ class RoleMenuPage extends StatelessWidget {
               children: [
                 Text(
                   '当前角色：${role.label}',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 12),
                 Wrap(
@@ -38,7 +41,9 @@ class RoleMenuPage extends StatelessWidget {
                   children: [
                     for (final destination in allowedDestinations)
                       ActionChip(
-                        avatar: Icon(destination.icon, size: 18),
+                        avatar: Icon(destination.icon,
+                            size: 18, color: Colors.black87),
+                        labelStyle: const TextStyle(color: Colors.black87),
                         label: Text(destination.label),
                         onPressed: () => onOpenDestination(destination.id),
                       ),
@@ -52,7 +57,8 @@ class RoleMenuPage extends StatelessWidget {
           builder: (context, constraints) {
             final columns = constraints.maxWidth >= 1050 ? 2 : 1;
             const spacing = 12.0;
-            final width = (constraints.maxWidth - spacing * (columns - 1)) / columns;
+            final width =
+                (constraints.maxWidth - spacing * (columns - 1)) / columns;
             return Wrap(
               spacing: spacing,
               runSpacing: spacing,
@@ -79,6 +85,7 @@ class _RoleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final destinations = destinationsForRole(definition.role);
+    const smallTextStyle = TextStyle(color: Colors.black87);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -90,14 +97,18 @@ class _RoleCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     definition.role.label,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                 ),
-                StatusTag(label: '${destinations.length} 个入口', tone: StatusTone.info),
+                StatusTag(
+                    label: '${destinations.length} 个入口', tone: StatusTone.info),
               ],
             ),
             const SizedBox(height: 6),
-            Text(definition.description),
+            Text(definition.description, style: smallTextStyle),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -106,7 +117,7 @@ class _RoleCard extends StatelessWidget {
                 for (final destination in destinations)
                   Chip(
                     avatar: Icon(destination.icon, size: 17),
-                    label: Text(destination.label),
+                    label: Text(destination.label, style: smallTextStyle),
                   ),
               ],
             ),

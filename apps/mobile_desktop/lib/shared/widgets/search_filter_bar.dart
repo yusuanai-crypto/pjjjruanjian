@@ -22,7 +22,12 @@ class AppSearchField extends StatelessWidget {
         prefixIcon: const Icon(Icons.search_rounded),
         suffixIcon: IconButton(
           tooltip: '清空',
-          onPressed: controller?.clear,
+          onPressed: controller == null
+              ? null
+              : () {
+                  controller!.clear();
+                  onChanged?.call('');
+                },
           icon: const Icon(Icons.close_rounded),
         ),
         hintText: hintText,
@@ -37,11 +42,13 @@ class AppFilterBar extends StatelessWidget {
     required this.filters,
     required this.selected,
     required this.onSelected,
+    this.labelColor = Colors.black87,
   });
 
   final List<String> filters;
   final String selected;
   final ValueChanged<String> onSelected;
+  final Color labelColor;
 
   @override
   Widget build(BuildContext context) {
@@ -53,6 +60,7 @@ class AppFilterBar extends StatelessWidget {
           FilterChip(
             selected: selected == filter,
             onSelected: (_) => onSelected(filter),
+            labelStyle: TextStyle(color: labelColor),
             label: Text(filter),
           ),
       ],
@@ -78,6 +86,18 @@ class AppDateRangeButton extends StatelessWidget {
       firstDate: DateTime(2024),
       lastDate: DateTime(2030),
       initialDateRange: DateTimeRange(start: start, end: end),
+      locale: const Locale('zh', 'CN'),
+      helpText: '选择日期范围',
+      cancelText: '取消',
+      confirmText: '确定',
+      saveText: '确定',
+      fieldStartHintText: '开始日期',
+      fieldEndHintText: '结束日期',
+      fieldStartLabelText: '开始日期',
+      fieldEndLabelText: '结束日期',
+      errorFormatText: '请输入正确日期',
+      errorInvalidText: '日期无效',
+      errorInvalidRangeText: '结束日期不能早于开始日期',
     );
     if (result != null) {
       onChanged(result);

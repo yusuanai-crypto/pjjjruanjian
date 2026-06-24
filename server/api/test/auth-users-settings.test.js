@@ -15,6 +15,182 @@ const {
   withPhase1Server,
 } = require('./helpers/phase1-api');
 
+const EXPECTED_ROLE_PERMISSIONS = {
+  admin: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'users:list',
+    'users:read',
+    'users:create',
+    'users:update',
+    'users:disable',
+    'users:enable',
+    'users:reset_password',
+    'settings:global_mark:read',
+    'settings:global_mark:enable',
+    'settings:global_mark:restore',
+    'operation_logs:list',
+    'travel_groups:list',
+    'travel_groups:read',
+    'travel_groups:create',
+    'travel_groups:update',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'guide_carried_groups:create',
+    'guide_carried_groups:update',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+    'pending_travel_groups:create',
+    'pending_travel_groups:update',
+    'travel_groups:finance_mark',
+    'guide_carried_groups:finance_mark',
+    'pending_travel_groups:finance_mark',
+    'sales_orders:list',
+    'sales_orders:read',
+    'sales_orders:create',
+    'sales_orders:finance_mark',
+    'finance:overview',
+    'reconciliations:read',
+    'reconciliations:upsert',
+    'strike_bonus_awards:list',
+    'strike_bonus_awards:create',
+  ],
+  boss: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'settings:global_mark:enable',
+    'travel_groups:list',
+    'travel_groups:read',
+    'travel_groups:create',
+    'travel_groups:update',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'guide_carried_groups:create',
+    'guide_carried_groups:update',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+    'pending_travel_groups:create',
+    'pending_travel_groups:update',
+    'sales_orders:list',
+    'sales_orders:read',
+    'sales_orders:create',
+    'finance:overview',
+    'reconciliations:read',
+    'reconciliations:upsert',
+    'strike_bonus_awards:list',
+    'strike_bonus_awards:create',
+  ],
+  front_desk: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'settings:global_mark:enable',
+    'travel_groups:list',
+    'travel_groups:read',
+    'travel_groups:create',
+    'travel_groups:update',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'guide_carried_groups:create',
+    'guide_carried_groups:update',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+    'pending_travel_groups:create',
+    'pending_travel_groups:update',
+    'sales_orders:list',
+    'sales_orders:read',
+  ],
+  sales: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'travel_groups:list',
+    'travel_groups:read',
+    'travel_groups:create',
+    'travel_groups:update',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'guide_carried_groups:create',
+    'guide_carried_groups:update',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+    'pending_travel_groups:create',
+    'pending_travel_groups:update',
+    'sales_orders:list',
+    'sales_orders:read',
+    'sales_orders:create',
+  ],
+  finance: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'travel_groups:list',
+    'travel_groups:read',
+    'travel_groups:create',
+    'travel_groups:update',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'guide_carried_groups:create',
+    'guide_carried_groups:update',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+    'pending_travel_groups:create',
+    'pending_travel_groups:update',
+    'travel_groups:finance_mark',
+    'guide_carried_groups:finance_mark',
+    'pending_travel_groups:finance_mark',
+    'sales_orders:list',
+    'sales_orders:read',
+    'sales_orders:create',
+    'sales_orders:finance_mark',
+    'finance:overview',
+    'reconciliations:read',
+    'reconciliations:upsert',
+    'strike_bonus_awards:list',
+    'strike_bonus_awards:create',
+  ],
+  warehouse: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'sales_orders:list',
+    'sales_orders:read',
+  ],
+  after_sales: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'settings:global_mark:enable',
+    'sales_orders:list',
+    'sales_orders:read',
+    'sales_orders:create',
+  ],
+  taster: [
+    'auth:me',
+    'auth:change_password',
+    'roles:read',
+    'settings:global_mark:read',
+    'travel_groups:list',
+    'travel_groups:read',
+    'guide_carried_groups:list',
+    'guide_carried_groups:read',
+    'pending_travel_groups:list',
+    'pending_travel_groups:read',
+  ],
+};
+
+function rolePermissionsSnapshot(roles) {
+  return Object.fromEntries(roles.map((role) => [role.role, role.permissions]));
+}
+
 test('contract: POST /api/auth/login returns session shape and stable login errors', async () => {
   await withPhase1Server(async (baseUrl) => {
     const loginResult = await requestJson(baseUrl, '/api/auth/login', {
@@ -31,6 +207,7 @@ test('contract: POST /api/auth/login returns session shape and stable login erro
     assert.equal(loginResult.body.data.user.role, 'admin');
     assert.equal(loginResult.body.data.permissions.includes('users:create'), true);
     assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'employee_accounts'), true);
+    assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'pending_travel_groups'), true);
     assert.deepEqual(loginResult.body.data.dataScope, { default: 'all' });
 
     const missingFields = await requestJson(baseUrl, '/api/auth/login', {
@@ -79,6 +256,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.deepEqual(Object.keys(roles.body).sort(), ['data']);
     assert.deepEqual(Object.keys(roles.body.data).sort(), ['roles']);
     assert.equal(roles.body.data.roles.length, 8);
+    assert.deepEqual(rolePermissionsSnapshot(roles.body.data.roles), EXPECTED_ROLE_PERMISSIONS);
 
     const tasterRole = roles.body.data.roles.find((role) => role.role === 'taster');
     assert.equal(tasterRole.title, '品鉴师');
@@ -314,6 +492,12 @@ test('contract: global mark query switch paths preserve permission and response 
       password: 'Password123',
       role: 'warehouse',
     });
+    await createUser(baseUrl, admin.token, {
+      name: '售后测试',
+      username: 'aftersales01',
+      password: 'Password123',
+      role: 'after_sales',
+    });
 
     const initial = await requestJson(baseUrl, '/api/settings/global-mark-query', {
       token: admin.token,
@@ -331,6 +515,31 @@ test('contract: global mark query switch paths preserve permission and response 
       token: warehouse.token,
     });
     assertErrorContract(warehouseEnable, 403, 'PERMISSION_DENIED');
+
+    const afterSales = await login(baseUrl, 'aftersales01', 'Password123');
+    assert.equal(afterSales.permissions.includes('settings:global_mark:enable'), true);
+    const afterSalesEnable = await requestJson(baseUrl, '/api/settings/global-mark-query/enable', {
+      method: 'POST',
+      token: afterSales.token,
+    });
+    assert.equal(afterSalesEnable.response.status, 200);
+    assertSettingsContract(afterSalesEnable.body.data.settings);
+    assert.equal(afterSalesEnable.body.data.settings.onlyShowMarkedRecords, true);
+    assert.equal(afterSalesEnable.body.data.settings.restoreRequired, true);
+    assert.equal(afterSalesEnable.body.data.settings.openedBy, afterSales.user.id);
+
+    const afterSalesRestore = await requestJson(baseUrl, '/api/settings/global-mark-query/restore', {
+      method: 'POST',
+      token: afterSales.token,
+    });
+    assertErrorContract(afterSalesRestore, 403, 'ADMIN_REQUIRED');
+
+    const adminRestoreAfterSales = await requestJson(baseUrl, '/api/settings/global-mark-query/restore', {
+      method: 'POST',
+      token: admin.token,
+    });
+    assert.equal(adminRestoreAfterSales.response.status, 200);
+    assert.equal(adminRestoreAfterSales.body.data.settings.onlyShowMarkedRecords, false);
 
     const boss = await login(baseUrl, 'boss01', 'Password123');
     const enable = await requestJson(baseUrl, '/api/settings/global-mark-query/enable', {

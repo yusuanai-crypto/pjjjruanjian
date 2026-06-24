@@ -1,14 +1,21 @@
 # Jiangjiu Flutter Client
 
-Flutter 手机和 Windows 客户端。当前已完成第 2 阶段 UI 骨架，并接入第 1 阶段登录接口。
+Flutter 手机和 Windows 客户端。当前已完成第 2 阶段 UI 骨架，并接入登录、会话恢复、后端菜单、全局标记查询开关和一部分业务 API。
 
 ## 当前状态
 
 - 登录页调用后端 `/api/auth/login`。
 - App 启动时读取本地 token，并调用 `/api/auth/me` 恢复会话。
-- 登录成功后，菜单来自后端返回的 `menus`。
+- 登录成功后，菜单来自后端返回的 `menus`，再由 `destinations.dart` 映射到 Flutter 页面。
 - 服务器地址和 token 使用 `shared_preferences` 保存在本机。
-- 旅行团、订单、二维码销售单、品鉴师总结、财务、库管、售后、数据分析、AI 助手等页面仍是 UI 骨架和假数据。
+- Shell 顶部的全局标记查询开关调用 `/api/settings/global-mark-query`、`/enable`、`/restore`。
+- 旅行团录入页已调用 `/api/travel-groups` 读取和创建旅行团，标记按钮调用 `/api/travel-groups/:id/finance-mark`。
+- 待处理旅行团页已通过菜单 `pending_travel_groups` 接入，并调用 `/api/pending-travel-groups` 读取列表。
+- 订单录入页已调用 `/api/sales-orders` 保存订单；暂存为本页本地草稿，历史客户和酒品明细仍是页面内数据。
+- 订单管理页已调用 `/api/sales-orders` 读取订单，标记按钮调用 `/api/sales-orders/:id/finance-mark`。
+- 订单绑定与离店备注页已读取后端旅行团和订单，并通过 `PATCH /api/travel-groups/:id` 保存离店时间和备注；订单勾选绑定仍是本地交互。
+- 财务查询页已调用 `/api/finance/overview`；对账表已调用 `/api/reconciliations/:businessDate` 读取和保存。
+- 首页指标和待办、旅行团查询、积分表、二维码销售单、品鉴师总结、库管打包、售后开单、数据分析、AI 助手仍是 UI 骨架或假数据。
 
 ## 本地运行前置条件
 
@@ -77,6 +84,7 @@ flutter test
 
 ## 范围说明
 
-- 当前只真实接入登录和会话恢复。
-- 业务保存、真实列表查询、二维码生成、AI 查询、导出等逻辑留给后续阶段。
+- 当前真实接入的业务能力集中在旅行团、待处理旅行团、订单录入、订单管理、财务概览、对账表和全局标记查询开关。
+- 订单录入表单已调用 `BusinessApi.createSalesOrder`，但完整商品选择、订单绑定旅行团和持久化草稿仍待后续阶段补齐。
+- 二维码生成、AI 查询、导出、售后、库管、提成、完整统计分析和独立客户库留给后续阶段。
 - 金额展示使用“分”作为输入单位，统一通过 `packages/shared` 格式化。
