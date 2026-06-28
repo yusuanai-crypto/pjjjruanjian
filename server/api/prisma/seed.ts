@@ -69,6 +69,30 @@ async function main() {
   await upsertSetting('only_show_marked_records', 'false', admin.id, now);
   await upsertSetting('marked_records_restore_required', 'false', admin.id, now);
 
+  await upsertGuideSnapshots(
+    [
+      {
+        name: '李导',
+        phone: '13800006666',
+        travelAgency: '黔程旅行社',
+        remarks: '系统示例旅行团导游',
+      },
+      {
+        name: '王导',
+        phone: '13900008888',
+        travelAgency: '导游自带',
+        remarks: '系统示例导游自带团导游',
+      },
+      {
+        name: '赵导',
+        phone: '13700009999',
+        travelAgency: '山水国旅',
+        remarks: '系统示例待处理旅行团导游',
+      },
+    ],
+    now,
+  );
+
   const demoTravelGroup = await prisma.travelGroup.upsert({
     where: {
       groupNo: 'GZ-0622-018',
@@ -392,6 +416,43 @@ async function main() {
       createdAt: now,
     },
   });
+}
+
+async function upsertGuideSnapshots(
+  guides: Array<{ name: string; phone: string; travelAgency: string; remarks?: string }>,
+  updatedAt: Date,
+) {
+  const uniqueGuides = new Map<string, { name: string; phone: string; travelAgency: string; remarks?: string }>();
+  for (const guide of guides) {
+    if (!guide.phone) {
+      continue;
+    }
+    uniqueGuides.set(guide.phone, guide);
+  }
+
+  for (const guide of uniqueGuides.values()) {
+    await prisma.guide.upsert({
+      where: {
+        phone: guide.phone,
+      },
+      update: {
+        name: guide.name,
+        travelAgency: guide.travelAgency,
+        remarks: guide.remarks ?? null,
+        isActive: true,
+        updatedAt,
+      },
+      create: {
+        name: guide.name,
+        phone: guide.phone,
+        travelAgency: guide.travelAgency,
+        remarks: guide.remarks ?? null,
+        isActive: true,
+        createdAt: updatedAt,
+        updatedAt,
+      },
+    });
+  }
 }
 
 async function upsertSetting(settingKey: string, settingValue: string, updatedBy: string, updatedAt: Date) {

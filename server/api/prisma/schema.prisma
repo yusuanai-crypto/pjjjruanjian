@@ -8,9 +8,9 @@ datasource db {
 }
 
 // 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
-// 已落库业务表：travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
+// 已落库业务表：guides、travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
 // sales_order_items、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
-// 独立客户、旅行社、导游、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
+// 独立客户、旅行社、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -86,6 +86,24 @@ model OperationLog {
   @@map("operation_logs")
 }
 
+model Guide {
+  id           String   @id @default(uuid()) @db.Char(36)
+  name         String   @db.VarChar(80)
+  phone        String   @unique @db.VarChar(30)
+  travelAgency String   @map("travel_agency") @db.VarChar(120)
+  remarks      String?  @db.Text
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  travelGroups TravelGroup[]
+
+  @@index([name])
+  @@index([travelAgency])
+  @@index([isActive])
+  @@map("guides")
+}
+
 enum TravelGroupStatus {
   UNMARKED        @map("unmarked")
   PENDING_SUMMARY @map("pending_summary")
@@ -150,25 +168,52 @@ model TravelGroup {
   financeMark              Boolean           @default(false) @map("finance_mark")
   markedById               String?           @map("marked_by") @db.Char(36)
   markedAt                 DateTime?         @map("marked_at") @db.DateTime(0)
+  guideId                  String?           @map("guide_id") @db.Char(36)
   tasterId                 String?           @map("taster_id") @db.Char(36)
+  tasterSummary            String?           @map("taster_summary") @db.Text
+  tasterSummaryAt          DateTime?         @map("taster_summary_at") @db.DateTime(0)
+  postMarkEditedAt         DateTime?         @map("post_mark_edited_at") @db.DateTime(0)
+  postMarkEditedById       String?           @map("post_mark_edited_by_id") @db.Char(36)
   createdById              String?           @map("created_by_id") @db.Char(36)
   updatedById              String?           @map("updated_by_id") @db.Char(36)
   createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrders SalesOrder[]
-  taster      User?        @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
-  markedBy    User?        @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  salesOrders  SalesOrder[]
+  tastingItems TravelGroupTastingItem[]
+  guide        Guide?                   @relation(fields: [guideId], references: [id], onDelete: SetNull)
+  taster       User?                    @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  markedBy     User?                    @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@index([visitDate])
   @@index([travelAgency])
   @@index([guideName])
+  @@index([guideId])
   @@index([tasterName])
   @@index([tasterId])
   @@index([financeMark])
   @@index([markedById])
+  @@index([groupType])
   @@index([status])
   @@map("travel_groups")
+}
+
+model TravelGroupTastingItem {
+  id            String   @id @default(uuid()) @db.Char(36)
+  travelGroupId String   @map("travel_group_id") @db.Char(36)
+  productName   String   @map("product_name") @db.VarChar(160)
+  quantity      Int
+  unit          String   @default("瓶") @db.VarChar(20)
+  note          String?  @db.Text
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  travelGroup TravelGroup @relation(fields: [travelGroupId], references: [id], onDelete: Cascade)
+
+  @@index([travelGroupId])
+  @@index([travelGroupId, sortOrder])
+  @@map("travel_group_tasting_items")
 }
 
 model GuideCarriedGroup {

@@ -92,7 +92,9 @@ function createInMemoryPrisma(options = {}) {
     createSystemSetting('global_mark_query_updated_at', now.toISOString(), null, now),
   ];
   const operationLogs = [];
+  const guides = [];
   const travelGroups = [];
+  const travelGroupTastingItems = [];
   const guideCarriedGroups = [];
   const pendingTravelGroups = [];
   const salesOrders = [];
@@ -100,11 +102,15 @@ function createInMemoryPrisma(options = {}) {
   const dailyReconciliations = [];
   const reconciliationPaymentMethods = [];
   const strikeBonusAwards = [];
+  seedTravelGroups(travelGroups, options.travelGroups || [], now);
+  seedSalesOrders(salesOrders, options.salesOrders || [], now);
   const transactionalRows = [
     users,
     systemSettings,
     operationLogs,
+    guides,
     travelGroups,
+    travelGroupTastingItems,
     guideCarriedGroups,
     pendingTravelGroups,
     salesOrders,
@@ -198,8 +204,12 @@ function createInMemoryPrisma(options = {}) {
         return sortRows(operationLogs.filter((log) => matchesWhere(log, where)).map(copyRow), orderBy);
       },
     },
+    guide: createGuideDelegate(guides),
     travelGroup: createTravelGroupDelegate(travelGroups, {
       failUpdateOnce: Boolean(options.failTravelGroupUpdateOnce),
+      tastingItems: travelGroupTastingItems,
+      users,
+      salesOrders,
     }),
     guideCarriedGroup: createTravelGroupDelegate(guideCarriedGroups),
     pendingTravelGroup: createTravelGroupDelegate(pendingTravelGroups),
@@ -312,8 +322,7 @@ function createInMemoryPrisma(options = {}) {
   return prisma;
 }
 
-function createTravelGroupDelegate(rows, options = {}) {
-  let failUpdateOnce = Boolean(options.failUpdateOnce);
+function createGuideDelegate(rows) {
   return {
     findUnique: async ({ where }) => {
       const row = rows.find((item) => matchesUnique(item, where));
@@ -334,13 +343,9 @@ function createTravelGroupDelegate(rows, options = {}) {
       return copyRow(row);
     },
     update: async ({ where, data }) => {
-      if (failUpdateOnce) {
-        failUpdateOnce = false;
-        throw new Error('Injected travel group update failure in test Prisma store.');
-      }
       const index = rows.findIndex((item) => matchesUnique(item, where));
       if (index < 0) {
-        throw new Error('Travel group not found in test Prisma store.');
+        throw new Error('Guide not found in test Prisma store.');
       }
       rows[index] = {
         ...rows[index],
@@ -350,6 +355,162 @@ function createTravelGroupDelegate(rows, options = {}) {
       return copyRow(rows[index]);
     },
   };
+}
+
+function createTravelGroupDelegate(rows, options = {}) {
+  let failUpdateOnce = Boolean(options.failUpdateOnce);
+  const tastingItems = options.tastingItems || [];
+  const users = options.users || [];
+  const salesOrders = options.salesOrders || [];
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders }) : null;
+    },
+    findMany: async ({ where, include, orderBy, take } = {}) => {
+      const result = sortRows(rows.filter((item) => matchesWhere(item, where)).map(copyRow), orderBy);
+      return result
+        .slice(0, take || result.length)
+        .map((row) => withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders }));
+    },
+    create: async ({ data, include } = {}) => {
+      if (data.groupNo && rows.some((item) => item.groupNo === data.groupNo)) {
+        const error = new Error('Unique constraint failed on groupNo');
+        error.code = 'P2002';
+        error.meta = {
+          target: ['groupNo'],
+        };
+        throw error;
+      }
+      const nestedTastingItems = data.tastingItems?.create || [];
+      const row = {
+        ...withoutNested(data, 'tastingItems'),
+        id: data.id || crypto.randomUUID(),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      for (const item of nestedTastingItems) {
+        tastingItems.push({
+          ...item,
+          id: item.id || crypto.randomUUID(),
+          travelGroupId: row.id,
+          createdAt: asDate(item.createdAt) || new Date(),
+          updatedAt: asDate(item.updatedAt) || new Date(),
+        });
+      }
+      return withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders });
+    },
+    update: async ({ where, data, include } = {}) => {
+      if (failUpdateOnce) {
+        failUpdateOnce = false;
+        throw new Error('Injected travel group update failure in test Prisma store.');
+      }
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Travel group not found in test Prisma store.');
+      }
+      const nestedTastingItems = data.tastingItems?.create || [];
+      if (data.tastingItems?.deleteMany !== undefined) {
+        removeWhere(tastingItems, (item) => item.travelGroupId === rows[index].id);
+      }
+      rows[index] = {
+        ...rows[index],
+        ...withoutNested(data, 'tastingItems'),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      for (const item of nestedTastingItems) {
+        tastingItems.push({
+          ...item,
+          id: item.id || crypto.randomUUID(),
+          travelGroupId: rows[index].id,
+          createdAt: asDate(item.createdAt) || new Date(),
+          updatedAt: asDate(item.updatedAt) || new Date(),
+        });
+      }
+      return withTravelGroupIncludes(rows[index], include, { tastingItems, users, salesOrders });
+    },
+  };
+}
+
+function seedTravelGroups(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      groupNo: seed.groupNo || `SEED-${rows.length + 1}`,
+      visitDate: asDate(seed.visitDate) || now,
+      travelAgency: seedValue(seed, 'travelAgency', 'Seed Agency'),
+      licensePlate: seedValue(seed, 'licensePlate', 'SEED-PLATE'),
+      guideName: seedValue(seed, 'guideName', 'Seed Guide'),
+      guidePhone: seedValue(seed, 'guidePhone', '13900000000'),
+      guestCount: seed.guestCount ?? 10,
+      tastingRoomNo: seedValue(seed, 'tastingRoomNo', 'Seed Room'),
+      tasterName: seedValue(seed, 'tasterName', 'Seed Taster'),
+      arrivalTime: seedValue(seed, 'arrivalTime', null),
+      groupType: seedValue(seed, 'groupType', 'seed'),
+      wineDetails: seedValue(seed, 'wineDetails', null),
+      departureTime: seedValue(seed, 'departureTime', null),
+      remarks: seedValue(seed, 'remarks', null),
+      status: seed.status || 'UNMARKED',
+      salesAmountCents: seed.salesAmountCents ?? 0,
+      paidDepositCents: seed.paidDepositCents ?? 0,
+      cashOnDeliveryCents: seed.cashOnDeliveryCents ?? 0,
+      liquorCostDeductionCents: seed.liquorCostDeductionCents ?? 0,
+      orderAmountCents: seed.orderAmountCents ?? 0,
+      points: seed.points ?? 0,
+      returnedPoints: seed.returnedPoints ?? 0,
+      unreturnedPoints: seed.unreturnedPoints ?? 0,
+      guideInfoSent: Boolean(seed.guideInfoSent),
+      travelAgencyInfoSent: Boolean(seed.travelAgencyInfoSent),
+      financeMark: Boolean(seed.financeMark),
+      markedById: seed.markedById ?? null,
+      markedAt: asDate(seed.markedAt) || null,
+      guideId: seed.guideId ?? null,
+      tasterId: seed.tasterId ?? null,
+      tasterSummary: seed.tasterSummary ?? null,
+      tasterSummaryAt: asDate(seed.tasterSummaryAt) || null,
+      postMarkEditedAt: asDate(seed.postMarkEditedAt) || null,
+      postMarkEditedById: seed.postMarkEditedById ?? null,
+      createdById: seed.createdById ?? null,
+      updatedById: seed.updatedById ?? null,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function seedValue(seed, key, fallback) {
+  return Object.hasOwn(seed, key) ? seed[key] : fallback;
+}
+
+function seedSalesOrders(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      orderNo: seed.orderNo || `SO-SEED-${rows.length + 1}`,
+      orderType: seed.orderType || 'TRAVEL_GROUP',
+      travelGroupId: seed.travelGroupId ?? null,
+      customerName: seed.customerName || 'Seed Customer',
+      customerPhone: seed.customerPhone ?? null,
+      province: seed.province ?? null,
+      city: seed.city ?? null,
+      district: seed.district ?? null,
+      address: seed.address ?? null,
+      orderDate: asDate(seed.orderDate) || now,
+      totalAmountCents: seed.totalAmountCents ?? 0,
+      cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
+      remark: seed.remark ?? null,
+      status: seed.status || 'VALID',
+      financeMark: Boolean(seed.financeMark),
+      markedById: seed.markedById ?? null,
+      markedAt: asDate(seed.markedAt) || null,
+      salesUserId: seed.salesUserId ?? null,
+      createdById: seed.createdById ?? null,
+      updatedById: seed.updatedById ?? null,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
 }
 
 function restoreRows(rowGroups, snapshot) {
@@ -385,6 +546,9 @@ function matchesWhere(row, where = {}) {
     }
     if (value && typeof value === 'object' && value.contains !== undefined) {
       return String(row[key] || '').includes(String(value.contains));
+    }
+    if (value && typeof value === 'object' && value.startsWith !== undefined) {
+      return String(row[key] || '').startsWith(String(value.startsWith));
     }
     if (value && typeof value === 'object' && (value.gte !== undefined || value.lte !== undefined)) {
       const rowTime = asDate(row[key])?.getTime();
@@ -447,6 +611,31 @@ function removeWhere(rows, predicate) {
       rows.splice(index, 1);
     }
   }
+}
+
+function withTravelGroupIncludes(group, include, relations) {
+  const row = copyRow(group);
+  const tastingItems = relations?.tastingItems || [];
+  const users = relations?.users || [];
+  const salesOrders = relations?.salesOrders || [];
+  if (include?.tastingItems) {
+    row.tastingItems = tastingItems
+      .filter((item) => item.travelGroupId === group.id)
+      .map(copyRow)
+      .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
+  }
+  if (include?.taster) {
+    const taster = users.find((user) => user.id === group.tasterId);
+    row.taster = taster ? copyRow(taster) : null;
+  }
+  if (include?.salesOrders) {
+    const includeConfig = typeof include.salesOrders === 'object' ? include.salesOrders : {};
+    row.salesOrders = sortRows(
+      salesOrders.filter((order) => order.travelGroupId === group.id).map(copyRow),
+      includeConfig.orderBy,
+    );
+  }
+  return row;
 }
 
 function withSalesOrderIncludes(order, include, salesOrderItems, travelGroups) {

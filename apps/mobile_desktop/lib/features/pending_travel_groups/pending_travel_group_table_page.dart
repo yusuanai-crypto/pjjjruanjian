@@ -6,21 +6,34 @@ import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/metric_card.dart';
-import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../travel_group_detail/travel_group_detail_panel.dart';
+
+const _allFilter = '全部';
+
+const _pendingStatusLabels = <String, String>{
+  'pending_front_desk': '待前台',
+  'pending_taster': '待品鉴师',
+  'pending_finance': '待财务',
+  'abnormal': '异常',
+};
 
 class PendingTravelGroupTablePage extends StatefulWidget {
   const PendingTravelGroupTablePage({
     super.key,
     required this.apiClient,
     required this.token,
+    required this.role,
+    required this.onOpenDestination,
   });
 
   final ApiClient apiClient;
   final String token;
+  final UserRole role;
+  final ValueChanged<String> onOpenDestination;
 
   @override
   State<PendingTravelGroupTablePage> createState() =>
@@ -34,7 +47,7 @@ class _PendingTravelGroupTablePageState
 
   DateTime _start = DateTime.now().subtract(const Duration(days: 30));
   DateTime _end = DateTime.now();
-  String _statusFilter = '全部';
+  String _statusFilter = _allFilter;
   String _query = '';
   String? _selectedId;
   bool _loading = true;
@@ -78,6 +91,8 @@ class _PendingTravelGroupTablePageState
         limit: 200,
         start: _start,
         end: _end,
+        keyword: _query,
+        pendingStatus: _pendingStatusValue(_statusFilter),
       );
       if (!mounted) {
         return;
@@ -108,61 +123,46 @@ class _PendingTravelGroupTablePageState
     return groups.first.id;
   }
 
-  List<TravelGroupRecord> get _visibleGroups {
-    final query = _query.trim().toLowerCase();
-    return _groups.where((group) {
-      if (_statusFilter != '全部' &&
-          _statusLabel(group.status) != _statusFilter) {
-        return false;
-      }
-      if (query.isEmpty) {
-        return true;
-      }
-      return [
-        group.groupNo,
-        group.travelAgency,
-        group.guideName,
-        group.guidePhone,
-        group.tasterName,
-        group.tastingRoomNo,
-        group.groupType,
-        group.remarks,
-      ].whereType<String>().any((value) => value.toLowerCase().contains(query));
-    }).toList();
-  }
-
-  TravelGroupRecord? _selectedRecord(List<TravelGroupRecord> records) {
-    if (records.isEmpty) {
+  TravelGroupRecord? _selectedRecord() {
+    if (_groups.isEmpty) {
       return null;
     }
     if (_selectedId != null) {
-      for (final record in records) {
+      for (final record in _groups) {
         if (record.id == _selectedId) {
           return record;
         }
       }
     }
-    return records.first;
+    return _groups.first;
+  }
+
+  void _selectRecord(TravelGroupRecord record) {
+    setState(() => _selectedId = record.id);
+  }
+
+  void _openHandlingEntry(TravelGroupRecord record) {
+    _selectRecord(record);
+    widget.onOpenDestination(_destinationFor(record.pendingStatus));
   }
 
   @override
   Widget build(BuildContext context) {
-    final records = _visibleGroups;
-    final selected = _selectedRecord(records);
+    final selected = _selectedRecord();
 
     return ResponsivePage(
       children: [
         FormSection(
-          title: '待处理旅行团筛选',
+          title: '待处理旅行团',
           trailing:
-              StatusTag(label: '${records.length} 个团', tone: StatusTone.info),
+              StatusTag(label: '${_groups.length} 个团', tone: StatusTone.info),
           children: [
             ResponsiveFormGrid(
               children: [
                 AppSearchField(
                   controller: _searchController,
                   hintText: '搜索团号、旅行社、导游、品鉴师',
-                  onChanged: (value) => setState(() => _query = value),
+                  onChanged: (value) => _query = value,
                 ),
                 AppDateRangeButton(
                   start: _start,
@@ -177,6 +177,27 @@ class _PendingTravelGroupTablePageState
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _loadData,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('刷新'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    setState(() => _query = _searchController.text.trim());
+                    _loadData();
+                  },
+                  icon: const Icon(Icons.search_rounded),
+                  label: const Text('查询'),
+                ),
+              ],
+            ),
           ],
         ),
         if (_loading)
@@ -188,26 +209,26 @@ class _PendingTravelGroupTablePageState
             metrics: [
               MetricData(
                 label: '待处理团数',
-                value: '${records.length}',
+                value: '${_groups.length}',
                 icon: Icons.pending_actions_rounded,
               ),
               MetricData(
-                label: '接待人数',
+                label: '待前台',
                 value:
-                    '${records.fold<int>(0, (sum, item) => sum + item.guestCount)}',
-                icon: Icons.groups_rounded,
+                    '${_groups.where((group) => group.pendingStatus == 'pending_front_desk').length}',
+                icon: Icons.assignment_ind_rounded,
               ),
               MetricData(
-                label: '订单金额',
-                value: formatMoneyCents(records.fold<int>(
-                    0, (sum, item) => sum + item.orderAmountCents)),
-                icon: Icons.receipt_long_rounded,
+                label: '待品鉴师',
+                value:
+                    '${_groups.where((group) => group.pendingStatus == 'pending_taster').length}',
+                icon: Icons.rate_review_rounded,
               ),
               MetricData(
-                label: '待收金额',
-                value: formatMoneyCents(records.fold<int>(
-                    0, (sum, item) => sum + item.cashOnDeliveryCents)),
-                icon: Icons.local_atm_rounded,
+                label: '待财务',
+                value:
+                    '${_groups.where((group) => group.pendingStatus == 'pending_finance').length}',
+                icon: Icons.bookmark_add_rounded,
               ),
             ],
           ),
@@ -216,39 +237,56 @@ class _PendingTravelGroupTablePageState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 AppFilterBar(
-                  filters: const ['全部', '待处理', '待总结', '已出单'],
+                  filters: const [
+                    _allFilter,
+                    '待前台',
+                    '待品鉴师',
+                    '待财务',
+                    '异常',
+                  ],
                   selected: _statusFilter,
-                  onSelected: (value) => setState(() => _statusFilter = value),
+                  onSelected: (value) {
+                    setState(() => _statusFilter = value);
+                    _loadData();
+                  },
                 ),
                 const SizedBox(height: 12),
-                if (records.isEmpty)
+                if (_groups.isEmpty)
                   const EmptyState(title: '没有匹配的待处理旅行团')
                 else
-                  AppRecordList(
-                    items: [
-                      for (final record in records)
-                        AppRecordItem(
-                          title: record.groupNo,
-                          subtitle:
-                              '${_display(record.travelAgency)} · ${_display(record.guideName)} · ${record.guestCount} 人',
-                          meta: [
-                            if (record.visitDate.isNotEmpty) record.visitDate,
-                            if (_display(record.tasterName) != '-') _display(record.tasterName),
-                          ],
-                          icon: Icons.pending_actions_rounded,
-                          trailing: StatusTag(
-                            label: _statusLabel(record.status),
-                            tone: _statusTone(record.status),
-                          ),
-                          onTap: () => setState(() => _selectedId = record.id),
-                        ),
-                    ],
+                  _PendingGroupList(
+                    groups: _groups,
+                    selectedId: _selectedId,
+                    onSelect: _selectRecord,
+                    onOpen: _openHandlingEntry,
                   ),
               ],
             ),
             secondary: selected == null
                 ? const EmptyState(title: '请选择待处理旅行团')
-                : _PendingGroupDetail(record: selected),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _HandlingEntryCard(
+                        record: selected,
+                        onOpen: () => _openHandlingEntry(selected),
+                      ),
+                      const SizedBox(height: 12),
+                      TravelGroupDetailPanel(
+                        group: selected,
+                        role: widget.role,
+                        onEdit: _canEdit(widget.role)
+                            ? () => _openHandlingEntry(selected)
+                            : null,
+                        onSummary: _canSubmitSummary(widget.role)
+                            ? () => _openHandlingEntry(selected)
+                            : null,
+                        onFinanceMark: _canMark(widget.role)
+                            ? () => _openHandlingEntry(selected)
+                            : null,
+                      ),
+                    ],
+                  ),
           ),
         ],
       ],
@@ -256,74 +294,205 @@ class _PendingTravelGroupTablePageState
   }
 }
 
-class _PendingGroupDetail extends StatelessWidget {
-  const _PendingGroupDetail({required this.record});
+class _PendingGroupList extends StatelessWidget {
+  const _PendingGroupList({
+    required this.groups,
+    required this.selectedId,
+    required this.onSelect,
+    required this.onOpen,
+  });
 
-  final TravelGroupRecord record;
+  final List<TravelGroupRecord> groups;
+  final String? selectedId;
+  final ValueChanged<TravelGroupRecord> onSelect;
+  final ValueChanged<TravelGroupRecord> onOpen;
 
   @override
   Widget build(BuildContext context) {
-    return FormSection(
-      title: '待处理明细',
-      trailing: StatusTag(
-        label: _statusLabel(record.status),
-        tone: _statusTone(record.status),
-      ),
-      children: [
-        _InfoRow(label: '团号', value: record.groupNo),
-        _InfoRow(label: '日期', value: record.visitDate),
-        _InfoRow(label: '旅行社', value: record.travelAgency),
-        _InfoRow(label: '导游', value: record.guideName),
-        _InfoRow(label: '导游电话', value: record.guidePhone),
-        _InfoRow(label: '品鉴师', value: record.tasterName),
-        _InfoRow(label: '品鉴馆', value: record.tastingRoomNo),
-        _InfoRow(label: '团型', value: record.groupType),
-        const Divider(height: 24),
-        _InfoRow(label: '人数', value: '${record.guestCount} 人'),
-        Row(
-          children: [
-            const Expanded(child: Text('订单金额')),
-            MoneyText(cents: record.orderAmountCents, prominent: true),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            const Expanded(child: Text('货到付款')),
-            MoneyText(cents: record.cashOnDeliveryCents, prominent: true),
-          ],
-        ),
-        const Divider(height: 24),
-        _InfoRow(label: '进店时间', value: record.arrivalTime),
-        _InfoRow(label: '离店时间', value: record.departureTime),
-        _InfoRow(label: '备注', value: record.remarks),
+    return AppRecordList(
+      items: [
+        for (final record in groups)
+          AppRecordItem(
+            title: record.groupNo,
+            subtitle:
+                '${_display(record.travelAgency)} · ${_display(record.guideName)} · ${record.guestCount} 人',
+            meta: [
+              if (record.visitDate.isNotEmpty) record.visitDate,
+              if (_display(record.tasterName) != '-')
+                _display(record.tasterName),
+              if (record.pendingReasons.isNotEmpty)
+                _pendingReasonsText(record.pendingReasons),
+            ],
+            icon: selectedId == record.id
+                ? Icons.radio_button_checked_rounded
+                : Icons.pending_actions_rounded,
+            trailing: Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                StatusTag(
+                  label: _pendingStatusLabel(record.pendingStatus),
+                  tone: _pendingStatusTone(record.pendingStatus),
+                ),
+                IconButton(
+                  tooltip: _handlingLabel(record.pendingStatus),
+                  onPressed: () => onOpen(record),
+                  icon: const Icon(Icons.open_in_new_rounded),
+                ),
+              ],
+            ),
+            onTap: () => onSelect(record),
+          ),
       ],
     );
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+class _HandlingEntryCard extends StatelessWidget {
+  const _HandlingEntryCard({
+    required this.record,
+    required this.onOpen,
+  });
 
-  final String label;
-  final String? value;
+  final TravelGroupRecord record;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-              width: 76,
-              child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
-          Expanded(
-              child: Text(_display(value),
-                  style: const TextStyle(fontWeight: FontWeight.w700))),
-        ],
+    return FormSection(
+      title: '处理入口',
+      trailing: StatusTag(
+        label: _pendingStatusLabel(record.pendingStatus),
+        tone: _pendingStatusTone(record.pendingStatus),
       ),
+      children: [
+        Text(_handlingDescription(record.pendingStatus)),
+        if (record.pendingReasons.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final reason in record.pendingReasons)
+                StatusTag(
+                  label: _pendingReasonLabel(reason),
+                  tone: StatusTone.info,
+                ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 14),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton.icon(
+            onPressed: onOpen,
+            icon: const Icon(Icons.open_in_new_rounded),
+            label: Text(_handlingLabel(record.pendingStatus)),
+          ),
+        ),
+      ],
     );
+  }
+}
+
+String? _pendingStatusValue(String label) {
+  if (label == _allFilter) {
+    return null;
+  }
+  for (final entry in _pendingStatusLabels.entries) {
+    if (entry.value == label) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+String _pendingStatusLabel(String? status) {
+  return _pendingStatusLabels[status] ?? '无待处理';
+}
+
+StatusTone _pendingStatusTone(String? status) {
+  switch (status) {
+    case 'abnormal':
+      return StatusTone.danger;
+    case 'pending_front_desk':
+    case 'pending_finance':
+      return StatusTone.warning;
+    case 'pending_taster':
+      return StatusTone.info;
+    default:
+      return StatusTone.success;
+  }
+}
+
+String _pendingReasonsText(List<String> reasons) {
+  return reasons.map(_pendingReasonLabel).join('、');
+}
+
+String _pendingReasonLabel(String reason) {
+  switch (reason) {
+    case 'missing_taster':
+      return '缺少品鉴师';
+    case 'missing_guide_name':
+      return '缺少导游姓名';
+    case 'missing_guide_phone':
+      return '缺少导游手机号';
+    case 'missing_travel_agency':
+      return '缺少旅行社';
+    case 'missing_guest_count':
+      return '缺少人数';
+    case 'invalid_guest_count_zero':
+      return '人数为 0';
+    case 'no_order_and_missing_taster_summary':
+      return '无订单且未总结';
+    case 'finance_unmarked_after_day_end':
+      return '超过当日未标记';
+    case 'duplicate_group_no':
+      return '团号重复';
+    case 'departure_before_arrival':
+      return '离店早于进店';
+    default:
+      return reason;
+  }
+}
+
+String _handlingLabel(String? status) {
+  switch (status) {
+    case 'pending_front_desk':
+      return '基础信息编辑';
+    case 'pending_taster':
+      return '填写总结';
+    case 'pending_finance':
+      return '财务标记';
+    case 'abnormal':
+    default:
+      return '查看详情';
+  }
+}
+
+String _handlingDescription(String? status) {
+  switch (status) {
+    case 'pending_front_desk':
+      return '补齐导游、旅行社、人数、品鉴师等基础信息。';
+    case 'pending_taster':
+      return '进入品鉴师总结表单，补充本团接待总结。';
+    case 'pending_finance':
+      return '进入旅行团详情，完成财务标记。';
+    case 'abnormal':
+    default:
+      return '进入旅行团详情查看异常原因。';
+  }
+}
+
+String _destinationFor(String? status) {
+  switch (status) {
+    case 'pending_taster':
+      return 'taster_summary';
+    case 'pending_front_desk':
+    case 'pending_finance':
+    case 'abnormal':
+    default:
+      return 'travel_group_query';
   }
 }
 
@@ -332,28 +501,20 @@ String _display(String? value) {
   return text.isEmpty ? '-' : text;
 }
 
-String _statusLabel(String status) {
-  switch (status) {
-    case 'pending_summary':
-      return '待总结';
-    case 'ordered':
-      return '已出单';
-    case 'unmarked':
-    default:
-      return '待处理';
-  }
+bool _canEdit(UserRole role) {
+  return role == UserRole.admin ||
+      role == UserRole.frontDesk ||
+      role == UserRole.sales ||
+      role == UserRole.taster ||
+      role == UserRole.finance;
 }
 
-StatusTone _statusTone(String status) {
-  switch (status) {
-    case 'pending_summary':
-      return StatusTone.info;
-    case 'ordered':
-      return StatusTone.success;
-    case 'unmarked':
-    default:
-      return StatusTone.warning;
-  }
+bool _canMark(UserRole role) {
+  return role == UserRole.admin || role == UserRole.finance;
+}
+
+bool _canSubmitSummary(UserRole role) {
+  return role == UserRole.admin || role == UserRole.taster;
 }
 
 String _messageForError(Object error) {

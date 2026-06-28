@@ -6,41 +6,36 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
-import { UsersNestService } from './users.nest.service';
+import { GuidesNestService } from './guides.nest.service';
 
-@Controller('users')
-export class UsersNestController {
+@Controller('guides')
+export class GuidesNestController {
   constructor(
     private readonly authService: AuthNestService,
-    private readonly usersService: UsersNestService,
+    private readonly guidesService: GuidesNestService,
   ) {}
 
   @Get()
-  async list(@Req() request: any) {
+  async list(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      users: await this.usersService.listUsers(actor),
+      guides: await this.guidesService.listGuides(actor, query),
     };
   }
 
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return this.usersService.createUser(actor, body, {
-      ipAddress: getRequestIp(request),
-    });
-  }
-
-  @Get('tasters')
-  async listTasters(@Req() request: any) {
-    const actor = await this.authService.authenticateRequest(request);
     return {
-      tasters: await this.usersService.listTasters(actor),
+      guide: await this.guidesService.createGuide(actor, body, {
+        ipAddress: getRequestIp(request),
+      }),
     };
   }
 
@@ -48,7 +43,7 @@ export class UsersNestController {
   async get(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      user: await this.usersService.getUser(actor, id),
+      guide: await this.guidesService.getGuide(actor, id),
     };
   }
 
@@ -56,7 +51,7 @@ export class UsersNestController {
   async update(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      user: await this.usersService.updateUser(actor, id, body, {
+      guide: await this.guidesService.updateGuide(actor, id, body, {
         ipAddress: getRequestIp(request),
       }),
     };
@@ -67,7 +62,7 @@ export class UsersNestController {
   async disable(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      user: await this.usersService.setUserActive(actor, id, false, {
+      guide: await this.guidesService.setGuideActive(actor, id, false, {
         ipAddress: getRequestIp(request),
       }),
     };
@@ -78,18 +73,7 @@ export class UsersNestController {
   async enable(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      user: await this.usersService.setUserActive(actor, id, true, {
-        ipAddress: getRequestIp(request),
-      }),
-    };
-  }
-
-  @Post(':id/reset-password')
-  @HttpCode(200)
-  async resetPassword(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
-    const actor = await this.authService.authenticateRequest(request);
-    return {
-      user: await this.usersService.resetPassword(actor, id, body, {
+      guide: await this.guidesService.setGuideActive(actor, id, true, {
         ipAddress: getRequestIp(request),
       }),
     };

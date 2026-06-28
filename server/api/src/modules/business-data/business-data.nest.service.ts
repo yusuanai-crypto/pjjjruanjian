@@ -5,6 +5,7 @@ import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import { withGeneratedTravelGroupNo } from './travel-group-no.helper';
 
 const GROUP_TABLES: any = {
   travel: {
@@ -37,6 +38,61 @@ const GROUP_STATUS_FROM_PRISMA: any = {
   UNMARKED: 'unmarked',
   PENDING_SUMMARY: 'pending_summary',
   ORDERED: 'ordered',
+};
+
+const TRAVEL_GROUP_FINANCE_PATCH_FIELDS = [
+  'status',
+  'salesAmountCents',
+  'paidDepositCents',
+  'cashOnDeliveryCents',
+  'liquorCostDeductionCents',
+  'orderAmountCents',
+  'points',
+  'returnedPoints',
+  'unreturnedPoints',
+  'guideInfoSent',
+  'travelAgencyInfoSent',
+  'remarks',
+];
+
+const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
+  admin: [
+    'groupNo',
+    'visitDate',
+    'travelAgency',
+    'licensePlate',
+    'guideId',
+    'guideName',
+    'guidePhone',
+    'guestCount',
+    'tastingRoomNo',
+    'tasterId',
+    'tasterName',
+    'arrivalTime',
+    'groupType',
+    'wineDetails',
+    'departureTime',
+    'remarks',
+    'tasterSummary',
+    'tastingItems',
+    ...TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
+  ],
+  front_desk: [
+    'visitDate',
+    'travelAgency',
+    'licensePlate',
+    'guideId',
+    'guestCount',
+    'tastingRoomNo',
+    'tasterId',
+    'arrivalTime',
+    'groupType',
+    'remarks',
+    'tastingItems',
+  ],
+  sales: ['guestCount', 'departureTime', 'remarks', 'tastingItems'],
+  taster: ['guestCount', 'tasterSummary', 'wineDetails'],
+  finance: TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
 };
 
 const ORDER_TYPE_TO_PRISMA: any = {
@@ -102,26 +158,54 @@ export class BusinessDataNestService {
     requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
     const table = getGroupTable(kind);
     const delegate = this.groupDelegate(table);
-    const where = await this.buildScopedGroupWhere(kind, actor, buildGroupWhere(filters));
+    const where = await this.buildScopedGroupWhere(kind, actor, buildGroupWhere(filters, kind));
+    const include = getGroupInclude(kind);
+    const take = normalizeTake(filters.limit, 50);
+    const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
     const groups = await delegate.findMany({
       where,
       orderBy: {
         createdAt: 'desc',
       },
-      take: normalizeTake(filters.limit, 50),
+      take: pendingStatusFilter ? 200 : take,
+      ...(include ? { include } : {}),
     });
-    return groups.map((group: any) => toGroupDto(group, kind));
+    return filterGroupDtosByComputedFields(annotateDuplicateGroupNos(groups).map((group: any) => toGroupDto(group, kind)), filters).slice(0, take);
+  }
+
+  async listPendingTravelGroups(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
+    const take = normalizeTake(filters.limit, 50);
+    const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
+    const groups = await this.prisma.travelGroup.findMany({
+      where: await this.buildRoleScopedTravelGroupWhere(actor, buildGroupWhere(filters, 'travel')),
+      include: getGroupInclude('travel', 'detail') as any,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: pendingStatusFilter ? 500 : 200,
+    });
+    return filterGroupDtosByComputedFields(
+      annotateDuplicateGroupNos(groups).map((group: any) => toGroupDto(group, 'travel')),
+      filters,
+    )
+      .filter((group: any) => group.pendingStatus)
+      .slice(0, take);
   }
 
   async getGroup(kind: string, actor: any, id: string) {
     requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
-    const group = await this.findGroupOrThrow(kind, id);
+    const group = await this.findGroupOrThrow(kind, id, true);
     await this.assertCanReadGroup(kind, actor, group);
     await this.assertPassesGlobalGroupMarkScope(group);
     return toGroupDto(group, kind);
   }
 
   async createGroup(kind: string, actor: any, payload: any, metadata: any = {}) {
+    if (kind === 'travel') {
+      return this.createTravelGroup(actor, payload, metadata);
+    }
+
     requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance']);
     const table = getGroupTable(kind);
     const delegate = this.groupDelegate(table);
@@ -147,8 +231,80 @@ export class BusinessDataNestService {
     return toGroupDto(created, kind);
   }
 
+  private async createTravelGroup(actor: any, payload: any, metadata: any = {}) {
+    requireAnyRole(actor, ['admin', 'front_desk']);
+    const data = buildTravelGroupCreateData(payload, actor);
+    const tastingItems = buildTravelGroupTastingItems(payload?.tastingItems);
+
+    const created = await this.prisma.$transaction(async (tx: any) => {
+      const guide = await tx.guide.findUnique({
+        where: {
+          id: data.guideId,
+        },
+      });
+      if (!guide) {
+        throw createHttpError(404, 'GUIDE_NOT_FOUND', 'Guide does not exist.');
+      }
+      if (!guide.isActive) {
+        throw createHttpError(400, 'GUIDE_DISABLED', 'Guide is disabled.');
+      }
+
+      const taster = await tx.user.findUnique({
+        where: {
+          id: data.tasterId,
+        },
+      });
+      if (!taster) {
+        throw createHttpError(404, 'TASTER_NOT_FOUND', 'Taster does not exist.');
+      }
+      if (!isActiveTasterUser(taster)) {
+        throw createHttpError(400, 'INVALID_TASTER', 'tasterId must reference an active taster user.');
+      }
+
+      return withGeneratedTravelGroupNo(tx.travelGroup, data.visitDate, async (groupNo) => {
+        const createdGroup = await tx.travelGroup.create({
+          data: {
+            ...data,
+            groupNo,
+            travelAgency: guide.travelAgency,
+            guideName: guide.name,
+            guidePhone: guide.phone,
+            tasterName: taster.name,
+            ...(tastingItems.length > 0
+              ? {
+                  tastingItems: {
+                    create: tastingItems,
+                  },
+                }
+              : {}),
+          },
+          include: getGroupInclude('travel'),
+        });
+        const dto = toGroupDto(createdGroup, 'travel');
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'travel_groups.create',
+            entityType: 'travel_group',
+            entityId: createdGroup.id,
+            afterData: dto,
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+        return createdGroup;
+      });
+    });
+
+    return toGroupDto(created, 'travel');
+  }
+
   async updateGroup(kind: string, actor: any, id: string, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance']);
+    if (kind === 'travel') {
+      return this.updateTravelGroup(actor, id, payload, metadata);
+    }
+
+    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'finance']);
     const table = getGroupTable(kind);
     const delegate = this.groupDelegate(table);
     const current = await this.findGroupOrThrow(kind, id);
@@ -185,29 +341,163 @@ export class BusinessDataNestService {
     return toGroupDto(updated, kind);
   }
 
+  private async updateTravelGroup(actor: any, id: string, payload: any, metadata: any = {}) {
+    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'taster', 'finance']);
+    assertTravelGroupPatchAllowedFields(actor, payload);
+
+    const current = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, current);
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const data = buildTravelGroupUpdateData(payload, actor);
+
+      if (data.groupNo && data.groupNo !== current.groupNo) {
+        const duplicate = await tx.travelGroup.findUnique({
+          where: {
+            groupNo: data.groupNo,
+          },
+        });
+        if (duplicate) {
+          throw createHttpError(409, 'GROUP_NO_EXISTS', 'Travel group number already exists.');
+        }
+      }
+
+      if (data.guideId !== undefined) {
+        const guide = await tx.guide.findUnique({
+          where: {
+            id: data.guideId,
+          },
+        });
+        if (!guide) {
+          throw createHttpError(404, 'GUIDE_NOT_FOUND', 'Guide does not exist.');
+        }
+        if (!guide.isActive) {
+          throw createHttpError(400, 'GUIDE_DISABLED', 'Guide is disabled.');
+        }
+        data.travelAgency = guide.travelAgency;
+        data.guideName = guide.name;
+        data.guidePhone = guide.phone;
+      }
+
+      if (data.tasterId !== undefined) {
+        const taster = await tx.user.findUnique({
+          where: {
+            id: data.tasterId,
+          },
+        });
+        if (!taster) {
+          throw createHttpError(404, 'TASTER_NOT_FOUND', 'Taster does not exist.');
+        }
+        if (!isActiveTasterUser(taster)) {
+          throw createHttpError(400, 'INVALID_TASTER', 'tasterId must reference an active taster user.');
+        }
+        data.tasterName = taster.name;
+      }
+
+      if (payload?.tastingItems !== undefined) {
+        data.tastingItems = {
+          deleteMany: {},
+          create: buildTravelGroupTastingItems(payload.tastingItems),
+        };
+      }
+
+      const updatedGroup = await tx.travelGroup.update({
+        where: {
+          id,
+        },
+        data,
+        include: getGroupInclude('travel', 'detail'),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'travel_groups.update',
+          entityType: 'travel_group',
+          entityId: updatedGroup.id,
+          beforeData: toGroupDto(current, 'travel'),
+          afterData: toGroupDto(updatedGroup, 'travel'),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedGroup;
+    });
+
+    return toGroupDto(updated, 'travel');
+  }
+
   async setGroupFinanceMark(kind: string, actor: any, id: string, payload: any, metadata: any = {}) {
     requireAnyRole(actor, ['admin', 'finance']);
     const table = getGroupTable(kind);
-    const delegate = this.groupDelegate(table);
-    const current = await this.findGroupOrThrow(kind, id);
+    const current = await this.findGroupOrThrow(kind, id, kind === 'travel');
     const marked = normalizeBoolean(payload?.financeMark ?? payload?.marked, 'financeMark');
-    const updated = await delegate.update({
-      where: {
-        id,
-      },
-      data: buildFinanceMarkData(marked, actor),
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const include = getGroupInclude(kind, kind === 'travel' ? 'detail' : 'list');
+      const updatedGroup = await tx[table.delegate].update({
+        where: {
+          id,
+        },
+        data: buildFinanceMarkData(marked, actor),
+        ...(include ? { include } : {}),
+      });
+
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: `${table.logPrefix}.finance_mark.${marked ? 'enable' : 'disable'}`,
+          entityType: table.entityType,
+          entityId: updatedGroup.id,
+          beforeData: toGroupDto(current, kind),
+          afterData: toGroupDto(updatedGroup, kind),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedGroup;
     });
 
-    await this.operationLogsService.appendLog({
-      userId: actor.id,
-      action: `${table.logPrefix}.finance_mark.${marked ? 'enable' : 'disable'}`,
-      entityType: table.entityType,
-      entityId: updated.id,
-      beforeData: toGroupDto(current, kind),
-      afterData: toGroupDto(updated, kind),
-      ipAddress: metadata.ipAddress || null,
-    });
     return toGroupDto(updated, kind);
+  }
+
+  async submitTravelGroupTasterSummary(actor: any, id: string, payload: any, metadata: any = {}) {
+    requireAnyRole(actor, ['admin', 'taster']);
+    const current = await this.findGroupOrThrow('travel', id, true);
+    if (actor.role === 'taster' && current.tasterId !== actor.id) {
+      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+    }
+
+    const now = new Date();
+    const summary = normalizeRequiredString(payload?.tasterSummary, 'tasterSummary');
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedGroup = await tx.travelGroup.update({
+        where: {
+          id,
+        },
+        data: {
+          tasterSummary: summary,
+          tasterSummaryAt: now,
+          updatedById: actor.id,
+          updatedAt: now,
+        },
+        include: getGroupInclude('travel', 'detail'),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'travel_groups.taster_summary.upsert',
+          entityType: 'travel_group',
+          entityId: updatedGroup.id,
+          beforeData: toGroupDto(current, 'travel'),
+          afterData: toGroupDto(updatedGroup, 'travel'),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedGroup;
+    });
+
+    return toGroupDto(updated, 'travel');
   }
 
   async listSalesOrders(actor: any, filters: any = {}) {
@@ -371,7 +661,7 @@ export class BusinessDataNestService {
       buildGroupWhere({
         dateFrom: filters.dateFrom || filters.start,
         dateTo: filters.dateTo || filters.end,
-      }),
+      }, 'travel'),
     );
     const [orders, groups] = await Promise.all([
       this.prisma.salesOrder.findMany({
@@ -510,6 +800,10 @@ export class BusinessDataNestService {
     return andWhere(andWhere(baseWhere, await this.buildGroupDataScope(kind, actor)), await this.buildGlobalGroupMarkScope());
   }
 
+  private async buildRoleScopedTravelGroupWhere(actor: any, baseWhere: any) {
+    return andWhere(baseWhere, await this.buildGroupDataScope('travel', actor));
+  }
+
   private async buildScopedSalesOrderWhere(actor: any, baseWhere: any) {
     return andWhere(andWhere(baseWhere, buildSalesOrderDataScope(actor)), await this.buildGlobalSalesOrderMarkScope());
   }
@@ -517,6 +811,10 @@ export class BusinessDataNestService {
   private async buildGroupDataScope(kind: string, actor: any) {
     if (actor?.role === 'taster') {
       return { tasterId: actor.id };
+    }
+
+    if (actor?.role === 'front_desk' && kind === 'travel') {
+      return { createdById: actor.id };
     }
 
     if (actor?.role === 'sales') {
@@ -549,6 +847,13 @@ export class BusinessDataNestService {
   private async assertCanReadGroup(kind: string, actor: any, group: any) {
     if (actor?.role === 'taster') {
       if (group.tasterId === actor.id) {
+        return;
+      }
+      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+    }
+
+    if (actor?.role === 'front_desk' && kind === 'travel') {
+      if (group.createdById === actor.id) {
         return;
       }
       throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
@@ -620,12 +925,14 @@ export class BusinessDataNestService {
     return Boolean(settings.onlyShowMarkedRecords);
   }
 
-  private async findGroupOrThrow(kind: string, id: string) {
+  private async findGroupOrThrow(kind: string, id: string, detail = false) {
     const table = getGroupTable(kind);
+    const include = getGroupInclude(kind, detail ? 'detail' : 'list');
     const group = await this.groupDelegate(table).findUnique({
       where: {
         id,
       },
+      ...(include ? { include } : {}),
     });
     if (!group) {
       throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
@@ -642,9 +949,42 @@ function getGroupTable(kind: string) {
   return table;
 }
 
-function buildGroupWhere(filters: any = {}) {
+function getGroupInclude(kind: string, mode = 'list') {
+  if (kind !== 'travel') {
+    return null;
+  }
+  if (mode === 'detail') {
+    return {
+      tastingItems: {
+        orderBy: {
+          sortOrder: 'asc',
+        },
+      },
+      taster: true,
+      salesOrders: {
+        orderBy: {
+          createdAt: 'desc',
+        },
+      },
+    };
+  }
+  return {
+    tastingItems: {
+      orderBy: {
+        sortOrder: 'asc',
+      },
+    },
+    salesOrders: {
+      orderBy: {
+        createdAt: 'desc',
+      },
+    },
+  };
+}
+
+function buildGroupWhere(filters: any = {}, kind = '') {
   const where: any = {};
-  const query = normalizeOptionalString(filters.query || filters.search);
+  const query = normalizeOptionalString(filters.keyword || filters.query || filters.search);
   if (query) {
     where.OR = [
       { groupNo: { contains: query } },
@@ -652,6 +992,27 @@ function buildGroupWhere(filters: any = {}) {
       { guideName: { contains: query } },
       { tasterName: { contains: query } },
     ];
+  }
+  const groupNo = normalizeOptionalString(filters.groupNo);
+  if (groupNo) {
+    where.groupNo = {
+      contains: groupNo,
+    };
+  }
+  const guideId = normalizeOptionalString(filters.guideId);
+  if (guideId && kind === 'travel') {
+    where.guideId = guideId;
+  }
+  const tasterId = normalizeOptionalString(filters.tasterId);
+  if (tasterId) {
+    where.tasterId = tasterId;
+  }
+  const groupType = normalizeOptionalString(filters.groupType);
+  if (groupType) {
+    where.groupType = groupType;
+  }
+  if (filters.financeMark !== undefined && filters.financeMark !== '') {
+    where.financeMark = normalizeBoolean(filters.financeMark, 'financeMark');
   }
   if (filters.status) {
     where.status = toPrismaGroupStatus(filters.status);
@@ -661,6 +1022,14 @@ function buildGroupWhere(filters: any = {}) {
     where.visitDate = dateRange;
   }
   return where;
+}
+
+function filterGroupDtosByComputedFields(groups: any[], filters: any = {}) {
+  const pendingStatus = normalizeOptionalString(filters.pendingStatus);
+  if (!pendingStatus) {
+    return groups;
+  }
+  return groups.filter((group) => group.pendingStatus === pendingStatus);
 }
 
 function buildSalesOrderWhere(filters: any = {}) {
@@ -783,6 +1152,121 @@ function buildGroupData(payload: any, actor: any, creating: boolean) {
   return data;
 }
 
+function buildTravelGroupCreateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    id: crypto.randomUUID(),
+    visitDate: parseDate(payload?.visitDate, 'visitDate', true),
+    travelAgency: normalizeRequiredString(payload?.travelAgency, 'travelAgency'),
+    licensePlate: normalizeRequiredString(payload?.licensePlate, 'licensePlate'),
+    guideId: normalizeRequiredString(payload?.guideId, 'guideId'),
+    guestCount: normalizeInt(payload?.guestCount, 'guestCount'),
+    tastingRoomNo: normalizeRequiredString(payload?.tastingRoomNo, 'tastingRoomNo'),
+    tasterId: normalizeRequiredString(payload?.tasterId, 'tasterId'),
+    groupType: normalizeRequiredString(payload?.groupType, 'groupType'),
+    createdById: actor.id,
+    updatedById: actor.id,
+    financeMark: false,
+    createdAt: now,
+    updatedAt: now,
+    status: 'UNMARKED',
+  };
+
+  assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
+  assignNullableString(data, 'wineDetails', payload?.wineDetails);
+  assignNullableString(data, 'departureTime', payload?.departureTime);
+  assignNullableString(data, 'remarks', payload?.remarks);
+  if (payload?.status !== undefined) {
+    data.status = toPrismaGroupStatus(payload.status);
+  }
+  assignInt(data, 'salesAmountCents', payload?.salesAmountCents);
+  assignInt(data, 'paidDepositCents', payload?.paidDepositCents);
+  assignInt(data, 'cashOnDeliveryCents', payload?.cashOnDeliveryCents);
+  assignInt(data, 'liquorCostDeductionCents', payload?.liquorCostDeductionCents);
+  assignInt(data, 'orderAmountCents', payload?.orderAmountCents);
+  assignInt(data, 'points', payload?.points);
+  assignInt(data, 'returnedPoints', payload?.returnedPoints);
+  assignInt(data, 'unreturnedPoints', payload?.unreturnedPoints);
+  assignBool(data, 'guideInfoSent', payload?.guideInfoSent);
+  assignBool(data, 'travelAgencyInfoSent', payload?.travelAgencyInfoSent);
+  return data;
+}
+
+function buildTravelGroupUpdateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+
+  assignString(data, 'groupNo', payload?.groupNo, false, 'groupNo');
+  if (payload?.visitDate !== undefined) {
+    data.visitDate = parseDate(payload.visitDate, 'visitDate', false);
+  }
+  assignNullableString(data, 'travelAgency', payload?.travelAgency);
+  assignNullableString(data, 'licensePlate', payload?.licensePlate);
+  if (payload?.guideId !== undefined) {
+    data.guideId = normalizeRequiredString(payload.guideId, 'guideId');
+  }
+  assignNullableString(data, 'guideName', payload?.guideName);
+  assignNullableString(data, 'guidePhone', payload?.guidePhone);
+  assignInt(data, 'guestCount', payload?.guestCount);
+  assignNullableString(data, 'tastingRoomNo', payload?.tastingRoomNo);
+  if (payload?.tasterId !== undefined) {
+    data.tasterId = normalizeRequiredString(payload.tasterId, 'tasterId');
+  }
+  assignNullableString(data, 'tasterName', payload?.tasterName);
+  assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
+  assignNullableString(data, 'groupType', payload?.groupType);
+  assignNullableString(data, 'wineDetails', payload?.wineDetails);
+  assignNullableString(data, 'departureTime', payload?.departureTime);
+  assignNullableString(data, 'remarks', payload?.remarks);
+  if (payload?.status !== undefined) {
+    data.status = toPrismaGroupStatus(payload.status);
+  }
+  assignInt(data, 'salesAmountCents', payload?.salesAmountCents);
+  assignInt(data, 'paidDepositCents', payload?.paidDepositCents);
+  assignInt(data, 'cashOnDeliveryCents', payload?.cashOnDeliveryCents);
+  assignInt(data, 'liquorCostDeductionCents', payload?.liquorCostDeductionCents);
+  assignInt(data, 'orderAmountCents', payload?.orderAmountCents);
+  assignInt(data, 'points', payload?.points);
+  assignInt(data, 'returnedPoints', payload?.returnedPoints);
+  assignInt(data, 'unreturnedPoints', payload?.unreturnedPoints);
+  assignNormalizedBool(data, 'guideInfoSent', payload?.guideInfoSent);
+  assignNormalizedBool(data, 'travelAgencyInfoSent', payload?.travelAgencyInfoSent);
+  if (payload?.tasterSummary !== undefined) {
+    data.tasterSummary = normalizeOptionalString(payload.tasterSummary);
+    data.tasterSummaryAt = data.tasterSummary ? now : null;
+  }
+  return data;
+}
+
+function buildTravelGroupTastingItems(items: any[]) {
+  if (items === undefined || items === null) {
+    return [];
+  }
+  if (!Array.isArray(items)) {
+    throw createHttpError(400, 'VALIDATION_FAILED', 'tastingItems must be an array.');
+  }
+  const now = new Date();
+  return items.map((item, index) => {
+    const quantity = normalizeInt(item?.quantity, `tastingItems[${index}].quantity`);
+    if (quantity <= 0) {
+      throw createHttpError(400, 'VALIDATION_FAILED', `tastingItems[${index}].quantity must be greater than 0.`);
+    }
+    return {
+      id: crypto.randomUUID(),
+      productName: normalizeRequiredString(item?.productName, `tastingItems[${index}].productName`),
+      quantity,
+      unit: normalizeRequiredString(item?.unit, `tastingItems[${index}].unit`),
+      note: normalizeOptionalString(item?.note),
+      sortOrder: normalizeInt(item?.sortOrder, `tastingItems[${index}].sortOrder`, index + 1),
+      createdAt: now,
+      updatedAt: now,
+    };
+  });
+}
+
 function buildSalesOrderData(payload: any, actor: any) {
   const now = new Date();
   const items = buildSalesOrderItems(payload?.items);
@@ -882,23 +1366,25 @@ function buildStrikeBonusAwardData(payload: any) {
 }
 
 function toGroupDto(group: any, kind: string) {
+  const pending = calculateGroupPendingState(group, kind);
+  const salesOrders = Array.isArray(group.salesOrders) ? group.salesOrders.map(toTravelGroupOrderSummaryDto) : [];
   return {
     id: group.id,
     kind,
     groupNo: group.groupNo,
     visitDate: formatDate(group.visitDate),
-    travelAgency: group.travelAgency,
-    licensePlate: group.licensePlate,
-    guideName: group.guideName,
-    guidePhone: group.guidePhone,
+    travelAgency: group.travelAgency || null,
+    licensePlate: group.licensePlate || null,
+    guideName: group.guideName || null,
+    guidePhone: group.guidePhone || null,
     guestCount: Number(group.guestCount || 0),
-    tastingRoomNo: group.tastingRoomNo,
-    tasterName: group.tasterName,
-    arrivalTime: group.arrivalTime,
-    groupType: group.groupType,
-    wineDetails: group.wineDetails,
-    departureTime: group.departureTime,
-    remarks: group.remarks,
+    tastingRoomNo: group.tastingRoomNo || null,
+    tasterName: group.tasterName || null,
+    arrivalTime: group.arrivalTime || null,
+    groupType: group.groupType || null,
+    wineDetails: group.wineDetails || null,
+    departureTime: group.departureTime || null,
+    remarks: group.remarks || null,
     status: GROUP_STATUS_FROM_PRISMA[group.status] || group.status,
     salesAmountCents: Number(group.salesAmountCents || 0),
     paidDepositCents: Number(group.paidDepositCents || 0),
@@ -913,9 +1399,199 @@ function toGroupDto(group: any, kind: string) {
     financeMark: Boolean(group.financeMark),
     markedById: group.markedById || null,
     markedAt: group.markedAt ? toIsoString(group.markedAt) : null,
+    guide: buildGuideSnapshotDto(group),
+    guideId: group.guideId || null,
     tasterId: group.tasterId || null,
+    taster: buildTasterSnapshotDto(group),
+    tasterSummary: group.tasterSummary || null,
+    tasterSummaryAt: group.tasterSummaryAt ? toIsoString(group.tasterSummaryAt) : null,
+    tastingItems: Array.isArray(group.tastingItems)
+      ? group.tastingItems
+          .slice()
+          .sort((left: any, right: any) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0))
+          .map(toTravelGroupTastingItemDto)
+      : [],
+    salesOrders,
+    orderSummary: buildTravelGroupOrderSummaryDto(salesOrders),
+    pendingStatus: pending.status,
+    pendingReasons: pending.reasons,
     createdAt: toIsoString(group.createdAt),
     updatedAt: toIsoString(group.updatedAt),
+  };
+}
+
+function buildGuideSnapshotDto(group: any) {
+  if (!group.guideId && !group.guideName && !group.guidePhone && !group.travelAgency) {
+    return null;
+  }
+  return {
+    id: group.guideId || null,
+    name: group.guideName || null,
+    phone: group.guidePhone || null,
+    travelAgency: group.travelAgency || null,
+  };
+}
+
+function buildTasterSnapshotDto(group: any) {
+  if (group.taster) {
+    return {
+      id: group.taster.id,
+      name: group.taster.name,
+      username: group.taster.username,
+    };
+  }
+  if (!group.tasterId && !group.tasterName) {
+    return null;
+  }
+  return {
+    id: group.tasterId || null,
+    name: group.tasterName || null,
+    username: null,
+  };
+}
+
+function toTravelGroupOrderSummaryDto(order: any) {
+  return {
+    id: order.id,
+    orderNo: order.orderNo,
+    orderType: ORDER_TYPE_FROM_PRISMA[order.orderType] || order.orderType,
+    orderDate: formatDate(order.orderDate),
+    customerName: order.customerName || null,
+    customerPhone: order.customerPhone || null,
+    totalAmountCents: Number(order.totalAmountCents || 0),
+    cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
+    status: ORDER_STATUS_FROM_PRISMA[order.status] || order.status,
+    financeMark: Boolean(order.financeMark),
+    markedById: order.markedById || null,
+    markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
+    salesUserId: order.salesUserId || null,
+  };
+}
+
+function buildTravelGroupOrderSummaryDto(salesOrders: any[]) {
+  return {
+    orderCount: salesOrders.length,
+    totalAmountCents: salesOrders.reduce((sum, order) => sum + Number(order.totalAmountCents || 0), 0),
+    cashOnDeliveryAmountCents: salesOrders.reduce(
+      (sum, order) => sum + Number(order.cashOnDeliveryAmountCents || 0),
+      0,
+    ),
+  };
+}
+
+function calculateGroupPendingState(group: any, kind: string) {
+  if (kind !== 'travel') {
+    return {
+      status: null,
+      reasons: [],
+    };
+  }
+
+  const findings: any[] = [];
+  const addFinding = (status: string, reason: string) => {
+    findings.push({ status, reason });
+  };
+
+  if (!hasText(group.tasterId) && !hasText(group.tasterName)) {
+    addFinding('pending_front_desk', 'missing_taster');
+  }
+  if (!hasText(group.guideName)) {
+    addFinding('pending_front_desk', 'missing_guide_name');
+  }
+  if (!hasText(group.guidePhone)) {
+    addFinding('pending_front_desk', 'missing_guide_phone');
+  }
+  if (!hasText(group.travelAgency)) {
+    addFinding('pending_front_desk', 'missing_travel_agency');
+  }
+
+  const guestCount = Number(group.guestCount || 0);
+  if (!Number.isFinite(guestCount) || guestCount <= 0) {
+    addFinding('pending_front_desk', 'missing_guest_count');
+  }
+  if (guestCount === 0) {
+    addFinding('abnormal', 'invalid_guest_count_zero');
+  }
+
+  const salesOrders = Array.isArray(group.salesOrders) ? group.salesOrders : [];
+  if (salesOrders.length === 0 && !hasText(group.tasterSummary)) {
+    addFinding('pending_taster', 'no_order_and_missing_taster_summary');
+  }
+
+  if (!group.financeMark && isAfterVisitDayEnd(group.visitDate)) {
+    addFinding('pending_finance', 'finance_unmarked_after_day_end');
+  }
+
+  if (group.__duplicateGroupNo) {
+    addFinding('abnormal', 'duplicate_group_no');
+  }
+
+  const arrivalMinutes = parseClockMinutes(group.arrivalTime);
+  const departureMinutes = parseClockMinutes(group.departureTime);
+  if (arrivalMinutes !== null && departureMinutes !== null && departureMinutes < arrivalMinutes) {
+    addFinding('abnormal', 'departure_before_arrival');
+  }
+
+  const status = ['abnormal', 'pending_front_desk', 'pending_taster', 'pending_finance']
+    .find((candidate) => findings.some((finding) => finding.status === candidate)) || null;
+  return {
+    status,
+    reasons: Array.from(new Set(findings.map((finding) => finding.reason))),
+  };
+}
+
+function annotateDuplicateGroupNos(groups: any[]) {
+  const counts = new Map<string, number>();
+  for (const group of groups) {
+    if (hasText(group.groupNo)) {
+      counts.set(group.groupNo, (counts.get(group.groupNo) || 0) + 1);
+    }
+  }
+  return groups.map((group) => ({
+    ...group,
+    __duplicateGroupNo: hasText(group.groupNo) && (counts.get(group.groupNo) || 0) > 1,
+  }));
+}
+
+function hasText(value: unknown) {
+  return typeof value === 'string' ? value.trim().length > 0 : value !== undefined && value !== null && value !== '';
+}
+
+function isAfterVisitDayEnd(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+  const end = new Date(date);
+  end.setUTCHours(23, 59, 59, 999);
+  return Date.now() > end.getTime();
+}
+
+function parseClockMinutes(value: unknown) {
+  if (!hasText(value)) {
+    return null;
+  }
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+  return hours * 60 + minutes;
+}
+
+function toTravelGroupTastingItemDto(item: any) {
+  return {
+    id: item.id,
+    travelGroupId: item.travelGroupId || null,
+    productName: item.productName,
+    quantity: Number(item.quantity || 0),
+    unit: item.unit,
+    note: item.note || null,
+    sortOrder: Number(item.sortOrder || 0),
   };
 }
 
@@ -1044,6 +1720,21 @@ function requireAnyRole(actor: any, roles: string[]) {
   }
 }
 
+function assertTravelGroupPatchAllowedFields(actor: any, payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(400, 'VALIDATION_FAILED', 'Request body must be an object.');
+  }
+  const allowedFields = new Set(TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || []);
+  const deniedFields = Object.keys(payload).filter((field) => !allowedFields.has(field));
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for ${actor.role}: ${deniedFields.join(', ')}.`,
+    );
+  }
+}
+
 function buildDateRange(startValue: unknown, endValue: unknown) {
   const range: any = {};
   if (startValue) {
@@ -1104,6 +1795,12 @@ function assignInt(data: any, key: string, value: unknown) {
 function assignBool(data: any, key: string, value: unknown) {
   if (value !== undefined) {
     data[key] = Boolean(value);
+  }
+}
+
+function assignNormalizedBool(data: any, key: string, value: unknown) {
+  if (value !== undefined) {
+    data[key] = normalizeBoolean(value, key);
   }
 }
 
@@ -1192,6 +1889,10 @@ function toPrismaDeliveryType(value: unknown) {
     throw createHttpError(400, 'INVALID_DELIVERY_TYPE', 'Sales order item delivery type is invalid.');
   }
   return deliveryType;
+}
+
+function isActiveTasterUser(user: any) {
+  return Boolean(user?.isActive) && ['TASTER', 'taster'].includes(String(user?.role || ''));
 }
 
 function normalizeTake(value: unknown, fallback: number) {

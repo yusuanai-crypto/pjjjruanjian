@@ -477,6 +477,93 @@ test('contract: non-admin users cannot manage users and taster menu is scoped to
   });
 });
 
+test('contract: taster picker only returns active tasters to allowed roles', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const activeTaster = await createUser(baseUrl, admin.token, {
+      name: '启用品鉴师',
+      username: 'active-taster',
+      password: 'Password123',
+      role: 'taster',
+      phone: '13800001234',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '停用品鉴师',
+      username: 'disabled-taster',
+      password: 'Password123',
+      role: 'taster',
+      isActive: false,
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '前台选择品鉴师',
+      username: 'picker-front-desk',
+      password: 'Password123',
+      role: 'front_desk',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '销售选择品鉴师',
+      username: 'picker-sales',
+      password: 'Password123',
+      role: 'sales',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '财务选择品鉴师',
+      username: 'picker-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '库管不可选',
+      username: 'picker-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: '售后不可选',
+      username: 'picker-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+
+    const allowedSessions = [
+      admin,
+      await login(baseUrl, 'picker-front-desk', 'Password123'),
+      await login(baseUrl, 'picker-sales', 'Password123'),
+      await login(baseUrl, 'picker-finance', 'Password123'),
+    ];
+
+    for (const session of allowedSessions) {
+      const result = await requestJson(baseUrl, '/api/users/tasters', {
+        token: session.token,
+      });
+      assert.equal(result.response.status, 200);
+      assert.deepEqual(Object.keys(result.body).sort(), ['data']);
+      assert.deepEqual(Object.keys(result.body.data).sort(), ['tasters']);
+      assert.deepEqual(result.body.data.tasters, [
+        {
+          id: activeTaster.id,
+          name: '启用品鉴师',
+          username: 'active-taster',
+        },
+      ]);
+      assert.deepEqual(Object.keys(result.body.data.tasters[0]).sort(), ['id', 'name', 'username']);
+    }
+
+    const blockedSessions = [
+      await login(baseUrl, 'picker-warehouse', 'Password123'),
+      await login(baseUrl, 'picker-after-sales', 'Password123'),
+      await login(baseUrl, 'active-taster', 'Password123'),
+    ];
+
+    for (const session of blockedSessions) {
+      const blocked = await requestJson(baseUrl, '/api/users/tasters', {
+        token: session.token,
+      });
+      assertErrorContract(blocked, 403, 'PERMISSION_DENIED');
+    }
+  });
+});
+
 test('contract: global mark query switch paths preserve permission and response contracts', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);

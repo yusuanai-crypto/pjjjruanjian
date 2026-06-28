@@ -39,9 +39,18 @@ Widget buildPageForDestination({
     case 'travel_group_form':
       return TravelGroupFormPage(apiClient: apiClient, token: token);
     case 'travel_group_query':
-      return const TravelGroupQueryPage();
+      return TravelGroupQueryPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'pending_travel_groups':
-      return PendingTravelGroupTablePage(apiClient: apiClient, token: token);
+      return PendingTravelGroupTablePage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        onOpenDestination: onOpenDestination,
+      );
     case 'travel_group_finance_supplement':
       return const TravelGroupFinanceSupplementPage();
     case 'travel_group_order_notes':

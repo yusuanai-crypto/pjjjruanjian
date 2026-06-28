@@ -31,6 +31,20 @@ export class UsersNestService {
     return toPublicUser(await this.findUserOrThrow(id));
   }
 
+  async listTasters(actor: any) {
+    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'finance']);
+    const tasters = await this.prisma.user.findMany({
+      where: {
+        role: toPrismaRole('taster'),
+        isActive: true,
+      },
+      orderBy: {
+        username: 'asc',
+      },
+    });
+    return tasters.map(toTasterOption);
+  }
+
   async createUser(actor: any, payload: any, metadata: any = {}) {
     requireAdmin(actor);
     const now = new Date();
@@ -248,9 +262,23 @@ export function toPublicUser(user: any) {
   };
 }
 
+function toTasterOption(user: any) {
+  return {
+    id: user.id,
+    name: user.name,
+    username: user.username,
+  };
+}
+
 function requireAdmin(actor: any) {
   if (!actor || actor.role !== 'admin') {
     throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
+  }
+}
+
+function requireAnyRole(actor: any, roles: string[]) {
+  if (!actor || !roles.includes(actor.role)) {
+    throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
   }
 }
 
