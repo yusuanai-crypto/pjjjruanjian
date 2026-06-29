@@ -11,13 +11,17 @@ function readPrismaFile(relativePath) {
 }
 
 function readMigration(name) {
-  return fs.readFileSync(path.join(migrationsDir, name, 'migration.sql'), 'utf8');
+  return fs.readFileSync(
+    path.join(migrationsDir, name, 'migration.sql'),
+    'utf8',
+  );
 }
 
 test('smoke: Prisma schema exposes phase 2 business models and scope fields', () => {
   const schema = readPrismaFile('schema.prisma');
 
   for (const model of [
+    'TravelAgency',
     'Guide',
     'TravelGroup',
     'TravelGroupTastingItem',
@@ -50,13 +54,76 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
 });
 
 test('smoke: phase 2 Prisma migrations create and evolve business tables', () => {
-  assert.equal(fs.existsSync(path.join(migrationsDir, '20260623000100_business_data_mysql', 'migration.sql')), true);
-  assert.equal(fs.existsSync(path.join(migrationsDir, '20260624000100_business_data_role_scopes', 'migration.sql')), true);
-  assert.equal(fs.existsSync(path.join(migrationsDir, '20260624000200_business_data_finance_marks', 'migration.sql')), true);
-  assert.equal(fs.existsSync(path.join(migrationsDir, '20260627000100_add_guides', 'migration.sql')), true);
-  assert.equal(fs.existsSync(path.join(migrationsDir, '20260627000200_travel_group_phase3_schema', 'migration.sql')), true);
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260623000100_business_data_mysql',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260624000100_business_data_role_scopes',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260624000200_business_data_finance_marks',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(migrationsDir, '20260627000100_add_guides', 'migration.sql'),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260627000200_travel_group_phase3_schema',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260629000100_add_travel_agencies',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260629000200_make_guide_travel_agency_optional',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
 
-  const businessDataMigration = readMigration('20260623000100_business_data_mysql');
+  const businessDataMigration = readMigration(
+    '20260623000100_business_data_mysql',
+  );
   for (const table of [
     'travel_groups',
     'guide_carried_groups',
@@ -67,15 +134,22 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     'reconciliation_payment_methods',
     'strike_bonus_awards',
   ]) {
-    assert.match(businessDataMigration, new RegExp(`CREATE TABLE \`${table}\``));
+    assert.match(
+      businessDataMigration,
+      new RegExp(`CREATE TABLE \`${table}\``),
+    );
   }
 
-  const roleScopesMigration = readMigration('20260624000100_business_data_role_scopes');
+  const roleScopesMigration = readMigration(
+    '20260624000100_business_data_role_scopes',
+  );
   assert.match(roleScopesMigration, /ADD COLUMN `taster_id`/);
   assert.match(roleScopesMigration, /ADD COLUMN `sales_user_id`/);
   assert.match(roleScopesMigration, /sales_orders_sales_user_id_fkey/);
 
-  const financeMarksMigration = readMigration('20260624000200_business_data_finance_marks');
+  const financeMarksMigration = readMigration(
+    '20260624000200_business_data_finance_marks',
+  );
   assert.match(financeMarksMigration, /ADD COLUMN `finance_mark`/);
   assert.match(financeMarksMigration, /ADD COLUMN `marked_by`/);
   assert.match(financeMarksMigration, /ADD COLUMN `marked_at`/);
@@ -88,13 +162,44 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
   assert.match(guidesMigration, /INDEX `guides_travel_agency_idx`/);
   assert.match(guidesMigration, /INDEX `guides_is_active_idx`/);
 
-  const phase3SchemaMigration = readMigration('20260627000200_travel_group_phase3_schema');
+  const phase3SchemaMigration = readMigration(
+    '20260627000200_travel_group_phase3_schema',
+  );
   assert.match(phase3SchemaMigration, /ADD COLUMN `guide_id`/);
   assert.match(phase3SchemaMigration, /ADD COLUMN `taster_summary`/);
   assert.match(phase3SchemaMigration, /ADD COLUMN `taster_summary_at`/);
   assert.match(phase3SchemaMigration, /ADD COLUMN `post_mark_edited_at`/);
   assert.match(phase3SchemaMigration, /ADD COLUMN `post_mark_edited_by_id`/);
-  assert.match(phase3SchemaMigration, /CREATE TABLE `travel_group_tasting_items`/);
+  assert.match(
+    phase3SchemaMigration,
+    /CREATE TABLE `travel_group_tasting_items`/,
+  );
   assert.match(phase3SchemaMigration, /travel_groups_guide_id_fkey/);
-  assert.match(phase3SchemaMigration, /travel_group_tasting_items_travel_group_id_fkey/);
+  assert.match(
+    phase3SchemaMigration,
+    /travel_group_tasting_items_travel_group_id_fkey/,
+  );
+
+  const travelAgenciesMigration = readMigration(
+    '20260629000100_add_travel_agencies',
+  );
+  assert.match(travelAgenciesMigration, /CREATE TABLE `travel_agencies`/);
+  assert.match(travelAgenciesMigration, /`contact_name` VARCHAR\(80\) NULL/);
+  assert.match(travelAgenciesMigration, /`contact_phone` VARCHAR\(30\) NULL/);
+  assert.match(
+    travelAgenciesMigration,
+    /UNIQUE INDEX `travel_agencies_name_key`/,
+  );
+  assert.match(
+    travelAgenciesMigration,
+    /INDEX `travel_agencies_contact_phone_idx`/,
+  );
+
+  const guideAgencyOptionalMigration = readMigration(
+    '20260629000200_make_guide_travel_agency_optional',
+  );
+  assert.match(
+    guideAgencyOptionalMigration,
+    /MODIFY `travel_agency` VARCHAR\(120\) NULL/,
+  );
 });

@@ -33,13 +33,48 @@ async function main() {
   });
 
   const demoUsers = [
-    { id: 'usr_boss_demo', name: '老板测试账号', username: 'boss', role: 'BOSS' },
-    { id: 'usr_front_desk_demo', name: '前台测试账号', username: 'front_desk', role: 'FRONT_DESK' },
-    { id: 'usr_sales_demo', name: '销售测试账号', username: 'sales', role: 'SALES' },
-    { id: 'usr_finance_demo', name: '财务测试账号', username: 'finance', role: 'FINANCE' },
-    { id: 'usr_warehouse_demo', name: '库管测试账号', username: 'warehouse', role: 'WAREHOUSE' },
-    { id: 'usr_after_sales_demo', name: '售后测试账号', username: 'after_sales', role: 'AFTER_SALES' },
-    { id: 'usr_taster_demo', name: '品鉴师测试账号', username: 'taster', role: 'TASTER' },
+    {
+      id: 'usr_boss_demo',
+      name: '老板测试账号',
+      username: 'boss',
+      role: 'BOSS',
+    },
+    {
+      id: 'usr_front_desk_demo',
+      name: '前台测试账号',
+      username: 'front_desk',
+      role: 'FRONT_DESK',
+    },
+    {
+      id: 'usr_sales_demo',
+      name: '销售测试账号',
+      username: 'sales',
+      role: 'SALES',
+    },
+    {
+      id: 'usr_finance_demo',
+      name: '财务测试账号',
+      username: 'finance',
+      role: 'FINANCE',
+    },
+    {
+      id: 'usr_warehouse_demo',
+      name: '库管测试账号',
+      username: 'warehouse',
+      role: 'WAREHOUSE',
+    },
+    {
+      id: 'usr_after_sales_demo',
+      name: '售后测试账号',
+      username: 'after_sales',
+      role: 'AFTER_SALES',
+    },
+    {
+      id: 'usr_taster_demo',
+      name: '品鉴师测试账号',
+      username: 'taster',
+      role: 'TASTER',
+    },
   ];
 
   for (const user of demoUsers) {
@@ -67,7 +102,21 @@ async function main() {
   }
 
   await upsertSetting('only_show_marked_records', 'false', admin.id, now);
-  await upsertSetting('marked_records_restore_required', 'false', admin.id, now);
+  await upsertSetting(
+    'marked_records_restore_required',
+    'false',
+    admin.id,
+    now,
+  );
+
+  await upsertTravelAgencies(
+    [
+      { name: '黔程旅行社', notes: '系统示例旅行社' },
+      { name: '导游自带', notes: '系统示例导游自带来源' },
+      { name: '山水国旅', notes: '系统示例旅行社' },
+    ],
+    now,
+  );
 
   await upsertGuideSnapshots(
     [
@@ -411,18 +460,78 @@ async function main() {
       afterData: {
         defaultAdmin: admin.username,
         demoUsers: demoUsers.map((user) => user.username),
-        settings: ['only_show_marked_records', 'marked_records_restore_required'],
+        settings: [
+          'only_show_marked_records',
+          'marked_records_restore_required',
+        ],
       },
       createdAt: now,
     },
   });
 }
 
-async function upsertGuideSnapshots(
-  guides: Array<{ name: string; phone: string; travelAgency: string; remarks?: string }>,
+async function upsertTravelAgencies(
+  agencies: Array<{
+    name: string;
+    contactName?: string;
+    contactPhone?: string;
+    notes?: string;
+  }>,
   updatedAt: Date,
 ) {
-  const uniqueGuides = new Map<string, { name: string; phone: string; travelAgency: string; remarks?: string }>();
+  const uniqueAgencies = new Map<
+    string,
+    {
+      name: string;
+      contactName?: string;
+      contactPhone?: string;
+      notes?: string;
+    }
+  >();
+  for (const agency of agencies) {
+    const name = agency.name.trim();
+    if (!name) {
+      continue;
+    }
+    uniqueAgencies.set(name, { ...agency, name });
+  }
+
+  for (const agency of uniqueAgencies.values()) {
+    await prisma.travelAgency.upsert({
+      where: {
+        name: agency.name,
+      },
+      update: {
+        contactName: agency.contactName ?? null,
+        contactPhone: agency.contactPhone ?? null,
+        notes: agency.notes ?? null,
+        updatedAt,
+      },
+      create: {
+        name: agency.name,
+        contactName: agency.contactName ?? null,
+        contactPhone: agency.contactPhone ?? null,
+        notes: agency.notes ?? null,
+        createdAt: updatedAt,
+        updatedAt,
+      },
+    });
+  }
+}
+
+async function upsertGuideSnapshots(
+  guides: Array<{
+    name: string;
+    phone: string;
+    travelAgency: string;
+    remarks?: string;
+  }>,
+  updatedAt: Date,
+) {
+  const uniqueGuides = new Map<
+    string,
+    { name: string; phone: string; travelAgency: string; remarks?: string }
+  >();
   for (const guide of guides) {
     if (!guide.phone) {
       continue;
@@ -455,7 +564,12 @@ async function upsertGuideSnapshots(
   }
 }
 
-async function upsertSetting(settingKey: string, settingValue: string, updatedBy: string, updatedAt: Date) {
+async function upsertSetting(
+  settingKey: string,
+  settingValue: string,
+  updatedBy: string,
+  updatedAt: Date,
+) {
   await prisma.systemSetting.upsert({
     where: {
       settingKey,

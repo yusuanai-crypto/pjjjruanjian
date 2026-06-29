@@ -93,9 +93,13 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     assert.equal(salesList.response.status, 200);
     assert.deepEqual(guidePhones(salesList.body.data.guides), ['13800001234']);
 
-    const financeDetail = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}`, {
-      token: finance.token,
-    });
+    const financeDetail = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}`,
+      {
+        token: finance.token,
+      },
+    );
     assert.equal(financeDetail.response.status, 200);
     assert.equal(financeDetail.body.data.guide.phone, '13800001234');
 
@@ -110,57 +114,83 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     });
     assertErrorContract(salesCreate, 403, 'PERMISSION_DENIED');
 
-    const updated = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}`, {
-      method: 'PATCH',
-      token: frontDesk.token,
-      body: {
-        name: '更新导游',
-        phone: '13800002222',
-        travelAgency: '更新旅行社',
-        remarks: '更新备注',
+    const updated = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}`,
+      {
+        method: 'PATCH',
+        token: frontDesk.token,
+        body: {
+          name: '更新导游',
+          phone: '13800002222',
+          travelAgency: '更新旅行社',
+          remarks: '更新备注',
+        },
       },
-    });
+    );
     assert.equal(updated.response.status, 200);
     assert.equal(updated.body.data.guide.name, '更新导游');
     assert.equal(updated.body.data.guide.phone, '13800002222');
     assert.equal(updated.body.data.guide.travelAgency, '更新旅行社');
 
-    const duplicatePatch = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}`, {
-      method: 'PATCH',
-      token: frontDesk.token,
-      body: {
-        phone: second.body.data.guide.phone,
+    const duplicatePatch = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}`,
+      {
+        method: 'PATCH',
+        token: frontDesk.token,
+        body: {
+          phone: second.body.data.guide.phone,
+        },
       },
-    });
+    );
     assertErrorContract(duplicatePatch, 409, 'GUIDE_PHONE_EXISTS');
 
-    const salesPatch = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}`, {
-      method: 'PATCH',
-      token: sales.token,
-      body: {
-        remarks: '销售不可改',
+    const salesPatch = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}`,
+      {
+        method: 'PATCH',
+        token: sales.token,
+        body: {
+          remarks: '销售不可改',
+        },
       },
-    });
+    );
     assertErrorContract(salesPatch, 403, 'PERMISSION_DENIED');
 
-    const frontDeskDisable = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}/disable`, {
-      method: 'POST',
-      token: frontDesk.token,
-    });
+    const frontDeskDisable = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}/disable`,
+      {
+        method: 'POST',
+        token: frontDesk.token,
+      },
+    );
     assertErrorContract(frontDeskDisable, 403, 'PERMISSION_DENIED');
 
-    const disabled = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}/disable`, {
-      method: 'POST',
-      token: admin.token,
-    });
+    const disabled = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}/disable`,
+      {
+        method: 'POST',
+        token: admin.token,
+      },
+    );
     assert.equal(disabled.response.status, 200);
     assert.equal(disabled.body.data.guide.isActive, false);
 
-    const inactiveList = await requestJson(baseUrl, '/api/guides?isActive=false', {
-      token: admin.token,
-    });
+    const inactiveList = await requestJson(
+      baseUrl,
+      '/api/guides?isActive=false',
+      {
+        token: admin.token,
+      },
+    );
     assert.equal(inactiveList.response.status, 200);
-    assert.deepEqual(guidePhones(inactiveList.body.data.guides), ['13800002222']);
+    assert.deepEqual(guidePhones(inactiveList.body.data.guides), [
+      '13800002222',
+    ]);
 
     const activeList = await requestJson(baseUrl, '/api/guides?isActive=true', {
       token: admin.token,
@@ -168,30 +198,58 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     assert.equal(activeList.response.status, 200);
     assert.deepEqual(guidePhones(activeList.body.data.guides), ['13800005678']);
 
-    const agencyList = await requestJson(baseUrl, '/api/guides?travelAgency=更新旅行社', {
-      token: admin.token,
-    });
+    const agencyList = await requestJson(
+      baseUrl,
+      '/api/guides?travelAgency=更新旅行社',
+      {
+        token: admin.token,
+      },
+    );
     assert.equal(agencyList.response.status, 200);
     assert.deepEqual(guidePhones(agencyList.body.data.guides), ['13800002222']);
 
-    const enabled = await requestJson(baseUrl, `/api/guides/${created.body.data.guide.id}/enable`, {
+    const optionalAgencyGuide = await requestJson(baseUrl, '/api/guides', {
       method: 'POST',
-      token: admin.token,
+      token: frontDesk.token,
+      body: {
+        name: '无旅行社导游',
+        phone: '13800006666',
+      },
     });
+    assert.equal(optionalAgencyGuide.response.status, 201);
+    assert.equal(optionalAgencyGuide.body.data.guide.travelAgency, null);
+
+    const enabled = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}/enable`,
+      {
+        method: 'POST',
+        token: admin.token,
+      },
+    );
     assert.equal(enabled.response.status, 200);
     assert.equal(enabled.body.data.guide.isActive, true);
 
-    const missingGuide = await requestJson(baseUrl, '/api/guides/missing-guide-id', {
-      token: admin.token,
-    });
+    const missingGuide = await requestJson(
+      baseUrl,
+      '/api/guides/missing-guide-id',
+      {
+        token: admin.token,
+      },
+    );
     assertErrorContract(missingGuide, 404, 'GUIDE_NOT_FOUND');
 
-    const logs = await requestJson(baseUrl, '/api/operation-logs?entityType=guide', {
-      token: admin.token,
-    });
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?entityType=guide',
+      {
+        token: admin.token,
+      },
+    );
     assert.equal(logs.response.status, 200);
     const actions = logs.body.data.logs.map((log) => log.action).sort();
     assert.deepEqual(actions, [
+      'guides.create',
       'guides.create',
       'guides.create',
       'guides.disable',
@@ -202,14 +260,22 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
 });
 
 function assertGuideContract(guide) {
-  assert.deepEqual(
-    Object.keys(guide).sort(),
-    ['createdAt', 'id', 'isActive', 'name', 'phone', 'remarks', 'travelAgency', 'updatedAt'],
-  );
+  assert.deepEqual(Object.keys(guide).sort(), [
+    'createdAt',
+    'id',
+    'isActive',
+    'name',
+    'phone',
+    'remarks',
+    'travelAgency',
+    'updatedAt',
+  ]);
   assert.equal(typeof guide.id, 'string');
   assert.equal(typeof guide.name, 'string');
   assert.equal(typeof guide.phone, 'string');
-  assert.equal(typeof guide.travelAgency, 'string');
+  assert.ok(
+    typeof guide.travelAgency === 'string' || guide.travelAgency === null,
+  );
   assert.equal(typeof guide.isActive, 'boolean');
   assert.equal(typeof guide.createdAt, 'string');
   assert.equal(typeof guide.updatedAt, 'string');

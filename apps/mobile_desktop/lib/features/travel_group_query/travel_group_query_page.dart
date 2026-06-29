@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
@@ -11,6 +12,7 @@ import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../travel_group_detail/travel_group_detail_panel.dart';
+import '../travel_groups/tasting_items_editor.dart';
 
 const _allFilter = '__all__';
 const _markedFilter = 'marked';
@@ -29,6 +31,8 @@ const _financeFilters = <String, String>{
   _markedFilter: '已标记',
   _unmarkedFilter: '未标记',
 };
+
+const _editableStatuses = <String>{'unmarked', 'pending_summary', 'ordered'};
 
 class TravelGroupQueryPage extends StatefulWidget {
   const TravelGroupQueryPage({
@@ -260,9 +264,23 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     });
   }
 
-  void _showEditHint() {
+  Future<void> _editTravelGroup(TravelGroupRecord group) async {
+    final updated = await showDialog<TravelGroupRecord>(
+      context: context,
+      builder: (context) => _TravelGroupEditDialog(
+        businessApi: _businessApi,
+        group: group,
+        role: widget.role,
+        guides: _guides,
+        tasters: _tasters,
+      ),
+    );
+    if (updated == null || !mounted) {
+      return;
+    }
+    _replaceGroup(updated);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('当前查询页已预留编辑入口，字段编辑请在对应录入/补充页面完成。')),
+      const SnackBar(content: Text('旅行团信息已保存。')),
     );
   }
 
@@ -359,7 +377,9 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                     role: widget.role,
                     marking: _markingIds.contains(selected.id),
                     summarizing: _summarizingIds.contains(selected.id),
-                    onEdit: _canEdit(widget.role) ? _showEditHint : null,
+                    onEdit: _canEdit(widget.role)
+                        ? () => _editTravelGroup(selected)
+                        : null,
                     onFinanceMark: _canMark(widget.role)
                         ? () => _toggleFinanceMark(selected)
                         : null,
@@ -643,6 +663,675 @@ class _TasterSummaryDialogState extends State<_TasterSummaryDialog> {
   }
 }
 
+class _TravelGroupEditDialog extends StatefulWidget {
+  const _TravelGroupEditDialog({
+    required this.businessApi,
+    required this.group,
+    required this.role,
+    required this.guides,
+    required this.tasters,
+  });
+
+  final BusinessApi businessApi;
+  final TravelGroupRecord group;
+  final UserRole role;
+  final List<GuideRecord> guides;
+  final List<TasterOption> tasters;
+
+  @override
+  State<_TravelGroupEditDialog> createState() => _TravelGroupEditDialogState();
+}
+
+class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _tastingItemsKey = GlobalKey<TastingItemsEditorState>();
+
+  late DateTime _visitDate;
+  late String _selectedGuideId;
+  late String _selectedTasterId;
+  String? _groupType;
+  late String _status;
+  late bool _guideInfoSent;
+  late bool _travelAgencyInfoSent;
+  bool _guideTouched = false;
+  bool _tasterTouched = false;
+  bool _saving = false;
+  String? _errorMessage;
+
+  late final TextEditingController _groupNoController;
+  late final TextEditingController _travelAgencyController;
+  late final TextEditingController _licensePlateController;
+  late final TextEditingController _guestCountController;
+  late final TextEditingController _tastingRoomNoController;
+  late final TextEditingController _arrivalTimeController;
+  late final TextEditingController _departureTimeController;
+  late final TextEditingController _remarksController;
+  late final TextEditingController _wineDetailsController;
+  late final TextEditingController _tasterSummaryController;
+  late final TextEditingController _salesAmountController;
+  late final TextEditingController _paidDepositController;
+  late final TextEditingController _cashOnDeliveryController;
+  late final TextEditingController _liquorCostDeductionController;
+  late final TextEditingController _orderAmountController;
+  late final TextEditingController _pointsController;
+  late final TextEditingController _returnedPointsController;
+  late final TextEditingController _unreturnedPointsController;
+  late final List<TastingItemDraft> _initialTastingItems;
+  late List<Map<String, dynamic>> _tastingItems;
+
+  bool get _isAdmin => widget.role == UserRole.admin;
+  bool get _isFrontDesk => widget.role == UserRole.frontDesk;
+  bool get _isSales => widget.role == UserRole.sales;
+  bool get _isTaster => widget.role == UserRole.taster;
+  bool get _isFinance => widget.role == UserRole.finance;
+
+  bool get _canEditGroupNo => _isAdmin;
+  bool get _canEditFrontDeskFields => _isAdmin || _isFrontDesk;
+  bool get _canEditGuestCount =>
+      _isAdmin || _isFrontDesk || _isSales || _isTaster;
+  bool get _canEditDepartureTime => _isAdmin || _isSales;
+  bool get _canEditTastingItems => _isAdmin || _isFrontDesk || _isSales;
+  bool get _canEditTasterNotes => _isAdmin || _isTaster;
+  bool get _canEditRemarks =>
+      _isAdmin || _isFrontDesk || _isSales || _isFinance;
+  bool get _canEditFinanceFields => _isAdmin || _isFinance;
+
+  bool get _showBasicSection =>
+      _canEditGroupNo || _canEditFrontDeskFields || _canEditGuestCount;
+  bool get _showSupplementSection =>
+      _canEditDepartureTime ||
+      _canEditTastingItems ||
+      _canEditTasterNotes ||
+      _canEditRemarks;
+
+  @override
+  void initState() {
+    super.initState();
+    final group = widget.group;
+    _visitDate = DateTime.tryParse(group.visitDate) ?? DateTime.now();
+    _selectedGuideId = group.guideId ?? '';
+    _selectedTasterId = group.tasterId ?? '';
+    _groupType = _nonEmpty(group.groupType);
+    _status =
+        _editableStatuses.contains(group.status) ? group.status : 'unmarked';
+    _guideInfoSent = group.guideInfoSent;
+    _travelAgencyInfoSent = group.travelAgencyInfoSent;
+
+    _groupNoController = TextEditingController(text: group.groupNo);
+    _travelAgencyController =
+        TextEditingController(text: group.travelAgency ?? '');
+    _licensePlateController =
+        TextEditingController(text: group.licensePlate ?? '');
+    _guestCountController = TextEditingController(text: '${group.guestCount}');
+    _tastingRoomNoController =
+        TextEditingController(text: group.tastingRoomNo ?? '');
+    _arrivalTimeController =
+        TextEditingController(text: group.arrivalTime ?? '');
+    _departureTimeController =
+        TextEditingController(text: group.departureTime ?? '');
+    _remarksController = TextEditingController(text: group.remarks ?? '');
+    _wineDetailsController =
+        TextEditingController(text: group.wineDetails ?? '');
+    _tasterSummaryController =
+        TextEditingController(text: group.tasterSummary ?? '');
+    _salesAmountController =
+        TextEditingController(text: _moneyText(group.salesAmountCents));
+    _paidDepositController =
+        TextEditingController(text: _moneyText(group.paidDepositCents));
+    _cashOnDeliveryController =
+        TextEditingController(text: _moneyText(group.cashOnDeliveryCents));
+    _liquorCostDeductionController =
+        TextEditingController(text: _moneyText(group.liquorCostDeductionCents));
+    _orderAmountController =
+        TextEditingController(text: _moneyText(group.orderAmountCents));
+    _pointsController = TextEditingController(text: '${group.points}');
+    _returnedPointsController =
+        TextEditingController(text: '${group.returnedPoints}');
+    _unreturnedPointsController =
+        TextEditingController(text: '${group.unreturnedPoints}');
+    _initialTastingItems = _tastingDraftsFromGroup(group);
+    _tastingItems = _tastingPayloadFromGroup(group);
+  }
+
+  @override
+  void dispose() {
+    _groupNoController.dispose();
+    _travelAgencyController.dispose();
+    _licensePlateController.dispose();
+    _guestCountController.dispose();
+    _tastingRoomNoController.dispose();
+    _arrivalTimeController.dispose();
+    _departureTimeController.dispose();
+    _remarksController.dispose();
+    _wineDetailsController.dispose();
+    _tasterSummaryController.dispose();
+    _salesAmountController.dispose();
+    _paidDepositController.dispose();
+    _cashOnDeliveryController.dispose();
+    _liquorCostDeductionController.dispose();
+    _orderAmountController.dispose();
+    _pointsController.dispose();
+    _returnedPointsController.dispose();
+    _unreturnedPointsController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final formValid = _formKey.currentState?.validate() ?? false;
+    final tastingValid = !_canEditTastingItems ||
+        (_tastingItemsKey.currentState?.validate() ?? true);
+    if (!formValid || !tastingValid) {
+      setState(() => _errorMessage = '请先修正表单中的提示。');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final updated = await widget.businessApi.updateTravelGroup(
+        widget.group.id,
+        _buildPayload(),
+      );
+      if (mounted) {
+        Navigator.of(context).pop(updated);
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForSaveError(error);
+      });
+    }
+  }
+
+  Map<String, dynamic> _buildPayload() {
+    final payload = <String, dynamic>{};
+
+    if (_canEditGroupNo) {
+      payload['groupNo'] = _groupNoController.text.trim();
+    }
+    if (_canEditFrontDeskFields) {
+      payload['visitDate'] = formatDate(_visitDate);
+      payload['travelAgency'] = _travelAgencyController.text.trim();
+      payload['licensePlate'] = _licensePlateController.text.trim();
+      if (_selectedGuideId.trim().isNotEmpty &&
+          (_guideTouched || _selectedGuideId != (widget.group.guideId ?? ''))) {
+        payload['guideId'] = _selectedGuideId;
+      }
+      payload['tastingRoomNo'] = _tastingRoomNoController.text.trim();
+      if (_selectedTasterId.trim().isNotEmpty &&
+          (_tasterTouched ||
+              _selectedTasterId != (widget.group.tasterId ?? ''))) {
+        payload['tasterId'] = _selectedTasterId;
+      }
+      payload['arrivalTime'] = _arrivalTimeController.text.trim();
+      if ((_groupType ?? '').trim().isNotEmpty) {
+        payload['groupType'] = _groupType!.trim();
+      }
+    }
+    if (_canEditGuestCount) {
+      payload['guestCount'] = _intFromText(_guestCountController.text);
+    }
+    if (_canEditDepartureTime) {
+      payload['departureTime'] = _departureTimeController.text.trim();
+    }
+    if (_canEditRemarks) {
+      payload['remarks'] = _remarksController.text.trim();
+    }
+    if (_canEditTasterNotes) {
+      payload['wineDetails'] = _wineDetailsController.text.trim();
+      payload['tasterSummary'] = _tasterSummaryController.text.trim();
+    }
+    if (_canEditTastingItems) {
+      payload['tastingItems'] = _tastingItems;
+    }
+    if (_canEditFinanceFields) {
+      payload['status'] = _status;
+      payload['salesAmountCents'] =
+          _centsFromMoneyText(_salesAmountController.text);
+      payload['paidDepositCents'] =
+          _centsFromMoneyText(_paidDepositController.text);
+      payload['cashOnDeliveryCents'] =
+          _centsFromMoneyText(_cashOnDeliveryController.text);
+      payload['liquorCostDeductionCents'] =
+          _centsFromMoneyText(_liquorCostDeductionController.text);
+      payload['orderAmountCents'] =
+          _centsFromMoneyText(_orderAmountController.text);
+      payload['points'] = _intFromText(_pointsController.text);
+      payload['returnedPoints'] = _intFromText(_returnedPointsController.text);
+      payload['unreturnedPoints'] =
+          _intFromText(_unreturnedPointsController.text);
+      payload['guideInfoSent'] = _guideInfoSent;
+      payload['travelAgencyInfoSent'] = _travelAgencyInfoSent;
+    }
+
+    return payload;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${widget.group.groupNo} 编辑'),
+      content: SizedBox(
+        width: 760,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_errorMessage != null) ...[
+                  _DialogNotice(message: _errorMessage!),
+                  const SizedBox(height: 12),
+                ],
+                if (_showBasicSection)
+                  _DialogSection(
+                    title: '基础信息',
+                    child: ResponsiveFormGrid(children: _basicFields()),
+                  ),
+                if (_showBasicSection && _showSupplementSection)
+                  const SizedBox(height: 12),
+                if (_showSupplementSection)
+                  _DialogSection(
+                    title: '接待补充',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ResponsiveFormGrid(children: _supplementFields()),
+                        if (_canEditTastingItems) ...[
+                          const SizedBox(height: 12),
+                          TastingItemsEditor(
+                            key: _tastingItemsKey,
+                            initialItems: _initialTastingItems,
+                            onChanged: (items) => _tastingItems = items,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                if ((_showBasicSection || _showSupplementSection) &&
+                    _canEditFinanceFields)
+                  const SizedBox(height: 12),
+                if (_canEditFinanceFields)
+                  _DialogSection(
+                    title: '财务信息',
+                    child: ResponsiveFormGrid(children: _financeFields()),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.check_rounded),
+          label: Text(_saving ? '保存中...' : '保存修改'),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _basicFields() {
+    return [
+      if (_canEditGroupNo)
+        TextFormField(
+          controller: _groupNoController,
+          decoration: const InputDecoration(labelText: '团号'),
+          validator: _requiredValidator('团号不能为空'),
+        ),
+      if (_canEditFrontDeskFields)
+        _EditDateField(
+          label: '日期',
+          value: _visitDate,
+          onTap: _pickVisitDate,
+        ),
+      if (_canEditFrontDeskFields)
+        TextFormField(
+          controller: _travelAgencyController,
+          decoration: const InputDecoration(labelText: '旅行社'),
+        ),
+      if (_canEditFrontDeskFields) _guideDropdown(),
+      if (_canEditFrontDeskFields)
+        TextFormField(
+          controller: _licensePlateController,
+          decoration: const InputDecoration(labelText: '车牌号'),
+        ),
+      if (_canEditGuestCount)
+        TextFormField(
+          controller: _guestCountController,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: const InputDecoration(labelText: '人数'),
+          validator: _positiveIntValidator('人数必须大于 0'),
+        ),
+      if (_canEditFrontDeskFields)
+        TextFormField(
+          controller: _tastingRoomNoController,
+          decoration: const InputDecoration(labelText: '品鉴馆号'),
+        ),
+      if (_canEditFrontDeskFields) _tasterDropdown(),
+      if (_canEditFrontDeskFields)
+        TextFormField(
+          controller: _arrivalTimeController,
+          decoration: const InputDecoration(labelText: '进店时间'),
+        ),
+      if (_canEditFrontDeskFields) _groupTypeDropdown(),
+    ];
+  }
+
+  List<Widget> _supplementFields() {
+    return [
+      if (_canEditDepartureTime)
+        TextFormField(
+          controller: _departureTimeController,
+          decoration: const InputDecoration(labelText: '离店时间'),
+        ),
+      if (_canEditTasterNotes)
+        TextFormField(
+          controller: _wineDetailsController,
+          decoration: const InputDecoration(labelText: '品鉴备注'),
+        ),
+      if (_canEditTasterNotes)
+        TextFormField(
+          controller: _tasterSummaryController,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: '品鉴总结'),
+        ),
+      if (_canEditRemarks)
+        TextFormField(
+          controller: _remarksController,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: '备注'),
+        ),
+    ];
+  }
+
+  List<Widget> _financeFields() {
+    return [
+      _statusDropdown(),
+      _moneyField(_salesAmountController, '销售金额（元）'),
+      _moneyField(_paidDepositController, '已付定金（元）'),
+      _moneyField(_cashOnDeliveryController, '货到付款（元）'),
+      _moneyField(_liquorCostDeductionController, '酒水成本扣除（元）'),
+      _moneyField(_orderAmountController, '订单金额（元）'),
+      _intField(_pointsController, '积分'),
+      _intField(_returnedPointsController, '已返积分'),
+      _intField(_unreturnedPointsController, '未返积分'),
+      CheckboxListTile(
+        value: _guideInfoSent,
+        contentPadding: EdgeInsets.zero,
+        title: const Text('已发送导游信息'),
+        onChanged: (value) {
+          setState(() => _guideInfoSent = value ?? false);
+        },
+      ),
+      CheckboxListTile(
+        value: _travelAgencyInfoSent,
+        contentPadding: EdgeInsets.zero,
+        title: const Text('已发送旅行社信息'),
+        onChanged: (value) {
+          setState(() => _travelAgencyInfoSent = value ?? false);
+        },
+      ),
+    ];
+  }
+
+  Widget _guideDropdown() {
+    final items = _guideItems();
+    final values = items.map((item) => item.key).toSet();
+    final safeValue = values.contains(_selectedGuideId) ? _selectedGuideId : '';
+    return DropdownButtonFormField<String>(
+      initialValue: safeValue,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: '导游'),
+      items: [
+        const DropdownMenuItem(value: '', child: Text('未选择')),
+        for (final item in items)
+          DropdownMenuItem(
+            value: item.key,
+            child: Text(item.value, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (value) {
+        setState(() {
+          _selectedGuideId = value ?? '';
+          _guideTouched = true;
+          final guide = _guideById(_selectedGuideId);
+          if (guide != null) {
+            _travelAgencyController.text = guide.travelAgency;
+          }
+        });
+      },
+    );
+  }
+
+  Widget _tasterDropdown() {
+    final items = _tasterItems();
+    final values = items.map((item) => item.key).toSet();
+    final safeValue =
+        values.contains(_selectedTasterId) ? _selectedTasterId : '';
+    return DropdownButtonFormField<String>(
+      initialValue: safeValue,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: '品鉴师'),
+      items: [
+        const DropdownMenuItem(value: '', child: Text('未选择')),
+        for (final item in items)
+          DropdownMenuItem(
+            value: item.key,
+            child: Text(item.value, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (value) {
+        setState(() {
+          _selectedTasterId = value ?? '';
+          _tasterTouched = true;
+        });
+      },
+    );
+  }
+
+  Widget _groupTypeDropdown() {
+    final options = [
+      for (final type in groupTypes) type,
+      if (_groupType != null && !groupTypes.contains(_groupType)) _groupType!,
+    ];
+    final value =
+        _groupType != null && options.contains(_groupType) ? _groupType : null;
+    return DropdownButtonFormField<String>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: '团型'),
+      items: [
+        for (final type in options)
+          DropdownMenuItem(value: type, child: Text(type)),
+      ],
+      onChanged: (value) => setState(() => _groupType = value),
+    );
+  }
+
+  Widget _statusDropdown() {
+    return DropdownButtonFormField<String>(
+      initialValue: _status,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: '状态'),
+      items: const [
+        DropdownMenuItem(value: 'unmarked', child: Text('未出单')),
+        DropdownMenuItem(value: 'pending_summary', child: Text('待总结')),
+        DropdownMenuItem(value: 'ordered', child: Text('已出单')),
+      ],
+      onChanged: (value) {
+        if (value != null) {
+          setState(() => _status = value);
+        }
+      },
+    );
+  }
+
+  Widget _moneyField(TextEditingController controller, String label) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: true,
+        signed: true,
+      ),
+      decoration: InputDecoration(labelText: label),
+      validator: _moneyValidator,
+    );
+  }
+
+  Widget _intField(TextEditingController controller, String label) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(signed: true),
+      decoration: InputDecoration(labelText: label),
+      validator: _integerValidator,
+    );
+  }
+
+  Future<void> _pickVisitDate() async {
+    final result = await showDatePicker(
+      context: context,
+      initialDate: _visitDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2030),
+    );
+    if (result != null) {
+      setState(() => _visitDate = result);
+    }
+  }
+
+  List<MapEntry<String, String>> _guideItems() {
+    final items = <String, String>{};
+    if ((widget.group.guideId ?? '').isNotEmpty) {
+      items[widget.group.guideId!] =
+          '${_display(widget.group.guideName)} · ${_display(widget.group.guidePhone)}';
+    }
+    for (final guide in widget.guides) {
+      if (guide.id.trim().isNotEmpty) {
+        items[guide.id] =
+            '${guide.name} · ${guide.phone} · ${guide.travelAgency}';
+      }
+    }
+    return items.entries.toList();
+  }
+
+  List<MapEntry<String, String>> _tasterItems() {
+    final items = <String, String>{};
+    if ((widget.group.tasterId ?? '').isNotEmpty) {
+      items[widget.group.tasterId!] = _display(widget.group.tasterName);
+    }
+    for (final taster in widget.tasters) {
+      if (taster.id.trim().isNotEmpty) {
+        items[taster.id] = _tasterLabel(taster);
+      }
+    }
+    return items.entries.toList();
+  }
+
+  GuideRecord? _guideById(String id) {
+    for (final guide in widget.guides) {
+      if (guide.id == id) {
+        return guide;
+      }
+    }
+    return null;
+  }
+}
+
+class _DialogSection extends StatelessWidget {
+  const _DialogSection({
+    required this.title,
+    required this.child,
+  });
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DialogNotice extends StatelessWidget {
+  const _DialogNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return StatusTag(label: message, tone: StatusTone.danger);
+  }
+}
+
+class _EditDateField extends StatelessWidget {
+  const _EditDateField({
+    required this.label,
+    required this.value,
+    required this.onTap,
+  });
+
+  final String label;
+  final DateTime value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      key: ValueKey(formatDate(value)),
+      readOnly: true,
+      onTap: onTap,
+      initialValue: formatDate(value),
+      decoration: InputDecoration(
+        labelText: label,
+        suffixIcon: const Icon(Icons.calendar_month_rounded),
+      ),
+    );
+  }
+}
+
 String? _optionalFilter(String value) {
   return value == _allFilter ? null : value;
 }
@@ -657,6 +1346,108 @@ String _tasterLabel(TasterOption taster) {
     return taster.name;
   }
   return '${taster.name} · ${taster.username}';
+}
+
+String? _nonEmpty(String? value) {
+  final text = value?.trim() ?? '';
+  return text.isEmpty ? null : text;
+}
+
+int _intFromText(String value) {
+  return int.tryParse(value.trim()) ?? 0;
+}
+
+String _moneyText(int cents) {
+  final sign = cents < 0 ? '-' : '';
+  final absolute = cents.abs();
+  final yuan = absolute ~/ 100;
+  final fraction = absolute % 100;
+  if (fraction == 0) {
+    return '$sign$yuan';
+  }
+  return '$sign$yuan.${fraction.toString().padLeft(2, '0')}';
+}
+
+int _centsFromMoneyText(String value) {
+  final text = value.trim().replaceAll(',', '');
+  if (text.isEmpty) {
+    return 0;
+  }
+  final negative = text.startsWith('-');
+  final normalized = negative ? text.substring(1) : text;
+  final parts = normalized.split('.');
+  final yuanText = parts.first.isEmpty ? '0' : parts.first;
+  final yuan = int.tryParse(yuanText) ?? 0;
+  final fractionText = parts.length > 1 ? parts[1] : '';
+  final centsText = fractionText.padRight(2, '0').substring(0, 2);
+  final cents = yuan * 100 + (int.tryParse(centsText) ?? 0);
+  return negative ? -cents : cents;
+}
+
+List<TastingItemDraft> _tastingDraftsFromGroup(TravelGroupRecord group) {
+  return [
+    for (final item in group.tastingItems)
+      TastingItemDraft(
+        productName: item.productName,
+        quantity: item.quantity,
+        unit: item.unit,
+        note: item.note,
+      ),
+  ];
+}
+
+List<Map<String, dynamic>> _tastingPayloadFromGroup(TravelGroupRecord group) {
+  return [
+    for (var index = 0; index < group.tastingItems.length; index += 1)
+      {
+        'productName': group.tastingItems[index].productName,
+        'quantity': group.tastingItems[index].quantity,
+        'unit': group.tastingItems[index].unit,
+        'note': group.tastingItems[index].note,
+        'sortOrder': index + 1,
+      },
+  ];
+}
+
+FormFieldValidator<String> _requiredValidator(String message) {
+  return (value) {
+    if (value == null || value.trim().isEmpty) {
+      return message;
+    }
+    return null;
+  };
+}
+
+FormFieldValidator<String> _positiveIntValidator(String message) {
+  return (value) {
+    final number = int.tryParse((value ?? '').trim()) ?? 0;
+    if (number <= 0) {
+      return message;
+    }
+    return null;
+  };
+}
+
+String? _integerValidator(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  if (int.tryParse(text) == null) {
+    return '请输入整数';
+  }
+  return null;
+}
+
+String? _moneyValidator(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  if (!RegExp(r'^-?\d+(\.\d{1,2})?$').hasMatch(text)) {
+    return '请输入有效金额';
+  }
+  return null;
 }
 
 bool _canEdit(UserRole role) {
@@ -733,4 +1524,11 @@ String _messageForError(Object error) {
     return error.message;
   }
   return '旅行团加载失败，请稍后重试。';
+}
+
+String _messageForSaveError(Object error) {
+  if (error is ApiException) {
+    return error.message;
+  }
+  return '旅行团保存失败，请稍后重试。';
 }

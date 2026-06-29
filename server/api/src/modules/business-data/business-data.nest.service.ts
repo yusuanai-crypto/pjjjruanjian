@@ -155,10 +155,21 @@ export class BusinessDataNestService {
   ) {}
 
   async listGroups(kind: string, actor: any, filters: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+    ]);
     const table = getGroupTable(kind);
     const delegate = this.groupDelegate(table);
-    const where = await this.buildScopedGroupWhere(kind, actor, buildGroupWhere(filters, kind));
+    const where = await this.buildScopedGroupWhere(
+      kind,
+      actor,
+      buildGroupWhere(filters, kind),
+    );
     const include = getGroupInclude(kind);
     const take = normalizeTake(filters.limit, 50);
     const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
@@ -170,15 +181,30 @@ export class BusinessDataNestService {
       take: pendingStatusFilter ? 200 : take,
       ...(include ? { include } : {}),
     });
-    return filterGroupDtosByComputedFields(annotateDuplicateGroupNos(groups).map((group: any) => toGroupDto(group, kind)), filters).slice(0, take);
+    return filterGroupDtosByComputedFields(
+      annotateDuplicateGroupNos(groups).map((group: any) =>
+        toGroupDto(group, kind),
+      ),
+      filters,
+    ).slice(0, take);
   }
 
   async listPendingTravelGroups(actor: any, filters: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+    ]);
     const take = normalizeTake(filters.limit, 50);
     const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
     const groups = await this.prisma.travelGroup.findMany({
-      where: await this.buildRoleScopedTravelGroupWhere(actor, buildGroupWhere(filters, 'travel')),
+      where: await this.buildRoleScopedTravelGroupWhere(
+        actor,
+        buildGroupWhere(filters, 'travel'),
+      ),
       include: getGroupInclude('travel', 'detail') as any,
       orderBy: {
         createdAt: 'desc',
@@ -186,7 +212,9 @@ export class BusinessDataNestService {
       take: pendingStatusFilter ? 500 : 200,
     });
     return filterGroupDtosByComputedFields(
-      annotateDuplicateGroupNos(groups).map((group: any) => toGroupDto(group, 'travel')),
+      annotateDuplicateGroupNos(groups).map((group: any) =>
+        toGroupDto(group, 'travel'),
+      ),
       filters,
     )
       .filter((group: any) => group.pendingStatus)
@@ -194,14 +222,26 @@ export class BusinessDataNestService {
   }
 
   async getGroup(kind: string, actor: any, id: string) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'taster']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+    ]);
     const group = await this.findGroupOrThrow(kind, id, true);
     await this.assertCanReadGroup(kind, actor, group);
     await this.assertPassesGlobalGroupMarkScope(group);
     return toGroupDto(group, kind);
   }
 
-  async createGroup(kind: string, actor: any, payload: any, metadata: any = {}) {
+  async createGroup(
+    kind: string,
+    actor: any,
+    payload: any,
+    metadata: any = {},
+  ) {
     if (kind === 'travel') {
       return this.createTravelGroup(actor, payload, metadata);
     }
@@ -216,7 +256,11 @@ export class BusinessDataNestService {
       },
     });
     if (existing) {
-      throw createHttpError(409, 'GROUP_NO_EXISTS', 'Travel group number already exists.');
+      throw createHttpError(
+        409,
+        'GROUP_NO_EXISTS',
+        'Travel group number already exists.',
+      );
     }
 
     const created = await delegate.create({ data });
@@ -231,7 +275,11 @@ export class BusinessDataNestService {
     return toGroupDto(created, kind);
   }
 
-  private async createTravelGroup(actor: any, payload: any, metadata: any = {}) {
+  private async createTravelGroup(
+    actor: any,
+    payload: any,
+    metadata: any = {},
+  ) {
     requireAnyRole(actor, ['admin', 'front_desk']);
     const data = buildTravelGroupCreateData(payload, actor);
     const tastingItems = buildTravelGroupTastingItems(payload?.tastingItems);
@@ -255,51 +303,68 @@ export class BusinessDataNestService {
         },
       });
       if (!taster) {
-        throw createHttpError(404, 'TASTER_NOT_FOUND', 'Taster does not exist.');
+        throw createHttpError(
+          404,
+          'TASTER_NOT_FOUND',
+          'Taster does not exist.',
+        );
       }
       if (!isActiveTasterUser(taster)) {
-        throw createHttpError(400, 'INVALID_TASTER', 'tasterId must reference an active taster user.');
+        throw createHttpError(
+          400,
+          'INVALID_TASTER',
+          'tasterId must reference an active taster user.',
+        );
       }
 
-      return withGeneratedTravelGroupNo(tx.travelGroup, data.visitDate, async (groupNo) => {
-        const createdGroup = await tx.travelGroup.create({
-          data: {
-            ...data,
-            groupNo,
-            travelAgency: guide.travelAgency,
-            guideName: guide.name,
-            guidePhone: guide.phone,
-            tasterName: taster.name,
-            ...(tastingItems.length > 0
-              ? {
-                  tastingItems: {
-                    create: tastingItems,
-                  },
-                }
-              : {}),
-          },
-          include: getGroupInclude('travel'),
-        });
-        const dto = toGroupDto(createdGroup, 'travel');
-        await this.operationLogsService.appendLog(
-          {
-            userId: actor.id,
-            action: 'travel_groups.create',
-            entityType: 'travel_group',
-            entityId: createdGroup.id,
-            afterData: dto,
-            ipAddress: metadata.ipAddress || null,
-          },
-          tx,
-        );
-        return createdGroup;
-      });
+      return withGeneratedTravelGroupNo(
+        tx.travelGroup,
+        data.visitDate,
+        async (groupNo) => {
+          const createdGroup = await tx.travelGroup.create({
+            data: {
+              ...data,
+              groupNo,
+              guideName: guide.name,
+              guidePhone: guide.phone,
+              tasterName: taster.name,
+              ...(tastingItems.length > 0
+                ? {
+                    tastingItems: {
+                      create: tastingItems,
+                    },
+                  }
+                : {}),
+            },
+            include: getGroupInclude('travel'),
+          });
+          const dto = toGroupDto(createdGroup, 'travel');
+          await this.operationLogsService.appendLog(
+            {
+              userId: actor.id,
+              action: 'travel_groups.create',
+              entityType: 'travel_group',
+              entityId: createdGroup.id,
+              afterData: dto,
+              ipAddress: metadata.ipAddress || null,
+            },
+            tx,
+          );
+          return createdGroup;
+        },
+      );
     });
 
     return toGroupDto(created, 'travel');
   }
 
-  async updateGroup(kind: string, actor: any, id: string, payload: any, metadata: any = {}) {
+  async updateGroup(
+    kind: string,
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
     if (kind === 'travel') {
       return this.updateTravelGroup(actor, id, payload, metadata);
     }
@@ -318,7 +383,11 @@ export class BusinessDataNestService {
         },
       });
       if (duplicate) {
-        throw createHttpError(409, 'GROUP_NO_EXISTS', 'Travel group number already exists.');
+        throw createHttpError(
+          409,
+          'GROUP_NO_EXISTS',
+          'Travel group number already exists.',
+        );
       }
     }
 
@@ -341,8 +410,19 @@ export class BusinessDataNestService {
     return toGroupDto(updated, kind);
   }
 
-  private async updateTravelGroup(actor: any, id: string, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'taster', 'finance']);
+  private async updateTravelGroup(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, [
+      'admin',
+      'front_desk',
+      'sales',
+      'taster',
+      'finance',
+    ]);
     assertTravelGroupPatchAllowedFields(actor, payload);
 
     const current = await this.findGroupOrThrow('travel', id, true);
@@ -358,7 +438,11 @@ export class BusinessDataNestService {
           },
         });
         if (duplicate) {
-          throw createHttpError(409, 'GROUP_NO_EXISTS', 'Travel group number already exists.');
+          throw createHttpError(
+            409,
+            'GROUP_NO_EXISTS',
+            'Travel group number already exists.',
+          );
         }
       }
 
@@ -369,12 +453,15 @@ export class BusinessDataNestService {
           },
         });
         if (!guide) {
-          throw createHttpError(404, 'GUIDE_NOT_FOUND', 'Guide does not exist.');
+          throw createHttpError(
+            404,
+            'GUIDE_NOT_FOUND',
+            'Guide does not exist.',
+          );
         }
         if (!guide.isActive) {
           throw createHttpError(400, 'GUIDE_DISABLED', 'Guide is disabled.');
         }
-        data.travelAgency = guide.travelAgency;
         data.guideName = guide.name;
         data.guidePhone = guide.phone;
       }
@@ -386,10 +473,18 @@ export class BusinessDataNestService {
           },
         });
         if (!taster) {
-          throw createHttpError(404, 'TASTER_NOT_FOUND', 'Taster does not exist.');
+          throw createHttpError(
+            404,
+            'TASTER_NOT_FOUND',
+            'Taster does not exist.',
+          );
         }
         if (!isActiveTasterUser(taster)) {
-          throw createHttpError(400, 'INVALID_TASTER', 'tasterId must reference an active taster user.');
+          throw createHttpError(
+            400,
+            'INVALID_TASTER',
+            'tasterId must reference an active taster user.',
+          );
         }
         data.tasterName = taster.name;
       }
@@ -426,14 +521,26 @@ export class BusinessDataNestService {
     return toGroupDto(updated, 'travel');
   }
 
-  async setGroupFinanceMark(kind: string, actor: any, id: string, payload: any, metadata: any = {}) {
+  async setGroupFinanceMark(
+    kind: string,
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
     requireAnyRole(actor, ['admin', 'finance']);
     const table = getGroupTable(kind);
     const current = await this.findGroupOrThrow(kind, id, kind === 'travel');
-    const marked = normalizeBoolean(payload?.financeMark ?? payload?.marked, 'financeMark');
+    const marked = normalizeBoolean(
+      payload?.financeMark ?? payload?.marked,
+      'financeMark',
+    );
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      const include = getGroupInclude(kind, kind === 'travel' ? 'detail' : 'list');
+      const include = getGroupInclude(
+        kind,
+        kind === 'travel' ? 'detail' : 'list',
+      );
       const updatedGroup = await tx[table.delegate].update({
         where: {
           id,
@@ -460,15 +567,27 @@ export class BusinessDataNestService {
     return toGroupDto(updated, kind);
   }
 
-  async submitTravelGroupTasterSummary(actor: any, id: string, payload: any, metadata: any = {}) {
+  async submitTravelGroupTasterSummary(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
     requireAnyRole(actor, ['admin', 'taster']);
     const current = await this.findGroupOrThrow('travel', id, true);
     if (actor.role === 'taster' && current.tasterId !== actor.id) {
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
 
     const now = new Date();
-    const summary = normalizeRequiredString(payload?.tasterSummary, 'tasterSummary');
+    const summary = normalizeRequiredString(
+      payload?.tasterSummary,
+      'tasterSummary',
+    );
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const updatedGroup = await tx.travelGroup.update({
         where: {
@@ -501,9 +620,20 @@ export class BusinessDataNestService {
   }
 
   async listSalesOrders(actor: any, filters: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'warehouse', 'after_sales']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'warehouse',
+      'after_sales',
+    ]);
     const orders = await this.prisma.salesOrder.findMany({
-      where: await this.buildScopedSalesOrderWhere(actor, buildSalesOrderWhere(filters)),
+      where: await this.buildScopedSalesOrderWhere(
+        actor,
+        buildSalesOrderWhere(filters),
+      ),
       include: {
         items: true,
         travelGroup: true,
@@ -517,7 +647,15 @@ export class BusinessDataNestService {
   }
 
   async getSalesOrder(actor: any, id: string) {
-    requireAnyRole(actor, ['admin', 'boss', 'front_desk', 'sales', 'finance', 'warehouse', 'after_sales']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'warehouse',
+      'after_sales',
+    ]);
     const order = await this.prisma.salesOrder.findUnique({
       where: {
         id,
@@ -528,7 +666,11 @@ export class BusinessDataNestService {
       },
     });
     if (!order) {
-      throw createHttpError(404, 'SALES_ORDER_NOT_FOUND', 'Sales order does not exist.');
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
     }
     assertCanReadSalesOrder(actor, order);
     await this.assertPassesGlobalSalesOrderMarkScope(order);
@@ -545,7 +687,11 @@ export class BusinessDataNestService {
         },
       });
       if (existing) {
-        throw createHttpError(409, 'ORDER_NO_EXISTS', 'Sales order number already exists.');
+        throw createHttpError(
+          409,
+          'ORDER_NO_EXISTS',
+          'Sales order number already exists.',
+        );
       }
 
       let travelGroup: any = null;
@@ -556,7 +702,11 @@ export class BusinessDataNestService {
           },
         });
         if (!travelGroup) {
-          throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Related travel group does not exist.');
+          throw createHttpError(
+            404,
+            'TRAVEL_GROUP_NOT_FOUND',
+            'Related travel group does not exist.',
+          );
         }
       }
 
@@ -569,17 +719,26 @@ export class BusinessDataNestService {
       });
 
       let orderForLog = createdOrder;
-      if (travelGroup && createdOrder.orderType === 'TRAVEL_GROUP' && createdOrder.status === 'VALID') {
+      if (
+        travelGroup &&
+        createdOrder.orderType === 'TRAVEL_GROUP' &&
+        createdOrder.status === 'VALID'
+      ) {
         await tx.travelGroup.update({
           where: {
             id: travelGroup.id,
           },
           data: {
             status: 'ORDERED',
-            salesAmountCents: Number(travelGroup.salesAmountCents || 0) + Number(createdOrder.totalAmountCents || 0),
-            orderAmountCents: Number(travelGroup.orderAmountCents || 0) + Number(createdOrder.totalAmountCents || 0),
+            salesAmountCents:
+              Number(travelGroup.salesAmountCents || 0) +
+              Number(createdOrder.totalAmountCents || 0),
+            orderAmountCents:
+              Number(travelGroup.orderAmountCents || 0) +
+              Number(createdOrder.totalAmountCents || 0),
             cashOnDeliveryCents:
-              Number(travelGroup.cashOnDeliveryCents || 0) + Number(createdOrder.cashOnDeliveryAmountCents || 0),
+              Number(travelGroup.cashOnDeliveryCents || 0) +
+              Number(createdOrder.cashOnDeliveryAmountCents || 0),
             updatedById: actor.id,
             updatedAt: new Date(),
           },
@@ -613,7 +772,12 @@ export class BusinessDataNestService {
     return toSalesOrderDto(order);
   }
 
-  async setSalesOrderFinanceMark(actor: any, id: string, payload: any, metadata: any = {}) {
+  async setSalesOrderFinanceMark(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
     requireAnyRole(actor, ['admin', 'finance']);
     const current = await this.prisma.salesOrder.findUnique({
       where: {
@@ -625,10 +789,17 @@ export class BusinessDataNestService {
       },
     });
     if (!current) {
-      throw createHttpError(404, 'SALES_ORDER_NOT_FOUND', 'Sales order does not exist.');
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
     }
 
-    const marked = normalizeBoolean(payload?.financeMark ?? payload?.marked, 'financeMark');
+    const marked = normalizeBoolean(
+      payload?.financeMark ?? payload?.marked,
+      'financeMark',
+    );
     const updated = await this.prisma.salesOrder.update({
       where: {
         id,
@@ -654,14 +825,20 @@ export class BusinessDataNestService {
 
   async getFinanceOverview(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin', 'boss', 'finance']);
-    const orderWhere = await this.buildScopedSalesOrderWhere(actor, buildSalesOrderWhere(filters));
+    const orderWhere = await this.buildScopedSalesOrderWhere(
+      actor,
+      buildSalesOrderWhere(filters),
+    );
     const groupWhere = await this.buildScopedGroupWhere(
       'travel',
       actor,
-      buildGroupWhere({
-        dateFrom: filters.dateFrom || filters.start,
-        dateTo: filters.dateTo || filters.end,
-      }, 'travel'),
+      buildGroupWhere(
+        {
+          dateFrom: filters.dateFrom || filters.start,
+          dateTo: filters.dateTo || filters.end,
+        },
+        'travel',
+      ),
     );
     const [orders, groups] = await Promise.all([
       this.prisma.salesOrder.findMany({
@@ -680,16 +857,29 @@ export class BusinessDataNestService {
       }),
     ]);
 
-    const validOrders = orders.filter((order: any) => order.status !== 'CANCELLED');
-    const refundOrders = orders.filter((order: any) => ['REFUNDED', 'PARTIAL_REFUND'].includes(order.status));
+    const validOrders = orders.filter(
+      (order: any) => order.status !== 'CANCELLED',
+    );
+    const refundOrders = orders.filter((order: any) =>
+      ['REFUNDED', 'PARTIAL_REFUND'].includes(order.status),
+    );
     return {
       metrics: {
         travelGroupCount: groups.length,
         orderCount: orders.length,
-        salesAmountCents: validOrders.reduce((sum: number, order: any) => sum + Number(order.totalAmountCents || 0), 0),
-        refundAmountCents: refundOrders.reduce((sum: number, order: any) => sum + Number(order.totalAmountCents || 0), 0),
+        salesAmountCents: validOrders.reduce(
+          (sum: number, order: any) =>
+            sum + Number(order.totalAmountCents || 0),
+          0,
+        ),
+        refundAmountCents: refundOrders.reduce(
+          (sum: number, order: any) =>
+            sum + Number(order.totalAmountCents || 0),
+          0,
+        ),
         cashOnDeliveryAmountCents: validOrders.reduce(
-          (sum: number, order: any) => sum + Number(order.cashOnDeliveryAmountCents || 0),
+          (sum: number, order: any) =>
+            sum + Number(order.cashOnDeliveryAmountCents || 0),
           0,
         ),
       },
@@ -796,8 +986,15 @@ export class BusinessDataNestService {
     return (this.prisma as any)[table.delegate];
   }
 
-  private async buildScopedGroupWhere(kind: string, actor: any, baseWhere: any) {
-    return andWhere(andWhere(baseWhere, await this.buildGroupDataScope(kind, actor)), await this.buildGlobalGroupMarkScope());
+  private async buildScopedGroupWhere(
+    kind: string,
+    actor: any,
+    baseWhere: any,
+  ) {
+    return andWhere(
+      andWhere(baseWhere, await this.buildGroupDataScope(kind, actor)),
+      await this.buildGlobalGroupMarkScope(),
+    );
   }
 
   private async buildRoleScopedTravelGroupWhere(actor: any, baseWhere: any) {
@@ -805,7 +1002,10 @@ export class BusinessDataNestService {
   }
 
   private async buildScopedSalesOrderWhere(actor: any, baseWhere: any) {
-    return andWhere(andWhere(baseWhere, buildSalesOrderDataScope(actor)), await this.buildGlobalSalesOrderMarkScope());
+    return andWhere(
+      andWhere(baseWhere, buildSalesOrderDataScope(actor)),
+      await this.buildGlobalSalesOrderMarkScope(),
+    );
   }
 
   private async buildGroupDataScope(kind: string, actor: any) {
@@ -839,7 +1039,10 @@ export class BusinessDataNestService {
       new Set(
         orders
           .map((order: any) => order.travelGroupId)
-          .filter((travelGroupId: any) => typeof travelGroupId === 'string' && travelGroupId.length > 0),
+          .filter(
+            (travelGroupId: any) =>
+              typeof travelGroupId === 'string' && travelGroupId.length > 0,
+          ),
       ),
     );
   }
@@ -849,24 +1052,39 @@ export class BusinessDataNestService {
       if (group.tasterId === actor.id) {
         return;
       }
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
 
     if (actor?.role === 'front_desk' && kind === 'travel') {
       if (group.createdById === actor.id) {
         return;
       }
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
 
     if (actor?.role === 'sales') {
       if (group.createdById === actor.id) {
         return;
       }
-      if (kind === 'travel' && (await this.hasSalesRelatedOrder(actor, group.id))) {
+      if (
+        kind === 'travel' &&
+        (await this.hasSalesRelatedOrder(actor, group.id))
+      ) {
         return;
       }
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
   }
 
@@ -906,7 +1124,11 @@ export class BusinessDataNestService {
 
   private async assertPassesGlobalGroupMarkScope(group: any) {
     if ((await this.onlyShowMarkedRecords()) && !group.financeMark) {
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
   }
 
@@ -914,10 +1136,17 @@ export class BusinessDataNestService {
     if (!(await this.onlyShowMarkedRecords())) {
       return;
     }
-    if (order.financeMark && (!order.travelGroupId || order.travelGroup?.financeMark)) {
+    if (
+      order.financeMark &&
+      (!order.travelGroupId || order.travelGroup?.financeMark)
+    ) {
       return;
     }
-    throw createHttpError(404, 'SALES_ORDER_NOT_FOUND', 'Sales order does not exist.');
+    throw createHttpError(
+      404,
+      'SALES_ORDER_NOT_FOUND',
+      'Sales order does not exist.',
+    );
   }
 
   private async onlyShowMarkedRecords() {
@@ -935,7 +1164,11 @@ export class BusinessDataNestService {
       ...(include ? { include } : {}),
     });
     if (!group) {
-      throw createHttpError(404, 'TRAVEL_GROUP_NOT_FOUND', 'Travel group does not exist.');
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
     }
     return group;
   }
@@ -944,7 +1177,11 @@ export class BusinessDataNestService {
 function getGroupTable(kind: string) {
   const table = GROUP_TABLES[kind];
   if (!table) {
-    throw createHttpError(400, 'INVALID_GROUP_KIND', 'Travel group table type is invalid.');
+    throw createHttpError(
+      400,
+      'INVALID_GROUP_KIND',
+      'Travel group table type is invalid.',
+    );
   }
   return table;
 }
@@ -984,7 +1221,9 @@ function getGroupInclude(kind: string, mode = 'list') {
 
 function buildGroupWhere(filters: any = {}, kind = '') {
   const where: any = {};
-  const query = normalizeOptionalString(filters.keyword || filters.query || filters.search);
+  const query = normalizeOptionalString(
+    filters.keyword || filters.query || filters.search,
+  );
   if (query) {
     where.OR = [
       { groupNo: { contains: query } },
@@ -1017,7 +1256,10 @@ function buildGroupWhere(filters: any = {}, kind = '') {
   if (filters.status) {
     where.status = toPrismaGroupStatus(filters.status);
   }
-  const dateRange = buildDateRange(filters.dateFrom || filters.start, filters.dateTo || filters.end);
+  const dateRange = buildDateRange(
+    filters.dateFrom || filters.start,
+    filters.dateTo || filters.end,
+  );
   if (dateRange) {
     where.visitDate = dateRange;
   }
@@ -1048,7 +1290,10 @@ function buildSalesOrderWhere(filters: any = {}) {
   if (filters.status) {
     where.status = toPrismaOrderStatus(filters.status);
   }
-  const dateRange = buildDateRange(filters.dateFrom || filters.start, filters.dateTo || filters.end);
+  const dateRange = buildDateRange(
+    filters.dateFrom || filters.start,
+    filters.dateTo || filters.end,
+  );
   if (dateRange) {
     where.orderDate = dateRange;
   }
@@ -1081,7 +1326,11 @@ function assertCanReadSalesOrder(actor: any, order: any) {
   if (order.salesUserId === actor.id || order.createdById === actor.id) {
     return;
   }
-  throw createHttpError(404, 'SALES_ORDER_NOT_FOUND', 'Sales order does not exist.');
+  throw createHttpError(
+    404,
+    'SALES_ORDER_NOT_FOUND',
+    'Sales order does not exist.',
+  );
 }
 
 function andWhere(baseWhere: any, scopeWhere: any) {
@@ -1098,7 +1347,10 @@ function andWhere(baseWhere: any, scopeWhere: any) {
 
 function buildBonusWhere(filters: any = {}) {
   const where: any = {};
-  const dateRange = buildDateRange(filters.dateFrom || filters.start, filters.dateTo || filters.end);
+  const dateRange = buildDateRange(
+    filters.dateFrom || filters.start,
+    filters.dateTo || filters.end,
+  );
   if (dateRange) {
     where.bonusDate = dateRange;
   }
@@ -1134,7 +1386,11 @@ function buildGroupData(payload: any, actor: any, creating: boolean) {
   assignInt(data, 'salesAmountCents', payload?.salesAmountCents);
   assignInt(data, 'paidDepositCents', payload?.paidDepositCents);
   assignInt(data, 'cashOnDeliveryCents', payload?.cashOnDeliveryCents);
-  assignInt(data, 'liquorCostDeductionCents', payload?.liquorCostDeductionCents);
+  assignInt(
+    data,
+    'liquorCostDeductionCents',
+    payload?.liquorCostDeductionCents,
+  );
   assignInt(data, 'orderAmountCents', payload?.orderAmountCents);
   assignInt(data, 'points', payload?.points);
   assignInt(data, 'returnedPoints', payload?.returnedPoints);
@@ -1157,11 +1413,20 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
   const data: any = {
     id: crypto.randomUUID(),
     visitDate: parseDate(payload?.visitDate, 'visitDate', true),
-    travelAgency: normalizeRequiredString(payload?.travelAgency, 'travelAgency'),
-    licensePlate: normalizeRequiredString(payload?.licensePlate, 'licensePlate'),
+    travelAgency: normalizeRequiredString(
+      payload?.travelAgency,
+      'travelAgency',
+    ),
+    licensePlate: normalizeRequiredString(
+      payload?.licensePlate,
+      'licensePlate',
+    ),
     guideId: normalizeRequiredString(payload?.guideId, 'guideId'),
     guestCount: normalizeInt(payload?.guestCount, 'guestCount'),
-    tastingRoomNo: normalizeRequiredString(payload?.tastingRoomNo, 'tastingRoomNo'),
+    tastingRoomNo: normalizeRequiredString(
+      payload?.tastingRoomNo,
+      'tastingRoomNo',
+    ),
     tasterId: normalizeRequiredString(payload?.tasterId, 'tasterId'),
     groupType: normalizeRequiredString(payload?.groupType, 'groupType'),
     createdById: actor.id,
@@ -1182,7 +1447,11 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
   assignInt(data, 'salesAmountCents', payload?.salesAmountCents);
   assignInt(data, 'paidDepositCents', payload?.paidDepositCents);
   assignInt(data, 'cashOnDeliveryCents', payload?.cashOnDeliveryCents);
-  assignInt(data, 'liquorCostDeductionCents', payload?.liquorCostDeductionCents);
+  assignInt(
+    data,
+    'liquorCostDeductionCents',
+    payload?.liquorCostDeductionCents,
+  );
   assignInt(data, 'orderAmountCents', payload?.orderAmountCents);
   assignInt(data, 'points', payload?.points);
   assignInt(data, 'returnedPoints', payload?.returnedPoints);
@@ -1227,13 +1496,21 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
   assignInt(data, 'salesAmountCents', payload?.salesAmountCents);
   assignInt(data, 'paidDepositCents', payload?.paidDepositCents);
   assignInt(data, 'cashOnDeliveryCents', payload?.cashOnDeliveryCents);
-  assignInt(data, 'liquorCostDeductionCents', payload?.liquorCostDeductionCents);
+  assignInt(
+    data,
+    'liquorCostDeductionCents',
+    payload?.liquorCostDeductionCents,
+  );
   assignInt(data, 'orderAmountCents', payload?.orderAmountCents);
   assignInt(data, 'points', payload?.points);
   assignInt(data, 'returnedPoints', payload?.returnedPoints);
   assignInt(data, 'unreturnedPoints', payload?.unreturnedPoints);
   assignNormalizedBool(data, 'guideInfoSent', payload?.guideInfoSent);
-  assignNormalizedBool(data, 'travelAgencyInfoSent', payload?.travelAgencyInfoSent);
+  assignNormalizedBool(
+    data,
+    'travelAgencyInfoSent',
+    payload?.travelAgencyInfoSent,
+  );
   if (payload?.tasterSummary !== undefined) {
     data.tasterSummary = normalizeOptionalString(payload.tasterSummary);
     data.tasterSummaryAt = data.tasterSummary ? now : null;
@@ -1246,21 +1523,39 @@ function buildTravelGroupTastingItems(items: any[]) {
     return [];
   }
   if (!Array.isArray(items)) {
-    throw createHttpError(400, 'VALIDATION_FAILED', 'tastingItems must be an array.');
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'tastingItems must be an array.',
+    );
   }
   const now = new Date();
   return items.map((item, index) => {
-    const quantity = normalizeInt(item?.quantity, `tastingItems[${index}].quantity`);
+    const quantity = normalizeInt(
+      item?.quantity,
+      `tastingItems[${index}].quantity`,
+    );
     if (quantity <= 0) {
-      throw createHttpError(400, 'VALIDATION_FAILED', `tastingItems[${index}].quantity must be greater than 0.`);
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `tastingItems[${index}].quantity must be greater than 0.`,
+      );
     }
     return {
       id: crypto.randomUUID(),
-      productName: normalizeRequiredString(item?.productName, `tastingItems[${index}].productName`),
+      productName: normalizeRequiredString(
+        item?.productName,
+        `tastingItems[${index}].productName`,
+      ),
       quantity,
       unit: normalizeRequiredString(item?.unit, `tastingItems[${index}].unit`),
       note: normalizeOptionalString(item?.note),
-      sortOrder: normalizeInt(item?.sortOrder, `tastingItems[${index}].sortOrder`, index + 1),
+      sortOrder: normalizeInt(
+        item?.sortOrder,
+        `tastingItems[${index}].sortOrder`,
+        index + 1,
+      ),
       createdAt: now,
       updatedAt: now,
     };
@@ -1272,15 +1567,24 @@ function buildSalesOrderData(payload: any, actor: any) {
   const items = buildSalesOrderItems(payload?.items);
   const totalAmountCents =
     payload?.totalAmountCents === undefined
-      ? items.reduce((sum: number, item: any) => sum + item.quantity * item.unitPriceCents, 0)
+      ? items.reduce(
+          (sum: number, item: any) => sum + item.quantity * item.unitPriceCents,
+          0,
+        )
       : normalizeInt(payload.totalAmountCents, 'totalAmountCents');
 
   const data: any = {
     id: crypto.randomUUID(),
-    orderNo: normalizeRequiredString(payload?.orderNo || generateOrderNo(), 'orderNo'),
+    orderNo: normalizeRequiredString(
+      payload?.orderNo || generateOrderNo(),
+      'orderNo',
+    ),
     orderType: toPrismaOrderType(payload?.orderType || 'travel_group'),
     travelGroupId: normalizeOptionalString(payload?.travelGroupId),
-    customerName: normalizeRequiredString(payload?.customerName, 'customerName'),
+    customerName: normalizeRequiredString(
+      payload?.customerName,
+      'customerName',
+    ),
     customerPhone: normalizeOptionalString(payload?.customerPhone),
     province: normalizeOptionalString(payload?.province),
     city: normalizeOptionalString(payload?.city),
@@ -1288,10 +1592,17 @@ function buildSalesOrderData(payload: any, actor: any) {
     address: normalizeOptionalString(payload?.address),
     orderDate: parseDate(payload?.orderDate, 'orderDate', true),
     totalAmountCents,
-    cashOnDeliveryAmountCents: normalizeInt(payload?.cashOnDeliveryAmountCents, 'cashOnDeliveryAmountCents', 0),
+    cashOnDeliveryAmountCents: normalizeInt(
+      payload?.cashOnDeliveryAmountCents,
+      'cashOnDeliveryAmountCents',
+      0,
+    ),
     remark: normalizeOptionalString(payload?.remark),
     status: toPrismaOrderStatus(payload?.status || 'valid'),
-    salesUserId: actor.role === 'sales' ? actor.id : normalizeOptionalString(payload?.salesUserId),
+    salesUserId:
+      actor.role === 'sales'
+        ? actor.id
+        : normalizeOptionalString(payload?.salesUserId),
     createdById: actor.id,
     updatedById: actor.id,
     createdAt: now,
@@ -1307,9 +1618,19 @@ function buildSalesOrderItems(items: any[]) {
   const rawItems = Array.isArray(items) && items.length > 0 ? items : [];
   return rawItems.map((item, index) => ({
     id: crypto.randomUUID(),
-    productName: normalizeRequiredString(item?.productName, `items[${index}].productName`),
-    quantity: Math.max(1, normalizeInt(item?.quantity, `items[${index}].quantity`, 1)),
-    unitPriceCents: normalizeInt(item?.unitPriceCents, `items[${index}].unitPriceCents`, 0),
+    productName: normalizeRequiredString(
+      item?.productName,
+      `items[${index}].productName`,
+    ),
+    quantity: Math.max(
+      1,
+      normalizeInt(item?.quantity, `items[${index}].quantity`, 1),
+    ),
+    unitPriceCents: normalizeInt(
+      item?.unitPriceCents,
+      `items[${index}].unitPriceCents`,
+      0,
+    ),
     deliveryType: toPrismaDeliveryType(item?.deliveryType || 'shipping'),
     createdAt: new Date(),
   }));
@@ -1318,15 +1639,43 @@ function buildSalesOrderItems(items: any[]) {
 function buildReconciliationData(payload: any, actor: any) {
   return {
     businessDate: parseDate(payload?.businessDate, 'businessDate', true),
-    travelGroupSalesCents: normalizeInt(payload?.travelGroupSalesCents, 'travelGroupSalesCents', 0),
-    backOfficeSalesCents: normalizeInt(payload?.backOfficeSalesCents, 'backOfficeSalesCents', 0),
+    travelGroupSalesCents: normalizeInt(
+      payload?.travelGroupSalesCents,
+      'travelGroupSalesCents',
+      0,
+    ),
+    backOfficeSalesCents: normalizeInt(
+      payload?.backOfficeSalesCents,
+      'backOfficeSalesCents',
+      0,
+    ),
     buybackCents: normalizeInt(payload?.buybackCents, 'buybackCents', 0),
-    externalSalesCents: normalizeInt(payload?.externalSalesCents, 'externalSalesCents', 0),
-    internalPurchaseCents: normalizeInt(payload?.internalPurchaseCents, 'internalPurchaseCents', 0),
-    afterSalesCents: normalizeInt(payload?.afterSalesCents, 'afterSalesCents', 0),
+    externalSalesCents: normalizeInt(
+      payload?.externalSalesCents,
+      'externalSalesCents',
+      0,
+    ),
+    internalPurchaseCents: normalizeInt(
+      payload?.internalPurchaseCents,
+      'internalPurchaseCents',
+      0,
+    ),
+    afterSalesCents: normalizeInt(
+      payload?.afterSalesCents,
+      'afterSalesCents',
+      0,
+    ),
     // refundsCents is stored as a positive deduction; totals subtract it when rendering reconciliation.
-    refundsCents: normalizeNonNegativeInt(payload?.refundsCents, 'refundsCents', 0),
-    otherReceivableCents: normalizeInt(payload?.otherReceivableCents, 'otherReceivableCents', 0),
+    refundsCents: normalizeNonNegativeInt(
+      payload?.refundsCents,
+      'refundsCents',
+      0,
+    ),
+    otherReceivableCents: normalizeInt(
+      payload?.otherReceivableCents,
+      'otherReceivableCents',
+      0,
+    ),
     notes: normalizeOptionalString(payload?.notes),
     updatedById: actor.id,
     updatedAt: new Date(),
@@ -1337,14 +1686,24 @@ function buildPaymentMethods(methods: any[]) {
   if (!Array.isArray(methods)) {
     return [];
   }
-  return methods
-    .map((method, index) => ({
-      id: crypto.randomUUID(),
-      name: normalizeRequiredString(method?.name, `paymentMethods[${index}].name`),
-      amountCents: normalizeInt(method?.amountCents, `paymentMethods[${index}].amountCents`, 0),
-      sortOrder: normalizeInt(method?.sortOrder, `paymentMethods[${index}].sortOrder`, index + 1),
-      createdAt: new Date(),
-    }));
+  return methods.map((method, index) => ({
+    id: crypto.randomUUID(),
+    name: normalizeRequiredString(
+      method?.name,
+      `paymentMethods[${index}].name`,
+    ),
+    amountCents: normalizeInt(
+      method?.amountCents,
+      `paymentMethods[${index}].amountCents`,
+      0,
+    ),
+    sortOrder: normalizeInt(
+      method?.sortOrder,
+      `paymentMethods[${index}].sortOrder`,
+      index + 1,
+    ),
+    createdAt: new Date(),
+  }));
 }
 
 function buildStrikeBonusAwardData(payload: any) {
@@ -1356,9 +1715,20 @@ function buildStrikeBonusAwardData(payload: any) {
     guideName: normalizeOptionalString(payload?.guideName),
     tasterName: normalizeOptionalString(payload?.tasterName),
     roomNo: normalizeOptionalString(payload?.roomNo),
-    salesAmountCents: normalizeInt(payload?.salesAmountCents, 'salesAmountCents', 0),
-    bonusAmountCents: normalizeInt(payload?.bonusAmountCents, 'bonusAmountCents', 0),
-    tasterPaidDate: parseOptionalDate(payload?.tasterPaidDate, 'tasterPaidDate'),
+    salesAmountCents: normalizeInt(
+      payload?.salesAmountCents,
+      'salesAmountCents',
+      0,
+    ),
+    bonusAmountCents: normalizeInt(
+      payload?.bonusAmountCents,
+      'bonusAmountCents',
+      0,
+    ),
+    tasterPaidDate: parseOptionalDate(
+      payload?.tasterPaidDate,
+      'tasterPaidDate',
+    ),
     salesPaidDate: parseOptionalDate(payload?.salesPaidDate, 'salesPaidDate'),
     createdAt: now,
     updatedAt: now,
@@ -1367,7 +1737,9 @@ function buildStrikeBonusAwardData(payload: any) {
 
 function toGroupDto(group: any, kind: string) {
   const pending = calculateGroupPendingState(group, kind);
-  const salesOrders = Array.isArray(group.salesOrders) ? group.salesOrders.map(toTravelGroupOrderSummaryDto) : [];
+  const salesOrders = Array.isArray(group.salesOrders)
+    ? group.salesOrders.map(toTravelGroupOrderSummaryDto)
+    : [];
   return {
     id: group.id,
     kind,
@@ -1404,11 +1776,16 @@ function toGroupDto(group: any, kind: string) {
     tasterId: group.tasterId || null,
     taster: buildTasterSnapshotDto(group),
     tasterSummary: group.tasterSummary || null,
-    tasterSummaryAt: group.tasterSummaryAt ? toIsoString(group.tasterSummaryAt) : null,
+    tasterSummaryAt: group.tasterSummaryAt
+      ? toIsoString(group.tasterSummaryAt)
+      : null,
     tastingItems: Array.isArray(group.tastingItems)
       ? group.tastingItems
           .slice()
-          .sort((left: any, right: any) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0))
+          .sort(
+            (left: any, right: any) =>
+              Number(left.sortOrder || 0) - Number(right.sortOrder || 0),
+          )
           .map(toTravelGroupTastingItemDto)
       : [],
     salesOrders,
@@ -1421,7 +1798,12 @@ function toGroupDto(group: any, kind: string) {
 }
 
 function buildGuideSnapshotDto(group: any) {
-  if (!group.guideId && !group.guideName && !group.guidePhone && !group.travelAgency) {
+  if (
+    !group.guideId &&
+    !group.guideName &&
+    !group.guidePhone &&
+    !group.travelAgency
+  ) {
     return null;
   }
   return {
@@ -1471,7 +1853,10 @@ function toTravelGroupOrderSummaryDto(order: any) {
 function buildTravelGroupOrderSummaryDto(salesOrders: any[]) {
   return {
     orderCount: salesOrders.length,
-    totalAmountCents: salesOrders.reduce((sum, order) => sum + Number(order.totalAmountCents || 0), 0),
+    totalAmountCents: salesOrders.reduce(
+      (sum, order) => sum + Number(order.totalAmountCents || 0),
+      0,
+    ),
     cashOnDeliveryAmountCents: salesOrders.reduce(
       (sum, order) => sum + Number(order.cashOnDeliveryAmountCents || 0),
       0,
@@ -1528,12 +1913,23 @@ function calculateGroupPendingState(group: any, kind: string) {
 
   const arrivalMinutes = parseClockMinutes(group.arrivalTime);
   const departureMinutes = parseClockMinutes(group.departureTime);
-  if (arrivalMinutes !== null && departureMinutes !== null && departureMinutes < arrivalMinutes) {
+  if (
+    arrivalMinutes !== null &&
+    departureMinutes !== null &&
+    departureMinutes < arrivalMinutes
+  ) {
     addFinding('abnormal', 'departure_before_arrival');
   }
 
-  const status = ['abnormal', 'pending_front_desk', 'pending_taster', 'pending_finance']
-    .find((candidate) => findings.some((finding) => finding.status === candidate)) || null;
+  const status =
+    [
+      'abnormal',
+      'pending_front_desk',
+      'pending_taster',
+      'pending_finance',
+    ].find((candidate) =>
+      findings.some((finding) => finding.status === candidate),
+    ) || null;
   return {
     status,
     reasons: Array.from(new Set(findings.map((finding) => finding.reason))),
@@ -1549,12 +1945,15 @@ function annotateDuplicateGroupNos(groups: any[]) {
   }
   return groups.map((group) => ({
     ...group,
-    __duplicateGroupNo: hasText(group.groupNo) && (counts.get(group.groupNo) || 0) > 1,
+    __duplicateGroupNo:
+      hasText(group.groupNo) && (counts.get(group.groupNo) || 0) > 1,
   }));
 }
 
 function hasText(value: unknown) {
-  return typeof value === 'string' ? value.trim().length > 0 : value !== undefined && value !== null && value !== '';
+  return typeof value === 'string'
+    ? value.trim().length > 0
+    : value !== undefined && value !== null && value !== '';
 }
 
 function isAfterVisitDayEnd(value: unknown) {
@@ -1571,7 +1970,9 @@ function parseClockMinutes(value: unknown) {
   if (!hasText(value)) {
     return null;
   }
-  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})$/);
+  const match = String(value)
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})$/);
   if (!match) {
     return null;
   }
@@ -1601,7 +2002,9 @@ function toSalesOrderDto(order: any) {
     orderNo: order.orderNo,
     orderType: ORDER_TYPE_FROM_PRISMA[order.orderType] || order.orderType,
     travelGroupId: order.travelGroupId,
-    travelGroup: order.travelGroup ? toGroupDto(order.travelGroup, 'travel') : null,
+    travelGroup: order.travelGroup
+      ? toGroupDto(order.travelGroup, 'travel')
+      : null,
     customerName: order.customerName,
     customerPhone: order.customerPhone,
     province: order.province,
@@ -1617,7 +2020,9 @@ function toSalesOrderDto(order: any) {
     markedById: order.markedById || null,
     markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
     salesUserId: order.salesUserId || null,
-    items: Array.isArray(order.items) ? order.items.map(toSalesOrderItemDto) : [],
+    items: Array.isArray(order.items)
+      ? order.items.map(toSalesOrderItemDto)
+      : [],
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
   };
@@ -1629,7 +2034,8 @@ function toSalesOrderItemDto(item: any) {
     productName: item.productName,
     quantity: Number(item.quantity || 0),
     unitPriceCents: Number(item.unitPriceCents || 0),
-    deliveryType: DELIVERY_TYPE_FROM_PRISMA[item.deliveryType] || item.deliveryType,
+    deliveryType:
+      DELIVERY_TYPE_FROM_PRISMA[item.deliveryType] || item.deliveryType,
   };
 }
 
@@ -1657,7 +2063,10 @@ function toReconciliationDto(row: any) {
   const paymentMethods = Array.isArray(row.paymentMethods)
     ? row.paymentMethods
         .slice()
-        .sort((left: any, right: any) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0))
+        .sort(
+          (left: any, right: any) =>
+            Number(left.sortOrder || 0) - Number(right.sortOrder || 0),
+        )
         .map((method: any) => ({
           id: method.id,
           name: method.name,
@@ -1674,7 +2083,10 @@ function toReconciliationDto(row: any) {
     Number(row.afterSalesCents || 0) -
     refundsCents +
     Number(row.otherReceivableCents || 0);
-  const actualTotalCents = paymentMethods.reduce((sum: number, method: any) => sum + method.amountCents, 0);
+  const actualTotalCents = paymentMethods.reduce(
+    (sum: number, method: any) => sum + method.amountCents,
+    0,
+  );
 
   return {
     id: row.id,
@@ -1716,16 +2128,28 @@ function toStrikeBonusAwardDto(row: any) {
 
 function requireAnyRole(actor: any, roles: string[]) {
   if (!actor || !roles.includes(actor.role)) {
-    throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
+    throw createHttpError(
+      403,
+      'PERMISSION_DENIED',
+      'You do not have permission to perform this action.',
+    );
   }
 }
 
 function assertTravelGroupPatchAllowedFields(actor: any, payload: any) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw createHttpError(400, 'VALIDATION_FAILED', 'Request body must be an object.');
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
   }
-  const allowedFields = new Set(TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || []);
-  const deniedFields = Object.keys(payload).filter((field) => !allowedFields.has(field));
+  const allowedFields = new Set(
+    TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || [],
+  );
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
   if (deniedFields.length > 0) {
     throw createHttpError(
       403,
@@ -1749,7 +2173,11 @@ function buildDateRange(startValue: unknown, endValue: unknown) {
 function parseDate(value: unknown, fieldName: string, required: boolean) {
   if (value === undefined || value === null || String(value).trim() === '') {
     if (required) {
-      throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} is required.`);
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `${fieldName} is required.`,
+      );
     }
     return undefined;
   }
@@ -1761,7 +2189,11 @@ function parseDate(value: unknown, fieldName: string, required: boolean) {
     ? new Date(`${text}T00:00:00.000Z`)
     : new Date(text);
   if (Number.isNaN(date.getTime())) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be a valid date.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a valid date.`,
+    );
   }
   return date;
 }
@@ -1773,7 +2205,13 @@ function parseOptionalDate(value: unknown, fieldName: string) {
   return parseDate(value, fieldName, true);
 }
 
-function assignString(data: any, key: string, value: unknown, required: boolean, fieldName: string) {
+function assignString(
+  data: any,
+  key: string,
+  value: unknown,
+  required: boolean,
+  fieldName: string,
+) {
   if (value === undefined && !required) {
     return;
   }
@@ -1806,7 +2244,11 @@ function assignNormalizedBool(data: any, key: string, value: unknown) {
 
 function normalizeBoolean(value: unknown, fieldName: string) {
   if (value === undefined || value === null || value === '') {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} is required.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} is required.`,
+    );
   }
   if (typeof value === 'boolean') {
     return value;
@@ -1818,13 +2260,21 @@ function normalizeBoolean(value: unknown, fieldName: string) {
   if (['false', '0', 'no', 'off'].includes(text)) {
     return false;
   }
-  throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be a boolean.`);
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    `${fieldName} must be a boolean.`,
+  );
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string) {
   const text = normalizeOptionalString(value);
   if (!text) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} is required.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} is required.`,
+    );
   }
   return text;
 }
@@ -1842,19 +2292,35 @@ function normalizeInt(value: unknown, fieldName: string, fallback?: number) {
     if (fallback !== undefined) {
       return fallback;
     }
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} is required.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} is required.`,
+    );
   }
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be a number.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a number.`,
+    );
   }
   return Math.trunc(numberValue);
 }
 
-function normalizeNonNegativeInt(value: unknown, fieldName: string, fallback?: number) {
+function normalizeNonNegativeInt(
+  value: unknown,
+  fieldName: string,
+  fallback?: number,
+) {
   const normalized = normalizeInt(value, fieldName, fallback);
   if (normalized < 0) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be a non-negative number.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a non-negative number.`,
+    );
   }
   return normalized;
 }
@@ -1862,7 +2328,11 @@ function normalizeNonNegativeInt(value: unknown, fieldName: string, fallback?: n
 function toPrismaGroupStatus(value: unknown) {
   const status = GROUP_STATUS_TO_PRISMA[String(value || '').trim()];
   if (!status) {
-    throw createHttpError(400, 'INVALID_GROUP_STATUS', 'Travel group status is invalid.');
+    throw createHttpError(
+      400,
+      'INVALID_GROUP_STATUS',
+      'Travel group status is invalid.',
+    );
   }
   return status;
 }
@@ -1870,7 +2340,11 @@ function toPrismaGroupStatus(value: unknown) {
 function toPrismaOrderType(value: unknown) {
   const orderType = ORDER_TYPE_TO_PRISMA[String(value || '').trim()];
   if (!orderType) {
-    throw createHttpError(400, 'INVALID_ORDER_TYPE', 'Sales order type is invalid.');
+    throw createHttpError(
+      400,
+      'INVALID_ORDER_TYPE',
+      'Sales order type is invalid.',
+    );
   }
   return orderType;
 }
@@ -1878,7 +2352,11 @@ function toPrismaOrderType(value: unknown) {
 function toPrismaOrderStatus(value: unknown) {
   const status = ORDER_STATUS_TO_PRISMA[String(value || '').trim()];
   if (!status) {
-    throw createHttpError(400, 'INVALID_ORDER_STATUS', 'Sales order status is invalid.');
+    throw createHttpError(
+      400,
+      'INVALID_ORDER_STATUS',
+      'Sales order status is invalid.',
+    );
   }
   return status;
 }
@@ -1886,17 +2364,25 @@ function toPrismaOrderStatus(value: unknown) {
 function toPrismaDeliveryType(value: unknown) {
   const deliveryType = DELIVERY_TYPE_TO_PRISMA[String(value || '').trim()];
   if (!deliveryType) {
-    throw createHttpError(400, 'INVALID_DELIVERY_TYPE', 'Sales order item delivery type is invalid.');
+    throw createHttpError(
+      400,
+      'INVALID_DELIVERY_TYPE',
+      'Sales order item delivery type is invalid.',
+    );
   }
   return deliveryType;
 }
 
 function isActiveTasterUser(user: any) {
-  return Boolean(user?.isActive) && ['TASTER', 'taster'].includes(String(user?.role || ''));
+  return (
+    Boolean(user?.isActive) &&
+    ['TASTER', 'taster'].includes(String(user?.role || ''))
+  );
 }
 
 function normalizeTake(value: unknown, fallback: number) {
-  const raw = value === undefined ? fallback : normalizeInt(value, 'limit', fallback);
+  const raw =
+    value === undefined ? fallback : normalizeInt(value, 'limit', fallback);
   return Math.min(Math.max(raw, 1), 200);
 }
 

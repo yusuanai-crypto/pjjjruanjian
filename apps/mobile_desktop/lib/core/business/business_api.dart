@@ -78,6 +78,36 @@ class BusinessApi {
         .toList();
   }
 
+  Future<List<TravelAgencyRecord>> listTravelAgencies({
+    String? keyword,
+    int limit = 100,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (keyword != null && keyword.trim().isNotEmpty) {
+      query['keyword'] = keyword.trim();
+    }
+
+    final payload = await _apiClient.getJson(
+      _path('/api/travel-agencies', query),
+      token: _token,
+    );
+    final data = _data(payload);
+    return _list(data['travelAgencies'])
+        .map((item) => TravelAgencyRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<TravelAgencyRecord> createTravelAgency(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/travel-agencies',
+      body: body,
+      token: _token,
+    );
+    return TravelAgencyRecord.fromJson(_map(_data(payload)['travelAgency']));
+  }
+
   Future<GuideRecord> createGuide(Map<String, dynamic> body) async {
     final payload = await _apiClient.postJson(
       '/api/guides',
@@ -317,6 +347,38 @@ class GuideRecord {
       travelAgency: '${json['travelAgency'] ?? ''}',
       remarks: _stringOrNull(json['remarks']),
       isActive: _boolValue(json['isActive'] ?? true),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class TravelAgencyRecord {
+  const TravelAgencyRecord({
+    required this.id,
+    required this.name,
+    required this.contactName,
+    required this.contactPhone,
+    required this.notes,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String name;
+  final String? contactName;
+  final String? contactPhone;
+  final String? notes;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory TravelAgencyRecord.fromJson(Map<String, dynamic> json) {
+    return TravelAgencyRecord(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      contactName: _stringOrNull(json['contactName']),
+      contactPhone: _stringOrNull(json['contactPhone']),
+      notes: _stringOrNull(json['notes']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
     );

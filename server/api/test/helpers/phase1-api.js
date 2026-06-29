@@ -5,11 +5,19 @@ const path = require('node:path');
 
 const { Test } = require('@nestjs/testing');
 const { AppModule } = require('../../src/app.module');
-const { ApiExceptionFilter } = require('../../src/common/filters/api-exception.filter');
-const { ApiResponseInterceptor } = require('../../src/common/interceptors/api-response.interceptor');
-const { RequestValidationPipe } = require('../../src/common/pipes/request-validation.pipe');
+const {
+  ApiExceptionFilter,
+} = require('../../src/common/filters/api-exception.filter');
+const {
+  ApiResponseInterceptor,
+} = require('../../src/common/interceptors/api-response.interceptor');
+const {
+  RequestValidationPipe,
+} = require('../../src/common/pipes/request-validation.pipe');
 const { hashPassword } = require('../../src/modules/auth/password');
-const { BOOTSTRAP_ADMIN_PASSWORD } = require('../../src/modules/users/users.repository');
+const {
+  BOOTSTRAP_ADMIN_PASSWORD,
+} = require('../../src/modules/users/users.repository');
 const { PrismaService } = require('../../src/prisma/prisma.service');
 
 function createTestStores() {
@@ -17,8 +25,14 @@ function createTestStores() {
   return {
     phase0StorePath: path.join(os.tmpdir(), `jiangjiu-phase0-${suffix}.json`),
     userStorePath: path.join(os.tmpdir(), `jiangjiu-users-${suffix}.json`),
-    settingsStorePath: path.join(os.tmpdir(), `jiangjiu-settings-${suffix}.json`),
-    operationLogStorePath: path.join(os.tmpdir(), `jiangjiu-logs-${suffix}.json`),
+    settingsStorePath: path.join(
+      os.tmpdir(),
+      `jiangjiu-settings-${suffix}.json`,
+    ),
+    operationLogStorePath: path.join(
+      os.tmpdir(),
+      `jiangjiu-logs-${suffix}.json`,
+    ),
     tokenSecret: `test-secret-${suffix}`,
   };
 }
@@ -89,9 +103,15 @@ function createInMemoryPrisma(options = {}) {
   const systemSettings = [
     createSystemSetting('only_show_marked_records', 'false', null, now),
     createSystemSetting('marked_records_restore_required', 'false', null, now),
-    createSystemSetting('global_mark_query_updated_at', now.toISOString(), null, now),
+    createSystemSetting(
+      'global_mark_query_updated_at',
+      now.toISOString(),
+      null,
+      now,
+    ),
   ];
   const operationLogs = [];
+  const travelAgencies = [];
   const guides = [];
   const travelGroups = [];
   const travelGroupTastingItems = [];
@@ -108,6 +128,7 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    travelAgencies,
     guides,
     travelGroups,
     travelGroupTastingItems,
@@ -141,7 +162,10 @@ function createInMemoryPrisma(options = {}) {
         return row ? copyRow(row) : null;
       },
       findMany: async ({ where, orderBy } = {}) => {
-        return sortRows(users.filter((user) => matchesWhere(user, where)).map(copyRow), orderBy);
+        return sortRows(
+          users.filter((user) => matchesWhere(user, where)).map(copyRow),
+          orderBy,
+        );
       },
       create: async ({ data }) => {
         const row = {
@@ -168,10 +192,17 @@ function createInMemoryPrisma(options = {}) {
     },
     systemSetting: {
       findMany: async ({ where, orderBy } = {}) => {
-        return sortRows(systemSettings.filter((item) => matchesWhere(item, where)).map(copyRow), orderBy);
+        return sortRows(
+          systemSettings
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        );
       },
       upsert: async ({ where, update, create }) => {
-        const index = systemSettings.findIndex((item) => matchesUnique(item, where));
+        const index = systemSettings.findIndex((item) =>
+          matchesUnique(item, where),
+        );
         if (index >= 0) {
           systemSettings[index] = {
             ...systemSettings[index],
@@ -201,9 +232,13 @@ function createInMemoryPrisma(options = {}) {
         return copyRow(row);
       },
       findMany: async ({ where, orderBy } = {}) => {
-        return sortRows(operationLogs.filter((log) => matchesWhere(log, where)).map(copyRow), orderBy);
+        return sortRows(
+          operationLogs.filter((log) => matchesWhere(log, where)).map(copyRow),
+          orderBy,
+        );
       },
     },
+    travelAgency: createTravelAgencyDelegate(travelAgencies),
     guide: createGuideDelegate(guides),
     travelGroup: createTravelGroupDelegate(travelGroups, {
       failUpdateOnce: Boolean(options.failTravelGroupUpdateOnce),
@@ -216,13 +251,27 @@ function createInMemoryPrisma(options = {}) {
     salesOrder: {
       findUnique: async ({ where, include } = {}) => {
         const row = salesOrders.find((order) => matchesUnique(order, where));
-        return row ? withSalesOrderIncludes(row, include, salesOrderItems, travelGroups) : null;
+        return row
+          ? withSalesOrderIncludes(row, include, salesOrderItems, travelGroups)
+          : null;
       },
       findMany: async ({ where, include, orderBy, take } = {}) => {
-        const rows = sortRows(salesOrders.filter((order) => matchesWhere(order, where)).map(copyRow), orderBy);
-        return rows.slice(0, take || rows.length).map((order) =>
-          withSalesOrderIncludes(order, include, salesOrderItems, travelGroups),
+        const rows = sortRows(
+          salesOrders
+            .filter((order) => matchesWhere(order, where))
+            .map(copyRow),
+          orderBy,
         );
+        return rows
+          .slice(0, take || rows.length)
+          .map((order) =>
+            withSalesOrderIncludes(
+              order,
+              include,
+              salesOrderItems,
+              travelGroups,
+            ),
+          );
       },
       create: async ({ data, include } = {}) => {
         const nestedItems = data.items?.create || [];
@@ -242,10 +291,17 @@ function createInMemoryPrisma(options = {}) {
             createdAt: asDate(item.createdAt) || new Date(),
           });
         }
-        return withSalesOrderIncludes(row, include, salesOrderItems, travelGroups);
+        return withSalesOrderIncludes(
+          row,
+          include,
+          salesOrderItems,
+          travelGroups,
+        );
       },
       update: async ({ where, data, include } = {}) => {
-        const index = salesOrders.findIndex((order) => matchesUnique(order, where));
+        const index = salesOrders.findIndex((order) =>
+          matchesUnique(order, where),
+        );
         if (index < 0) {
           throw new Error('Sales order not found in test Prisma store.');
         }
@@ -254,16 +310,31 @@ function createInMemoryPrisma(options = {}) {
           ...data,
           updatedAt: asDate(data?.updatedAt) || new Date(),
         };
-        return withSalesOrderIncludes(salesOrders[index], include, salesOrderItems, travelGroups);
+        return withSalesOrderIncludes(
+          salesOrders[index],
+          include,
+          salesOrderItems,
+          travelGroups,
+        );
       },
     },
     dailyReconciliation: {
       findUnique: async ({ where, include } = {}) => {
-        const row = dailyReconciliations.find((item) => matchesUnique(item, where));
-        return row ? withReconciliationIncludes(row, include, reconciliationPaymentMethods) : null;
+        const row = dailyReconciliations.find((item) =>
+          matchesUnique(item, where),
+        );
+        return row
+          ? withReconciliationIncludes(
+              row,
+              include,
+              reconciliationPaymentMethods,
+            )
+          : null;
       },
       upsert: async ({ where, update, create, include } = {}) => {
-        const index = dailyReconciliations.findIndex((item) => matchesUnique(item, where));
+        const index = dailyReconciliations.findIndex((item) =>
+          matchesUnique(item, where),
+        );
         const nestedUpdateMethods = update?.paymentMethods?.create || [];
         const nestedCreateMethods = create?.paymentMethods?.create || [];
         if (index >= 0) {
@@ -272,7 +343,11 @@ function createInMemoryPrisma(options = {}) {
             ...withoutNested(update, 'paymentMethods'),
             updatedAt: asDate(update.updatedAt) || new Date(),
           };
-          removeWhere(reconciliationPaymentMethods, (method) => method.reconciliationId === dailyReconciliations[index].id);
+          removeWhere(
+            reconciliationPaymentMethods,
+            (method) =>
+              method.reconciliationId === dailyReconciliations[index].id,
+          );
           for (const method of nestedUpdateMethods) {
             reconciliationPaymentMethods.push({
               ...method,
@@ -281,7 +356,11 @@ function createInMemoryPrisma(options = {}) {
               createdAt: asDate(method.createdAt) || new Date(),
             });
           }
-          return withReconciliationIncludes(dailyReconciliations[index], include, reconciliationPaymentMethods);
+          return withReconciliationIncludes(
+            dailyReconciliations[index],
+            include,
+            reconciliationPaymentMethods,
+          );
         }
 
         const row = {
@@ -299,12 +378,21 @@ function createInMemoryPrisma(options = {}) {
             createdAt: asDate(method.createdAt) || new Date(),
           });
         }
-        return withReconciliationIncludes(row, include, reconciliationPaymentMethods);
+        return withReconciliationIncludes(
+          row,
+          include,
+          reconciliationPaymentMethods,
+        );
       },
     },
     strikeBonusAward: {
       findMany: async ({ where, orderBy, take } = {}) => {
-        const rows = sortRows(strikeBonusAwards.filter((award) => matchesWhere(award, where)).map(copyRow), orderBy);
+        const rows = sortRows(
+          strikeBonusAwards
+            .filter((award) => matchesWhere(award, where))
+            .map(copyRow),
+          orderBy,
+        );
         return rows.slice(0, take || rows.length);
       },
       create: async ({ data } = {}) => {
@@ -329,7 +417,10 @@ function createGuideDelegate(rows) {
       return row ? copyRow(row) : null;
     },
     findMany: async ({ where, orderBy, take } = {}) => {
-      const result = sortRows(rows.filter((item) => matchesWhere(item, where)).map(copyRow), orderBy);
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
       return result.slice(0, take || result.length);
     },
     create: async ({ data }) => {
@@ -357,6 +448,32 @@ function createGuideDelegate(rows) {
   };
 }
 
+function createTravelAgencyDelegate(rows) {
+  return {
+    findUnique: async ({ where }) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findMany: async ({ where, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      return result.slice(0, take || result.length);
+    },
+    create: async ({ data }) => {
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+  };
+}
+
 function createTravelGroupDelegate(rows, options = {}) {
   let failUpdateOnce = Boolean(options.failUpdateOnce);
   const tastingItems = options.tastingItems || [];
@@ -365,13 +482,26 @@ function createTravelGroupDelegate(rows, options = {}) {
   return {
     findUnique: async ({ where, include } = {}) => {
       const row = rows.find((item) => matchesUnique(item, where));
-      return row ? withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders }) : null;
+      return row
+        ? withTravelGroupIncludes(row, include, {
+            tastingItems,
+            users,
+            salesOrders,
+          })
+        : null;
     },
     findMany: async ({ where, include, orderBy, take } = {}) => {
-      const result = sortRows(rows.filter((item) => matchesWhere(item, where)).map(copyRow), orderBy);
-      return result
-        .slice(0, take || result.length)
-        .map((row) => withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders }));
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      return result.slice(0, take || result.length).map((row) =>
+        withTravelGroupIncludes(row, include, {
+          tastingItems,
+          users,
+          salesOrders,
+        }),
+      );
     },
     create: async ({ data, include } = {}) => {
       if (data.groupNo && rows.some((item) => item.groupNo === data.groupNo)) {
@@ -399,12 +529,18 @@ function createTravelGroupDelegate(rows, options = {}) {
           updatedAt: asDate(item.updatedAt) || new Date(),
         });
       }
-      return withTravelGroupIncludes(row, include, { tastingItems, users, salesOrders });
+      return withTravelGroupIncludes(row, include, {
+        tastingItems,
+        users,
+        salesOrders,
+      });
     },
     update: async ({ where, data, include } = {}) => {
       if (failUpdateOnce) {
         failUpdateOnce = false;
-        throw new Error('Injected travel group update failure in test Prisma store.');
+        throw new Error(
+          'Injected travel group update failure in test Prisma store.',
+        );
       }
       const index = rows.findIndex((item) => matchesUnique(item, where));
       if (index < 0) {
@@ -412,7 +548,10 @@ function createTravelGroupDelegate(rows, options = {}) {
       }
       const nestedTastingItems = data.tastingItems?.create || [];
       if (data.tastingItems?.deleteMany !== undefined) {
-        removeWhere(tastingItems, (item) => item.travelGroupId === rows[index].id);
+        removeWhere(
+          tastingItems,
+          (item) => item.travelGroupId === rows[index].id,
+        );
       }
       rows[index] = {
         ...rows[index],
@@ -428,7 +567,11 @@ function createTravelGroupDelegate(rows, options = {}) {
           updatedAt: asDate(item.updatedAt) || new Date(),
         });
       }
-      return withTravelGroupIncludes(rows[index], include, { tastingItems, users, salesOrders });
+      return withTravelGroupIncludes(rows[index], include, {
+        tastingItems,
+        users,
+        salesOrders,
+      });
     },
   };
 }
@@ -515,7 +658,11 @@ function seedSalesOrders(rows, seeds, now) {
 
 function restoreRows(rowGroups, snapshot) {
   for (let index = 0; index < rowGroups.length; index += 1) {
-    rowGroups[index].splice(0, rowGroups[index].length, ...snapshot[index].map(copyRow));
+    rowGroups[index].splice(
+      0,
+      rowGroups[index].length,
+      ...snapshot[index].map(copyRow),
+    );
   }
 }
 
@@ -530,7 +677,9 @@ function createSystemSetting(settingKey, settingValue, updatedBy, updatedAt) {
 }
 
 function matchesUnique(row, where = {}) {
-  return Object.entries(where).every(([key, value]) => valuesEqual(row[key], value));
+  return Object.entries(where).every(([key, value]) =>
+    valuesEqual(row[key], value),
+  );
 }
 
 function matchesWhere(row, where = {}) {
@@ -550,7 +699,11 @@ function matchesWhere(row, where = {}) {
     if (value && typeof value === 'object' && value.startsWith !== undefined) {
       return String(row[key] || '').startsWith(String(value.startsWith));
     }
-    if (value && typeof value === 'object' && (value.gte !== undefined || value.lte !== undefined)) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      (value.gte !== undefined || value.lte !== undefined)
+    ) {
       const rowTime = asDate(row[key])?.getTime();
       if (rowTime === undefined || Number.isNaN(rowTime)) {
         return false;
@@ -576,8 +729,10 @@ function sortRows(rows, orderBy) {
     return rows;
   }
   return rows.sort((left, right) => {
-    const leftValue = left[key] instanceof Date ? left[key].getTime() : left[key];
-    const rightValue = right[key] instanceof Date ? right[key].getTime() : right[key];
+    const leftValue =
+      left[key] instanceof Date ? left[key].getTime() : left[key];
+    const rightValue =
+      right[key] instanceof Date ? right[key].getTime() : right[key];
     if (leftValue === rightValue) {
       return 0;
     }
@@ -594,7 +749,10 @@ function valuesEqual(left, right) {
   if (left instanceof Date || right instanceof Date) {
     const leftDate = asDate(left);
     const rightDate = asDate(right);
-    return leftDate?.toISOString().slice(0, 10) === rightDate?.toISOString().slice(0, 10);
+    return (
+      leftDate?.toISOString().slice(0, 10) ===
+      rightDate?.toISOString().slice(0, 10)
+    );
   }
   return left === right;
 }
@@ -622,16 +780,22 @@ function withTravelGroupIncludes(group, include, relations) {
     row.tastingItems = tastingItems
       .filter((item) => item.travelGroupId === group.id)
       .map(copyRow)
-      .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
+      .sort(
+        (left, right) =>
+          Number(left.sortOrder || 0) - Number(right.sortOrder || 0),
+      );
   }
   if (include?.taster) {
     const taster = users.find((user) => user.id === group.tasterId);
     row.taster = taster ? copyRow(taster) : null;
   }
   if (include?.salesOrders) {
-    const includeConfig = typeof include.salesOrders === 'object' ? include.salesOrders : {};
+    const includeConfig =
+      typeof include.salesOrders === 'object' ? include.salesOrders : {};
     row.salesOrders = sortRows(
-      salesOrders.filter((order) => order.travelGroupId === group.id).map(copyRow),
+      salesOrders
+        .filter((order) => order.travelGroupId === group.id)
+        .map(copyRow),
       includeConfig.orderBy,
     );
   }
@@ -641,7 +805,9 @@ function withTravelGroupIncludes(group, include, relations) {
 function withSalesOrderIncludes(order, include, salesOrderItems, travelGroups) {
   const row = copyRow(order);
   if (include?.items) {
-    row.items = salesOrderItems.filter((item) => item.salesOrderId === order.id).map(copyRow);
+    row.items = salesOrderItems
+      .filter((item) => item.salesOrderId === order.id)
+      .map(copyRow);
   }
   if (include?.travelGroup) {
     const group = travelGroups.find((item) => item.id === order.travelGroupId);
@@ -653,7 +819,9 @@ function withSalesOrderIncludes(order, include, salesOrderItems, travelGroups) {
 function withReconciliationIncludes(row, include, paymentMethods) {
   const copy = copyRow(row);
   if (include?.paymentMethods) {
-    copy.paymentMethods = paymentMethods.filter((method) => method.reconciliationId === row.id).map(copyRow);
+    copy.paymentMethods = paymentMethods
+      .filter((method) => method.reconciliationId === row.id)
+      .map(copyRow);
   }
   return copy;
 }
@@ -693,7 +861,11 @@ async function requestJson(baseUrl, pathName, options = {}) {
   };
 }
 
-async function login(baseUrl, username = 'admin', password = BOOTSTRAP_ADMIN_PASSWORD) {
+async function login(
+  baseUrl,
+  username = 'admin',
+  password = BOOTSTRAP_ADMIN_PASSWORD,
+) {
   const result = await requestJson(baseUrl, '/api/auth/login', {
     method: 'POST',
     body: {
@@ -721,9 +893,19 @@ async function createUser(baseUrl, token, payload) {
 }
 
 function assertSessionContract(session) {
-  assert.deepEqual(Object.keys(session).sort(), ['dataScope', 'expiresAt', 'menus', 'permissions', 'token', 'user']);
+  assert.deepEqual(Object.keys(session).sort(), [
+    'dataScope',
+    'expiresAt',
+    'menus',
+    'permissions',
+    'token',
+    'user',
+  ]);
   assert.equal(typeof session.token, 'string');
-  assert.match(session.token, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.match(
+    session.token,
+    /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+  );
   assert.equal(typeof session.expiresAt, 'string');
   assert.doesNotThrow(() => new Date(session.expiresAt).toISOString());
   assertPublicUserContract(session.user);
@@ -733,7 +915,12 @@ function assertSessionContract(session) {
 }
 
 function assertCurrentUserContract(data) {
-  assert.deepEqual(Object.keys(data).sort(), ['dataScope', 'menus', 'permissions', 'user']);
+  assert.deepEqual(Object.keys(data).sort(), [
+    'dataScope',
+    'menus',
+    'permissions',
+    'user',
+  ]);
   assertPublicUserContract(data.user);
   assert.equal(Array.isArray(data.permissions), true);
   assert.equal(Array.isArray(data.menus), true);
@@ -741,10 +928,17 @@ function assertCurrentUserContract(data) {
 }
 
 function assertPublicUserContract(user) {
-  assert.deepEqual(
-    Object.keys(user).sort(),
-    ['createdAt', 'id', 'isActive', 'leaderId', 'name', 'phone', 'role', 'updatedAt', 'username'],
-  );
+  assert.deepEqual(Object.keys(user).sort(), [
+    'createdAt',
+    'id',
+    'isActive',
+    'leaderId',
+    'name',
+    'phone',
+    'role',
+    'updatedAt',
+    'username',
+  ]);
   assert.equal(typeof user.id, 'string');
   assert.equal(typeof user.name, 'string');
   assert.equal(typeof user.username, 'string');
@@ -756,19 +950,31 @@ function assertPublicUserContract(user) {
 }
 
 function assertSettingsContract(settings) {
-  assert.deepEqual(
-    Object.keys(settings).sort(),
-    ['onlyShowMarkedRecords', 'openedAt', 'openedBy', 'restoreRequired', 'restoredAt', 'restoredBy', 'updatedAt'],
-  );
+  assert.deepEqual(Object.keys(settings).sort(), [
+    'onlyShowMarkedRecords',
+    'openedAt',
+    'openedBy',
+    'restoreRequired',
+    'restoredAt',
+    'restoredBy',
+    'updatedAt',
+  ]);
   assert.equal(typeof settings.onlyShowMarkedRecords, 'boolean');
   assert.equal(typeof settings.restoreRequired, 'boolean');
 }
 
 function assertOperationLogContract(log) {
-  assert.deepEqual(
-    Object.keys(log).sort(),
-    ['action', 'afterData', 'beforeData', 'createdAt', 'entityId', 'entityType', 'id', 'ipAddress', 'userId'],
-  );
+  assert.deepEqual(Object.keys(log).sort(), [
+    'action',
+    'afterData',
+    'beforeData',
+    'createdAt',
+    'entityId',
+    'entityType',
+    'id',
+    'ipAddress',
+    'userId',
+  ]);
   assert.equal(typeof log.id, 'string');
   assert.equal(typeof log.action, 'string');
   assert.equal(typeof log.entityType, 'string');

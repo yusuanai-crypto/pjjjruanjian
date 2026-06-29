@@ -10,7 +10,6 @@ import '../../shared/widgets/mark_info_button.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
-import 'tasting_items_editor.dart';
 
 class TravelGroupFormPage extends StatefulWidget {
   const TravelGroupFormPage({
@@ -28,7 +27,6 @@ class TravelGroupFormPage extends StatefulWidget {
 
 class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   final _formKey = GlobalKey<FormState>();
-  final _tastingItemsKey = GlobalKey<TastingItemsEditorState>();
 
   late BusinessApi _businessApi;
   late final TextEditingController _travelAgencyController;
@@ -46,10 +44,10 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   String? _successMessage;
   GuideRecord? _selectedGuide;
   TasterOption? _selectedTaster;
-  List<Map<String, dynamic>> _tastingItems = const <Map<String, dynamic>>[];
   final Set<String> _markingGroupIds = <String>{};
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
   List<GuideRecord> _guides = const <GuideRecord>[];
+  List<TravelAgencyRecord> _travelAgencies = const <TravelAgencyRecord>[];
   List<TasterOption> _tasters = const <TasterOption>[];
 
   @override
@@ -96,6 +94,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       final results = await Future.wait<Object>([
         _businessApi.listTravelGroups(),
         _businessApi.listGuides(isActive: true, limit: 100),
+        _businessApi.listTravelAgencies(limit: 100),
         _businessApi.listTasters(),
       ]);
       if (!mounted) {
@@ -104,7 +103,8 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       setState(() {
         _groups = results[0] as List<TravelGroupRecord>;
         _guides = results[1] as List<GuideRecord>;
-        _tasters = results[2] as List<TasterOption>;
+        _travelAgencies = results[2] as List<TravelAgencyRecord>;
+        _tasters = results[3] as List<TasterOption>;
         _loading = false;
       });
     } catch (error) {
@@ -120,10 +120,16 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
 
   Future<void> _saveTravelGroup() async {
     final formValid = _formKey.currentState?.validate() ?? false;
-    final tastingValid = _tastingItemsKey.currentState?.validate() ?? true;
-    if (!formValid || !tastingValid) {
+    if (!formValid) {
       setState(() {
         _errorMessage = '请先补全必填信息。';
+        _successMessage = null;
+      });
+      return;
+    }
+    if (_travelAgencyController.text.trim().isEmpty) {
+      setState(() {
+        _errorMessage = '请选择旅行社。';
         _successMessage = null;
       });
       return;
@@ -160,7 +166,6 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
         'tasterId': _selectedTaster!.id,
         'arrivalTime': _arrivalTimeController.text.trim(),
         'groupType': _groupType,
-        'tastingItems': _tastingItems,
       });
       if (!mounted) {
         return;
@@ -192,13 +197,11 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _guestCountController.clear();
     _tastingRoomNoController.clear();
     _arrivalTimeController.clear();
-    _tastingItemsKey.currentState?.clear();
     setState(() {
       _visitDate = DateTime.now();
       _groupType = groupTypes.first;
       _selectedGuide = null;
       _selectedTaster = null;
-      _tastingItems = const <Map<String, dynamic>>[];
     });
   }
 
@@ -208,6 +211,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       builder: (context) => _GuidePickerDialog(
         businessApi: _businessApi,
         guides: _guides,
+        initialAgency: _travelAgencyController.text.trim(),
       ),
     );
     if (selected == null || !mounted) {
@@ -215,7 +219,6 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     }
     setState(() {
       _selectedGuide = selected;
-      _travelAgencyController.text = selected.travelAgency;
       if (!_guides.any((guide) => guide.id == selected.id)) {
         _guides = [..._guides, selected];
       }
@@ -291,6 +294,32 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     return _groups;
   }
 
+  Future<void> _selectTravelAgency() async {
+    final selected = await showDialog<TravelAgencyRecord>(
+      context: context,
+      builder: (context) => _TravelAgencyPickerDialog(
+        businessApi: _businessApi,
+        agencies: _travelAgencies,
+        initialAgency: _travelAgencyController.text.trim(),
+      ),
+    );
+    if (selected == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _travelAgencyController.text = selected.name;
+      if (!_travelAgencies.any((agency) => agency.id == selected.id)) {
+        _travelAgencies = [..._travelAgencies, selected]..sort(
+            (left, right) => left.name.toLowerCase().compareTo(
+                  right.name.toLowerCase(),
+                ),
+          );
+      }
+      _successMessage = null;
+      _errorMessage = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return ResponsivePage(
@@ -324,10 +353,15 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                             }
                           },
                         ),
-                        TextFormField(
-                          controller: _travelAgencyController,
-                          decoration: const InputDecoration(labelText: '旅行社'),
-                          validator: _requiredValidator('旅行社不能为空'),
+                        _SelectionField(
+                          label: '旅行社',
+                          value: _travelAgencyController.text.trim().isEmpty
+                              ? null
+                              : _travelAgencyController.text.trim(),
+                          errorText: _travelAgencyController.text.trim().isEmpty
+                              ? '必选'
+                              : null,
+                          onTap: _selectTravelAgency,
                         ),
                         TextFormField(
                           controller: _licensePlateController,
@@ -382,16 +416,6 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           },
                         ),
                       ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                FormSection(
-                  title: '品酒明细',
-                  children: [
-                    TastingItemsEditor(
-                      key: _tastingItemsKey,
-                      onChanged: (items) => _tastingItems = items,
                     ),
                   ],
                 ),
@@ -507,14 +531,180 @@ class _SelectionField extends StatelessWidget {
   }
 }
 
+class _TravelAgencyPickerDialog extends StatefulWidget {
+  const _TravelAgencyPickerDialog({
+    required this.businessApi,
+    required this.agencies,
+    required this.initialAgency,
+  });
+
+  final BusinessApi businessApi;
+  final List<TravelAgencyRecord> agencies;
+  final String initialAgency;
+
+  @override
+  State<_TravelAgencyPickerDialog> createState() =>
+      _TravelAgencyPickerDialogState();
+}
+
+class _TravelAgencyPickerDialogState extends State<_TravelAgencyPickerDialog> {
+  late final TextEditingController _searchController;
+  late final TextEditingController _newAgencyController;
+  bool _creating = false;
+  String _agencyQuery = '';
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _newAgencyController = TextEditingController(text: widget.initialAgency);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _newAgencyController.dispose();
+    super.dispose();
+  }
+
+  List<TravelAgencyRecord> get _filteredAgencies {
+    final query = _agencyQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return widget.agencies;
+    }
+    return widget.agencies
+        .where((agency) => agency.name.toLowerCase().contains(query))
+        .toList();
+  }
+
+  Future<void> _createAndSelect() async {
+    final name = _newAgencyController.text.trim();
+    if (name.isEmpty) {
+      return;
+    }
+    setState(() {
+      _creating = true;
+      _errorMessage = null;
+    });
+    try {
+      final agency = await widget.businessApi.createTravelAgency({
+        'name': name,
+      });
+      if (mounted) {
+        Navigator.of(context).pop(agency);
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _creating = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredAgencies = _filteredAgencies;
+    return AlertDialog(
+      title: const Text('选择旅行社'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: '搜索旅行社',
+                  hintText: '输入旅行社名称查询',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _agencyQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _agencyQuery = '');
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+                textInputAction: TextInputAction.search,
+                onChanged: (value) => setState(() => _agencyQuery = value),
+              ),
+              const SizedBox(height: 12),
+              if (widget.agencies.isEmpty)
+                const Text('暂无已录入旅行社，可在下方新建。')
+              else if (filteredAgencies.isEmpty)
+                const Text('未找到匹配旅行社，可调整关键词或在下方新建。')
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final agency in filteredAgencies)
+                        ListTile(
+                          title: Text(agency.name),
+                          subtitle: agency.contactPhone == null
+                              ? null
+                              : Text(agency.contactPhone!),
+                          trailing: const Icon(Icons.check_circle_outline),
+                          onTap: () => Navigator.of(context).pop(agency),
+                        ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 28),
+              TextField(
+                controller: _newAgencyController,
+                decoration: const InputDecoration(labelText: '新建旅行社名称'),
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _createAndSelect(),
+              ),
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 12),
+                _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _creating ? null : _createAndSelect,
+          icon: _creating
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add_rounded),
+          label: const Text('新建并选择'),
+        ),
+      ],
+    );
+  }
+}
+
 class _GuidePickerDialog extends StatefulWidget {
   const _GuidePickerDialog({
     required this.businessApi,
     required this.guides,
+    required this.initialAgency,
   });
 
   final BusinessApi businessApi;
   final List<GuideRecord> guides;
+  final String initialAgency;
 
   @override
   State<_GuidePickerDialog> createState() => _GuidePickerDialogState();
@@ -522,15 +712,24 @@ class _GuidePickerDialog extends StatefulWidget {
 
 class _GuidePickerDialogState extends State<_GuidePickerDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _searchController = TextEditingController();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _agencyController = TextEditingController();
+  late final TextEditingController _agencyController;
   final _remarksController = TextEditingController();
   bool _creating = false;
+  String _guideQuery = '';
   String? _errorMessage;
 
   @override
+  void initState() {
+    super.initState();
+    _agencyController = TextEditingController(text: widget.initialAgency);
+  }
+
+  @override
   void dispose() {
+    _searchController.dispose();
     _nameController.dispose();
     _phoneController.dispose();
     _agencyController.dispose();
@@ -567,8 +766,23 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
     }
   }
 
+  List<GuideRecord> get _filteredGuides {
+    final query = _guideQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return widget.guides;
+    }
+    return widget.guides.where((guide) {
+      return [
+        guide.name,
+        guide.phone,
+        guide.travelAgency,
+      ].any((value) => value.toLowerCase().contains(query));
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filteredGuides = _filteredGuides;
     return AlertDialog(
       title: const Text('选择导游'),
       content: SizedBox(
@@ -578,15 +792,48 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: '搜索导游',
+                  hintText: '输入导游姓名查询',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _guideQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _guideQuery = '');
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+                textInputAction: TextInputAction.search,
+                onChanged: (value) => setState(() => _guideQuery = value),
+              ),
+              const SizedBox(height: 12),
               if (widget.guides.isEmpty)
                 const Text('暂无导游，可在下方新建。')
+              else if (filteredGuides.isEmpty)
+                const Text('未找到匹配导游，可调整关键词或在下方新建。')
               else
-                for (final guide in widget.guides)
-                  ListTile(
-                    title: Text(guide.name),
-                    subtitle: Text('${guide.phone} · ${guide.travelAgency}'),
-                    onTap: () => Navigator.of(context).pop(guide),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final guide in filteredGuides)
+                        ListTile(
+                          title: Text(guide.name),
+                          subtitle:
+                              Text('${guide.phone} · ${guide.travelAgency}'),
+                          trailing: const Icon(Icons.check_circle_outline),
+                          onTap: () => Navigator.of(context).pop(guide),
+                        ),
+                    ],
                   ),
+                ),
               const Divider(height: 28),
               Form(
                 key: _formKey,
@@ -607,8 +854,7 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _agencyController,
-                      decoration: const InputDecoration(labelText: '旅行社'),
-                      validator: _requiredValidator('旅行社不能为空'),
+                      decoration: const InputDecoration(labelText: '常用旅行社（选填）'),
                     ),
                     const SizedBox(height: 8),
                     TextFormField(

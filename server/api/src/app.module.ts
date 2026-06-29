@@ -7,18 +7,26 @@ import { OperationLogNestController } from './modules/operation-logs/operation-l
 import { OperationLogsModule } from './modules/operation-logs/operation-logs.module';
 import { PreparationConfirmationNestController } from './modules/preparation-confirmation/preparation-confirmation.nest.controller';
 import { SettingsModule } from './modules/settings/settings.module';
+import { TravelAgenciesModule } from './modules/travel-agencies/travel-agencies.module';
 import { UsersModule } from './modules/users/users.module';
 import { PrismaModule } from './prisma/prisma.module';
-import {
-  PREPARATION_CONFIRMATION_SERVICE,
-} from './modules/legacy/legacy.tokens';
+import { PREPARATION_CONFIRMATION_SERVICE } from './modules/legacy/legacy.tokens';
 
 const {
   createPreparationConfirmationService,
 } = require('./modules/preparation-confirmation/preparation-confirmation.service');
 
 @Module({
-  imports: [PrismaModule, OperationLogsModule, UsersModule, AuthModule, SettingsModule, BusinessDataModule, GuidesModule],
+  imports: [
+    PrismaModule,
+    OperationLogsModule,
+    UsersModule,
+    AuthModule,
+    SettingsModule,
+    BusinessDataModule,
+    GuidesModule,
+    TravelAgenciesModule,
+  ],
   controllers: [
     OperationLogNestController,
     PreparationConfirmationNestController,

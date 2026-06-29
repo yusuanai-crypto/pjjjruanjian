@@ -35,6 +35,22 @@ void main() {
     const errorState = GuideLibraryState.error('Failed to load guides');
     expect(errorState.hasError, isTrue);
     expect(errorState.isEmpty, isFalse);
+
+    final agency = TravelAgencyRecord.fromJson({
+      'id': 'agency-1',
+      'name': 'Agency One',
+      'contactName': 'Contact One',
+      'contactPhone': '13900003333',
+      'notes': 'Often handles morning groups',
+      'createdAt': '2026-06-29T08:00:00.000Z',
+      'updatedAt': '2026-06-29T09:00:00.000Z',
+    });
+
+    expect(agency.id, 'agency-1');
+    expect(agency.name, 'Agency One');
+    expect(agency.contactName, 'Contact One');
+    expect(agency.contactPhone, '13900003333');
+    expect(agency.notes, 'Often handles morning groups');
   });
 
   test('parses sales order JSON returned by business API', () {

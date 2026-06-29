@@ -9,6 +9,7 @@ import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../travel_groups/tasting_items_editor.dart';
 
 class TravelGroupOrderNotesPage extends StatefulWidget {
   const TravelGroupOrderNotesPage({
@@ -26,12 +27,16 @@ class TravelGroupOrderNotesPage extends StatefulWidget {
 }
 
 class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
+  final _tastingItemsKey = GlobalKey<TastingItemsEditorState>();
+
   late BusinessApi _businessApi;
   late final TextEditingController _searchController;
   late final TextEditingController _departureTimeController;
   late final TextEditingController _remarksController;
 
   final Map<String, Set<String>> _selectedOrderIdsByGroup = {};
+  List<TastingItemDraft> _tastingItemDrafts = const <TastingItemDraft>[];
+  List<Map<String, dynamic>> _tastingItems = const <Map<String, dynamic>>[];
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   String _filter = '待补充';
@@ -179,6 +184,8 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     final group = _selectedGroup;
     _departureTimeController.text = group?.departureTime ?? '';
     _remarksController.text = group?.remarks ?? '';
+    _tastingItemDrafts = _tastingDraftsFromGroup(group);
+    _tastingItems = _tastingPayloadFromGroup(group);
   }
 
   void _toggleOrder(String orderId, bool selected) {
@@ -197,6 +204,14 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     if (group == null) {
       return;
     }
+    final tastingValid = _tastingItemsKey.currentState?.validate() ?? true;
+    if (!tastingValid) {
+      setState(() {
+        _errorMessage = '请先补全品酒明细。';
+        _successMessage = null;
+      });
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -208,6 +223,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
       final updated = await _businessApi.updateTravelGroup(group.id, {
         'departureTime': _departureTimeController.text.trim(),
         'remarks': _remarksController.text.trim(),
+        'tastingItems': _tastingItems,
       });
       if (!mounted) {
         return;
@@ -216,8 +232,10 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _groups = [
           for (final item in _groups) item.id == updated.id ? updated : item,
         ];
+        _tastingItemDrafts = _tastingDraftsFromGroup(updated);
+        _tastingItems = _tastingPayloadFromGroup(updated);
         _saving = false;
-        _successMessage = '离店备注已保存。';
+        _successMessage = '品酒明细与离店备注已保存。';
       });
     } catch (error) {
       if (!mounted) {
@@ -274,18 +292,24 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
             group: selectedGroup,
             orders: _orders,
             selectedOrderIds: _selectedOrderIds,
+            tastingItemsKey: _tastingItemsKey,
+            initialTastingItems: _tastingItemDrafts,
             departureTimeController: _departureTimeController,
             remarksController: _remarksController,
             saving: _saving,
             onOrderChanged: _toggleOrder,
+            onTastingItemsChanged: (items) => _tastingItems = items,
             onSave: _saving ? null : _saveSupplement,
             onClear: selectedGroup == null
                 ? null
                 : () {
+                    _tastingItemsKey.currentState?.clear();
                     setState(() {
                       _departureTimeController.clear();
                       _remarksController.clear();
                       _selectedOrderIds.clear();
+                      _tastingItems = const <Map<String, dynamic>>[];
+                      _tastingItemDrafts = const <TastingItemDraft>[];
                       _successMessage = null;
                       _errorMessage = null;
                     });
@@ -415,10 +439,13 @@ class _BindingPanel extends StatelessWidget {
     required this.group,
     required this.orders,
     required this.selectedOrderIds,
+    required this.tastingItemsKey,
+    required this.initialTastingItems,
     required this.departureTimeController,
     required this.remarksController,
     required this.saving,
     required this.onOrderChanged,
+    required this.onTastingItemsChanged,
     required this.onSave,
     required this.onClear,
   });
@@ -426,10 +453,13 @@ class _BindingPanel extends StatelessWidget {
   final TravelGroupRecord? group;
   final List<SalesOrderRecord> orders;
   final Set<String> selectedOrderIds;
+  final GlobalKey<TastingItemsEditorState> tastingItemsKey;
+  final List<TastingItemDraft> initialTastingItems;
   final TextEditingController departureTimeController;
   final TextEditingController remarksController;
   final bool saving;
   final void Function(String orderId, bool selected) onOrderChanged;
+  final ValueChanged<List<Map<String, dynamic>>> onTastingItemsChanged;
   final VoidCallback? onSave;
   final VoidCallback? onClear;
 
@@ -448,6 +478,12 @@ class _BindingPanel extends StatelessWidget {
       ),
       children: [
         _SelectedGroupHeader(group: selectedGroup),
+        const SizedBox(height: 12),
+        _TastingItemsBox(
+          tastingItemsKey: tastingItemsKey,
+          initialItems: initialTastingItems,
+          onChanged: onTastingItemsChanged,
+        ),
         const SizedBox(height: 12),
         _OrderBindingBox(
           orders: orders,
@@ -470,12 +506,56 @@ class _BindingPanel extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         SectionActions(
-          primaryLabel: saving ? '保存中...' : '保存离店备注',
+          primaryLabel: saving ? '保存中...' : '保存明细与备注',
           secondaryLabel: '清空',
           onPrimaryPressed: onSave,
           onSecondaryPressed: onClear,
         ),
       ],
+    );
+  }
+}
+
+class _TastingItemsBox extends StatelessWidget {
+  const _TastingItemsBox({
+    required this.tastingItemsKey,
+    required this.initialItems,
+    required this.onChanged,
+  });
+
+  final GlobalKey<TastingItemsEditorState> tastingItemsKey;
+  final List<TastingItemDraft> initialItems;
+  final ValueChanged<List<Map<String, dynamic>>> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '品酒明细',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            TastingItemsEditor(
+              key: tastingItemsKey,
+              initialItems: initialItems,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -645,4 +725,43 @@ String _orderTypeLabel(String type) {
     default:
       return '旅行团订单';
   }
+}
+
+List<TastingItemDraft> _tastingDraftsFromGroup(TravelGroupRecord? group) {
+  if (group == null) {
+    return const <TastingItemDraft>[];
+  }
+  return [
+    for (final item in _sortedTastingItems(group.tastingItems))
+      TastingItemDraft(
+        productName: item.productName,
+        quantity: item.quantity,
+        unit: item.unit,
+        note: item.note,
+      ),
+  ];
+}
+
+List<Map<String, dynamic>> _tastingPayloadFromGroup(TravelGroupRecord? group) {
+  if (group == null) {
+    return const <Map<String, dynamic>>[];
+  }
+  final sortedItems = _sortedTastingItems(group.tastingItems);
+  return [
+    for (var index = 0; index < sortedItems.length; index += 1)
+      {
+        'productName': sortedItems[index].productName,
+        'quantity': sortedItems[index].quantity,
+        'unit': sortedItems[index].unit,
+        'note': sortedItems[index].note,
+        'sortOrder': index + 1,
+      },
+  ];
+}
+
+List<TravelGroupTastingItemRecord> _sortedTastingItems(
+  List<TravelGroupTastingItemRecord> items,
+) {
+  return [...items]
+    ..sort((left, right) => left.sortOrder.compareTo(right.sortOrder));
 }

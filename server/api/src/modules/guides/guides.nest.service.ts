@@ -38,7 +38,11 @@ export class GuidesNestService {
       },
     });
     if (existing) {
-      throw createHttpError(409, 'GUIDE_PHONE_EXISTS', 'Guide phone already exists.');
+      throw createHttpError(
+        409,
+        'GUIDE_PHONE_EXISTS',
+        'Guide phone already exists.',
+      );
     }
 
     const created = await this.prisma.guide.create({
@@ -68,7 +72,11 @@ export class GuidesNestService {
         },
       });
       if (duplicate) {
-        throw createHttpError(409, 'GUIDE_PHONE_EXISTS', 'Guide phone already exists.');
+        throw createHttpError(
+          409,
+          'GUIDE_PHONE_EXISTS',
+          'Guide phone already exists.',
+        );
       }
     }
 
@@ -90,7 +98,12 @@ export class GuidesNestService {
     return toGuideDto(updated);
   }
 
-  async setGuideActive(actor: any, id: string, isActive: boolean, metadata: any = {}) {
+  async setGuideActive(
+    actor: any,
+    id: string,
+    isActive: boolean,
+    metadata: any = {},
+  ) {
     requireAnyRole(actor, ['admin']);
     const current = await this.findGuideOrThrow(id);
     const updated = await this.prisma.guide.update({
@@ -129,7 +142,9 @@ export class GuidesNestService {
 
 function buildGuideWhere(filters: any = {}) {
   const where: any = {};
-  const keyword = normalizeOptionalString(filters.keyword || filters.query || filters.search);
+  const keyword = normalizeOptionalString(
+    filters.keyword || filters.query || filters.search,
+  );
   if (keyword) {
     where.OR = [
       { name: { contains: keyword } },
@@ -158,7 +173,13 @@ function buildGuideData(payload: any, creating: boolean) {
 
   assignRequiredString(data, 'name', payload?.name, creating, 'name', 80);
   assignRequiredString(data, 'phone', payload?.phone, creating, 'phone', 30);
-  assignRequiredString(data, 'travelAgency', payload?.travelAgency, creating, 'travelAgency', 120);
+  assignOptionalString(
+    data,
+    'travelAgency',
+    payload?.travelAgency,
+    'travelAgency',
+    120,
+  );
   assignNullableString(data, 'remarks', payload?.remarks);
   if (payload?.isActive !== undefined) {
     data.isActive = normalizeBoolean(payload.isActive, 'isActive');
@@ -185,7 +206,11 @@ function assignRequiredString(
   }
   const text = normalizeRequiredString(value, fieldName);
   if (text.length > maxLength) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be ${maxLength} characters or fewer.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be ${maxLength} characters or fewer.`,
+    );
   }
   data[key] = text;
 }
@@ -196,10 +221,35 @@ function assignNullableString(data: any, key: string, value: unknown) {
   }
 }
 
+function assignOptionalString(
+  data: any,
+  key: string,
+  value: unknown,
+  fieldName: string,
+  maxLength: number,
+) {
+  if (value === undefined) {
+    return;
+  }
+  const text = normalizeOptionalString(value);
+  if (text && text.length > maxLength) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be ${maxLength} characters or fewer.`,
+    );
+  }
+  data[key] = text;
+}
+
 function normalizeRequiredString(value: unknown, fieldName: string) {
   const text = normalizeOptionalString(value);
   if (!text) {
-    throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} is required.`);
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} is required.`,
+    );
   }
   return text;
 }
@@ -223,7 +273,11 @@ function normalizeBoolean(value: unknown, fieldName: string) {
   if (['false', '0', 'no', 'off'].includes(text)) {
     return false;
   }
-  throw createHttpError(400, 'VALIDATION_FAILED', `${fieldName} must be a boolean.`);
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    `${fieldName} must be a boolean.`,
+  );
 }
 
 function normalizeTake(value: unknown, fallback: number) {
@@ -242,7 +296,7 @@ function toGuideDto(guide: any) {
     id: guide.id,
     name: guide.name,
     phone: guide.phone,
-    travelAgency: guide.travelAgency,
+    travelAgency: guide.travelAgency || null,
     remarks: guide.remarks,
     isActive: Boolean(guide.isActive),
     createdAt: toIsoString(guide.createdAt),
@@ -259,6 +313,10 @@ function toIsoString(value: unknown) {
 
 function requireAnyRole(actor: any, roles: string[]) {
   if (!actor || !roles.includes(actor.role)) {
-    throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
+    throw createHttpError(
+      403,
+      'PERMISSION_DENIED',
+      'You do not have permission to perform this action.',
+    );
   }
 }

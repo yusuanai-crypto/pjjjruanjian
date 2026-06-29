@@ -8,9 +8,9 @@ datasource db {
 }
 
 // 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
-// 已落库业务表：guides、travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
+// 已落库业务表：travel_agencies、guides、travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
 // sales_order_items、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
-// 独立客户、旅行社、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
+// 独立客户、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -86,11 +86,24 @@ model OperationLog {
   @@map("operation_logs")
 }
 
+model TravelAgency {
+  id           String   @id @default(uuid()) @db.Char(36)
+  name         String   @unique @db.VarChar(120)
+  contactName  String?  @map("contact_name") @db.VarChar(80)
+  contactPhone String?  @map("contact_phone") @db.VarChar(30)
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  @@index([contactPhone])
+  @@map("travel_agencies")
+}
+
 model Guide {
   id           String   @id @default(uuid()) @db.Char(36)
   name         String   @db.VarChar(80)
   phone        String   @unique @db.VarChar(30)
-  travelAgency String   @map("travel_agency") @db.VarChar(120)
+  travelAgency String?  @map("travel_agency") @db.VarChar(120)
   remarks      String?  @db.Text
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
