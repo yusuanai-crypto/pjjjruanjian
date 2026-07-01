@@ -46,6 +46,46 @@ export class SalesOrdersNestController {
     };
   }
 
+  @Patch(':id/finance')
+  async updateFinance(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.updateSalesOrderFinance(actor, id, body, {
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
+
+  @Patch(':id/packing')
+  async updatePacking(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.updateSalesOrderPacking(actor, id, body, {
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
+
+  @Patch(':id/status')
+  async updateStatus(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.updateSalesOrderStatus(actor, id, body, {
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.updateSalesOrder(actor, id, body, {
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
+
   @Patch(':id/finance-mark')
   async setFinanceMark(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

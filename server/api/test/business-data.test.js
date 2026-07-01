@@ -143,12 +143,14 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
         orderNo: 'SO-TEST-001',
         orderType: 'travel_group',
         travelGroupId: createdGroup.body.data.travelGroup.id,
-        customerName: '测试客户',
-        customerPhone: '13900002222',
-        province: '贵州省',
-        city: '贵阳市',
-        district: '观山湖区',
-        address: '测试地址',
+        customer: {
+          name: '测试客户',
+          phone: '13900002222',
+          province: '贵州省',
+          city: '贵阳市',
+          district: '观山湖区',
+          address: '测试地址',
+        },
         orderDate: '2026-06-23',
         cashOnDeliveryAmountCents: 5000,
         items: [
@@ -163,6 +165,8 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     });
     assert.equal(createdOrder.response.status, 201);
     assert.equal(createdOrder.body.data.salesOrder.orderType, 'travel_group');
+    assert.equal(createdOrder.body.data.salesOrder.orderNo, 'SO20260623001');
+    assert.notEqual(createdOrder.body.data.salesOrder.orderNo, 'SO-TEST-001');
     assert.equal(createdOrder.body.data.salesOrder.totalAmountCents, 39800);
     assert.equal(createdOrder.body.data.salesOrder.items.length, 1);
 
@@ -178,7 +182,7 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     assert.equal(overview.body.data.overview.metrics.salesAmountCents, 39800);
     assert.equal(
       overview.body.data.overview.recentOrders[0].orderNo,
-      'SO-TEST-001',
+      createdOrder.body.data.salesOrder.orderNo,
     );
 
     const emptyReconciliation = await requestJson(
@@ -289,6 +293,2113 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     );
     assert.equal(bonusList.response.status, 200);
     assert.equal(bonusList.body.data.strikeBonusAwards.length, 1);
+  });
+});
+
+test('contract: sales order creation generates orderNo from orderDate and ignores client orderNo', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+
+    const first = await createGeneratedSalesOrder(baseUrl, admin.token, {
+      orderNo: 'CLIENT-SHOULD-BE-IGNORED-1',
+      orderDate: '2026-06-29',
+    });
+    const second = await createGeneratedSalesOrder(baseUrl, admin.token, {
+      orderNo: 'CLIENT-SHOULD-BE-IGNORED-2',
+      orderDate: '2026-06-29',
+    });
+    const nextDay = await createGeneratedSalesOrder(baseUrl, admin.token, {
+      orderNo: 'CLIENT-SHOULD-BE-IGNORED-3',
+      orderDate: '2026-06-30',
+    });
+
+    assert.equal(first.orderNo, 'SO20260629001');
+    assert.equal(second.orderNo, 'SO20260629002');
+    assert.equal(nextDay.orderNo, 'SO20260630001');
+  });
+});
+
+test('contract: sales order creation retries once after generated orderNo conflict', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+
+      const order = await createGeneratedSalesOrder(baseUrl, admin.token, {
+        orderDate: '2026-06-29',
+      });
+
+      assert.equal(order.orderNo, 'SO20260629002');
+    },
+    {
+      prisma: {
+        failSalesOrderCreateOrderNoOnce: true,
+      },
+    },
+  );
+});
+
+test('contract: sales order creation uses existing customer snapshots and sales ownership', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const salesUser = await createUser(baseUrl, admin.token, {
+        name: 'Order Scope Sales',
+        username: 'order-scope-sales',
+        password: 'Password123',
+        role: 'sales',
+      });
+      const sales = await login(baseUrl, salesUser.username, 'Password123');
+      const group = await createScopedTravelGroup(baseUrl, admin.token, {
+        visitDate: '2026-06-29',
+      });
+
+      const created = await requestJson(baseUrl, '/api/sales-orders', {
+        method: 'POST',
+        token: sales.token,
+        body: {
+          orderNo: 'CLIENT-ORDER-NO-IGNORED',
+          orderType: 'travel_group',
+          travelGroupId: group.id,
+          customerId: 'cust_existing_order',
+          salesUserId: 'usr_admin',
+          orderDate: '2026-06-29',
+          salesFormNo: 'FORM-TEST-001',
+          totalAmountCents: 999999,
+          cashOnDeliveryAmountCents: 600,
+          invoiceRequired: true,
+          items: [
+            {
+              productName: 'Existing Customer Product',
+              quantity: 2,
+              unitPriceCents: 1500,
+              deliveryType: 'shipping',
+              notes: 'shipping note',
+              sortOrder: 7,
+            },
+          ],
+        },
+      });
+      assert.equal(created.response.status, 201);
+      const order = created.body.data.salesOrder;
+      assert.equal(order.orderNo, 'SO20260629001');
+      assert.equal(order.customerId, 'cust_existing_order');
+      assert.equal(order.customerName, 'Existing Order Customer');
+      assert.equal(order.customerPhone, '13900008888');
+      assert.equal(order.province, '贵州省');
+      assert.equal(order.city, '贵阳市');
+      assert.equal(order.district, '南明区');
+      assert.equal(order.address, 'Existing Snapshot Address');
+      assert.equal(order.customer.name, 'Existing Order Customer');
+      assert.equal(order.customer.financeMark, true);
+      assert.equal(order.salesUserId, salesUser.id);
+      assert.equal(order.totalAmountCents, 3000);
+      assert.equal(order.deliverySummary, 'shipping');
+      assert.equal(order.packingStatus, 'pending');
+      assert.equal(order.invoiceRequired, true);
+      assert.equal(order.items[0].subtotalCents, 3000);
+      assert.equal(order.items[0].deliveryType, 'shipping');
+      assert.equal(order.items[0].notes, 'shipping note');
+      assert.equal(order.items[0].sortOrder, 7);
+      assertSalesOrderDtoPhase4(order);
+
+      const orderDetail = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${order.id}`,
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(orderDetail.response.status, 200);
+      assertSalesOrderDtoPhase4(orderDetail.body.data.salesOrder);
+      assertSalesOrderDtoStableEqual(orderDetail.body.data.salesOrder, order);
+
+      const orderList = await requestJson(baseUrl, '/api/sales-orders', {
+        token: admin.token,
+      });
+      assert.equal(orderList.response.status, 200);
+      const listedOrder = orderList.body.data.salesOrders.find(
+        (item) => item.id === order.id,
+      );
+      assert.ok(listedOrder);
+      assertSalesOrderDtoPhase4(listedOrder);
+      assertSalesOrderDtoStableEqual(
+        listedOrder,
+        orderDetail.body.data.salesOrder,
+      );
+
+      const groupDetail = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${group.id}`,
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(groupDetail.response.status, 200);
+      assert.equal(groupDetail.body.data.travelGroup.status, 'ordered');
+      assert.equal(groupDetail.body.data.travelGroup.salesAmountCents, 3000);
+      assert.equal(groupDetail.body.data.travelGroup.orderAmountCents, 3000);
+      assert.equal(
+        groupDetail.body.data.travelGroup.cashOnDeliveryCents,
+        600,
+      );
+
+      const salesLogs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=sales_orders.create',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(salesLogs.response.status, 200);
+      assert.equal(salesLogs.body.data.logs.length, 1);
+      assert.equal(
+        salesLogs.body.data.logs[0].afterData.customerId,
+        'cust_existing_order',
+      );
+      assertSalesOrderDtoPhase4(salesLogs.body.data.logs[0].afterData);
+      assert.equal(
+        salesLogs.body.data.logs[0].afterData.deliverySummary,
+        'shipping',
+      );
+
+      const customerLogs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=customers.create',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(customerLogs.response.status, 200);
+      assert.equal(customerLogs.body.data.logs.length, 0);
+    },
+    {
+      prisma: {
+        customers: [
+          {
+            id: 'cust_existing_order',
+            name: 'Existing Order Customer',
+            phone: '13900008888',
+            province: '贵州省',
+            city: '贵阳市',
+            district: '南明区',
+            address: 'Existing Snapshot Address',
+            financeMark: true,
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: sales order creation can create a new unmarked customer in the same transaction', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+
+    const created = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'external',
+        orderDate: '2026-06-29',
+        customer: {
+          name: 'New Order Customer',
+          phone: '13900007777',
+          province: '四川省',
+          city: '成都市',
+          district: '武侯区',
+          address: 'New Snapshot Address',
+          financeMark: true,
+          notes: 'new customer note',
+        },
+        totalAmountCents: 999999,
+        items: [
+          {
+            productName: 'Self Pickup Product',
+            quantity: 3,
+            unitPriceCents: 2000,
+            deliveryType: 'self_pickup',
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const order = created.body.data.salesOrder;
+    assert.equal(order.orderNo, 'SO20260629001');
+    assert.equal(typeof order.customerId, 'string');
+    assert.equal(order.customerName, 'New Order Customer');
+    assert.equal(order.customer.financeMark, false);
+    assert.equal(order.totalAmountCents, 6000);
+    assert.equal(order.deliverySummary, 'self_pickup');
+    assert.equal(order.packingStatus, 'packed');
+    assert.equal(order.items[0].deliveryType, 'self_pickup');
+    assert.equal(order.items[0].subtotalCents, 6000);
+    assertSalesOrderDtoPhase4(order);
+
+    const customerLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=customers.create',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(customerLogs.response.status, 200);
+    assert.equal(customerLogs.body.data.logs.length, 1);
+    assert.equal(
+      customerLogs.body.data.logs[0].afterData.financeMark,
+      false,
+    );
+    assert.equal(
+      customerLogs.body.data.logs[0].afterData.id,
+      order.customerId,
+    );
+
+    const salesLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=sales_orders.create',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(salesLogs.response.status, 200);
+    assert.equal(salesLogs.body.data.logs.length, 1);
+    assert.equal(
+      salesLogs.body.data.logs[0].afterData.totalAmountCents,
+      6000,
+    );
+    assert.equal(
+      salesLogs.body.data.logs[0].afterData.deliverySummary,
+      'self_pickup',
+    );
+    assertSalesOrderDtoPhase4(salesLogs.body.data.logs[0].afterData);
+  });
+});
+
+test('contract: sales order DTO summarizes mixed delivery items consistently', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+
+    const created = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'external',
+        orderDate: '2026-06-29',
+        customer: {
+          name: 'Mixed Delivery Customer',
+          phone: '13900005555',
+        },
+        items: [
+          {
+            productName: 'Mixed Shipping Product',
+            quantity: 1,
+            unitPriceCents: 2500,
+            deliveryType: 'shipping',
+            notes: 'ship item',
+            sortOrder: 2,
+          },
+          {
+            productName: 'Mixed Pickup Product',
+            quantity: 2,
+            unitPriceCents: 1500,
+            deliveryType: 'self_pickup',
+            notes: 'pickup item',
+            sortOrder: 1,
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const order = created.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(order);
+    assert.equal(order.deliverySummary, 'mixed');
+    assert.equal(order.packingStatus, 'pending');
+    assert.equal(order.totalAmountCents, 5500);
+    assert.deepEqual(
+      order.items.map((item) => item.deliveryType).sort(),
+      ['self_pickup', 'shipping'],
+    );
+    assert.deepEqual(
+      order.items
+        .map((item) => item.subtotalCents)
+        .sort((left, right) => left - right),
+      [2500, 3000],
+    );
+
+    const detail = await requestJson(baseUrl, `/api/sales-orders/${order.id}`, {
+      token: admin.token,
+    });
+    assert.equal(detail.response.status, 200);
+    assertSalesOrderDtoPhase4(detail.body.data.salesOrder);
+    assertSalesOrderDtoStableEqual(detail.body.data.salesOrder, order);
+
+    const list = await requestJson(baseUrl, '/api/sales-orders', {
+      token: admin.token,
+    });
+    assert.equal(list.response.status, 200);
+    const listedOrder = list.body.data.salesOrders.find(
+      (item) => item.id === order.id,
+    );
+    assert.ok(listedOrder);
+    assertSalesOrderDtoStableEqual(listedOrder, detail.body.data.salesOrder);
+  });
+});
+
+test('contract: sales order DTO keeps legacy snapshots without customer relation', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+
+      const detail = await requestJson(
+        baseUrl,
+        '/api/sales-orders/legacy_sales_order_dto',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(detail.response.status, 200);
+      const order = detail.body.data.salesOrder;
+      assertSalesOrderDtoPhase4(order);
+      assert.equal(order.customerId, null);
+      assert.equal(order.customer, null);
+      assert.equal(order.customerName, 'Legacy Snapshot Customer');
+      assert.equal(order.customerPhone, '13900004444');
+      assert.equal(order.province, 'Legacy Province');
+      assert.equal(order.city, 'Legacy City');
+      assert.equal(order.district, 'Legacy District');
+      assert.equal(order.address, 'Legacy Address');
+      assert.equal(order.deliverySummary, null);
+      assert.deepEqual(order.items, []);
+
+      const list = await requestJson(baseUrl, '/api/sales-orders', {
+        token: admin.token,
+      });
+      assert.equal(list.response.status, 200);
+      assert.equal(list.body.data.salesOrders.length, 1);
+      assertSalesOrderDtoStableEqual(list.body.data.salesOrders[0], order);
+
+      const enabled = await requestJson(
+        baseUrl,
+        '/api/settings/global-mark-query/enable',
+        {
+          method: 'POST',
+          token: admin.token,
+        },
+      );
+      assert.equal(enabled.response.status, 200);
+
+      const hiddenList = await requestJson(baseUrl, '/api/sales-orders', {
+        token: admin.token,
+      });
+      assert.equal(hiddenList.response.status, 200);
+      assert.deepEqual(hiddenList.body.data.salesOrders, []);
+
+      const hiddenDetail = await requestJson(
+        baseUrl,
+        '/api/sales-orders/legacy_sales_order_dto',
+        {
+          token: admin.token,
+        },
+      );
+      assertErrorContract(hiddenDetail, 404, 'SALES_ORDER_NOT_FOUND');
+    },
+    {
+      prisma: {
+        salesOrders: [
+          {
+            id: 'legacy_sales_order_dto',
+            orderNo: 'SO-LEGACY-DTO',
+            orderType: 'EXTERNAL',
+            customerId: null,
+            customerName: 'Legacy Snapshot Customer',
+            customerPhone: '13900004444',
+            province: 'Legacy Province',
+            city: 'Legacy City',
+            district: 'Legacy District',
+            address: 'Legacy Address',
+            orderDate: '2026-06-28',
+            totalAmountCents: 12300,
+            cashOnDeliveryAmountCents: 0,
+            packingStatus: 'PACKED',
+            status: 'VALID',
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: sales order list supports phase 4 filters and role scopes', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const salesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Filter Sales',
+      username: 'order-filter-sales',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const warehouseUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Filter Warehouse',
+      username: 'order-filter-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    const tasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Filter Taster',
+      username: 'order-filter-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Filter After Sales',
+      username: 'order-filter-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const sales = await login(baseUrl, salesUser.username, 'Password123');
+    const warehouse = await login(
+      baseUrl,
+      warehouseUser.username,
+      'Password123',
+    );
+    const taster = await login(baseUrl, tasterUser.username, 'Password123');
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+
+    const group = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-29',
+      travelAgency: 'Filter Travel Agency',
+    });
+    const markedCustomer = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Filter Marked Customer',
+      phone: '13900001001',
+      province: 'Guizhou',
+      city: 'Guiyang',
+      district: 'Guanshanhu',
+      address: 'Filter Shipping Address',
+    });
+    await setCustomerFinanceMark(
+      baseUrl,
+      admin.token,
+      markedCustomer.id,
+      true,
+    );
+    const unmarkedCustomer = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Filter Unmarked Customer',
+      phone: '13900001002',
+      address: 'Filter Pickup Address',
+    });
+
+    const shippingCreated = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: group.id,
+        customerId: markedCustomer.id,
+        salesUserId: salesUser.id,
+        orderDate: '2026-06-29',
+        salesFormNo: 'FORM-FILTER-001',
+        items: [
+          {
+            productName: 'Filter Shipping Product',
+            quantity: 1,
+            unitPriceCents: 12000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(shippingCreated.response.status, 201);
+    const shippingOrder = shippingCreated.body.data.salesOrder;
+    await setSalesOrderFinanceMark(baseUrl, admin.token, shippingOrder.id, true);
+
+    const pickupCreated = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'external',
+        customerId: unmarkedCustomer.id,
+        orderDate: '2026-06-30',
+        salesFormNo: 'FORM-FILTER-002',
+        items: [
+          {
+            productName: 'Filter Pickup Product',
+            quantity: 1,
+            unitPriceCents: 8000,
+            deliveryType: 'self_pickup',
+          },
+        ],
+      },
+    });
+    assert.equal(pickupCreated.response.status, 201);
+    const pickupOrder = pickupCreated.body.data.salesOrder;
+
+    const listOrderNos = async (query, token = admin.token) => {
+      const result = await requestJson(baseUrl, `/api/sales-orders?${query}`, {
+        token,
+      });
+      assert.equal(result.response.status, 200);
+      return orderNos(result.body.data.salesOrders);
+    };
+
+    assert.deepEqual(
+      await listOrderNos('dateFrom=2026-06-29&dateTo=2026-06-29'),
+      [shippingOrder.orderNo],
+    );
+    assert.deepEqual(
+      await listOrderNos(`keyword=${encodeURIComponent(group.groupNo)}`),
+      [shippingOrder.orderNo],
+    );
+    assert.deepEqual(
+      await listOrderNos('query=13900001001'),
+      [shippingOrder.orderNo],
+    );
+    assert.deepEqual(
+      await listOrderNos(`customerId=${markedCustomer.id}`),
+      [shippingOrder.orderNo],
+    );
+    assert.deepEqual(
+      await listOrderNos('customerPhone=13900001002'),
+      [pickupOrder.orderNo],
+    );
+    assert.deepEqual(
+      await listOrderNos(`travelGroupId=${group.id}`),
+      [shippingOrder.orderNo],
+    );
+    assert.deepEqual(await listOrderNos('orderType=travel_group'), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('status=valid'), [
+      pickupOrder.orderNo,
+      shippingOrder.orderNo,
+    ].sort());
+    assert.deepEqual(await listOrderNos('deliveryType=shipping'), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('packingStatus=pending'), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('financeMark=true'), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('customerFinanceMark=true'), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos(`salesUserId=${salesUser.id}`), [
+      shippingOrder.orderNo,
+    ]);
+    assert.equal((await listOrderNos('limit=1')).length, 1);
+
+    assert.deepEqual(await listOrderNos('', sales.token), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('', warehouse.token), [
+      shippingOrder.orderNo,
+    ]);
+    assert.deepEqual(await listOrderNos('', afterSales.token), [
+      pickupOrder.orderNo,
+      shippingOrder.orderNo,
+    ].sort());
+
+    const salesVisibleDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${shippingOrder.id}`,
+      {
+        token: sales.token,
+      },
+    );
+    assert.equal(salesVisibleDetail.response.status, 200);
+    assert.equal(salesVisibleDetail.body.data.salesOrder.id, shippingOrder.id);
+
+    const salesHiddenDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${pickupOrder.id}`,
+      {
+        token: sales.token,
+      },
+    );
+    assertErrorContract(salesHiddenDetail, 404, 'SALES_ORDER_NOT_FOUND');
+
+    const afterSalesVisibleDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${pickupOrder.id}`,
+      {
+        token: afterSales.token,
+      },
+    );
+    assert.equal(afterSalesVisibleDetail.response.status, 200);
+    assert.equal(
+      afterSalesVisibleDetail.body.data.salesOrder.id,
+      pickupOrder.id,
+    );
+
+    const warehouseHiddenDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${pickupOrder.id}`,
+      {
+        token: warehouse.token,
+      },
+    );
+    assertErrorContract(
+      warehouseHiddenDetail,
+      404,
+      'SALES_ORDER_NOT_FOUND',
+    );
+
+    const tasterList = await requestJson(baseUrl, '/api/sales-orders', {
+      token: taster.token,
+    });
+    assertErrorContract(tasterList, 403, 'PERMISSION_DENIED');
+    const tasterDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${shippingOrder.id}`,
+      {
+        token: taster.token,
+      },
+    );
+    assertErrorContract(tasterDetail, 403, 'PERMISSION_DENIED');
+  });
+});
+
+test('contract: sales order patch enforces field permissions, replaces items, updates customers, and refreshes travel group summaries', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const salesAlphaUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Sales Alpha',
+      username: 'order-patch-sales-alpha',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const salesBetaUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Sales Beta',
+      username: 'order-patch-sales-beta',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Finance',
+      username: 'order-patch-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const warehouseUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Warehouse',
+      username: 'order-patch-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    const bossUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Boss',
+      username: 'order-patch-boss',
+      password: 'Password123',
+      role: 'boss',
+    });
+    const tasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch Taster',
+      username: 'order-patch-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Patch After Sales',
+      username: 'order-patch-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const salesAlpha = await login(
+      baseUrl,
+      salesAlphaUser.username,
+      'Password123',
+    );
+    const salesBeta = await login(
+      baseUrl,
+      salesBetaUser.username,
+      'Password123',
+    );
+    const finance = await login(baseUrl, financeUser.username, 'Password123');
+    const warehouse = await login(
+      baseUrl,
+      warehouseUser.username,
+      'Password123',
+    );
+    const boss = await login(baseUrl, bossUser.username, 'Password123');
+    const taster = await login(baseUrl, tasterUser.username, 'Password123');
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+
+    const groupA = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-29',
+      travelAgency: 'Patch Travel Agency A',
+    });
+    const groupB = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-30',
+      travelAgency: 'Patch Travel Agency B',
+    });
+    const customerA = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Patch Customer A',
+      phone: '13900002000',
+      province: 'Guizhou',
+      city: 'Guiyang',
+      district: 'Nanming',
+      address: 'Patch Address A',
+    });
+    const customerB = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Patch Customer B',
+      phone: '13900002002',
+      province: 'Sichuan',
+      city: 'Chengdu',
+      district: 'Wuhou',
+      address: 'Patch Address B',
+    });
+
+    const created = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: salesAlpha.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: groupA.id,
+        customerId: customerA.id,
+        orderDate: '2026-06-29',
+        cashOnDeliveryAmountCents: 1000,
+        items: [
+          {
+            productName: 'Patch Initial Product',
+            quantity: 1,
+            unitPriceCents: 10000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const originalOrder = created.body.data.salesOrder;
+    assert.equal(originalOrder.salesUserId, salesAlphaUser.id);
+
+    const initialGroupA = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupA.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(initialGroupA.response.status, 200);
+    assert.equal(initialGroupA.body.data.travelGroup.status, 'ordered');
+    assert.equal(initialGroupA.body.data.travelGroup.salesAmountCents, 10000);
+    assert.equal(initialGroupA.body.data.travelGroup.orderAmountCents, 10000);
+    assert.equal(
+      initialGroupA.body.data.travelGroup.cashOnDeliveryCents,
+      1000,
+    );
+
+    const salesPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          salesFormNo: 'PATCH-FORM-001',
+          orderDate: '2026-06-30',
+          customer: {
+            name: 'Patch Customer Updated',
+            phone: '13900002001',
+            province: 'Guizhou',
+            city: 'Guiyang',
+            district: 'Yunyan',
+            address: 'Patch Updated Address',
+            notes: 'patch note',
+          },
+          cashOnDeliveryAmountCents: 2500,
+          invoiceRequired: true,
+          remark: 'sales patch remark',
+          items: [
+            {
+              productName: 'Patch Product A',
+              quantity: 2,
+              unitPriceCents: 7000,
+              deliveryType: 'shipping',
+              notes: 'first',
+              sortOrder: 2,
+            },
+            {
+              productName: 'Patch Product B',
+              quantity: 1,
+              unitPriceCents: 3000,
+              deliveryType: 'self_pickup',
+              notes: 'second',
+              sortOrder: 1,
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(salesPatch.response.status, 200);
+    const salesPatchedOrder = salesPatch.body.data.salesOrder;
+    assert.equal(salesPatchedOrder.salesFormNo, 'PATCH-FORM-001');
+    assert.equal(salesPatchedOrder.orderDate, '2026-06-30');
+    assert.equal(salesPatchedOrder.customerId, customerA.id);
+    assert.equal(salesPatchedOrder.customerName, 'Patch Customer Updated');
+    assert.equal(salesPatchedOrder.customerPhone, '13900002001');
+    assert.equal(salesPatchedOrder.address, 'Patch Updated Address');
+    assert.equal(salesPatchedOrder.customer.financeMark, false);
+    assert.equal(salesPatchedOrder.totalAmountCents, 17000);
+    assert.equal(salesPatchedOrder.cashOnDeliveryAmountCents, 2500);
+    assert.equal(salesPatchedOrder.invoiceRequired, true);
+    assert.equal(salesPatchedOrder.remark, 'sales patch remark');
+    assert.equal(salesPatchedOrder.deliverySummary, 'mixed');
+    assert.deepEqual(
+      salesPatchedOrder.items.map((item) => item.productName).sort(),
+      ['Patch Product A', 'Patch Product B'],
+    );
+    assert.equal(
+      salesPatchedOrder.items.find((item) => item.productName === 'Patch Product A')
+        .subtotalCents,
+      14000,
+    );
+    assert.equal(
+      salesPatchedOrder.items.find((item) => item.productName === 'Patch Product B')
+        .deliveryType,
+      'self_pickup',
+    );
+    assert.equal(
+      salesPatchedOrder.items.find((item) => item.productName === 'Patch Product B')
+        .sortOrder,
+      1,
+    );
+
+    const patchedGroupA = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupA.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(patchedGroupA.response.status, 200);
+    assert.equal(patchedGroupA.body.data.travelGroup.status, 'ordered');
+    assert.equal(patchedGroupA.body.data.travelGroup.salesAmountCents, 17000);
+    assert.equal(patchedGroupA.body.data.travelGroup.orderAmountCents, 17000);
+    assert.equal(
+      patchedGroupA.body.data.travelGroup.cashOnDeliveryCents,
+      2500,
+    );
+
+    const customerUpdateLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=customers.update',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(customerUpdateLogs.response.status, 200);
+    assert.equal(customerUpdateLogs.body.data.logs.length, 1);
+    assert.equal(
+      customerUpdateLogs.body.data.logs[0].beforeData.name,
+      'Patch Customer A',
+    );
+    assert.equal(
+      customerUpdateLogs.body.data.logs[0].afterData.name,
+      'Patch Customer Updated',
+    );
+
+    const salesCannotPatchWarehouseField = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          logisticsNo: 'NOPE',
+        },
+      },
+    );
+    assertErrorContract(
+      salesCannotPatchWarehouseField,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
+
+    const salesCannotPatchStatus = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          status: 'cancelled',
+        },
+      },
+    );
+    assertErrorContract(
+      salesCannotPatchStatus,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
+
+    const salesCannotPatchCustomerMark = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          customer: {
+            financeMark: true,
+          },
+        },
+      },
+    );
+    assertErrorContract(
+      salesCannotPatchCustomerMark,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
+
+    const otherSalesPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: salesBeta.token,
+        body: {
+          remark: 'should not update',
+        },
+      },
+    );
+    assertErrorContract(otherSalesPatch, 404, 'SALES_ORDER_NOT_FOUND');
+
+    for (const token of [
+      finance.token,
+      warehouse.token,
+      boss.token,
+      taster.token,
+      afterSales.token,
+    ]) {
+      const forbidden = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${originalOrder.id}`,
+        {
+          method: 'PATCH',
+          token,
+          body: {
+            remark: 'not allowed',
+          },
+        },
+      );
+      assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
+    }
+
+    const adminPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          customerId: customerB.id,
+          travelGroupId: groupB.id,
+          status: 'partial_refund',
+          salesUserId: salesBetaUser.id,
+          cashOnDeliveryAmountCents: 4000,
+          remark: 'admin moved order',
+          items: [
+            {
+              productName: 'Admin Patch Product',
+              quantity: 2,
+              unitPriceCents: 9000,
+              deliveryType: 'shipping',
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(adminPatch.response.status, 200);
+    const adminPatchedOrder = adminPatch.body.data.salesOrder;
+    assert.equal(adminPatchedOrder.customerId, customerB.id);
+    assert.equal(adminPatchedOrder.customerName, 'Patch Customer B');
+    assert.equal(adminPatchedOrder.customerPhone, '13900002002');
+    assert.equal(adminPatchedOrder.address, 'Patch Address B');
+    assert.equal(adminPatchedOrder.travelGroupId, groupB.id);
+    assert.equal(adminPatchedOrder.status, 'partial_refund');
+    assert.equal(adminPatchedOrder.salesUserId, salesBetaUser.id);
+    assert.equal(adminPatchedOrder.totalAmountCents, 18000);
+    assert.equal(adminPatchedOrder.cashOnDeliveryAmountCents, 4000);
+    assert.deepEqual(
+      adminPatchedOrder.items.map((item) => item.productName),
+      ['Admin Patch Product'],
+    );
+
+    const movedGroupA = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupA.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(movedGroupA.response.status, 200);
+    assert.equal(movedGroupA.body.data.travelGroup.status, 'unmarked');
+    assert.equal(movedGroupA.body.data.travelGroup.salesAmountCents, 0);
+    assert.equal(movedGroupA.body.data.travelGroup.orderAmountCents, 0);
+    assert.equal(movedGroupA.body.data.travelGroup.cashOnDeliveryCents, 0);
+
+    const movedGroupB = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupB.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(movedGroupB.response.status, 200);
+    assert.equal(movedGroupB.body.data.travelGroup.status, 'ordered');
+    assert.equal(movedGroupB.body.data.travelGroup.salesAmountCents, 18000);
+    assert.equal(movedGroupB.body.data.travelGroup.orderAmountCents, 18000);
+    assert.equal(movedGroupB.body.data.travelGroup.cashOnDeliveryCents, 4000);
+
+    const cancelled = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          status: 'cancelled',
+        },
+      },
+    );
+    assert.equal(cancelled.response.status, 200);
+    assert.equal(cancelled.body.data.salesOrder.status, 'cancelled');
+
+    const cancelledGroupB = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupB.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(cancelledGroupB.response.status, 200);
+    assert.equal(cancelledGroupB.body.data.travelGroup.status, 'unmarked');
+    assert.equal(cancelledGroupB.body.data.travelGroup.salesAmountCents, 0);
+    assert.equal(cancelledGroupB.body.data.travelGroup.orderAmountCents, 0);
+    assert.equal(cancelledGroupB.body.data.travelGroup.cashOnDeliveryCents, 0);
+
+    const orderUpdateLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=sales_orders.update',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(orderUpdateLogs.response.status, 200);
+    assert.equal(orderUpdateLogs.body.data.logs.length, 3);
+    assert.ok(
+      orderUpdateLogs.body.data.logs.some(
+        (log) => log.afterData.status === 'cancelled',
+      ),
+    );
+    assert.ok(
+      orderUpdateLogs.body.data.logs.some(
+        (log) =>
+          log.beforeData.totalAmountCents === 10000 &&
+          log.afterData.totalAmountCents === 17000,
+      ),
+    );
+  });
+});
+
+test('contract: sales order finance patch updates finance fields and rejects unauthorized changes', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Finance',
+      username: 'order-finance-patch-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const bossUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Boss',
+      username: 'order-finance-patch-boss',
+      password: 'Password123',
+      role: 'boss',
+    });
+    const frontDeskUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Front Desk',
+      username: 'order-finance-patch-front-desk',
+      password: 'Password123',
+      role: 'front_desk',
+    });
+    const salesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Sales',
+      username: 'order-finance-patch-sales',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const warehouseUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Warehouse',
+      username: 'order-finance-patch-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch After Sales',
+      username: 'order-finance-patch-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const tasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Finance Patch Taster',
+      username: 'order-finance-patch-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const finance = await login(
+      baseUrl,
+      financeUser.username,
+      'Password123',
+    );
+    const boss = await login(baseUrl, bossUser.username, 'Password123');
+    const frontDesk = await login(
+      baseUrl,
+      frontDeskUser.username,
+      'Password123',
+    );
+    const sales = await login(baseUrl, salesUser.username, 'Password123');
+    const warehouse = await login(
+      baseUrl,
+      warehouseUser.username,
+      'Password123',
+    );
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+    const taster = await login(baseUrl, tasterUser.username, 'Password123');
+
+    const group = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-29',
+      travelAgency: 'Order Finance Patch Agency',
+    });
+    const customer = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Order Finance Patch Customer',
+      phone: '13900003000',
+      province: 'Guizhou',
+      city: 'Guiyang',
+      district: 'Nanming',
+      address: 'Order Finance Patch Address',
+    });
+    const created = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: group.id,
+        customerId: customer.id,
+        orderDate: '2026-06-29',
+        items: [
+          {
+            productName: 'Order Finance Patch Product',
+            quantity: 1,
+            unitPriceCents: 12000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const order = created.body.data.salesOrder;
+
+    const initialGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(initialGroup.response.status, 200);
+    assert.equal(initialGroup.body.data.travelGroup.status, 'ordered');
+    assert.equal(initialGroup.body.data.travelGroup.salesAmountCents, 12000);
+    assert.equal(initialGroup.body.data.travelGroup.orderAmountCents, 12000);
+
+    const financePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          logisticsNo: 'SF-FIN-001',
+          logisticsFeeCents: 1888,
+          invoiceIssued: true,
+          financeRemark: 'finance checked test',
+          status: 'cancelled',
+        },
+      },
+    );
+    assert.equal(financePatch.response.status, 200);
+    const financePatchedOrder = financePatch.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(financePatchedOrder);
+    assert.equal(financePatchedOrder.id, order.id);
+    assert.equal(financePatchedOrder.customer.id, customer.id);
+    assert.equal(financePatchedOrder.travelGroup.id, group.id);
+    assert.equal(financePatchedOrder.logisticsNo, 'SF-FIN-001');
+    assert.equal(financePatchedOrder.logisticsFeeCents, 1888);
+    assert.equal(financePatchedOrder.invoiceIssued, true);
+    assert.equal(financePatchedOrder.financeRemark, 'finance checked test');
+    assert.equal(financePatchedOrder.status, 'cancelled');
+    assert.equal(financePatchedOrder.totalAmountCents, 12000);
+    assert.deepEqual(
+      financePatchedOrder.items.map((item) => item.productName),
+      ['Order Finance Patch Product'],
+    );
+
+    const cancelledGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(cancelledGroup.response.status, 200);
+    assert.equal(cancelledGroup.body.data.travelGroup.status, 'unmarked');
+    assert.equal(cancelledGroup.body.data.travelGroup.salesAmountCents, 0);
+    assert.equal(cancelledGroup.body.data.travelGroup.orderAmountCents, 0);
+
+    const adminPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          logisticsNo: null,
+          logisticsFeeCents: 0,
+          invoiceIssued: false,
+          financeRemark: null,
+          status: 'partial_refund',
+        },
+      },
+    );
+    assert.equal(adminPatch.response.status, 200);
+    const adminPatchedOrder = adminPatch.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(adminPatchedOrder);
+    assert.equal(adminPatchedOrder.logisticsNo, null);
+    assert.equal(adminPatchedOrder.logisticsFeeCents, 0);
+    assert.equal(adminPatchedOrder.invoiceIssued, false);
+    assert.equal(adminPatchedOrder.financeRemark, null);
+    assert.equal(adminPatchedOrder.status, 'partial_refund');
+
+    const partialRefundGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(partialRefundGroup.response.status, 200);
+    assert.equal(partialRefundGroup.body.data.travelGroup.status, 'ordered');
+    assert.equal(
+      partialRefundGroup.body.data.travelGroup.salesAmountCents,
+      12000,
+    );
+    assert.equal(
+      partialRefundGroup.body.data.travelGroup.orderAmountCents,
+      12000,
+    );
+
+    for (const token of [
+      boss.token,
+      frontDesk.token,
+      sales.token,
+      warehouse.token,
+      afterSales.token,
+      taster.token,
+    ]) {
+      const forbidden = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${order.id}/finance`,
+        {
+          method: 'PATCH',
+          token,
+          body: {
+            logisticsNo: 'NOPE',
+          },
+        },
+      );
+      assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
+    }
+
+    const forbiddenFields = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          customerId: customer.id,
+          items: [],
+          packingStatus: 'packed',
+        },
+      },
+    );
+    assertErrorContract(forbiddenFields, 403, 'FIELD_PERMISSION_DENIED');
+
+    const negativeFee = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          logisticsFeeCents: -1,
+        },
+      },
+    );
+    assertErrorContract(negativeFee, 400, 'VALIDATION_FAILED');
+
+    const invalidInvoiceIssued = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          invoiceIssued: 'maybe',
+        },
+      },
+    );
+    assertErrorContract(invalidInvoiceIssued, 400, 'VALIDATION_FAILED');
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=sales_orders.finance.update',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(logs.response.status, 200);
+    assert.equal(logs.body.data.logs.length, 2);
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.logisticsFeeCents === 0 &&
+          log.afterData.logisticsFeeCents === 1888 &&
+          log.afterData.invoiceIssued === true &&
+          log.afterData.status === 'cancelled',
+      ),
+    );
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.status === 'cancelled' &&
+          log.afterData.logisticsFeeCents === 0 &&
+          log.afterData.invoiceIssued === false &&
+          log.afterData.status === 'partial_refund',
+      ),
+    );
+    for (const log of logs.body.data.logs) {
+      assertSalesOrderDtoPhase4(log.afterData);
+    }
+  });
+});
+
+test('contract: sales order packing patch updates warehouse fields and rejects unauthorized changes', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const warehouseUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch Warehouse',
+      username: 'order-packing-patch-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    const salesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch Sales',
+      username: 'order-packing-patch-sales',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch Finance',
+      username: 'order-packing-patch-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch After Sales',
+      username: 'order-packing-patch-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const bossUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch Boss',
+      username: 'order-packing-patch-boss',
+      password: 'Password123',
+      role: 'boss',
+    });
+    const tasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Packing Patch Taster',
+      username: 'order-packing-patch-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const warehouse = await login(
+      baseUrl,
+      warehouseUser.username,
+      'Password123',
+    );
+    const sales = await login(baseUrl, salesUser.username, 'Password123');
+    const finance = await login(
+      baseUrl,
+      financeUser.username,
+      'Password123',
+    );
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+    const boss = await login(baseUrl, bossUser.username, 'Password123');
+    const taster = await login(baseUrl, tasterUser.username, 'Password123');
+
+    const order = await createGeneratedSalesOrder(baseUrl, admin.token, {
+      orderDate: '2026-06-29',
+      customer: {
+        name: 'Order Packing Patch Customer',
+        phone: '13900003100',
+      },
+      items: [
+        {
+          productName: 'Order Packing Patch Product',
+          quantity: 1,
+          unitPriceCents: 15000,
+          deliveryType: 'shipping',
+        },
+      ],
+    });
+    assert.equal(order.packingStatus, 'pending');
+    assert.equal(order.packageCount, 0);
+    assert.equal(order.totalAmountCents, 15000);
+    assert.equal(order.status, 'valid');
+
+    const warehousePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          logisticsMethod: 'Yunda test',
+          packingStatus: 'packing',
+          packageCount: 3,
+          warehouseRemark: 'warehouse packing test',
+        },
+      },
+    );
+    assert.equal(warehousePatch.response.status, 200);
+    const warehousePatchedOrder = warehousePatch.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(warehousePatchedOrder);
+    assert.equal(warehousePatchedOrder.id, order.id);
+    assert.equal(warehousePatchedOrder.logisticsMethod, 'Yunda test');
+    assert.equal(warehousePatchedOrder.packingStatus, 'packing');
+    assert.equal(warehousePatchedOrder.packageCount, 3);
+    assert.equal(
+      warehousePatchedOrder.warehouseRemark,
+      'warehouse packing test',
+    );
+    assert.equal(warehousePatchedOrder.totalAmountCents, 15000);
+    assert.equal(warehousePatchedOrder.status, 'valid');
+    assert.equal(warehousePatchedOrder.financeMark, false);
+    assert.equal(warehousePatchedOrder.logisticsNo, null);
+    assert.equal(warehousePatchedOrder.logisticsFeeCents, 0);
+
+    const adminPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          logisticsMethod: 'SF admin test',
+          packingStatus: 'packed',
+          packageCount: 0,
+          warehouseRemark: null,
+        },
+      },
+    );
+    assert.equal(adminPatch.response.status, 200);
+    const adminPatchedOrder = adminPatch.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(adminPatchedOrder);
+    assert.equal(adminPatchedOrder.logisticsMethod, 'SF admin test');
+    assert.equal(adminPatchedOrder.packingStatus, 'packed');
+    assert.equal(adminPatchedOrder.packageCount, 0);
+    assert.equal(adminPatchedOrder.warehouseRemark, null);
+
+    for (const token of [
+      sales.token,
+      finance.token,
+      afterSales.token,
+      boss.token,
+      taster.token,
+    ]) {
+      const forbidden = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${order.id}/packing`,
+        {
+          method: 'PATCH',
+          token,
+          body: {
+            packingStatus: 'packed',
+          },
+        },
+      );
+      assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
+    }
+
+    const forbiddenFields = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          totalAmountCents: 1,
+          customerId: order.customerId,
+          status: 'cancelled',
+          financeMark: true,
+          logisticsNo: 'NOPE',
+        },
+      },
+    );
+    assertErrorContract(forbiddenFields, 403, 'FIELD_PERMISSION_DENIED');
+
+    const invalidPackingStatus = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          packingStatus: 'done',
+        },
+      },
+    );
+    assertErrorContract(invalidPackingStatus, 400, 'INVALID_PACKING_STATUS');
+
+    const negativePackageCount = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          packageCount: -1,
+        },
+      },
+    );
+    assertErrorContract(negativePackageCount, 400, 'VALIDATION_FAILED');
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=sales_orders.packing.update',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(logs.response.status, 200);
+    assert.equal(logs.body.data.logs.length, 2);
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.packingStatus === 'pending' &&
+          log.afterData.packingStatus === 'packing' &&
+          log.afterData.packageCount === 3,
+      ),
+    );
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.packingStatus === 'packing' &&
+          log.afterData.packingStatus === 'packed' &&
+          log.afterData.packageCount === 0,
+      ),
+    );
+    for (const log of logs.body.data.logs) {
+      assertSalesOrderDtoPhase4(log.afterData);
+    }
+  });
+});
+
+test('contract: sales order status patch updates effective order summaries and pending rules', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch After Sales',
+      username: 'order-status-patch-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Finance',
+      username: 'order-status-patch-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const salesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Sales',
+      username: 'order-status-patch-sales',
+      password: 'Password123',
+      role: 'sales',
+    });
+    const warehouseUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Warehouse',
+      username: 'order-status-patch-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    const bossUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Boss',
+      username: 'order-status-patch-boss',
+      password: 'Password123',
+      role: 'boss',
+    });
+    const tasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Taster',
+      username: 'order-status-patch-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const frontDeskUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Status Patch Front Desk',
+      username: 'order-status-patch-front-desk',
+      password: 'Password123',
+      role: 'front_desk',
+    });
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+    const finance = await login(
+      baseUrl,
+      financeUser.username,
+      'Password123',
+    );
+    const sales = await login(baseUrl, salesUser.username, 'Password123');
+    const warehouse = await login(
+      baseUrl,
+      warehouseUser.username,
+      'Password123',
+    );
+    const boss = await login(baseUrl, bossUser.username, 'Password123');
+    const taster = await login(baseUrl, tasterUser.username, 'Password123');
+    const frontDesk = await login(
+      baseUrl,
+      frontDeskUser.username,
+      'Password123',
+    );
+
+    const group = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-29',
+      travelAgency: 'Order Status Patch Agency',
+    });
+    await setTravelGroupFinanceMark(baseUrl, admin.token, group.id, true);
+    const customer = await createCustomerFixture(baseUrl, admin.token, {
+      name: 'Order Status Patch Customer',
+      phone: '13900003200',
+    });
+    const created = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: group.id,
+        customerId: customer.id,
+        orderDate: '2026-06-29',
+        items: [
+          {
+            productName: 'Order Status Patch Product',
+            quantity: 1,
+            unitPriceCents: 21000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const order = created.body.data.salesOrder;
+    assert.equal(order.status, 'valid');
+    assert.deepEqual(await fetchPendingByGroupNo(baseUrl, admin.token, group.groupNo), []);
+
+    const partialRefund = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'partial_refund',
+          statusReason: 'partial refund reason test',
+        },
+      },
+    );
+    assert.equal(partialRefund.response.status, 200);
+    assertSalesOrderDtoPhase4(partialRefund.body.data.salesOrder);
+    assert.equal(partialRefund.body.data.salesOrder.status, 'partial_refund');
+    assert.equal(
+      partialRefund.body.data.salesOrder.remark,
+      'partial refund reason test',
+    );
+    const partialGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(partialGroup.response.status, 200);
+    assert.equal(partialGroup.body.data.travelGroup.status, 'ordered');
+    assert.equal(partialGroup.body.data.travelGroup.salesAmountCents, 21000);
+    assert.equal(partialGroup.body.data.travelGroup.orderSummary.orderCount, 1);
+    assert.deepEqual(await fetchPendingByGroupNo(baseUrl, admin.token, group.groupNo), []);
+
+    const refunded = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'refunded',
+          remark: 'refunded reason test',
+        },
+      },
+    );
+    assert.equal(refunded.response.status, 200);
+    assert.equal(refunded.body.data.salesOrder.status, 'refunded');
+    assert.equal(refunded.body.data.salesOrder.remark, 'refunded reason test');
+    const refundedGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(refundedGroup.response.status, 200);
+    assert.equal(refundedGroup.body.data.travelGroup.status, 'unmarked');
+    assert.equal(refundedGroup.body.data.travelGroup.salesAmountCents, 0);
+    assert.equal(refundedGroup.body.data.travelGroup.orderAmountCents, 0);
+    assert.equal(refundedGroup.body.data.travelGroup.orderSummary.orderCount, 0);
+    const pendingAfterRefund = await fetchPendingByGroupNo(
+      baseUrl,
+      admin.token,
+      group.groupNo,
+    );
+    assert.equal(pendingAfterRefund.length, 1);
+    assert.equal(pendingAfterRefund[0].pendingStatus, 'pending_taster');
+    assert.deepEqual(pendingAfterRefund[0].pendingReasons, [
+      'no_order_and_missing_taster_summary',
+    ]);
+
+    const cancelled = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'cancelled',
+          statusReason: 'cancelled reason test',
+        },
+      },
+    );
+    assert.equal(cancelled.response.status, 200);
+    assert.equal(cancelled.body.data.salesOrder.status, 'cancelled');
+    assert.equal(
+      cancelled.body.data.salesOrder.remark,
+      'cancelled reason test',
+    );
+    const pendingAfterCancel = await fetchPendingByGroupNo(
+      baseUrl,
+      admin.token,
+      group.groupNo,
+    );
+    assert.equal(pendingAfterCancel.length, 1);
+    assert.equal(pendingAfterCancel[0].pendingStatus, 'pending_taster');
+
+    const financeRestore = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          status: 'valid',
+          remark: 'finance restored valid test',
+        },
+      },
+    );
+    assert.equal(financeRestore.response.status, 200);
+    assert.equal(financeRestore.body.data.salesOrder.status, 'valid');
+    assert.deepEqual(await fetchPendingByGroupNo(baseUrl, admin.token, group.groupNo), []);
+
+    const adminPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          status: 'partial_refund',
+          statusReason: 'admin partial reason test',
+        },
+      },
+    );
+    assert.equal(adminPatch.response.status, 200);
+    assert.equal(adminPatch.body.data.salesOrder.status, 'partial_refund');
+    assert.equal(
+      adminPatch.body.data.salesOrder.remark,
+      'admin partial reason test',
+    );
+
+    for (const token of [
+      sales.token,
+      warehouse.token,
+      boss.token,
+      taster.token,
+      frontDesk.token,
+    ]) {
+      const forbidden = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${order.id}/status`,
+        {
+          method: 'PATCH',
+          token,
+          body: {
+            status: 'cancelled',
+          },
+        },
+      );
+      assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
+    }
+
+    const forbiddenFields = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'cancelled',
+          totalAmountCents: 1,
+        },
+      },
+    );
+    assertErrorContract(forbiddenFields, 403, 'FIELD_PERMISSION_DENIED');
+
+    const invalidStatus = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'void',
+        },
+      },
+    );
+    assertErrorContract(invalidStatus, 400, 'INVALID_ORDER_STATUS');
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=sales_orders.status.update',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(logs.response.status, 200);
+    assert.equal(logs.body.data.logs.length, 5);
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.status === 'valid' &&
+          log.afterData.status === 'partial_refund' &&
+          log.afterData.remark === 'partial refund reason test',
+      ),
+    );
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.status === 'partial_refund' &&
+          log.afterData.status === 'refunded',
+      ),
+    );
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.status === 'refunded' &&
+          log.afterData.status === 'cancelled',
+      ),
+    );
+    for (const log of logs.body.data.logs) {
+      assertSalesOrderDtoPhase4(log.afterData);
+    }
+  });
+});
+
+test('contract: sales order creation validates customer, travel group, items, and create roles', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const bossUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Create Boss',
+      username: 'order-create-boss',
+      password: 'Password123',
+      role: 'boss',
+    });
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Create Finance',
+      username: 'order-create-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const afterSalesUser = await createUser(baseUrl, admin.token, {
+      name: 'Order Create After Sales',
+      username: 'order-create-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
+    const boss = await login(baseUrl, bossUser.username, 'Password123');
+    const finance = await login(baseUrl, financeUser.username, 'Password123');
+    const afterSales = await login(
+      baseUrl,
+      afterSalesUser.username,
+      'Password123',
+    );
+
+    const validFinanceOrder = await createGeneratedSalesOrder(
+      baseUrl,
+      finance.token,
+      {
+        orderDate: '2026-06-29',
+      },
+    );
+    assert.equal(validFinanceOrder.orderNo, 'SO20260629001');
+    const validAfterSalesOrder = await createGeneratedSalesOrder(
+      baseUrl,
+      afterSales.token,
+      {
+        orderDate: '2026-06-30',
+      },
+    );
+    assert.equal(validAfterSalesOrder.orderNo, 'SO20260630001');
+
+    const bossCreate = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: boss.token,
+      body: buildValidSalesOrderCreateBody(),
+    });
+    assertErrorContract(bossCreate, 403, 'PERMISSION_DENIED');
+
+    const missingCustomer = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'external',
+        orderDate: '2026-06-29',
+        items: buildValidOrderItems(),
+      },
+    });
+    assertErrorContract(missingCustomer, 400, 'CUSTOMER_REQUIRED');
+
+    const missingTravelGroup = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        orderType: 'travel_group',
+        travelGroupId: undefined,
+      }),
+    });
+    assertErrorContract(missingTravelGroup, 400, 'VALIDATION_FAILED');
+
+    const unknownTravelGroup = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        orderType: 'travel_group',
+        travelGroupId: 'missing-travel-group-id',
+      }),
+    });
+    assertErrorContract(unknownTravelGroup, 404, 'TRAVEL_GROUP_NOT_FOUND');
+
+    const missingCustomerId = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        customerId: 'missing-customer-id',
+        customer: undefined,
+      }),
+    });
+    assertErrorContract(missingCustomerId, 404, 'CUSTOMER_NOT_FOUND');
+
+    const emptyItems = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        items: [],
+      }),
+    });
+    assertErrorContract(emptyItems, 400, 'VALIDATION_FAILED');
+
+    const zeroQuantity = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        items: [
+          {
+            productName: 'Invalid Quantity Product',
+            quantity: 0,
+            unitPriceCents: 1000,
+            deliveryType: 'shipping',
+          },
+        ],
+      }),
+    });
+    assertErrorContract(zeroQuantity, 400, 'VALIDATION_FAILED');
+
+    const negativePrice = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        items: [
+          {
+            productName: 'Invalid Price Product',
+            quantity: 1,
+            unitPriceCents: -1,
+            deliveryType: 'shipping',
+          },
+        ],
+      }),
+    });
+    assertErrorContract(negativePrice, 400, 'VALIDATION_FAILED');
+
+    const invalidDelivery = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: buildValidSalesOrderCreateBody({
+        items: [
+          {
+            productName: 'Invalid Delivery Product',
+            quantity: 1,
+            unitPriceCents: 1000,
+            deliveryType: 'drone',
+          },
+        ],
+      }),
+    });
+    assertErrorContract(invalidDelivery, 400, 'INVALID_DELIVERY_TYPE');
   });
 });
 
@@ -570,9 +2681,19 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         orderNo: 'SO-PATCH-SALES',
         orderType: 'travel_group',
         travelGroupId: group.id,
-        customerName: 'Patch Customer',
+        customer: {
+          name: 'Patch Customer',
+        },
         orderDate: '2026-06-25',
         totalAmountCents: 8800,
+        items: [
+          {
+            productName: 'Patch Product',
+            quantity: 1,
+            unitPriceCents: 8800,
+            deliveryType: 'self_pickup',
+          },
+        ],
       },
     });
     assert.equal(relatedOrder.response.status, 201);
@@ -1051,8 +3172,13 @@ test('contract: travel group finance mark endpoint is admin/finance only and pre
     );
     assert.equal(financeUnmark.response.status, 200);
     assert.equal(financeUnmark.body.data.travelGroup.financeMark, false);
-    assert.equal(financeUnmark.body.data.travelGroup.markedById, null);
-    assert.equal(financeUnmark.body.data.travelGroup.markedAt, null);
+    assert.equal(financeUnmark.body.data.travelGroup.markedById, finance.user.id);
+    assert.equal(typeof financeUnmark.body.data.travelGroup.markedAt, 'string');
+    assert.equal(
+      financeUnmark.body.data.travelGroup.markedAt >=
+        adminMark.body.data.travelGroup.markedAt,
+      true,
+    );
     assert.equal(
       financeUnmark.body.data.travelGroup.guestCount,
       before.guestCount,
@@ -1109,7 +3235,8 @@ test('contract: travel group finance mark endpoint is admin/finance only and pre
     assert.ok(disableLog);
     assert.equal(disableLog.beforeData.financeMark, true);
     assert.equal(disableLog.afterData.financeMark, false);
-    assert.equal(disableLog.afterData.markedById, null);
+    assert.equal(disableLog.afterData.markedById, finance.user.id);
+    assert.equal(typeof disableLog.afterData.markedAt, 'string');
   });
 });
 
@@ -1861,16 +3988,16 @@ test('contract: business data role scopes hide other users travel groups and sal
     });
     assert.equal(alphaOrders.response.status, 200);
     assert.deepEqual(orderNos(alphaOrders.body.data.salesOrders), [
-      'SO-SCOPE-ASSIGNED',
-      'SO-SCOPE-CREATED',
-    ]);
+      assignedToAlpha.orderNo,
+      createdByAlpha.orderNo,
+    ].sort());
 
     const betaOrders = await requestJson(baseUrl, '/api/sales-orders', {
       token: salesBeta.token,
     });
     assert.equal(betaOrders.response.status, 200);
     assert.deepEqual(orderNos(betaOrders.body.data.salesOrders), [
-      'SO-SCOPE-BETA',
+      createdByBeta.orderNo,
     ]);
 
     const assignedDetail = await requestJson(
@@ -1883,7 +4010,7 @@ test('contract: business data role scopes hide other users travel groups and sal
     assert.equal(assignedDetail.response.status, 200);
     assert.equal(
       assignedDetail.body.data.salesOrder.orderNo,
-      'SO-SCOPE-ASSIGNED',
+      assignedToAlpha.orderNo,
     );
 
     const salesBlockedOrderDetail = await requestJson(
@@ -1913,10 +4040,10 @@ test('contract: business data role scopes hide other users travel groups and sal
     });
     assert.equal(adminOrders.response.status, 200);
     assert.deepEqual(orderNos(adminOrders.body.data.salesOrders), [
-      'SO-SCOPE-ASSIGNED',
-      'SO-SCOPE-BETA',
-      'SO-SCOPE-CREATED',
-    ]);
+      assignedToAlpha.orderNo,
+      createdByAlpha.orderNo,
+      createdByBeta.orderNo,
+    ].sort());
 
     const adminGroupDetail = await requestJson(
       baseUrl,
@@ -1937,7 +4064,7 @@ test('contract: business data role scopes hide other users travel groups and sal
     );
     assert.deepEqual(
       orderNos(adminGroupDetail.body.data.travelGroup.salesOrders),
-      ['SO-SCOPE-ASSIGNED', 'SO-SCOPE-CREATED'],
+      [assignedToAlpha.orderNo, createdByAlpha.orderNo].sort(),
     );
     assert.equal(
       adminGroupDetail.body.data.travelGroup.orderSummary.orderCount,
@@ -2062,8 +4189,10 @@ test('contract: sales order creation rolls back when travel group summary update
           orderNo: 'SO-TX-ROLLBACK',
           orderType: 'travel_group',
           travelGroupId: group.id,
-          customerName: 'Rollback Customer',
-          customerPhone: '13900001111',
+          customer: {
+            name: 'Rollback Customer',
+            phone: '13900001111',
+          },
           orderDate: '2026-06-24',
           cashOnDeliveryAmountCents: 3000,
           items: [
@@ -2144,7 +4273,25 @@ test('contract: global mark query filters business lists and details until admin
     );
 
     await setTravelGroupFinanceMark(baseUrl, admin.token, markedGroup.id, true);
+    await setCustomerFinanceMark(
+      baseUrl,
+      admin.token,
+      markedOrder.customerId,
+      true,
+    );
+    await setCustomerFinanceMark(
+      baseUrl,
+      admin.token,
+      markedOrderWithUnmarkedGroup.customerId,
+      true,
+    );
     await setSalesOrderFinanceMark(baseUrl, admin.token, markedOrder.id, true);
+    await setSalesOrderFinanceMark(
+      baseUrl,
+      admin.token,
+      unmarkedOrder.id,
+      true,
+    );
     await setSalesOrderFinanceMark(
       baseUrl,
       admin.token,
@@ -2170,10 +4317,10 @@ test('contract: global mark query filters business lists and details until admin
     });
     assert.equal(beforeEnableOrders.response.status, 200);
     assert.deepEqual(orderNos(beforeEnableOrders.body.data.salesOrders), [
-      'SO-MARK-GROUP-NO',
-      'SO-MARK-ORDER-NO',
-      'SO-MARK-YES',
-    ]);
+      markedOrder.orderNo,
+      markedOrderWithUnmarkedGroup.orderNo,
+      unmarkedOrder.orderNo,
+    ].sort());
 
     const enabled = await requestJson(
       baseUrl,
@@ -2208,7 +4355,7 @@ test('contract: global mark query filters business lists and details until admin
     });
     assert.equal(markedOrdersOnly.response.status, 200);
     assert.deepEqual(orderNos(markedOrdersOnly.body.data.salesOrders), [
-      'SO-MARK-YES',
+      markedOrder.orderNo,
     ]);
 
     const hiddenUnmarkedOrderDetail = await requestJson(
@@ -2277,14 +4424,65 @@ test('contract: global mark query filters business lists and details until admin
     });
     assert.equal(restoredOrders.response.status, 200);
     assert.deepEqual(orderNos(restoredOrders.body.data.salesOrders), [
-      'SO-MARK-GROUP-NO',
-      'SO-MARK-ORDER-NO',
-      'SO-MARK-YES',
-    ]);
+      markedOrder.orderNo,
+      markedOrderWithUnmarkedGroup.orderNo,
+      unmarkedOrder.orderNo,
+    ].sort());
   });
 });
 
 let fixtureSequence = 0;
+
+function buildValidSalesOrderCreateBody(overrides = {}) {
+  return {
+    orderType: 'external',
+    orderDate: '2026-06-29',
+    customer: {
+      name: 'Valid Order Customer',
+      phone: '13900006666',
+    },
+    items: buildValidOrderItems(),
+    ...overrides,
+  };
+}
+
+function buildValidOrderItems() {
+  return [
+    {
+      productName: 'Valid Order Product',
+      quantity: 1,
+      unitPriceCents: 10000,
+      deliveryType: 'shipping',
+    },
+  ];
+}
+
+async function createGeneratedSalesOrder(baseUrl, token, overrides = {}) {
+  const result = await requestJson(baseUrl, '/api/sales-orders', {
+    method: 'POST',
+    token,
+    body: {
+      orderNo: overrides.orderNo,
+      orderType: overrides.orderType || 'external',
+      customerId: overrides.customerId,
+      customer: overrides.customer || {
+        name: overrides.customerName || 'Generated Customer',
+        phone: overrides.customerPhone || '13900006666',
+      },
+      orderDate: overrides.orderDate || '2026-06-29',
+      items: overrides.items || [
+        {
+          productName: 'Generated Product',
+          quantity: 1,
+          unitPriceCents: 10000,
+          deliveryType: 'shipping',
+        },
+      ],
+    },
+  });
+  assert.equal(result.response.status, 201);
+  return result.body.data.salesOrder;
+}
 
 async function createGuideFixture(baseUrl, token, overrides = {}) {
   fixtureSequence += 1;
@@ -2344,8 +4542,10 @@ async function createScopedSalesOrder(baseUrl, token, overrides) {
     orderNo: overrides.orderNo,
     orderType: 'travel_group',
     travelGroupId: overrides.travelGroupId,
-    customerName: 'Scope Customer',
-    customerPhone: '13900009999',
+    customer: {
+      name: 'Scope Customer',
+      phone: '13900009999',
+    },
     orderDate: '2026-06-24',
     items: [
       {
@@ -2367,6 +4567,41 @@ async function createScopedSalesOrder(baseUrl, token, overrides) {
   });
   assert.equal(result.response.status, 201);
   return result.body.data.salesOrder;
+}
+
+async function createCustomerFixture(baseUrl, token, overrides = {}) {
+  const result = await requestJson(baseUrl, '/api/customers', {
+    method: 'POST',
+    token,
+    body: {
+      name: overrides.name || 'Customer Fixture',
+      phone: overrides.phone,
+      province: overrides.province,
+      city: overrides.city,
+      district: overrides.district,
+      address: overrides.address,
+      notes: overrides.notes,
+    },
+  });
+  assert.equal(result.response.status, 201);
+  return result.body.data.customer;
+}
+
+async function setCustomerFinanceMark(baseUrl, token, id, financeMark) {
+  const result = await requestJson(
+    baseUrl,
+    `/api/customers/${id}/finance-mark`,
+    {
+      method: 'PATCH',
+      token,
+      body: {
+        financeMark,
+      },
+    },
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.data.customer.financeMark, financeMark);
+  return result.body.data.customer;
 }
 
 async function setTravelGroupFinanceMark(baseUrl, token, id, financeMark) {
@@ -2401,6 +4636,113 @@ async function setSalesOrderFinanceMark(baseUrl, token, id, financeMark) {
   assert.equal(result.response.status, 200);
   assert.equal(result.body.data.salesOrder.financeMark, financeMark);
   return result.body.data.salesOrder;
+}
+
+function assertSalesOrderDtoPhase4(order) {
+  for (const key of [
+    'id',
+    'orderNo',
+    'orderType',
+    'travelGroupId',
+    'travelGroup',
+    'customerId',
+    'customer',
+    'customerName',
+    'customerPhone',
+    'province',
+    'city',
+    'district',
+    'address',
+    'orderDate',
+    'salesFormNo',
+    'totalAmountCents',
+    'cashOnDeliveryAmountCents',
+    'deliverySummary',
+    'logisticsMethod',
+    'packingStatus',
+    'packageCount',
+    'warehouseRemark',
+    'logisticsNo',
+    'logisticsFeeCents',
+    'invoiceRequired',
+    'invoiceIssued',
+    'financeRemark',
+    'status',
+    'financeMark',
+    'items',
+  ]) {
+    assert.ok(
+      Object.hasOwn(order, key),
+      `sales order DTO should include ${key}`,
+    );
+  }
+  assert.equal(Array.isArray(order.items), true);
+  if (order.customer !== null) {
+    for (const key of ['id', 'name', 'phone', 'financeMark']) {
+      assert.ok(
+        Object.hasOwn(order.customer, key),
+        `sales order customer DTO should include ${key}`,
+      );
+    }
+  }
+  for (const item of order.items) {
+    for (const key of [
+      'id',
+      'productName',
+      'quantity',
+      'unitPriceCents',
+      'subtotalCents',
+      'deliveryType',
+      'notes',
+      'sortOrder',
+    ]) {
+      assert.ok(
+        Object.hasOwn(item, key),
+        `sales order item DTO should include ${key}`,
+      );
+    }
+  }
+}
+
+function assertSalesOrderDtoStableEqual(actual, expected) {
+  for (const key of [
+    'id',
+    'orderNo',
+    'orderType',
+    'travelGroupId',
+    'customerId',
+    'customerName',
+    'customerPhone',
+    'province',
+    'city',
+    'district',
+    'address',
+    'orderDate',
+    'salesFormNo',
+    'totalAmountCents',
+    'cashOnDeliveryAmountCents',
+    'deliverySummary',
+    'logisticsMethod',
+    'packingStatus',
+    'packageCount',
+    'warehouseRemark',
+    'logisticsNo',
+    'logisticsFeeCents',
+    'invoiceRequired',
+    'invoiceIssued',
+    'financeRemark',
+    'status',
+    'financeMark',
+    'salesUserId',
+  ]) {
+    assert.deepEqual(actual[key], expected[key], key);
+  }
+  assert.deepEqual(actual.customer, expected.customer, 'customer');
+  assert.deepEqual(actual.items, expected.items, 'items');
+  assert.equal(
+    actual.travelGroup?.id || null,
+    expected.travelGroup?.id || null,
+  );
 }
 
 async function fetchPendingByGroupNo(baseUrl, token, groupNo) {

@@ -27,6 +27,7 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'TravelGroupTastingItem',
     'GuideCarriedGroup',
     'PendingTravelGroup',
+    'Customer',
     'SalesOrder',
     'SalesOrderItem',
     'DailyReconciliation',
@@ -48,9 +49,25 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'tasterSummaryAt',
     'postMarkEditedAt',
     'postMarkEditedById',
+    'customerId',
+    'salesFormNo',
+    'logisticsMethod',
+    'packingStatus',
+    'packageCount',
+    'warehouseRemark',
+    'logisticsNo',
+    'logisticsFeeCents',
+    'invoiceRequired',
+    'invoiceIssued',
+    'financeRemark',
+    'subtotalCents',
+    'notes',
+    'sortOrder',
   ]) {
     assert.match(schema, new RegExp(`\\b${field}\\b`));
   }
+
+  assert.match(schema, /enum SalesOrderPackingStatus \{/);
 });
 
 test('smoke: phase 2 Prisma migrations create and evolve business tables', () => {
@@ -59,6 +76,22 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
       path.join(
         migrationsDir,
         '20260623000100_business_data_mysql',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(migrationsDir, '20260629000300_add_customers', 'migration.sql'),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260629000400_sales_order_phase4_schema',
         'migration.sql',
       ),
     ),
@@ -202,4 +235,42 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     guideAgencyOptionalMigration,
     /MODIFY `travel_agency` VARCHAR\(120\) NULL/,
   );
+
+  const customersMigration = readMigration('20260629000300_add_customers');
+  assert.match(customersMigration, /CREATE TABLE `customers`/);
+  assert.match(customersMigration, /`phone` VARCHAR\(30\) NULL/);
+  assert.match(customersMigration, /INDEX `customers_name_idx`/);
+  assert.match(customersMigration, /INDEX `customers_phone_idx`/);
+  assert.match(customersMigration, /INDEX `customers_finance_mark_idx`/);
+  assert.match(customersMigration, /INDEX `customers_created_by_id_idx`/);
+  assert.match(customersMigration, /INDEX `customers_updated_at_idx`/);
+  assert.doesNotMatch(customersMigration, /UNIQUE INDEX `customers_phone/);
+  assert.match(customersMigration, /customers_marked_by_fkey/);
+
+  const salesOrderPhase4Migration = readMigration(
+    '20260629000400_sales_order_phase4_schema',
+  );
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `customer_id`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `sales_form_no`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `packing_status`/);
+  assert.match(salesOrderPhase4Migration, /DEFAULT 'packed'/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `logistics_no`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `invoice_required`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `finance_remark`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `subtotal_cents`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `notes`/);
+  assert.match(salesOrderPhase4Migration, /ADD COLUMN `sort_order`/);
+  assert.match(
+    salesOrderPhase4Migration,
+    /`subtotal_cents` = `quantity` \* `unit_price_cents`/,
+  );
+  assert.match(salesOrderPhase4Migration, /`packing_status` = 'pending'/);
+  assert.match(salesOrderPhase4Migration, /sales_orders_customer_id_idx/);
+  assert.match(salesOrderPhase4Migration, /sales_orders_packing_status_idx/);
+  assert.match(salesOrderPhase4Migration, /sales_orders_logistics_no_idx/);
+  assert.match(
+    salesOrderPhase4Migration,
+    /sales_order_items_sales_order_id_sort_order_idx/,
+  );
+  assert.match(salesOrderPhase4Migration, /sales_orders_customer_id_fkey/);
 });

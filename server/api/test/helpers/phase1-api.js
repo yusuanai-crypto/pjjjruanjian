@@ -100,6 +100,7 @@ function createInMemoryPrisma(options = {}) {
       updatedAt: now,
     },
   ];
+  seedUsers(users, options.users || [], now);
   const systemSettings = [
     createSystemSetting('only_show_marked_records', 'false', null, now),
     createSystemSetting('marked_records_restore_required', 'false', null, now),
@@ -117,11 +118,16 @@ function createInMemoryPrisma(options = {}) {
   const travelGroupTastingItems = [];
   const guideCarriedGroups = [];
   const pendingTravelGroups = [];
+  const customers = [];
   const salesOrders = [];
   const salesOrderItems = [];
+  let failSalesOrderCreateOrderNoOnce = Boolean(
+    options.failSalesOrderCreateOrderNoOnce,
+  );
   const dailyReconciliations = [];
   const reconciliationPaymentMethods = [];
   const strikeBonusAwards = [];
+  seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now);
   const transactionalRows = [
@@ -134,6 +140,7 @@ function createInMemoryPrisma(options = {}) {
     travelGroupTastingItems,
     guideCarriedGroups,
     pendingTravelGroups,
+    customers,
     salesOrders,
     salesOrderItems,
     dailyReconciliations,
@@ -248,17 +255,39 @@ function createInMemoryPrisma(options = {}) {
     }),
     guideCarriedGroup: createTravelGroupDelegate(guideCarriedGroups),
     pendingTravelGroup: createTravelGroupDelegate(pendingTravelGroups),
+    customer: createCustomerDelegate(customers),
     salesOrder: {
       findUnique: async ({ where, include } = {}) => {
         const row = salesOrders.find((order) => matchesUnique(order, where));
         return row
-          ? withSalesOrderIncludes(row, include, salesOrderItems, travelGroups)
+          ? withSalesOrderIncludes(
+              row,
+              include,
+              salesOrderItems,
+              travelGroups,
+              customers,
+            )
           : null;
       },
       findMany: async ({ where, include, orderBy, take } = {}) => {
         const rows = sortRows(
           salesOrders
-            .filter((order) => matchesWhere(order, where))
+            .filter((order) =>
+              matchesWhere(
+                withSalesOrderIncludes(
+                  order,
+                  {
+                    items: true,
+                    travelGroup: true,
+                    customer: true,
+                  },
+                  salesOrderItems,
+                  travelGroups,
+                  customers,
+                ),
+                where,
+              ),
+            )
             .map(copyRow),
           orderBy,
         );
@@ -270,6 +299,7 @@ function createInMemoryPrisma(options = {}) {
               include,
               salesOrderItems,
               travelGroups,
+              customers,
             ),
           );
       },
@@ -282,6 +312,17 @@ function createInMemoryPrisma(options = {}) {
           createdAt: asDate(data.createdAt) || new Date(),
           updatedAt: asDate(data.updatedAt) || new Date(),
         };
+        if (failSalesOrderCreateOrderNoOnce) {
+          failSalesOrderCreateOrderNoOnce = false;
+          salesOrders.push({
+            ...row,
+            id: crypto.randomUUID(),
+          });
+          throw createPrismaUniqueError('orderNo');
+        }
+        if (salesOrders.some((order) => order.orderNo === row.orderNo)) {
+          throw createPrismaUniqueError('orderNo');
+        }
         salesOrders.push(row);
         for (const item of nestedItems) {
           salesOrderItems.push({
@@ -296,6 +337,7 @@ function createInMemoryPrisma(options = {}) {
           include,
           salesOrderItems,
           travelGroups,
+          customers,
         );
       },
       update: async ({ where, data, include } = {}) => {
@@ -305,16 +347,32 @@ function createInMemoryPrisma(options = {}) {
         if (index < 0) {
           throw new Error('Sales order not found in test Prisma store.');
         }
+        const nestedItems = data.items?.create || [];
+        if (data.items?.deleteMany !== undefined) {
+          removeWhere(
+            salesOrderItems,
+            (item) => item.salesOrderId === salesOrders[index].id,
+          );
+        }
         salesOrders[index] = {
           ...salesOrders[index],
-          ...data,
+          ...withoutNested(data, 'items'),
           updatedAt: asDate(data?.updatedAt) || new Date(),
         };
+        for (const item of nestedItems) {
+          salesOrderItems.push({
+            ...item,
+            id: item.id || crypto.randomUUID(),
+            salesOrderId: salesOrders[index].id,
+            createdAt: asDate(item.createdAt) || new Date(),
+          });
+        }
         return withSalesOrderIncludes(
           salesOrders[index],
           include,
           salesOrderItems,
           travelGroups,
+          customers,
         );
       },
     },
@@ -474,6 +532,47 @@ function createTravelAgencyDelegate(rows) {
   };
 }
 
+function createCustomerDelegate(rows) {
+  return {
+    findUnique: async ({ where } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findMany: async ({ where, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      return result.slice(0, take || result.length);
+    },
+    create: async ({ data } = {}) => {
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        financeMark: Boolean(data.financeMark),
+        markedById: data.markedById ?? null,
+        markedAt: asDate(data.markedAt) || null,
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data } = {}) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Customer not found in test Prisma store.');
+      }
+      rows[index] = {
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return copyRow(rows[index]);
+    },
+  };
+}
+
 function createTravelGroupDelegate(rows, options = {}) {
   let failUpdateOnce = Boolean(options.failUpdateOnce);
   const tastingItems = options.tastingItems || [];
@@ -505,12 +604,7 @@ function createTravelGroupDelegate(rows, options = {}) {
     },
     create: async ({ data, include } = {}) => {
       if (data.groupNo && rows.some((item) => item.groupNo === data.groupNo)) {
-        const error = new Error('Unique constraint failed on groupNo');
-        error.code = 'P2002';
-        error.meta = {
-          target: ['groupNo'],
-        };
-        throw error;
+        throw createPrismaUniqueError('groupNo');
       }
       const nestedTastingItems = data.tastingItems?.create || [];
       const row = {
@@ -576,6 +670,45 @@ function createTravelGroupDelegate(rows, options = {}) {
   };
 }
 
+function seedUsers(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      name: seed.name || `Seed User ${rows.length + 1}`,
+      username: seed.username || `seed-user-${rows.length + 1}`,
+      passwordHash: seed.passwordHash || hashPassword(seed.password || 'Password123'),
+      role: toSeedPrismaRole(seed.role || 'sales'),
+      phone: seed.phone ?? null,
+      leaderId: seed.leaderId ?? null,
+      isActive: seed.isActive === undefined ? true : Boolean(seed.isActive),
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function seedCustomers(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      name: seed.name || `Seed Customer ${rows.length + 1}`,
+      phone: seed.phone ?? null,
+      province: seed.province ?? null,
+      city: seed.city ?? null,
+      district: seed.district ?? null,
+      address: seed.address ?? null,
+      financeMark: Boolean(seed.financeMark),
+      markedById: seed.markedById ?? null,
+      markedAt: asDate(seed.markedAt) || null,
+      notes: seed.notes ?? null,
+      createdById: seed.createdById ?? null,
+      updatedById: seed.updatedById ?? null,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
 function seedTravelGroups(rows, seeds, now) {
   for (const seed of seeds) {
     rows.push({
@@ -626,6 +759,21 @@ function seedValue(seed, key, fallback) {
   return Object.hasOwn(seed, key) ? seed[key] : fallback;
 }
 
+function toSeedPrismaRole(role) {
+  const value = String(role || '').trim();
+  const map = {
+    admin: 'ADMIN',
+    boss: 'BOSS',
+    front_desk: 'FRONT_DESK',
+    sales: 'SALES',
+    finance: 'FINANCE',
+    warehouse: 'WAREHOUSE',
+    after_sales: 'AFTER_SALES',
+    taster: 'TASTER',
+  };
+  return map[value] || value.toUpperCase();
+}
+
 function seedSalesOrders(rows, seeds, now) {
   for (const seed of seeds) {
     rows.push({
@@ -633,6 +781,7 @@ function seedSalesOrders(rows, seeds, now) {
       orderNo: seed.orderNo || `SO-SEED-${rows.length + 1}`,
       orderType: seed.orderType || 'TRAVEL_GROUP',
       travelGroupId: seed.travelGroupId ?? null,
+      customerId: seed.customerId ?? null,
       customerName: seed.customerName || 'Seed Customer',
       customerPhone: seed.customerPhone ?? null,
       province: seed.province ?? null,
@@ -640,8 +789,18 @@ function seedSalesOrders(rows, seeds, now) {
       district: seed.district ?? null,
       address: seed.address ?? null,
       orderDate: asDate(seed.orderDate) || now,
+      salesFormNo: seed.salesFormNo ?? null,
       totalAmountCents: seed.totalAmountCents ?? 0,
       cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
+      logisticsMethod: seed.logisticsMethod ?? null,
+      packingStatus: seed.packingStatus || 'PACKED',
+      packageCount: seed.packageCount ?? 0,
+      warehouseRemark: seed.warehouseRemark ?? null,
+      logisticsNo: seed.logisticsNo ?? null,
+      logisticsFeeCents: seed.logisticsFeeCents ?? 0,
+      invoiceRequired: Boolean(seed.invoiceRequired),
+      invoiceIssued: Boolean(seed.invoiceIssued),
+      financeRemark: seed.financeRemark ?? null,
       remark: seed.remark ?? null,
       status: seed.status || 'VALID',
       financeMark: Boolean(seed.financeMark),
@@ -689,6 +848,19 @@ function matchesWhere(row, where = {}) {
     }
     if (key === 'OR' && Array.isArray(value)) {
       return value.some((item) => matchesWhere(row, item));
+    }
+    if (value && typeof value === 'object' && value.some !== undefined) {
+      const relatedRows = Array.isArray(row[key]) ? row[key] : [];
+      return relatedRows.some((item) => matchesWhere(item, value.some));
+    }
+    if (value && typeof value === 'object' && value.is !== undefined) {
+      if (value.is === null) {
+        return row[key] === null || row[key] === undefined;
+      }
+      if (row[key] === null || row[key] === undefined) {
+        return false;
+      }
+      return matchesWhere(row[key], value.is);
     }
     if (value && typeof value === 'object' && Array.isArray(value.in)) {
       return value.in.includes(row[key]);
@@ -743,6 +915,15 @@ function sortRows(rows, orderBy) {
 
 function copyRow(row) {
   return { ...row };
+}
+
+function createPrismaUniqueError(target) {
+  const error = new Error(`Unique constraint failed on ${target}`);
+  error.code = 'P2002';
+  error.meta = {
+    target: [target],
+  };
+  return error;
 }
 
 function valuesEqual(left, right) {
@@ -802,7 +983,13 @@ function withTravelGroupIncludes(group, include, relations) {
   return row;
 }
 
-function withSalesOrderIncludes(order, include, salesOrderItems, travelGroups) {
+function withSalesOrderIncludes(
+  order,
+  include,
+  salesOrderItems,
+  travelGroups,
+  customers = [],
+) {
   const row = copyRow(order);
   if (include?.items) {
     row.items = salesOrderItems
@@ -812,6 +999,10 @@ function withSalesOrderIncludes(order, include, salesOrderItems, travelGroups) {
   if (include?.travelGroup) {
     const group = travelGroups.find((item) => item.id === order.travelGroupId);
     row.travelGroup = group ? copyRow(group) : null;
+  }
+  if (include?.customer) {
+    const customer = customers.find((item) => item.id === order.customerId);
+    row.customer = customer ? copyRow(customer) : null;
   }
   return row;
 }

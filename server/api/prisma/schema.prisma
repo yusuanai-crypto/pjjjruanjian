@@ -8,9 +8,9 @@ datasource db {
 }
 
 // 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
-// 已落库业务表：travel_agencies、guides、travel_groups、guide_carried_groups、pending_travel_groups、sales_orders、
+// 已落库业务表：travel_agencies、guides、travel_groups、guide_carried_groups、pending_travel_groups、customers、sales_orders、
 // sales_order_items、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
-// 独立客户、售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
+// 售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -48,6 +48,7 @@ model User {
   markedGuideGroups     GuideCarriedGroup[]  @relation("GuideCarriedGroupMarkedBy")
   markedPendingGroups   PendingTravelGroup[] @relation("PendingTravelGroupMarkedBy")
   markedSalesOrders     SalesOrder[]         @relation("SalesOrderMarkedBy")
+  markedCustomers       Customer[]           @relation("CustomerMarkedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -149,6 +150,15 @@ enum SalesOrderDeliveryType {
   SHIPPING    @map("shipping")
 
   @@map("sales_order_delivery_type")
+}
+
+enum SalesOrderPackingStatus {
+  PENDING  @map("pending")
+  PACKING  @map("packing")
+  PACKED   @map("packed")
+  ABNORMAL @map("abnormal")
+
+  @@map("sales_order_packing_status")
 }
 
 model TravelGroup {
@@ -329,36 +339,78 @@ model PendingTravelGroup {
   @@map("pending_travel_groups")
 }
 
-model SalesOrder {
-  id                        String           @id @default(uuid()) @db.Char(36)
-  orderNo                   String           @unique @map("order_no") @db.VarChar(80)
-  orderType                 SalesOrderType   @default(TRAVEL_GROUP) @map("order_type")
-  travelGroupId             String?          @map("travel_group_id") @db.Char(36)
-  customerName              String           @map("customer_name") @db.VarChar(100)
-  customerPhone             String?          @map("customer_phone") @db.VarChar(30)
-  province                  String?          @db.VarChar(60)
-  city                      String?          @db.VarChar(60)
-  district                  String?          @db.VarChar(60)
-  address                   String?          @db.VarChar(255)
-  orderDate                 DateTime         @map("order_date") @db.Date
-  totalAmountCents          Int              @default(0) @map("total_amount_cents")
-  cashOnDeliveryAmountCents Int              @default(0) @map("cash_on_delivery_amount_cents")
-  remark                    String?          @db.Text
-  status                    SalesOrderStatus @default(VALID)
-  financeMark               Boolean          @default(false) @map("finance_mark")
-  markedById                String?          @map("marked_by") @db.Char(36)
-  markedAt                  DateTime?        @map("marked_at") @db.DateTime(0)
-  salesUserId               String?          @map("sales_user_id") @db.Char(36)
-  createdById               String?          @map("created_by_id") @db.Char(36)
-  updatedById               String?          @map("updated_by_id") @db.Char(36)
-  createdAt                 DateTime         @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt                 DateTime         @updatedAt @map("updated_at") @db.DateTime(0)
+model Customer {
+  id          String    @id @default(uuid()) @db.Char(36)
+  name        String    @db.VarChar(100)
+  phone       String?   @db.VarChar(30)
+  province    String?   @db.VarChar(60)
+  city        String?   @db.VarChar(60)
+  district    String?   @db.VarChar(60)
+  address     String?   @db.VarChar(255)
+  financeMark Boolean   @default(false) @map("finance_mark")
+  markedById  String?   @map("marked_by") @db.Char(36)
+  markedAt    DateTime? @map("marked_at") @db.DateTime(0)
+  notes       String?   @db.Text
+  createdById String?   @map("created_by_id") @db.Char(36)
+  updatedById String?   @map("updated_by_id") @db.Char(36)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
+  markedBy    User?        @relation("CustomerMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  salesOrders SalesOrder[]
+
+  @@index([name])
+  @@index([phone])
+  @@index([financeMark])
+  @@index([markedById])
+  @@index([createdById])
+  @@index([updatedAt])
+  @@map("customers")
+}
+
+model SalesOrder {
+  id                        String                  @id @default(uuid()) @db.Char(36)
+  orderNo                   String                  @unique @map("order_no") @db.VarChar(80)
+  orderType                 SalesOrderType          @default(TRAVEL_GROUP) @map("order_type")
+  travelGroupId             String?                 @map("travel_group_id") @db.Char(36)
+  customerId                String?                 @map("customer_id") @db.Char(36)
+  customerName              String                  @map("customer_name") @db.VarChar(100)
+  customerPhone             String?                 @map("customer_phone") @db.VarChar(30)
+  province                  String?                 @db.VarChar(60)
+  city                      String?                 @db.VarChar(60)
+  district                  String?                 @db.VarChar(60)
+  address                   String?                 @db.VarChar(255)
+  orderDate                 DateTime                @map("order_date") @db.Date
+  salesFormNo               String?                 @map("sales_form_no") @db.VarChar(80)
+  totalAmountCents          Int                     @default(0) @map("total_amount_cents")
+  cashOnDeliveryAmountCents Int                     @default(0) @map("cash_on_delivery_amount_cents")
+  logisticsMethod           String?                 @map("logistics_method") @db.VarChar(80)
+  packingStatus             SalesOrderPackingStatus @default(PACKED) @map("packing_status")
+  packageCount              Int                     @default(0) @map("package_count")
+  warehouseRemark           String?                 @map("warehouse_remark") @db.Text
+  logisticsNo               String?                 @map("logistics_no") @db.VarChar(120)
+  logisticsFeeCents         Int                     @default(0) @map("logistics_fee_cents")
+  invoiceRequired           Boolean                 @default(false) @map("invoice_required")
+  invoiceIssued             Boolean                 @default(false) @map("invoice_issued")
+  financeRemark             String?                 @map("finance_remark") @db.Text
+  remark                    String?                 @db.Text
+  status                    SalesOrderStatus        @default(VALID)
+  financeMark               Boolean                 @default(false) @map("finance_mark")
+  markedById                String?                 @map("marked_by") @db.Char(36)
+  markedAt                  DateTime?               @map("marked_at") @db.DateTime(0)
+  salesUserId               String?                 @map("sales_user_id") @db.Char(36)
+  createdById               String?                 @map("created_by_id") @db.Char(36)
+  updatedById               String?                 @map("updated_by_id") @db.Char(36)
+  createdAt                 DateTime                @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                 DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
+
+  customer    Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
   travelGroup TravelGroup?     @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
   salesUser   User?            @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
   markedBy    User?            @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
   items       SalesOrderItem[]
 
+  @@index([customerId])
   @@index([travelGroupId])
   @@index([salesUserId])
   @@index([financeMark])
@@ -367,6 +419,9 @@ model SalesOrder {
   @@index([orderDate])
   @@index([customerPhone])
   @@index([status])
+  @@index([salesFormNo])
+  @@index([packingStatus])
+  @@index([logisticsNo])
   @@map("sales_orders")
 }
 
@@ -376,12 +431,16 @@ model SalesOrderItem {
   productName    String                 @map("product_name") @db.VarChar(160)
   quantity       Int                    @default(1)
   unitPriceCents Int                    @default(0) @map("unit_price_cents")
+  subtotalCents  Int                    @default(0) @map("subtotal_cents")
   deliveryType   SalesOrderDeliveryType @default(SHIPPING) @map("delivery_type")
+  notes          String?                @db.Text
+  sortOrder      Int                    @default(0) @map("sort_order")
   createdAt      DateTime               @default(now()) @map("created_at") @db.DateTime(0)
 
   salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
 
   @@index([salesOrderId])
+  @@index([salesOrderId, sortOrder])
   @@map("sales_order_items")
 }
 

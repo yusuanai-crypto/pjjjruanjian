@@ -5,6 +5,7 @@ import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import { withGeneratedSalesOrderNo } from './sales-order-no.helper';
 import { withGeneratedTravelGroupNo } from './travel-group-no.helper';
 
 const GROUP_TABLES: any = {
@@ -145,6 +146,72 @@ const DELIVERY_TYPE_FROM_PRISMA: any = {
   SELF_PICKUP: 'self_pickup',
   SHIPPING: 'shipping',
 };
+
+const PACKING_STATUS_TO_PRISMA: any = {
+  pending: 'PENDING',
+  packing: 'PACKING',
+  packed: 'PACKED',
+  abnormal: 'ABNORMAL',
+  PENDING: 'PENDING',
+  PACKING: 'PACKING',
+  PACKED: 'PACKED',
+  ABNORMAL: 'ABNORMAL',
+};
+
+const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
+  admin: [
+    'orderType',
+    'salesUserId',
+    'salesFormNo',
+    'orderDate',
+    'customerId',
+    'customer',
+    'travelGroupId',
+    'cashOnDeliveryAmountCents',
+    'invoiceRequired',
+    'remark',
+    'items',
+    'status',
+  ],
+  sales: [
+    'salesFormNo',
+    'orderDate',
+    'customerId',
+    'customer',
+    'travelGroupId',
+    'cashOnDeliveryAmountCents',
+    'invoiceRequired',
+    'remark',
+    'items',
+  ],
+};
+
+const SALES_ORDER_FINANCE_PATCH_FIELDS = [
+  'logisticsNo',
+  'logisticsFeeCents',
+  'invoiceIssued',
+  'financeRemark',
+  'status',
+];
+
+const SALES_ORDER_PACKING_PATCH_FIELDS = [
+  'logisticsMethod',
+  'packingStatus',
+  'packageCount',
+  'warehouseRemark',
+];
+
+const SALES_ORDER_STATUS_PATCH_FIELDS = ['status', 'remark', 'statusReason'];
+
+const SALES_ORDER_CUSTOMER_PATCH_FIELDS = [
+  'name',
+  'phone',
+  'province',
+  'city',
+  'district',
+  'address',
+  'notes',
+];
 
 @Injectable()
 export class BusinessDataNestService {
@@ -623,7 +690,6 @@ export class BusinessDataNestService {
     requireAnyRole(actor, [
       'admin',
       'boss',
-      'front_desk',
       'sales',
       'finance',
       'warehouse',
@@ -636,6 +702,7 @@ export class BusinessDataNestService {
       ),
       include: {
         items: true,
+        customer: true,
         travelGroup: true,
       },
       orderBy: {
@@ -650,7 +717,6 @@ export class BusinessDataNestService {
     requireAnyRole(actor, [
       'admin',
       'boss',
-      'front_desk',
       'sales',
       'finance',
       'warehouse',
@@ -662,6 +728,7 @@ export class BusinessDataNestService {
       },
       include: {
         items: true,
+        customer: true,
         travelGroup: true,
       },
     });
@@ -678,23 +745,38 @@ export class BusinessDataNestService {
   }
 
   async createSalesOrder(actor: any, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'sales', 'finance', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'sales', 'finance', 'after_sales']);
     const data = buildSalesOrderData(payload, actor);
     const order = await this.prisma.$transaction(async (tx: any) => {
-      const existing = await tx.salesOrder.findUnique({
-        where: {
-          orderNo: data.orderNo,
-        },
-      });
-      if (existing) {
-        throw createHttpError(
-          409,
-          'ORDER_NO_EXISTS',
-          'Sales order number already exists.',
+      const customerResult = await resolveSalesOrderCustomer(
+        tx,
+        payload,
+        actor,
+      );
+      const customer = customerResult.customer;
+
+      if (customerResult.created) {
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'customers.create',
+            entityType: 'customer',
+            entityId: customer.id,
+            afterData: toSalesOrderCustomerDto(customer),
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
         );
       }
 
       let travelGroup: any = null;
+      if (data.orderType === 'TRAVEL_GROUP' && !data.travelGroupId) {
+        throw createHttpError(
+          400,
+          'VALIDATION_FAILED',
+          'travelGroupId is required for travel_group orders.',
+        );
+      }
       if (data.travelGroupId) {
         travelGroup = await tx.travelGroup.findUnique({
           where: {
@@ -710,57 +792,226 @@ export class BusinessDataNestService {
         }
       }
 
-      const createdOrder = await tx.salesOrder.create({
+      return withGeneratedSalesOrderNo(
+        tx.salesOrder,
+        data.orderDate,
+        async (orderNo) => {
+          const createdOrder = await tx.salesOrder.create({
+            data: {
+              ...data,
+              orderNo,
+              customerId: customer.id,
+              customerName: customer.name,
+              customerPhone: customer.phone || null,
+              province: customer.province || null,
+              city: customer.city || null,
+              district: customer.district || null,
+              address: customer.address || null,
+            },
+            include: {
+              items: true,
+              customer: true,
+              travelGroup: true,
+            },
+          });
+
+          let orderForLog = createdOrder;
+          if (
+            travelGroup &&
+            createdOrder.orderType === 'TRAVEL_GROUP' &&
+            ['VALID', 'PARTIAL_REFUND'].includes(createdOrder.status)
+          ) {
+            await tx.travelGroup.update({
+              where: {
+                id: travelGroup.id,
+              },
+              data: {
+                status: 'ORDERED',
+                salesAmountCents:
+                  Number(travelGroup.salesAmountCents || 0) +
+                  Number(createdOrder.totalAmountCents || 0),
+                orderAmountCents:
+                  Number(travelGroup.orderAmountCents || 0) +
+                  Number(createdOrder.totalAmountCents || 0),
+                cashOnDeliveryCents:
+                  Number(travelGroup.cashOnDeliveryCents || 0) +
+                  Number(createdOrder.cashOnDeliveryAmountCents || 0),
+                updatedById: actor.id,
+                updatedAt: new Date(),
+              },
+            });
+          const reloadedOrder = await tx.salesOrder.findUnique({
+            where: {
+              id: createdOrder.id,
+            },
+            include: {
+              items: true,
+              customer: true,
+              travelGroup: true,
+            },
+          });
+            orderForLog = reloadedOrder || createdOrder;
+          }
+
+          await this.operationLogsService.appendLog(
+            {
+              userId: actor.id,
+              action: 'sales_orders.create',
+              entityType: 'sales_order',
+              entityId: createdOrder.id,
+              afterData: toSalesOrderDto(orderForLog),
+              ipAddress: metadata.ipAddress || null,
+            },
+            tx,
+          );
+          return orderForLog;
+        },
+      );
+    });
+
+    return toSalesOrderDto(order);
+  }
+
+  async updateSalesOrder(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'sales']);
+    assertSalesOrderPatchAllowedFields(actor, payload);
+
+    const current = await this.prisma.salesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+      },
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    assertCanUpdateSalesOrder(actor, current);
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const data = buildSalesOrderUpdateData(payload, actor);
+      const customerResult = await resolveSalesOrderPatchCustomer(
+        tx,
+        payload,
+        current,
+        actor,
+      );
+
+      if (customerResult.customer) {
+        Object.assign(
+          data,
+          buildSalesOrderCustomerSnapshotData(customerResult.customer),
+        );
+      }
+
+      if (customerResult.created) {
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'customers.create',
+            entityType: 'customer',
+            entityId: customerResult.customer.id,
+            afterData: toSalesOrderCustomerDto(customerResult.customer),
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+      } else if (customerResult.updated) {
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'customers.update',
+            entityType: 'customer',
+            entityId: customerResult.customer.id,
+            beforeData: toSalesOrderCustomerDto(customerResult.beforeCustomer),
+            afterData: toSalesOrderCustomerDto(customerResult.customer),
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+      }
+
+      const finalOrderType = data.orderType || current.orderType;
+      const finalTravelGroupId =
+        data.travelGroupId !== undefined
+          ? data.travelGroupId
+          : current.travelGroupId;
+      if (finalOrderType === 'TRAVEL_GROUP' && !finalTravelGroupId) {
+        throw createHttpError(
+          400,
+          'VALIDATION_FAILED',
+          'travelGroupId is required for travel_group orders.',
+        );
+      }
+      if (finalTravelGroupId) {
+        const travelGroup = await tx.travelGroup.findUnique({
+          where: {
+            id: finalTravelGroupId,
+          },
+        });
+        if (!travelGroup) {
+          throw createHttpError(
+            404,
+            'TRAVEL_GROUP_NOT_FOUND',
+            'Related travel group does not exist.',
+          );
+        }
+      }
+
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
         data,
         include: {
           items: true,
+          customer: true,
           travelGroup: true,
         },
       });
 
-      let orderForLog = createdOrder;
-      if (
-        travelGroup &&
-        createdOrder.orderType === 'TRAVEL_GROUP' &&
-        createdOrder.status === 'VALID'
-      ) {
-        await tx.travelGroup.update({
+      for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
+        current,
+        updatedOrder,
+      )) {
+        await this.refreshTravelGroupOrderSummary(
+          tx,
+          travelGroupId,
+          actor.id,
+        );
+      }
+
+      const orderForLog =
+        (await tx.salesOrder.findUnique({
           where: {
-            id: travelGroup.id,
-          },
-          data: {
-            status: 'ORDERED',
-            salesAmountCents:
-              Number(travelGroup.salesAmountCents || 0) +
-              Number(createdOrder.totalAmountCents || 0),
-            orderAmountCents:
-              Number(travelGroup.orderAmountCents || 0) +
-              Number(createdOrder.totalAmountCents || 0),
-            cashOnDeliveryCents:
-              Number(travelGroup.cashOnDeliveryCents || 0) +
-              Number(createdOrder.cashOnDeliveryAmountCents || 0),
-            updatedById: actor.id,
-            updatedAt: new Date(),
-          },
-        });
-        const reloadedOrder = await tx.salesOrder.findUnique({
-          where: {
-            id: createdOrder.id,
+            id,
           },
           include: {
             items: true,
+            customer: true,
             travelGroup: true,
           },
-        });
-        orderForLog = reloadedOrder || createdOrder;
-      }
+        })) || updatedOrder;
 
       await this.operationLogsService.appendLog(
         {
           userId: actor.id,
-          action: 'sales_orders.create',
+          action: 'sales_orders.update',
           entityType: 'sales_order',
-          entityId: createdOrder.id,
+          entityId: orderForLog.id,
+          beforeData: toSalesOrderDto(current),
           afterData: toSalesOrderDto(orderForLog),
           ipAddress: metadata.ipAddress || null,
         },
@@ -769,7 +1020,227 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
-    return toSalesOrderDto(order);
+    return toSalesOrderDto(updated);
+  }
+
+  async updateSalesOrderFinance(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    assertSalesOrderFinancePatchAllowedFields(payload);
+
+    const current = await this.prisma.salesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+      },
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
+        data: buildSalesOrderFinanceUpdateData(payload, actor),
+        include: {
+          items: true,
+          customer: true,
+          travelGroup: true,
+        },
+      });
+
+      for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
+        current,
+        updatedOrder,
+      )) {
+        await this.refreshTravelGroupOrderSummary(
+          tx,
+          travelGroupId,
+          actor.id,
+        );
+      }
+
+      const orderForLog =
+        (await tx.salesOrder.findUnique({
+          where: {
+            id,
+          },
+          include: {
+            items: true,
+            customer: true,
+            travelGroup: true,
+          },
+        })) || updatedOrder;
+
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.finance.update',
+          entityType: 'sales_order',
+          entityId: orderForLog.id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(orderForLog),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return orderForLog;
+    });
+
+    return toSalesOrderDto(updated);
+  }
+
+  async updateSalesOrderPacking(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'warehouse']);
+    assertSalesOrderPackingPatchAllowedFields(payload);
+
+    const current = await this.prisma.salesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+      },
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
+        data: buildSalesOrderPackingUpdateData(payload, actor),
+        include: {
+          items: true,
+          customer: true,
+          travelGroup: true,
+        },
+      });
+
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.packing.update',
+          entityType: 'sales_order',
+          entityId: updatedOrder.id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    });
+
+    return toSalesOrderDto(updated);
+  }
+
+  async updateSalesOrderStatus(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance', 'after_sales']);
+    assertSalesOrderStatusPatchAllowedFields(payload);
+
+    const current = await this.prisma.salesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+      },
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
+        data: buildSalesOrderStatusUpdateData(payload, actor),
+        include: {
+          items: true,
+          customer: true,
+          travelGroup: true,
+        },
+      });
+
+      for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
+        current,
+        updatedOrder,
+      )) {
+        await this.refreshTravelGroupOrderSummary(
+          tx,
+          travelGroupId,
+          actor.id,
+        );
+      }
+
+      const orderForLog =
+        (await tx.salesOrder.findUnique({
+          where: {
+            id,
+          },
+          include: {
+            items: true,
+            customer: true,
+            travelGroup: true,
+          },
+        })) || updatedOrder;
+
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.status.update',
+          entityType: 'sales_order',
+          entityId: orderForLog.id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(orderForLog),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return orderForLog;
+    });
+
+    return toSalesOrderDto(updated);
   }
 
   async setSalesOrderFinanceMark(
@@ -785,6 +1256,7 @@ export class BusinessDataNestService {
       },
       include: {
         items: true,
+        customer: true,
         travelGroup: true,
       },
     });
@@ -807,6 +1279,7 @@ export class BusinessDataNestService {
       data: buildFinanceMarkData(marked, actor),
       include: {
         items: true,
+        customer: true,
         travelGroup: true,
       },
     });
@@ -845,6 +1318,7 @@ export class BusinessDataNestService {
         where: orderWhere,
         include: {
           items: true,
+          customer: true,
           travelGroup: true,
         },
         orderBy: {
@@ -982,6 +1456,47 @@ export class BusinessDataNestService {
     return toStrikeBonusAwardDto(created);
   }
 
+  private async refreshTravelGroupOrderSummary(
+    tx: any,
+    travelGroupId: string | null | undefined,
+    actorId: string,
+  ) {
+    if (!travelGroupId) {
+      return;
+    }
+    const orders = await tx.salesOrder.findMany({
+      where: {
+        travelGroupId,
+        orderType: 'TRAVEL_GROUP',
+        status: {
+          in: ['VALID', 'PARTIAL_REFUND'],
+        },
+      },
+    });
+    const salesAmountCents = orders.reduce(
+      (sum: number, order: any) => sum + Number(order.totalAmountCents || 0),
+      0,
+    );
+    const cashOnDeliveryCents = orders.reduce(
+      (sum: number, order: any) =>
+        sum + Number(order.cashOnDeliveryAmountCents || 0),
+      0,
+    );
+    await tx.travelGroup.update({
+      where: {
+        id: travelGroupId,
+      },
+      data: {
+        status: orders.length > 0 ? 'ORDERED' : 'UNMARKED',
+        salesAmountCents,
+        orderAmountCents: salesAmountCents,
+        cashOnDeliveryCents,
+        updatedById: actorId,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
   private groupDelegate(table: any) {
     return (this.prisma as any)[table.delegate];
   }
@@ -1104,18 +1619,19 @@ export class BusinessDataNestService {
     if (!(await this.onlyShowMarkedRecords())) {
       return null;
     }
-    const markedGroups = await this.prisma.travelGroup.findMany({
-      where: {
-        financeMark: true,
-      },
-    });
     return {
-      financeMark: true,
+      customer: {
+        is: {
+          financeMark: true,
+        },
+      },
       OR: [
         { travelGroupId: null },
         {
-          travelGroupId: {
-            in: markedGroups.map((group: any) => group.id),
+          travelGroup: {
+            is: {
+              financeMark: true,
+            },
           },
         },
       ],
@@ -1137,7 +1653,7 @@ export class BusinessDataNestService {
       return;
     }
     if (
-      order.financeMark &&
+      order.customer?.financeMark &&
       (!order.travelGroupId || order.travelGroup?.financeMark)
     ) {
       return;
@@ -1275,20 +1791,79 @@ function filterGroupDtosByComputedFields(groups: any[], filters: any = {}) {
 }
 
 function buildSalesOrderWhere(filters: any = {}) {
-  const where: any = {};
-  const query = normalizeOptionalString(filters.query || filters.search);
+  let where: any = {};
+  const query = normalizeOptionalString(
+    filters.keyword || filters.query || filters.search,
+  );
   if (query) {
-    where.OR = [
-      { orderNo: { contains: query } },
-      { customerName: { contains: query } },
-      { customerPhone: { contains: query } },
-    ];
+    where = andWhere(where, {
+      OR: [
+        { orderNo: { contains: query } },
+        { salesFormNo: { contains: query } },
+        { customerName: { contains: query } },
+        { customerPhone: { contains: query } },
+        { address: { contains: query } },
+        { customer: { is: { name: { contains: query } } } },
+        { customer: { is: { phone: { contains: query } } } },
+        { travelGroup: { is: { groupNo: { contains: query } } } },
+        { travelGroup: { is: { travelAgency: { contains: query } } } },
+      ],
+    });
+  }
+  const customerId = normalizeOptionalString(filters.customerId);
+  if (customerId) {
+    where.customerId = customerId;
+  }
+  const customerPhone = normalizeOptionalString(filters.customerPhone);
+  if (customerPhone) {
+    where = andWhere(where, {
+      OR: [
+        { customerPhone: { contains: customerPhone } },
+        { customer: { is: { phone: { contains: customerPhone } } } },
+      ],
+    });
+  }
+  const travelGroupId = normalizeOptionalString(filters.travelGroupId);
+  if (travelGroupId) {
+    where.travelGroupId = travelGroupId;
   }
   if (filters.orderType) {
     where.orderType = toPrismaOrderType(filters.orderType);
   }
   if (filters.status) {
     where.status = toPrismaOrderStatus(filters.status);
+  }
+  if (filters.deliveryType) {
+    where.items = {
+      some: {
+        deliveryType: toPrismaDeliveryType(filters.deliveryType),
+      },
+    };
+  }
+  if (filters.packingStatus) {
+    where.packingStatus = toPrismaPackingStatus(filters.packingStatus);
+  }
+  if (filters.financeMark !== undefined && filters.financeMark !== '') {
+    where.financeMark = normalizeBoolean(filters.financeMark, 'financeMark');
+  }
+  if (
+    filters.customerFinanceMark !== undefined &&
+    filters.customerFinanceMark !== ''
+  ) {
+    where = andWhere(where, {
+      customer: {
+        is: {
+          financeMark: normalizeBoolean(
+            filters.customerFinanceMark,
+            'customerFinanceMark',
+          ),
+        },
+      },
+    });
+  }
+  const salesUserId = normalizeOptionalString(filters.salesUserId);
+  if (salesUserId) {
+    where.salesUserId = salesUserId;
   }
   const dateRange = buildDateRange(
     filters.dateFrom || filters.start,
@@ -1300,36 +1875,229 @@ function buildSalesOrderWhere(filters: any = {}) {
   return where;
 }
 
-function buildSalesOrderDataScope(actor: any) {
-  if (actor?.role !== 'sales') {
-    return null;
+function buildSalesOrderDataScope(actor: any): any {
+  if (actor?.role === 'sales') {
+    return {
+      OR: [{ salesUserId: actor.id }, { createdById: actor.id }],
+    };
   }
-  return {
-    OR: [{ salesUserId: actor.id }, { createdById: actor.id }],
-  };
+  if (actor?.role === 'warehouse') {
+    return {
+      OR: [
+        {
+          items: {
+            some: {
+              deliveryType: 'SHIPPING',
+            },
+          },
+        },
+        {
+          packingStatus: {
+            in: ['PENDING', 'PACKING', 'ABNORMAL'],
+          },
+        },
+      ],
+    };
+  }
+  return null;
 }
 
 function buildFinanceMarkData(marked: boolean, actor: any) {
+  const now = new Date();
   return {
     financeMark: marked,
-    markedById: marked ? actor.id : null,
-    markedAt: marked ? new Date() : null,
+    markedById: actor.id,
+    markedAt: now,
     updatedById: actor.id,
-    updatedAt: new Date(),
+    updatedAt: now,
   };
 }
 
-function assertCanReadSalesOrder(actor: any, order: any) {
-  if (actor?.role !== 'sales') {
+function assertSalesOrderPatchAllowedFields(actor: any, payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowedFields = new Set(
+    SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || [],
+  );
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for ${actor.role}: ${deniedFields.join(', ')}.`,
+    );
+  }
+  if (hasOwn(payload, 'customer')) {
+    assertSalesOrderCustomerPatchAllowedFields(payload.customer);
+  }
+}
+
+function assertSalesOrderFinancePatchAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowedFields = new Set(SALES_ORDER_FINANCE_PATCH_FIELDS);
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for sales order finance: ${deniedFields.join(', ')}.`,
+    );
+  }
+}
+
+function assertSalesOrderPackingPatchAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowedFields = new Set(SALES_ORDER_PACKING_PATCH_FIELDS);
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for sales order packing: ${deniedFields.join(', ')}.`,
+    );
+  }
+}
+
+function assertSalesOrderStatusPatchAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowedFields = new Set(SALES_ORDER_STATUS_PATCH_FIELDS);
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for sales order status: ${deniedFields.join(', ')}.`,
+    );
+  }
+  if (!hasOwn(payload, 'status')) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'status is required.',
+    );
+  }
+}
+
+function assertSalesOrderCustomerPatchAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'customer must be an object.',
+    );
+  }
+  const allowedFields = new Set(SALES_ORDER_CUSTOMER_PATCH_FIELDS);
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Customer fields are not allowed here: ${deniedFields.join(', ')}.`,
+    );
+  }
+}
+
+function assertCanUpdateSalesOrder(actor: any, order: any) {
+  if (actor?.role === 'admin') {
     return;
   }
-  if (order.salesUserId === actor.id || order.createdById === actor.id) {
+  if (
+    actor?.role === 'sales' &&
+    (order.salesUserId === actor.id || order.createdById === actor.id)
+  ) {
     return;
   }
   throw createHttpError(
     404,
     'SALES_ORDER_NOT_FOUND',
     'Sales order does not exist.',
+  );
+}
+
+function assertCanReadSalesOrder(actor: any, order: any) {
+  if (actor?.role === 'sales') {
+    if (order.salesUserId === actor.id || order.createdById === actor.id) {
+      return;
+    }
+    throw createHttpError(
+      404,
+      'SALES_ORDER_NOT_FOUND',
+      'Sales order does not exist.',
+    );
+  }
+  if (actor?.role === 'warehouse') {
+    if (isWarehouseReadableSalesOrder(order)) {
+      return;
+    }
+    throw createHttpError(
+      404,
+      'SALES_ORDER_NOT_FOUND',
+      'Sales order does not exist.',
+    );
+  }
+}
+
+function isWarehouseReadableSalesOrder(order: any) {
+  if (['PENDING', 'PACKING', 'ABNORMAL'].includes(order.packingStatus)) {
+    return;
+  }
+  return (Array.isArray(order.items) ? order.items : []).some(
+    (item: any) => item.deliveryType === 'SHIPPING',
+  );
+}
+
+function getSalesOrderSummaryAffectedTravelGroupIds(current: any, updated: any) {
+  const summaryChanged =
+    current.travelGroupId !== updated.travelGroupId ||
+    current.orderType !== updated.orderType ||
+    current.status !== updated.status ||
+    Number(current.totalAmountCents || 0) !==
+      Number(updated.totalAmountCents || 0) ||
+    Number(current.cashOnDeliveryAmountCents || 0) !==
+      Number(updated.cashOnDeliveryAmountCents || 0);
+  if (!summaryChanged) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      [current.travelGroupId, updated.travelGroupId].filter(
+        (travelGroupId) =>
+          typeof travelGroupId === 'string' && travelGroupId.length > 0,
+      ),
+    ),
   );
 }
 
@@ -1563,42 +2331,51 @@ function buildTravelGroupTastingItems(items: any[]) {
 }
 
 function buildSalesOrderData(payload: any, actor: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
   const now = new Date();
   const items = buildSalesOrderItems(payload?.items);
-  const totalAmountCents =
-    payload?.totalAmountCents === undefined
-      ? items.reduce(
-          (sum: number, item: any) => sum + item.quantity * item.unitPriceCents,
-          0,
-        )
-      : normalizeInt(payload.totalAmountCents, 'totalAmountCents');
+  const totalAmountCents = items.reduce(
+    (sum: number, item: any) => sum + item.subtotalCents,
+    0,
+  );
 
   const data: any = {
     id: crypto.randomUUID(),
-    orderNo: normalizeRequiredString(
-      payload?.orderNo || generateOrderNo(),
-      'orderNo',
-    ),
     orderType: toPrismaOrderType(payload?.orderType || 'travel_group'),
     travelGroupId: normalizeOptionalString(payload?.travelGroupId),
-    customerName: normalizeRequiredString(
-      payload?.customerName,
-      'customerName',
-    ),
-    customerPhone: normalizeOptionalString(payload?.customerPhone),
-    province: normalizeOptionalString(payload?.province),
-    city: normalizeOptionalString(payload?.city),
-    district: normalizeOptionalString(payload?.district),
-    address: normalizeOptionalString(payload?.address),
     orderDate: parseDate(payload?.orderDate, 'orderDate', true),
+    salesFormNo: normalizeOptionalString(payload?.salesFormNo),
     totalAmountCents,
     cashOnDeliveryAmountCents: normalizeInt(
       payload?.cashOnDeliveryAmountCents,
       'cashOnDeliveryAmountCents',
       0,
     ),
+    logisticsMethod: null,
+    packingStatus: items.some((item: any) => item.deliveryType === 'SHIPPING')
+      ? 'PENDING'
+      : 'PACKED',
+    packageCount: 0,
+    warehouseRemark: null,
+    logisticsNo: null,
+    logisticsFeeCents: 0,
+    invoiceRequired:
+      payload?.invoiceRequired === undefined
+        ? false
+        : normalizeBoolean(payload.invoiceRequired, 'invoiceRequired'),
+    invoiceIssued: false,
+    financeRemark: null,
     remark: normalizeOptionalString(payload?.remark),
     status: toPrismaOrderStatus(payload?.status || 'valid'),
+    financeMark: false,
+    markedById: null,
+    markedAt: null,
     salesUserId:
       actor.role === 'sales'
         ? actor.id
@@ -1614,26 +2391,378 @@ function buildSalesOrderData(payload: any, actor: any) {
   return data;
 }
 
-function buildSalesOrderItems(items: any[]) {
-  const rawItems = Array.isArray(items) && items.length > 0 ? items : [];
-  return rawItems.map((item, index) => ({
+function buildSalesOrderUpdateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+
+  if (hasOwn(payload, 'orderType')) {
+    data.orderType = toPrismaOrderType(payload.orderType);
+  }
+  if (hasOwn(payload, 'salesUserId')) {
+    data.salesUserId = normalizeOptionalString(payload.salesUserId);
+  }
+  if (hasOwn(payload, 'salesFormNo')) {
+    data.salesFormNo = normalizeOptionalString(payload.salesFormNo);
+  }
+  if (hasOwn(payload, 'orderDate')) {
+    data.orderDate = parseDate(payload.orderDate, 'orderDate', true);
+  }
+  if (hasOwn(payload, 'travelGroupId')) {
+    data.travelGroupId = normalizeOptionalString(payload.travelGroupId);
+  }
+  if (hasOwn(payload, 'cashOnDeliveryAmountCents')) {
+    data.cashOnDeliveryAmountCents = normalizeNonNegativeInt(
+      payload.cashOnDeliveryAmountCents,
+      'cashOnDeliveryAmountCents',
+    );
+  }
+  if (hasOwn(payload, 'invoiceRequired')) {
+    data.invoiceRequired = normalizeBoolean(
+      payload.invoiceRequired,
+      'invoiceRequired',
+    );
+  }
+  if (hasOwn(payload, 'remark')) {
+    data.remark = normalizeOptionalString(payload.remark);
+  }
+  if (hasOwn(payload, 'status')) {
+    data.status = toPrismaOrderStatus(payload.status);
+  }
+  if (hasOwn(payload, 'items')) {
+    const items = buildSalesOrderItems(payload.items);
+    data.totalAmountCents = items.reduce(
+      (sum: number, item: any) => sum + Number(item.subtotalCents || 0),
+      0,
+    );
+    data.items = {
+      deleteMany: {},
+      create: items,
+    };
+  }
+
+  return data;
+}
+
+function buildSalesOrderFinanceUpdateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+
+  if (hasOwn(payload, 'logisticsNo')) {
+    data.logisticsNo = normalizeOptionalString(payload.logisticsNo);
+  }
+  if (hasOwn(payload, 'logisticsFeeCents')) {
+    data.logisticsFeeCents = normalizeNonNegativeInt(
+      payload.logisticsFeeCents,
+      'logisticsFeeCents',
+    );
+  }
+  if (hasOwn(payload, 'invoiceIssued')) {
+    data.invoiceIssued = normalizeBoolean(
+      payload.invoiceIssued,
+      'invoiceIssued',
+    );
+  }
+  if (hasOwn(payload, 'financeRemark')) {
+    data.financeRemark = normalizeOptionalString(payload.financeRemark);
+  }
+  if (hasOwn(payload, 'status')) {
+    data.status = toPrismaOrderStatus(payload.status);
+  }
+
+  return data;
+}
+
+function buildSalesOrderPackingUpdateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+
+  if (hasOwn(payload, 'logisticsMethod')) {
+    data.logisticsMethod = normalizeOptionalString(payload.logisticsMethod);
+  }
+  if (hasOwn(payload, 'packingStatus')) {
+    data.packingStatus = toPrismaPackingStatus(payload.packingStatus);
+  }
+  if (hasOwn(payload, 'packageCount')) {
+    data.packageCount = normalizeNonNegativeInt(
+      payload.packageCount,
+      'packageCount',
+    );
+  }
+  if (hasOwn(payload, 'warehouseRemark')) {
+    data.warehouseRemark = normalizeOptionalString(payload.warehouseRemark);
+  }
+
+  return data;
+}
+
+function buildSalesOrderStatusUpdateData(payload: any, actor: any) {
+  const now = new Date();
+  const data: any = {
+    status: toPrismaOrderStatus(payload.status),
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+
+  if (hasOwn(payload, 'statusReason')) {
+    data.remark = normalizeOptionalString(payload.statusReason);
+  } else if (hasOwn(payload, 'remark')) {
+    data.remark = normalizeOptionalString(payload.remark);
+  }
+
+  return data;
+}
+
+async function resolveSalesOrderCustomer(tx: any, payload: any, actor: any) {
+  const customerId = normalizeOptionalString(payload?.customerId);
+  if (customerId) {
+    const customer = await tx.customer.findUnique({
+      where: {
+        id: customerId,
+      },
+    });
+    if (!customer) {
+      throw createHttpError(
+        404,
+        'CUSTOMER_NOT_FOUND',
+        'Customer does not exist.',
+      );
+    }
+    return {
+      customer,
+      created: false,
+    };
+  }
+
+  if (payload?.customer !== undefined) {
+    const customer = await tx.customer.create({
+      data: buildCustomerCreateData(payload.customer, actor),
+    });
+    return {
+      customer,
+      created: true,
+    };
+  }
+
+  throw createHttpError(
+    400,
+    'CUSTOMER_REQUIRED',
+    'customerId or customer is required.',
+  );
+}
+
+async function resolveSalesOrderPatchCustomer(
+  tx: any,
+  payload: any,
+  currentOrder: any,
+  actor: any,
+) {
+  const hasCustomerId = hasOwn(payload, 'customerId');
+  const hasCustomerPayload = hasOwn(payload, 'customer');
+  if (!hasCustomerId && !hasCustomerPayload) {
+    return {
+      customer: null,
+      created: false,
+      updated: false,
+      beforeCustomer: null,
+    };
+  }
+
+  if (hasCustomerId) {
+    const customerId = normalizeOptionalString(payload.customerId);
+    if (!customerId) {
+      throw createHttpError(
+        400,
+        'CUSTOMER_REQUIRED',
+        'customerId cannot be empty when relinking a sales order.',
+      );
+    }
+    const customer = await tx.customer.findUnique({
+      where: {
+        id: customerId,
+      },
+    });
+    if (!customer) {
+      throw createHttpError(
+        404,
+        'CUSTOMER_NOT_FOUND',
+        'Customer does not exist.',
+      );
+    }
+    if (!hasCustomerPayload) {
+      return {
+        customer,
+        created: false,
+        updated: false,
+        beforeCustomer: null,
+      };
+    }
+    const updatedCustomer = await tx.customer.update({
+      where: {
+        id: customer.id,
+      },
+      data: buildCustomerPatchData(payload.customer, actor),
+    });
+    return {
+      customer: updatedCustomer,
+      created: false,
+      updated: true,
+      beforeCustomer: customer,
+    };
+  }
+
+  if (currentOrder.customerId) {
+    const customer = await tx.customer.findUnique({
+      where: {
+        id: currentOrder.customerId,
+      },
+    });
+    if (customer) {
+      const updatedCustomer = await tx.customer.update({
+        where: {
+          id: customer.id,
+        },
+        data: buildCustomerPatchData(payload.customer, actor),
+      });
+      return {
+        customer: updatedCustomer,
+        created: false,
+        updated: true,
+        beforeCustomer: customer,
+      };
+    }
+  }
+
+  const createdCustomer = await tx.customer.create({
+    data: buildCustomerCreateData(payload.customer, actor),
+  });
+  return {
+    customer: createdCustomer,
+    created: true,
+    updated: false,
+    beforeCustomer: null,
+  };
+}
+
+function buildCustomerCreateData(payload: any, actor: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'customer must be an object.',
+    );
+  }
+  const now = new Date();
+  return {
     id: crypto.randomUUID(),
-    productName: normalizeRequiredString(
-      item?.productName,
-      `items[${index}].productName`,
-    ),
-    quantity: Math.max(
-      1,
-      normalizeInt(item?.quantity, `items[${index}].quantity`, 1),
-    ),
-    unitPriceCents: normalizeInt(
+    name: normalizeRequiredString(payload?.name, 'customer.name'),
+    phone: normalizeOptionalString(payload?.phone),
+    province: normalizeOptionalString(payload?.province),
+    city: normalizeOptionalString(payload?.city),
+    district: normalizeOptionalString(payload?.district),
+    address: normalizeOptionalString(payload?.address),
+    financeMark: false,
+    markedById: null,
+    markedAt: null,
+    notes: normalizeOptionalString(payload?.notes),
+    createdById: actor.id,
+    updatedById: actor.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function buildCustomerPatchData(payload: any, actor: any) {
+  assertSalesOrderCustomerPatchAllowedFields(payload);
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: new Date(),
+  };
+  if (hasOwn(payload, 'name')) {
+    data.name = normalizeRequiredString(payload.name, 'customer.name');
+  }
+  if (hasOwn(payload, 'phone')) {
+    data.phone = normalizeOptionalString(payload.phone);
+  }
+  if (hasOwn(payload, 'province')) {
+    data.province = normalizeOptionalString(payload.province);
+  }
+  if (hasOwn(payload, 'city')) {
+    data.city = normalizeOptionalString(payload.city);
+  }
+  if (hasOwn(payload, 'district')) {
+    data.district = normalizeOptionalString(payload.district);
+  }
+  if (hasOwn(payload, 'address')) {
+    data.address = normalizeOptionalString(payload.address);
+  }
+  if (hasOwn(payload, 'notes')) {
+    data.notes = normalizeOptionalString(payload.notes);
+  }
+  return data;
+}
+
+function buildSalesOrderCustomerSnapshotData(customer: any) {
+  return {
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone || null,
+    province: customer.province || null,
+    city: customer.city || null,
+    district: customer.district || null,
+    address: customer.address || null,
+  };
+}
+
+function buildSalesOrderItems(items: any[]) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'items must contain at least one item.',
+    );
+  }
+  const now = new Date();
+  return items.map((item, index) => {
+    const quantity = normalizeInt(item?.quantity, `items[${index}].quantity`);
+    if (quantity <= 0) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `items[${index}].quantity must be greater than 0.`,
+      );
+    }
+    const unitPriceCents = normalizeNonNegativeInt(
       item?.unitPriceCents,
       `items[${index}].unitPriceCents`,
-      0,
-    ),
-    deliveryType: toPrismaDeliveryType(item?.deliveryType || 'shipping'),
-    createdAt: new Date(),
-  }));
+    );
+    return {
+      id: crypto.randomUUID(),
+      productName: normalizeRequiredString(
+        item?.productName,
+        `items[${index}].productName`,
+      ),
+      quantity,
+      unitPriceCents,
+      subtotalCents: quantity * unitPriceCents,
+      deliveryType: toPrismaDeliveryType(item?.deliveryType),
+      notes: normalizeOptionalString(item?.notes),
+      sortOrder: normalizeInt(
+        item?.sortOrder,
+        `items[${index}].sortOrder`,
+        index + 1,
+      ),
+      createdAt: now,
+    };
+  });
 }
 
 function buildReconciliationData(payload: any, actor: any) {
@@ -1737,9 +2866,13 @@ function buildStrikeBonusAwardData(payload: any) {
 
 function toGroupDto(group: any, kind: string) {
   const pending = calculateGroupPendingState(group, kind);
-  const salesOrders = Array.isArray(group.salesOrders)
-    ? group.salesOrders.map(toTravelGroupOrderSummaryDto)
+  const rawSalesOrders = Array.isArray(group.salesOrders)
+    ? group.salesOrders
     : [];
+  const salesOrders = rawSalesOrders.map(toTravelGroupOrderSummaryDto);
+  const effectiveSalesOrders = getEffectiveSalesOrders(rawSalesOrders).map(
+    toTravelGroupOrderSummaryDto,
+  );
   return {
     id: group.id,
     kind,
@@ -1789,7 +2922,7 @@ function toGroupDto(group: any, kind: string) {
           .map(toTravelGroupTastingItemDto)
       : [],
     salesOrders,
-    orderSummary: buildTravelGroupOrderSummaryDto(salesOrders),
+    orderSummary: buildTravelGroupOrderSummaryDto(effectiveSalesOrders),
     pendingStatus: pending.status,
     pendingReasons: pending.reasons,
     createdAt: toIsoString(group.createdAt),
@@ -1864,6 +2997,15 @@ function buildTravelGroupOrderSummaryDto(salesOrders: any[]) {
   };
 }
 
+function getEffectiveSalesOrders(salesOrders: any[]) {
+  return (Array.isArray(salesOrders) ? salesOrders : []).filter(
+    (order: any) =>
+      ['VALID', 'PARTIAL_REFUND', 'valid', 'partial_refund'].includes(
+        order?.status,
+      ),
+  );
+}
+
 function calculateGroupPendingState(group: any, kind: string) {
   if (kind !== 'travel') {
     return {
@@ -1898,7 +3040,7 @@ function calculateGroupPendingState(group: any, kind: string) {
     addFinding('abnormal', 'invalid_guest_count_zero');
   }
 
-  const salesOrders = Array.isArray(group.salesOrders) ? group.salesOrders : [];
+  const salesOrders = getEffectiveSalesOrders(group.salesOrders);
   if (salesOrders.length === 0 && !hasText(group.tasterSummary)) {
     addFinding('pending_taster', 'no_order_and_missing_taster_summary');
   }
@@ -1948,6 +3090,10 @@ function annotateDuplicateGroupNos(groups: any[]) {
     __duplicateGroupNo:
       hasText(group.groupNo) && (counts.get(group.groupNo) || 0) > 1,
   }));
+}
+
+function hasOwn(value: any, key: string) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
 }
 
 function hasText(value: unknown) {
@@ -2005,6 +3151,8 @@ function toSalesOrderDto(order: any) {
     travelGroup: order.travelGroup
       ? toGroupDto(order.travelGroup, 'travel')
       : null,
+    customerId: order.customerId || null,
+    customer: order.customer ? toSalesOrderCustomerDto(order.customer) : null,
     customerName: order.customerName,
     customerPhone: order.customerPhone,
     province: order.province,
@@ -2012,8 +3160,21 @@ function toSalesOrderDto(order: any) {
     district: order.district,
     address: order.address,
     orderDate: formatDate(order.orderDate),
+    salesFormNo: order.salesFormNo || null,
     totalAmountCents: Number(order.totalAmountCents || 0),
     cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
+    deliverySummary: toSalesOrderDeliverySummary(order.items),
+    logisticsMethod: order.logisticsMethod || null,
+    packingStatus: order.packingStatus
+      ? String(order.packingStatus).toLowerCase()
+      : null,
+    packageCount: Number(order.packageCount || 0),
+    warehouseRemark: order.warehouseRemark || null,
+    logisticsNo: order.logisticsNo || null,
+    logisticsFeeCents: Number(order.logisticsFeeCents || 0),
+    invoiceRequired: Boolean(order.invoiceRequired),
+    invoiceIssued: Boolean(order.invoiceIssued),
+    financeRemark: order.financeRemark || null,
     remark: order.remark,
     status: ORDER_STATUS_FROM_PRISMA[order.status] || order.status,
     financeMark: Boolean(order.financeMark),
@@ -2028,14 +3189,61 @@ function toSalesOrderDto(order: any) {
   };
 }
 
+function toSalesOrderDeliverySummary(items: any[]) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+  const types = new Set(
+    items
+      .map(
+        (item: any) =>
+          DELIVERY_TYPE_FROM_PRISMA[item?.deliveryType] ||
+          item?.deliveryType,
+      )
+      .filter(
+        (type: any) => type === 'shipping' || type === 'self_pickup',
+      ),
+  );
+  if (types.size === 0) {
+    return null;
+  }
+  if (types.size > 1) {
+    return 'mixed';
+  }
+  return Array.from(types)[0];
+}
+
+function toSalesOrderCustomerDto(customer: any) {
+  return {
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone || null,
+    province: customer.province || null,
+    city: customer.city || null,
+    district: customer.district || null,
+    address: customer.address || null,
+    financeMark: Boolean(customer.financeMark),
+    markedById: customer.markedById || null,
+    markedAt: customer.markedAt ? toIsoString(customer.markedAt) : null,
+    notes: customer.notes || null,
+    createdById: customer.createdById || null,
+    updatedById: customer.updatedById || null,
+    createdAt: customer.createdAt ? toIsoString(customer.createdAt) : null,
+    updatedAt: customer.updatedAt ? toIsoString(customer.updatedAt) : null,
+  };
+}
+
 function toSalesOrderItemDto(item: any) {
   return {
     id: item.id,
     productName: item.productName,
     quantity: Number(item.quantity || 0),
     unitPriceCents: Number(item.unitPriceCents || 0),
+    subtotalCents: Number(item.subtotalCents || 0),
     deliveryType:
       DELIVERY_TYPE_FROM_PRISMA[item.deliveryType] || item.deliveryType,
+    notes: item.notes || null,
+    sortOrder: Number(item.sortOrder || 0),
   };
 }
 
@@ -2373,6 +3581,18 @@ function toPrismaDeliveryType(value: unknown) {
   return deliveryType;
 }
 
+function toPrismaPackingStatus(value: unknown) {
+  const packingStatus = PACKING_STATUS_TO_PRISMA[String(value || '').trim()];
+  if (!packingStatus) {
+    throw createHttpError(
+      400,
+      'INVALID_PACKING_STATUS',
+      'Sales order packing status is invalid.',
+    );
+  }
+  return packingStatus;
+}
+
 function isActiveTasterUser(user: any) {
   return (
     Boolean(user?.isActive) &&
@@ -2384,14 +3604,6 @@ function normalizeTake(value: unknown, fallback: number) {
   const raw =
     value === undefined ? fallback : normalizeInt(value, 'limit', fallback);
   return Math.min(Math.max(raw, 1), 200);
-}
-
-function generateOrderNo() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `SO-${y}${m}${d}-${crypto.randomInt(1000, 9999)}`;
 }
 
 function formatDate(value: unknown) {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { BusinessDataModule } from './modules/business-data/business-data.module';
+import { CustomersModule } from './modules/customers/customers.module';
 import { GuidesModule } from './modules/guides/guides.module';
 import { OperationLogNestController } from './modules/operation-logs/operation-log.nest.controller';
 import { OperationLogsModule } from './modules/operation-logs/operation-logs.module';
@@ -24,6 +25,7 @@ const {
     AuthModule,
     SettingsModule,
     BusinessDataModule,
+    CustomersModule,
     GuidesModule,
     TravelAgenciesModule,
   ],
