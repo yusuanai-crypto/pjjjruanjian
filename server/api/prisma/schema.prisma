@@ -382,6 +382,9 @@ model SalesOrder {
   address                   String?                 @db.VarChar(255)
   orderDate                 DateTime                @map("order_date") @db.Date
   salesFormNo               String?                 @map("sales_form_no") @db.VarChar(80)
+  qrCodeToken               String?                 @unique @map("qr_code_token") @db.VarChar(80)
+  qrCodeGeneratedAt         DateTime?               @map("qr_code_generated_at") @db.DateTime(0)
+  qrCodeExpiresAt           DateTime?               @map("qr_code_expires_at") @db.DateTime(0)
   totalAmountCents          Int                     @default(0) @map("total_amount_cents")
   cashOnDeliveryAmountCents Int                     @default(0) @map("cash_on_delivery_amount_cents")
   logisticsMethod           String?                 @map("logistics_method") @db.VarChar(80)
@@ -420,6 +423,7 @@ model SalesOrder {
   @@index([customerPhone])
   @@index([status])
   @@index([salesFormNo])
+  @@index([qrCodeExpiresAt])
   @@index([packingStatus])
   @@index([logisticsNo])
   @@map("sales_orders")

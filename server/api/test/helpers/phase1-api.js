@@ -129,7 +129,7 @@ function createInMemoryPrisma(options = {}) {
   const strikeBonusAwards = [];
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
-  seedSalesOrders(salesOrders, options.salesOrders || [], now);
+  seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
   const transactionalRows = [
     users,
     systemSettings,
@@ -266,6 +266,7 @@ function createInMemoryPrisma(options = {}) {
               salesOrderItems,
               travelGroups,
               customers,
+              users,
             )
           : null;
       },
@@ -284,6 +285,7 @@ function createInMemoryPrisma(options = {}) {
                   salesOrderItems,
                   travelGroups,
                   customers,
+                  users,
                 ),
                 where,
               ),
@@ -300,6 +302,7 @@ function createInMemoryPrisma(options = {}) {
               salesOrderItems,
               travelGroups,
               customers,
+              users,
             ),
           );
       },
@@ -338,6 +341,7 @@ function createInMemoryPrisma(options = {}) {
           salesOrderItems,
           travelGroups,
           customers,
+          users,
         );
       },
       update: async ({ where, data, include } = {}) => {
@@ -373,6 +377,7 @@ function createInMemoryPrisma(options = {}) {
           salesOrderItems,
           travelGroups,
           customers,
+          users,
         );
       },
     },
@@ -774,9 +779,9 @@ function toSeedPrismaRole(role) {
   return map[value] || value.toUpperCase();
 }
 
-function seedSalesOrders(rows, seeds, now) {
+function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
   for (const seed of seeds) {
-    rows.push({
+    const row = {
       id: seed.id || crypto.randomUUID(),
       orderNo: seed.orderNo || `SO-SEED-${rows.length + 1}`,
       orderType: seed.orderType || 'TRAVEL_GROUP',
@@ -790,6 +795,9 @@ function seedSalesOrders(rows, seeds, now) {
       address: seed.address ?? null,
       orderDate: asDate(seed.orderDate) || now,
       salesFormNo: seed.salesFormNo ?? null,
+      qrCodeToken: seed.qrCodeToken ?? null,
+      qrCodeGeneratedAt: asDate(seed.qrCodeGeneratedAt) || null,
+      qrCodeExpiresAt: asDate(seed.qrCodeExpiresAt) || null,
       totalAmountCents: seed.totalAmountCents ?? 0,
       cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
       logisticsMethod: seed.logisticsMethod ?? null,
@@ -811,7 +819,25 @@ function seedSalesOrders(rows, seeds, now) {
       updatedById: seed.updatedById ?? null,
       createdAt: asDate(seed.createdAt) || now,
       updatedAt: asDate(seed.updatedAt) || now,
-    });
+    };
+    rows.push(row);
+    for (const item of seed.items || []) {
+      const quantity = item.quantity ?? 1;
+      const unitPriceCents = item.unitPriceCents ?? 0;
+      salesOrderItems.push({
+        id: item.id || crypto.randomUUID(),
+        salesOrderId: row.id,
+        productName: item.productName || 'Seed Product',
+        quantity,
+        unitPriceCents,
+        subtotalCents:
+          item.subtotalCents ?? Number(quantity || 0) * Number(unitPriceCents || 0),
+        deliveryType: item.deliveryType || 'SHIPPING',
+        notes: item.notes ?? null,
+        sortOrder: item.sortOrder ?? 0,
+        createdAt: asDate(item.createdAt) || now,
+      });
+    }
   }
 }
 
@@ -989,6 +1015,7 @@ function withSalesOrderIncludes(
   salesOrderItems,
   travelGroups,
   customers = [],
+  users = [],
 ) {
   const row = copyRow(order);
   if (include?.items) {
@@ -1003,6 +1030,10 @@ function withSalesOrderIncludes(
   if (include?.customer) {
     const customer = customers.find((item) => item.id === order.customerId);
     row.customer = customer ? copyRow(customer) : null;
+  }
+  if (include?.salesUser) {
+    const user = users.find((item) => item.id === order.salesUserId);
+    row.salesUser = user ? copyRow(user) : null;
   }
   return row;
 }

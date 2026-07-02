@@ -9,6 +9,7 @@ import {
   ReconciliationsNestController,
   StrikeBonusAwardsNestController,
 } from './finance.nest.controller';
+import { PublicSalesSheetsNestController } from './public-sales-sheets.nest.controller';
 import { SalesOrdersNestController } from './sales-orders.nest.controller';
 import {
   GuideCarriedGroupsNestController,
@@ -22,6 +23,7 @@ import {
     TravelGroupsNestController,
     GuideCarriedGroupsNestController,
     PendingTravelGroupsNestController,
+    PublicSalesSheetsNestController,
     SalesOrdersNestController,
     FinanceNestController,
     ReconciliationsNestController,

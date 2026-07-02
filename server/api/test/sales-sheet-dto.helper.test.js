@@ -1,0 +1,204 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+
+const {
+  buildPublicSalesSheetDto,
+  buildSalesSheetDto,
+  formatCentsAsYuan,
+  maskCustomerPhone,
+} = require('../src/modules/business-data/sales-sheet.dto.helper');
+
+test('unit: sales sheet DTO builds internal and public views for a normal multi-item order', () => {
+  const salesSheet = buildSalesSheetDto(buildOrderFixture(), {
+    publicUrl: 'https://example.test/api/public/sales-sheets/token-123',
+  });
+
+  assert.equal(salesSheet.visibility, 'internal');
+  assert.equal(salesSheet.companyName, '贵州酱酒馆');
+  assert.equal(salesSheet.order.id, 'order-1');
+  assert.equal(salesSheet.order.orderNo, 'SO20260701001');
+  assert.equal(salesSheet.order.orderType, 'travel_group');
+  assert.equal(salesSheet.order.orderTypeLabel, '旅行团订单');
+  assert.equal(salesSheet.customer.phone, '13812340000');
+  assert.equal(salesSheet.customer.phoneMasked, '138****0000');
+  assert.equal(salesSheet.customer.fullAddress, '贵州省贵阳市观山湖区测试路 1 号');
+  assert.equal(salesSheet.travelGroup.groupNo, 'TG20260701001');
+  assert.equal(salesSheet.salesUser.name, '销售小王');
+  assert.equal(salesSheet.items.length, 2);
+  assert.deepEqual(
+    salesSheet.items.map((item) => item.productName),
+    ['酱香酒 B', '酱香酒 A'],
+  );
+  assert.equal(salesSheet.items[0].deliveryTypeLabel, '自提');
+  assert.equal(salesSheet.items[1].deliveryTypeLabel, '邮寄');
+  assert.equal(salesSheet.amounts.totalAmountCents, 59800);
+  assert.equal(salesSheet.amounts.totalAmountYuan, '598.00');
+  assert.equal(salesSheet.amounts.cashOnDeliveryAmountYuan, '100.00');
+  assert.equal(salesSheet.amounts.logisticsFeeYuan, '12.00');
+  assert.equal(salesSheet.status.label, '有效');
+  assert.equal(salesSheet.delivery.summary, 'mixed');
+  assert.equal(salesSheet.delivery.summaryLabel, '混合配送');
+  assert.equal(salesSheet.logistics.packingStatusLabel, '待打包');
+  assert.equal(salesSheet.invoice.requiredLabel, '需要开票');
+  assert.equal(salesSheet.invoice.issuedLabel, '未开票');
+  assert.equal(salesSheet.qrCode.token, 'token-123');
+  assert.equal(
+    salesSheet.qrCode.url,
+    'https://example.test/api/public/sales-sheets/token-123',
+  );
+
+  assert.equal(salesSheet.public.visibility, 'public');
+  assert.equal(salesSheet.public.order.orderNo, salesSheet.order.orderNo);
+  assert.equal(salesSheet.public.customer.phoneMasked, '138****0000');
+  assert.equal(salesSheet.public.items[0].subtotalYuan, '199.00');
+});
+
+test('unit: sales sheet DTO supports orders without a travel group', () => {
+  const order = buildOrderFixture({
+    orderType: 'EXTERNAL',
+    travelGroupId: null,
+    travelGroup: null,
+    qrCodeToken: null,
+  });
+
+  const salesSheet = buildSalesSheetDto(order);
+
+  assert.equal(salesSheet.order.orderType, 'external');
+  assert.equal(salesSheet.order.orderTypeLabel, '外部销售');
+  assert.equal(salesSheet.travelGroup, null);
+  assert.equal(salesSheet.public.travelGroup, null);
+  assert.equal(salesSheet.qrCode, null);
+  assert.equal(salesSheet.public.qrCode, null);
+});
+
+test('unit: sales sheet public view masks phone and does not leak internal fields', () => {
+  const salesSheet = buildSalesSheetDto(buildOrderFixture());
+  const publicSalesSheet = buildPublicSalesSheetDto(salesSheet);
+  const serialized = JSON.stringify(publicSalesSheet);
+
+  assert.equal(publicSalesSheet.customer.phoneMasked, '138****0000');
+  assert.equal(serialized.includes('13812340000'), false);
+
+  for (const forbidden of [
+    'financeRemark',
+    'warehouseRemark',
+    'financeMark',
+    'operationLogs',
+    'internalFields',
+    'sales-user-1',
+    'customer-1',
+    'travel-group-1',
+    'item-1',
+    'item-2',
+    'internal-user-1',
+    '财务内部备注',
+    '库管内部备注',
+  ]) {
+    assert.equal(
+      serialized.includes(forbidden),
+      false,
+      `public sales sheet should not leak ${forbidden}`,
+    );
+  }
+});
+
+test('unit: sales sheet helpers mask phones and format cents', () => {
+  assert.equal(maskCustomerPhone('13812340000'), '138****0000');
+  assert.equal(maskCustomerPhone(' 0851-1234567 '), '085****67');
+  assert.equal(maskCustomerPhone('12345'), '12345');
+  assert.equal(maskCustomerPhone(null), null);
+  assert.equal(formatCentsAsYuan(0), '0.00');
+  assert.equal(formatCentsAsYuan(199), '1.99');
+  assert.equal(formatCentsAsYuan(-105), '-1.05');
+});
+
+function buildOrderFixture(overrides = {}) {
+  return {
+    id: 'order-1',
+    orderNo: 'SO20260701001',
+    orderType: 'TRAVEL_GROUP',
+    travelGroupId: 'travel-group-1',
+    customerId: 'customer-1',
+    customerName: '测试客户',
+    customerPhone: '13812340000',
+    province: '贵州省',
+    city: '贵阳市',
+    district: '观山湖区',
+    address: '测试路 1 号',
+    orderDate: new Date('2026-07-01T00:00:00.000Z'),
+    salesFormNo: 'XS-001',
+    totalAmountCents: 59800,
+    cashOnDeliveryAmountCents: 10000,
+    logisticsMethod: '顺丰',
+    packingStatus: 'PENDING',
+    packageCount: 2,
+    warehouseRemark: '库管内部备注',
+    logisticsNo: 'SF123456',
+    logisticsFeeCents: 1200,
+    invoiceRequired: true,
+    invoiceIssued: false,
+    financeRemark: '财务内部备注',
+    remark: '客户可见备注',
+    status: 'VALID',
+    financeMark: true,
+    markedById: 'internal-user-1',
+    markedAt: new Date('2026-07-01T10:00:00.000Z'),
+    salesUserId: 'sales-user-1',
+    createdAt: new Date('2026-07-01T08:00:00.000Z'),
+    updatedAt: new Date('2026-07-01T09:00:00.000Z'),
+    qrCodeToken: 'token-123',
+    qrCodeGeneratedAt: new Date('2026-07-01T10:30:00.000Z'),
+    qrCodeExpiresAt: null,
+    customer: {
+      id: 'customer-1',
+      name: '当前客户名',
+      phone: '13999990000',
+      financeMark: true,
+    },
+    travelGroup: {
+      id: 'travel-group-1',
+      groupNo: 'TG20260701001',
+      visitDate: new Date('2026-07-01T00:00:00.000Z'),
+      travelAgency: '测试旅行社',
+      guideName: '测试导游',
+      guidePhone: '13911112222',
+      tasterName: '测试品鉴师',
+      tastingRoomNo: 'A101',
+      financeMark: true,
+    },
+    salesUser: {
+      id: 'sales-user-1',
+      name: '销售小王',
+      username: 'sales-wang',
+    },
+    items: [
+      {
+        id: 'item-1',
+        productName: '酱香酒 A',
+        quantity: 2,
+        unitPriceCents: 19950,
+        subtotalCents: 39900,
+        deliveryType: 'SHIPPING',
+        notes: '内部明细备注 A',
+        sortOrder: 2,
+      },
+      {
+        id: 'item-2',
+        productName: '酱香酒 B',
+        quantity: 1,
+        unitPriceCents: 19900,
+        subtotalCents: 19900,
+        deliveryType: 'SELF_PICKUP',
+        notes: '内部明细备注 B',
+        sortOrder: 1,
+      },
+    ],
+    operationLogs: [
+      {
+        id: 'log-1',
+        action: 'secret',
+      },
+    ],
+    ...overrides,
+  };
+}

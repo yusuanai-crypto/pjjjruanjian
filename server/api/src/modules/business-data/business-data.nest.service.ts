@@ -1,11 +1,23 @@
 import { Injectable } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import {
+  calculateQrCodeExpiresAt,
+  generateQrCodeToken,
+  hasReusableQrCodeToken,
+  isQrCodeTokenUnexpired,
+} from './qr-code-token.helper';
+import {
+  renderPublicSalesSheetErrorHtml,
+  renderPublicSalesSheetHtml,
+} from './public-sales-sheet-html.helper';
 import { withGeneratedSalesOrderNo } from './sales-order-no.helper';
+import { buildSalesSheetDto } from './sales-sheet.dto.helper';
 import { withGeneratedTravelGroupNo } from './travel-group-no.helper';
 
 const GROUP_TABLES: any = {
@@ -158,6 +170,95 @@ const PACKING_STATUS_TO_PRISMA: any = {
   ABNORMAL: 'ABNORMAL',
 };
 
+const SALES_ORDER_EXPORT_MAX_ROWS = 5000;
+const TRAVEL_GROUP_EXPORT_MAX_ROWS = 5000;
+
+const SALES_ORDER_EXPORT_COLUMNS = [
+  { header: '系统单号', key: 'orderNo', width: 18 },
+  { header: '销售单号', key: 'salesFormNo', width: 18 },
+  { header: '订单日期', key: 'orderDate', width: 14 },
+  { header: '客户姓名', key: 'customerName', width: 18 },
+  { header: '客户电话', key: 'customerPhone', width: 16 },
+  { header: '地址', key: 'address', width: 36 },
+  { header: '旅行团号', key: 'travelGroupNo', width: 18 },
+  { header: '旅行社', key: 'travelAgency', width: 24 },
+  { header: '销售人员', key: 'salesUserName', width: 16 },
+  { header: '酒品明细', key: 'itemsSummary', width: 36 },
+  { header: '配送摘要', key: 'deliverySummary', width: 14 },
+  { header: '订单总额', key: 'totalAmountYuan', width: 14 },
+  { header: '货到付款金额', key: 'cashOnDeliveryAmountYuan', width: 16 },
+  { header: '订单状态', key: 'status', width: 14 },
+  { header: '客户标记', key: 'customerMark', width: 12 },
+  { header: '订单标记', key: 'orderMark', width: 12 },
+  { header: '打包状态', key: 'packingStatus', width: 14 },
+  { header: '物流方式', key: 'logisticsMethod', width: 16 },
+  { header: '物流单号', key: 'logisticsNo', width: 20 },
+  { header: '运费', key: 'logisticsFeeYuan', width: 12 },
+  { header: '是否需要开票', key: 'invoiceRequired', width: 14 },
+  { header: '是否已开票', key: 'invoiceIssued', width: 14 },
+  { header: '创建时间', key: 'createdAt', width: 24 },
+  { header: '更新时间', key: 'updatedAt', width: 24 },
+];
+
+const SALES_ORDER_EXPORT_AMOUNT_KEYS = new Set([
+  'totalAmountYuan',
+  'cashOnDeliveryAmountYuan',
+  'logisticsFeeYuan',
+]);
+
+const ORDER_STATUS_EXPORT_LABELS: any = {
+  valid: '有效',
+  partial_refund: '部分退款',
+  refunded: '已退款',
+  cancelled: '已取消',
+  VALID: '有效',
+  PARTIAL_REFUND: '部分退款',
+  REFUNDED: '已退款',
+  CANCELLED: '已取消',
+};
+
+const PACKING_STATUS_EXPORT_LABELS: any = {
+  pending: '待打包',
+  packing: '打包中',
+  packed: '已打包',
+  abnormal: '异常',
+  PENDING: '待打包',
+  PACKING: '打包中',
+  PACKED: '已打包',
+  ABNORMAL: '异常',
+};
+
+const DELIVERY_SUMMARY_EXPORT_LABELS: any = {
+  shipping: '邮寄',
+  self_pickup: '自提',
+  mixed: '混合配送',
+};
+
+const TRAVEL_GROUP_EXPORT_COLUMNS = [
+  { header: '团号', key: 'groupNo', width: 18 },
+  { header: '日期', key: 'visitDate', width: 14 },
+  { header: '旅行社', key: 'travelAgency', width: 24 },
+  { header: '车牌号', key: 'licensePlate', width: 14 },
+  { header: '导游', key: 'guideName', width: 16 },
+  { header: '导游电话', key: 'guidePhone', width: 16 },
+  { header: '人数', key: 'guestCount', width: 10 },
+  { header: '品鉴馆馆号', key: 'tastingRoomNo', width: 14 },
+  { header: '品鉴师', key: 'tasterName', width: 16 },
+  { header: '进店时间', key: 'arrivalTime', width: 12 },
+  { header: '离店时间', key: 'departureTime', width: 12 },
+  { header: '团型', key: 'groupType', width: 14 },
+  { header: '品酒种类和瓶数', key: 'tastingSummary', width: 32 },
+  { header: '是否出单', key: 'hasEffectiveOrder', width: 12 },
+  { header: '订单总额', key: 'orderAmountYuan', width: 14 },
+  { header: '财务标记', key: 'financeMark', width: 12 },
+  { header: '品鉴师总结', key: 'tasterSummary', width: 36 },
+  { header: '备注', key: 'remarks', width: 30 },
+  { header: '创建时间', key: 'createdAt', width: 24 },
+  { header: '更新时间', key: 'updatedAt', width: 24 },
+];
+
+const TRAVEL_GROUP_EXPORT_AMOUNT_KEYS = new Set(['orderAmountYuan']);
+
 const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
   admin: [
     'orderType',
@@ -254,6 +355,44 @@ export class BusinessDataNestService {
       ),
       filters,
     ).slice(0, take);
+  }
+
+  async exportTravelGroupsXlsx(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const groups = await this.prisma.travelGroup.findMany({
+      where: await this.buildScopedGroupWhere(
+        'travel',
+        actor,
+        buildGroupWhere(filters, 'travel'),
+      ),
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: TRAVEL_GROUP_EXPORT_MAX_ROWS + 1,
+      include: getGroupInclude('travel') as any,
+    });
+
+    const groupDtos = filterGroupDtosByComputedFields(
+      annotateDuplicateGroupNos(groups).map((group: any) =>
+        toGroupDto(group, 'travel'),
+      ),
+      filters,
+    );
+
+    if (groupDtos.length > TRAVEL_GROUP_EXPORT_MAX_ROWS) {
+      throw createHttpError(
+        400,
+        'EXPORT_LIMIT_EXCEEDED',
+        `Travel group export exceeds ${TRAVEL_GROUP_EXPORT_MAX_ROWS} rows. Please narrow filters.`,
+      );
+    }
+
+    const workbook = buildTravelGroupsExportWorkbook(groupDtos);
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildTravelGroupsExportFileName(),
+      buffer: Buffer.from(xlsxData as any),
+    };
   }
 
   async listPendingTravelGroups(actor: any, filters: any = {}) {
@@ -713,35 +852,172 @@ export class BusinessDataNestService {
     return orders.map(toSalesOrderDto);
   }
 
+  async exportSalesOrdersXlsx(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const orders = await this.prisma.salesOrder.findMany({
+      where: await this.buildScopedSalesOrderWhere(
+        actor,
+        buildSalesOrderWhere(filters),
+      ),
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+        salesUser: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: SALES_ORDER_EXPORT_MAX_ROWS + 1,
+    });
+
+    if (orders.length > SALES_ORDER_EXPORT_MAX_ROWS) {
+      throw createHttpError(
+        400,
+        'EXPORT_LIMIT_EXCEEDED',
+        `Sales order export exceeds ${SALES_ORDER_EXPORT_MAX_ROWS} rows. Please narrow filters.`,
+      );
+    }
+
+    const workbook = buildSalesOrdersExportWorkbook(orders);
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildSalesOrdersExportFileName(),
+      buffer: Buffer.from(xlsxData as any),
+    };
+  }
+
   async getSalesOrder(actor: any, id: string) {
-    requireAnyRole(actor, [
-      'admin',
-      'boss',
-      'sales',
-      'finance',
-      'warehouse',
-      'after_sales',
-    ]);
+    const order = await this.findReadableSalesOrderOrThrow(actor, id);
+    return toSalesOrderDto(order);
+  }
+
+  async getSalesOrderSalesSheet(actor: any, id: string, options: any = {}) {
+    const order = await this.findReadableSalesOrderOrThrow(actor, id, {
+      includeSalesUser: true,
+    });
+    return buildSalesSheetDto(order, {
+      publicUrl: buildPublicSalesSheetUrl(
+        options?.publicSalesSheetBaseUrl,
+        order.qrCodeToken,
+      ),
+    });
+  }
+
+  async generateSalesOrderQrCode(
+    actor: any,
+    id: string,
+    payload: any = {},
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'sales']);
+    const body = normalizeOptionalObjectPayload(payload);
+    const regenerate = normalizeOptionalBoolean(
+      body.regenerate,
+      'regenerate',
+      false,
+    );
+    const now = new Date();
+    const expiresAt = calculateQrCodeExpiresAt(body.expiresInDays, now);
+    const current = await this.findReadableSalesOrderOrThrow(actor, id, {
+      includeSalesUser: true,
+    });
+
+    if (
+      !regenerate &&
+      hasReusableQrCodeToken(current.qrCodeToken, current.qrCodeExpiresAt, now)
+    ) {
+      return buildSalesOrderQrCodeResponse(
+        current,
+        metadata.publicSalesSheetBaseUrl,
+      );
+    }
+
+    const nextQrCodeToken = generateQrCodeToken();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
+        data: {
+          qrCodeToken: nextQrCodeToken,
+          qrCodeGeneratedAt: now,
+          qrCodeExpiresAt: expiresAt,
+          updatedById: actor.id,
+          updatedAt: now,
+        },
+        include: {
+          items: true,
+          customer: true,
+          travelGroup: true,
+          salesUser: true,
+        },
+      });
+
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: hasText(current.qrCodeToken)
+            ? 'sales_orders.qr_code.regenerate'
+            : 'sales_orders.qr_code.generate',
+          entityType: 'sales_order',
+          entityId: updatedOrder.id,
+          beforeData: toSalesOrderQrCodeLogDto(current),
+          afterData: toSalesOrderQrCodeLogDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    });
+
+    return buildSalesOrderQrCodeResponse(
+      updated,
+      metadata.publicSalesSheetBaseUrl,
+    );
+  }
+
+  async getPublicSalesSheetHtml(token: string) {
+    const tokenText = normalizeOptionalString(token);
+    if (!tokenText) {
+      return buildPublicSalesSheetErrorResult(
+        404,
+        '二维码无效',
+        '这个二维码无法识别，请联系销售人员重新确认。',
+      );
+    }
+
     const order = await this.prisma.salesOrder.findUnique({
       where: {
-        id,
+        qrCodeToken: tokenText,
       },
       include: {
         items: true,
         customer: true,
         travelGroup: true,
+        salesUser: true,
       },
     });
     if (!order) {
-      throw createHttpError(
+      return buildPublicSalesSheetErrorResult(
         404,
-        'SALES_ORDER_NOT_FOUND',
-        'Sales order does not exist.',
+        '销售单不存在',
+        '未找到对应的销售单，请联系销售人员重新生成二维码。',
       );
     }
-    assertCanReadSalesOrder(actor, order);
-    await this.assertPassesGlobalSalesOrderMarkScope(order);
-    return toSalesOrderDto(order);
+    if (!isQrCodeTokenUnexpired(order.qrCodeExpiresAt)) {
+      return buildPublicSalesSheetErrorResult(
+        410,
+        '二维码已过期',
+        '这个二维码已经过期，请联系销售人员重新生成二维码。',
+      );
+    }
+
+    const salesSheet = buildSalesSheetDto(order).public;
+    return {
+      statusCode: 200,
+      html: renderPublicSalesSheetHtml(salesSheet),
+    };
   }
 
   async createSalesOrder(actor: any, payload: any, metadata: any = {}) {
@@ -1499,6 +1775,42 @@ export class BusinessDataNestService {
 
   private groupDelegate(table: any) {
     return (this.prisma as any)[table.delegate];
+  }
+
+  private async findReadableSalesOrderOrThrow(
+    actor: any,
+    id: string,
+    options: any = {},
+  ) {
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'sales',
+      'finance',
+      'warehouse',
+      'after_sales',
+    ]);
+    const order = await this.prisma.salesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        items: true,
+        customer: true,
+        travelGroup: true,
+        ...(options.includeSalesUser ? { salesUser: true } : {}),
+      },
+    });
+    if (!order) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    assertCanReadSalesOrder(actor, order);
+    await this.assertPassesGlobalSalesOrderMarkScope(order);
+    return order;
   }
 
   private async buildScopedGroupWhere(
@@ -3247,6 +3559,273 @@ function toSalesOrderItemDto(item: any) {
   };
 }
 
+function buildSalesOrdersExportWorkbook(orders: any[]) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'jiangjiu-api';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet('销售订单');
+  worksheet.columns = SALES_ORDER_EXPORT_COLUMNS;
+  for (const column of worksheet.columns) {
+    if (column.key && SALES_ORDER_EXPORT_AMOUNT_KEYS.has(String(column.key))) {
+      column.numFmt = '0.00';
+    }
+    column.alignment = { vertical: 'top', wrapText: true };
+  }
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: SALES_ORDER_EXPORT_COLUMNS.length },
+  };
+
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.getRow(1).alignment = {
+    vertical: 'middle',
+    horizontal: 'center',
+  };
+
+  for (const order of orders) {
+    worksheet.addRow(toSalesOrderExportRow(order));
+  }
+
+  return workbook;
+}
+
+function buildTravelGroupsExportWorkbook(groups: any[]) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'jiangjiu-api';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet('旅行团');
+  worksheet.columns = TRAVEL_GROUP_EXPORT_COLUMNS;
+  for (const column of worksheet.columns) {
+    if (column.key && TRAVEL_GROUP_EXPORT_AMOUNT_KEYS.has(String(column.key))) {
+      column.numFmt = '0.00';
+    }
+    column.alignment = { vertical: 'top', wrapText: true };
+  }
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: TRAVEL_GROUP_EXPORT_COLUMNS.length },
+  };
+
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.getRow(1).alignment = {
+    vertical: 'middle',
+    horizontal: 'center',
+  };
+
+  for (const group of groups) {
+    worksheet.addRow(toTravelGroupExportRow(group));
+  }
+
+  return workbook;
+}
+
+function toTravelGroupExportRow(group: any) {
+  const orderSummary = group.orderSummary || {};
+  const effectiveOrderCount = Number(orderSummary.orderCount || 0);
+  return {
+    groupNo: group.groupNo || '',
+    visitDate: group.visitDate || '',
+    travelAgency: group.travelAgency || '',
+    licensePlate: group.licensePlate || '',
+    guideName: group.guideName || '',
+    guidePhone: group.guidePhone || '',
+    guestCount: Number(group.guestCount || 0),
+    tastingRoomNo: group.tastingRoomNo || '',
+    tasterName: group.tasterName || '',
+    arrivalTime: group.arrivalTime || '',
+    departureTime: group.departureTime || '',
+    groupType: group.groupType || '',
+    tastingSummary: buildTravelGroupTastingSummary(group),
+    hasEffectiveOrder: booleanLabel(effectiveOrderCount > 0),
+    orderAmountYuan: centsToYuanNumber(orderSummary.totalAmountCents),
+    financeMark: markLabel(group.financeMark),
+    tasterSummary: group.tasterSummary || '',
+    remarks: group.remarks || '',
+    createdAt: group.createdAt || '',
+    updatedAt: group.updatedAt || '',
+  };
+}
+
+function buildTravelGroupTastingSummary(group: any) {
+  if (Array.isArray(group.tastingItems) && group.tastingItems.length > 0) {
+    return group.tastingItems
+      .map((item: any) => {
+        const productName =
+          normalizeOptionalString(item?.productName) || '未命名品酒';
+        const quantity = Number(item?.quantity || 0);
+        const unit = normalizeOptionalString(item?.unit) || '';
+        return `${productName} x ${quantity}${unit}`;
+      })
+      .join('；');
+  }
+  return group.wineDetails || '';
+}
+
+function toSalesOrderExportRow(order: any) {
+  const deliverySummary = toSalesOrderDeliverySummary(order.items);
+  const status = ORDER_STATUS_FROM_PRISMA[order.status] || order.status;
+  const packingStatus = order.packingStatus
+    ? String(order.packingStatus).toLowerCase()
+    : null;
+  return {
+    orderNo: order.orderNo || '',
+    salesFormNo: order.salesFormNo || '',
+    orderDate: formatDate(order.orderDate) || '',
+    customerName: order.customerName || order.customer?.name || '',
+    customerPhone: order.customerPhone || order.customer?.phone || '',
+    address: buildSalesOrderExportAddress(order),
+    travelGroupNo: order.travelGroup?.groupNo || '',
+    travelAgency: order.travelGroup?.travelAgency || '',
+    salesUserName: order.salesUser?.name || '',
+    itemsSummary: buildSalesOrderItemsSummary(order.items),
+    deliverySummary:
+      DELIVERY_SUMMARY_EXPORT_LABELS[deliverySummary || ''] ||
+      deliverySummary ||
+      '',
+    totalAmountYuan: centsToYuanNumber(order.totalAmountCents),
+    cashOnDeliveryAmountYuan: centsToYuanNumber(
+      order.cashOnDeliveryAmountCents,
+    ),
+    status: ORDER_STATUS_EXPORT_LABELS[status] || status || '',
+    customerMark: markLabel(order.customer?.financeMark ?? false),
+    orderMark: markLabel(order.financeMark),
+    packingStatus:
+      PACKING_STATUS_EXPORT_LABELS[packingStatus || ''] ||
+      PACKING_STATUS_EXPORT_LABELS[order.packingStatus] ||
+      packingStatus ||
+      '',
+    logisticsMethod: order.logisticsMethod || '',
+    logisticsNo: order.logisticsNo || '',
+    logisticsFeeYuan: centsToYuanNumber(order.logisticsFeeCents),
+    invoiceRequired: booleanLabel(order.invoiceRequired),
+    invoiceIssued: booleanLabel(order.invoiceIssued),
+    createdAt: toIsoString(order.createdAt) || '',
+    updatedAt: toIsoString(order.updatedAt) || '',
+  };
+}
+
+function buildSalesOrderExportAddress(order: any) {
+  return [
+    order.province,
+    order.city,
+    order.district,
+    order.address,
+  ]
+    .map(normalizeOptionalString)
+    .filter(Boolean)
+    .join('');
+}
+
+function buildSalesOrderItemsSummary(items: any[]) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '';
+  }
+  return [...items]
+    .sort((left: any, right: any) => {
+      const leftOrder = Number(left?.sortOrder || 0);
+      const rightOrder = Number(right?.sortOrder || 0);
+      return leftOrder - rightOrder;
+    })
+    .map((item: any) => {
+      const productName = normalizeOptionalString(item?.productName) || '未命名商品';
+      const quantity = Number(item?.quantity || 0);
+      return `${productName} x ${quantity}`;
+    })
+    .join('；');
+}
+
+function centsToYuanNumber(value: unknown) {
+  return Number((Number(value || 0) / 100).toFixed(2));
+}
+
+function markLabel(value: unknown) {
+  return value ? '已标记' : '未标记';
+}
+
+function booleanLabel(value: unknown) {
+  return value ? '是' : '否';
+}
+
+function buildSalesOrdersExportFileName(date = new Date()) {
+  return `sales-orders-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function buildTravelGroupsExportFileName(date = new Date()) {
+  return `travel-groups-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function formatFileNameTimestamp(date: Date) {
+  const year = date.getFullYear();
+  const month = pad2(date.getMonth() + 1);
+  const day = pad2(date.getDate());
+  const hour = pad2(date.getHours());
+  const minute = pad2(date.getMinutes());
+  const second = pad2(date.getSeconds());
+  return `${year}${month}${day}-${hour}${minute}${second}`;
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function buildPublicSalesSheetUrl(baseUrl: unknown, token: unknown) {
+  const baseUrlText = normalizeOptionalString(baseUrl);
+  const tokenText = normalizeOptionalString(token);
+  if (!baseUrlText || !tokenText) {
+    return null;
+  }
+  return `${baseUrlText.replace(/\/+$/, '')}/api/public/sales-sheets/${encodeURIComponent(tokenText)}`;
+}
+
+function buildSalesOrderQrCodeResponse(order: any, baseUrl: unknown) {
+  const salesSheet = buildSalesSheetDto(order, {
+    publicUrl: buildPublicSalesSheetUrl(baseUrl, order?.qrCodeToken),
+  });
+  return {
+    salesSheet,
+    qrCode: salesSheet.qrCode,
+  };
+}
+
+function buildPublicSalesSheetErrorResult(
+  statusCode: number,
+  title: string,
+  message: string,
+) {
+  return {
+    statusCode,
+    html: renderPublicSalesSheetErrorHtml({ title, message }),
+  };
+}
+
+function toSalesOrderQrCodeLogDto(order: any) {
+  return {
+    id: order?.id || null,
+    orderNo: order?.orderNo || null,
+    salesUserId: order?.salesUserId || null,
+    qrCode: {
+      tokenPresent: hasText(order?.qrCodeToken),
+      tokenFingerprint: buildQrCodeTokenFingerprint(order?.qrCodeToken),
+      generatedAt: toIsoString(order?.qrCodeGeneratedAt),
+      expiresAt: toIsoString(order?.qrCodeExpiresAt),
+    },
+  };
+}
+
+function buildQrCodeTokenFingerprint(token: unknown) {
+  const tokenText = normalizeOptionalString(token);
+  if (!tokenText) {
+    return null;
+  }
+  return crypto
+    .createHash('sha256')
+    .update(tokenText)
+    .digest('hex')
+    .slice(0, 16);
+}
+
 function emptyReconciliationDto(businessDate: Date) {
   return toReconciliationDto({
     id: null,
@@ -3473,6 +4052,31 @@ function normalizeBoolean(value: unknown, fieldName: string) {
     'VALIDATION_FAILED',
     `${fieldName} must be a boolean.`,
   );
+}
+
+function normalizeOptionalBoolean(
+  value: unknown,
+  fieldName: string,
+  fallback: boolean,
+) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  return normalizeBoolean(value, fieldName);
+}
+
+function normalizeOptionalObjectPayload(payload: unknown) {
+  if (payload === undefined || payload === null || payload === '') {
+    return {};
+  }
+  if (typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  return payload as any;
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string) {

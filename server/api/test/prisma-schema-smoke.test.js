@@ -63,9 +63,26 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'subtotalCents',
     'notes',
     'sortOrder',
+    'qrCodeToken',
+    'qrCodeGeneratedAt',
+    'qrCodeExpiresAt',
   ]) {
     assert.match(schema, new RegExp(`\\b${field}\\b`));
   }
+
+  assert.match(
+    schema,
+    /qrCodeToken\s+String\?\s+@unique\s+@map\("qr_code_token"\)\s+@db\.VarChar\(80\)/,
+  );
+  assert.match(
+    schema,
+    /qrCodeGeneratedAt\s+DateTime\?\s+@map\("qr_code_generated_at"\)\s+@db\.DateTime\(0\)/,
+  );
+  assert.match(
+    schema,
+    /qrCodeExpiresAt\s+DateTime\?\s+@map\("qr_code_expires_at"\)\s+@db\.DateTime\(0\)/,
+  );
+  assert.match(schema, /@@index\(\[qrCodeExpiresAt\]\)/);
 
   assert.match(schema, /enum SalesOrderPackingStatus \{/);
 });
@@ -92,6 +109,16 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
       path.join(
         migrationsDir,
         '20260629000400_sales_order_phase4_schema',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260701000100_sales_order_qr_code_fields',
         'migration.sql',
       ),
     ),
@@ -273,4 +300,32 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     /sales_order_items_sales_order_id_sort_order_idx/,
   );
   assert.match(salesOrderPhase4Migration, /sales_orders_customer_id_fkey/);
+
+  const salesOrderQrCodeMigration = readMigration(
+    '20260701000100_sales_order_qr_code_fields',
+  );
+  assert.match(
+    salesOrderQrCodeMigration,
+    /ADD COLUMN `qr_code_token` VARCHAR\(80\) NULL/,
+  );
+  assert.match(
+    salesOrderQrCodeMigration,
+    /ADD COLUMN `qr_code_generated_at` DATETIME\(0\) NULL/,
+  );
+  assert.match(
+    salesOrderQrCodeMigration,
+    /ADD COLUMN `qr_code_expires_at` DATETIME\(0\) NULL/,
+  );
+  assert.doesNotMatch(
+    salesOrderQrCodeMigration,
+    /`qr_code_token` VARCHAR\(80\) NOT NULL/,
+  );
+  assert.match(
+    salesOrderQrCodeMigration,
+    /UNIQUE INDEX `sales_orders_qr_code_token_key`/,
+  );
+  assert.match(
+    salesOrderQrCodeMigration,
+    /INDEX `sales_orders_qr_code_expires_at_idx`/,
+  );
 });

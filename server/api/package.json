@@ -14,7 +14,8 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
-    "migrate:legacy-json": "node scripts/migrate-legacy-json.js"
+    "migrate:legacy-json": "node scripts/migrate-legacy-json.js",
+    "backfill:sales-order-customers": "node scripts/backfill-sales-order-customers.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
@@ -22,6 +23,7 @@
     "@nestjs/platform-express": "^10.4.15",
     "@prisma/client": "^6.19.0",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

@@ -7,6 +7,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
 } from '@nestjs/common';
 
 import { getRequestIp } from '../../common/request-ip';
@@ -36,6 +37,53 @@ export class SalesOrdersNestController {
         ipAddress: getRequestIp(request),
       }),
     };
+  }
+
+  @Get('export.xlsx')
+  async exportXlsx(@Query() query: any, @Req() request: any, @Res() response: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult = await this.businessDataService.exportSalesOrdersXlsx(
+      actor,
+      query,
+    );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
+  @Get(':id/sales-sheet')
+  async getSalesSheet(@Param('id') id: string, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesSheet: await this.businessDataService.getSalesOrderSalesSheet(
+        actor,
+        id,
+        {
+          publicSalesSheetBaseUrl: getPublicSalesSheetBaseUrl(request),
+        },
+      ),
+    };
+  }
+
+  @Post(':id/qr-code')
+  async generateQrCode(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return await this.businessDataService.generateSalesOrderQrCode(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+        publicSalesSheetBaseUrl: getPublicSalesSheetBaseUrl(request),
+      },
+    );
   }
 
   @Get(':id')
@@ -95,4 +143,46 @@ export class SalesOrdersNestController {
       }),
     };
   }
+}
+
+function getPublicSalesSheetBaseUrl(request: any) {
+  const configuredBaseUrl = normalizeBaseUrl(
+    process.env.PUBLIC_SALES_SHEET_BASE_URL,
+  );
+  return configuredBaseUrl || getRequestBaseUrl(request);
+}
+
+function getRequestBaseUrl(request: any) {
+  const forwardedProto = getFirstHeaderValue(
+    request?.headers?.['x-forwarded-proto'],
+  );
+  const forwardedHost = getFirstHeaderValue(
+    request?.headers?.['x-forwarded-host'],
+  );
+  const protocol =
+    forwardedProto ||
+    request?.protocol ||
+    (request?.socket?.encrypted ? 'https' : 'http');
+  const host =
+    forwardedHost ||
+    getFirstHeaderValue(request?.headers?.host) ||
+    'localhost';
+  return normalizeBaseUrl(`${protocol}://${host}`) || 'http://localhost';
+}
+
+function getFirstHeaderValue(value: unknown) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const text = raw.split(',')[0]?.trim();
+  return text || null;
+}
+
+function normalizeBaseUrl(value: unknown) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const text = String(value).trim().replace(/\/+$/, '');
+  return text || null;
 }

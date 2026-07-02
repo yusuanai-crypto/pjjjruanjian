@@ -53,6 +53,7 @@ const ROLE_DEFINITIONS = {
 };
 
 const MENU_ENTRIES = {
+  customers: { id: 'customers', title: 'Customers', phase: 4 },
   dashboard: { id: 'dashboard', title: '首页', phase: 1 },
   employee_accounts: { id: 'employee_accounts', title: '员工账号', phase: 1 },
   role_permissions: { id: 'role_permissions', title: '角色权限', phase: 1 },
@@ -89,6 +90,7 @@ const ROLE_MENU_IDS = {
     'pending_travel_groups',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
+    'customers',
     'sales_orders',
     'order_query',
     'after_sales_orders',
@@ -105,6 +107,7 @@ const ROLE_MENU_IDS = {
     'global_mark_query',
     'travel_group_query',
     'pending_travel_groups',
+    'customers',
     'order_query',
     'finance_workspace',
     'reconciliation_table',
@@ -112,19 +115,20 @@ const ROLE_MENU_IDS = {
     'ai_assistant',
   ],
   front_desk: ['dashboard', 'global_mark_query', 'travel_groups', 'travel_group_query', 'pending_travel_groups'],
-  sales: ['dashboard', 'travel_group_query', 'pending_travel_groups', 'travel_group_order_notes', 'sales_orders', 'order_query'],
+  sales: ['dashboard', 'travel_group_query', 'pending_travel_groups', 'travel_group_order_notes', 'customers', 'sales_orders', 'order_query'],
   finance: [
     'dashboard',
     'travel_group_query',
     'pending_travel_groups',
     'travel_group_finance_supplement',
+    'customers',
     'order_query',
     'finance_workspace',
     'reconciliation_table',
     'commissions',
   ],
   warehouse: ['dashboard', 'order_query', 'warehouse_workspace'],
-  after_sales: ['dashboard', 'sales_orders', 'order_query', 'after_sales_orders'],
+  after_sales: ['dashboard', 'customers', 'sales_orders', 'order_query', 'after_sales_orders'],
   taster: ['dashboard', 'own_taster_receptions', 'own_commissions'],
 };
 
@@ -186,6 +190,10 @@ const GROUP_FINANCE_MARK_PERMISSIONS = [
 const SALES_ORDER_READ_PERMISSIONS = ['sales_orders:list', 'sales_orders:read'];
 const SALES_ORDER_CREATE_PERMISSIONS = ['sales_orders:create'];
 const SALES_ORDER_FINANCE_MARK_PERMISSIONS = ['sales_orders:finance_mark'];
+const CUSTOMER_READ_PERMISSIONS = ['customers:list', 'customers:read'];
+const CUSTOMER_CREATE_PERMISSIONS = ['customers:create'];
+const CUSTOMER_UPDATE_PERMISSIONS = ['customers:update'];
+const CUSTOMER_FINANCE_MARK_PERMISSIONS = ['customers:finance_mark'];
 
 const FINANCE_OVERVIEW_PERMISSIONS = ['finance:overview'];
 const RECONCILIATION_PERMISSIONS = ['reconciliations:read', 'reconciliations:upsert'];
@@ -201,6 +209,10 @@ const ROLE_PERMISSIONS = {
     ...OPERATION_LOG_PERMISSIONS,
     ...GROUP_WRITE_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
+    ...CUSTOMER_READ_PERMISSIONS,
+    ...CUSTOMER_CREATE_PERMISSIONS,
+    ...CUSTOMER_UPDATE_PERMISSIONS,
+    ...CUSTOMER_FINANCE_MARK_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
@@ -213,6 +225,7 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GLOBAL_MARK_ENABLE_PERMISSION,
     ...GROUP_WRITE_PERMISSIONS,
+    ...CUSTOMER_READ_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
@@ -230,6 +243,9 @@ const ROLE_PERMISSIONS = {
     ...AUTHENTICATED_PERMISSIONS,
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GROUP_WRITE_PERMISSIONS,
+    ...CUSTOMER_READ_PERMISSIONS,
+    ...CUSTOMER_CREATE_PERMISSIONS,
+    ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
   ],
@@ -238,6 +254,9 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GROUP_WRITE_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
+    ...CUSTOMER_READ_PERMISSIONS,
+    ...CUSTOMER_UPDATE_PERMISSIONS,
+    ...CUSTOMER_FINANCE_MARK_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
@@ -254,6 +273,9 @@ const ROLE_PERMISSIONS = {
     ...AUTHENTICATED_PERMISSIONS,
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GLOBAL_MARK_ENABLE_PERMISSION,
+    ...CUSTOMER_READ_PERMISSIONS,
+    ...CUSTOMER_CREATE_PERMISSIONS,
+    ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
   ],
