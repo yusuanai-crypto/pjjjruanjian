@@ -17,6 +17,14 @@ function readMigration(name) {
   );
 }
 
+function readAllMigrationSql() {
+  return fs
+    .readdirSync(migrationsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readMigration(entry.name))
+    .join('\n');
+}
+
 test('smoke: Prisma schema exposes phase 2 business models and scope fields', () => {
   const schema = readPrismaFile('schema.prisma');
 
@@ -30,6 +38,7 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'Customer',
     'SalesOrder',
     'SalesOrderItem',
+    'AfterSalesOrder',
     'DailyReconciliation',
     'ReconciliationPaymentMethod',
     'StrikeBonusAward',
@@ -66,6 +75,16 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'qrCodeToken',
     'qrCodeGeneratedAt',
     'qrCodeExpiresAt',
+    'afterSalesNo',
+    'issueType',
+    'actionType',
+    'refundAmountCents',
+    'financeConfirmed',
+    'financeConfirmedById',
+    'financeConfirmedAt',
+    'handledById',
+    'handledAt',
+    'completedAt',
   ]) {
     assert.match(schema, new RegExp(`\\b${field}\\b`));
   }
@@ -85,6 +104,35 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
   assert.match(schema, /@@index\(\[qrCodeExpiresAt\]\)/);
 
   assert.match(schema, /enum SalesOrderPackingStatus \{/);
+  assert.match(schema, /enum AfterSalesIssueType \{/);
+  assert.match(schema, /enum AfterSalesActionType \{/);
+  assert.match(schema, /enum AfterSalesStatus \{/);
+  assert.match(
+    schema,
+    /afterSalesNo\s+String\s+@unique\s+@map\("after_sales_no"\)\s+@db\.VarChar\(80\)/,
+  );
+  assert.match(
+    schema,
+    /salesOrder\s+SalesOrder\s+@relation\(fields: \[salesOrderId\], references: \[id\], onDelete: Restrict\)/,
+  );
+  for (const index of [
+    'salesOrderId',
+    'customerId',
+    'status',
+    'issueType',
+    'actionType',
+    'financeConfirmed',
+    'createdAt',
+    'handledById',
+  ]) {
+    assert.match(schema, new RegExp(`@@index\\(\\[${index}\\]\\)`));
+  }
+  assert.match(schema, /@@index\(\[status, createdAt\]\)/);
+  assert.match(schema, /@@index\(\[financeConfirmed, createdAt\]\)/);
+  assert.doesNotMatch(
+    schema,
+    /\b(shippedAt|shippedById|shipped_at|shipped_by_id)\b/,
+  );
 });
 
 test('smoke: phase 2 Prisma migrations create and evolve business tables', () => {
@@ -119,6 +167,16 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
       path.join(
         migrationsDir,
         '20260701000100_sales_order_qr_code_fields',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260702000100_after_sales_orders',
         'migration.sql',
       ),
     ),
@@ -328,4 +386,59 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     salesOrderQrCodeMigration,
     /INDEX `sales_orders_qr_code_expires_at_idx`/,
   );
+
+  const afterSalesOrdersMigration = readMigration(
+    '20260702000100_after_sales_orders',
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /CREATE TABLE `after_sales_orders`/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /UNIQUE INDEX `after_sales_orders_after_sales_no_key`/,
+  );
+  for (const indexName of [
+    'after_sales_orders_sales_order_id_idx',
+    'after_sales_orders_customer_id_idx',
+    'after_sales_orders_status_idx',
+    'after_sales_orders_issue_type_idx',
+    'after_sales_orders_action_type_idx',
+    'after_sales_orders_finance_confirmed_idx',
+    'after_sales_orders_created_at_idx',
+    'after_sales_orders_handled_by_id_idx',
+    'after_sales_orders_status_created_at_idx',
+    'after_sales_orders_finance_confirmed_created_at_idx',
+  ]) {
+    assert.match(afterSalesOrdersMigration, new RegExp(indexName));
+  }
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_sales_order_id_fkey/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /FOREIGN KEY \(`sales_order_id`\) REFERENCES `sales_orders`\(`id`\) ON DELETE RESTRICT ON UPDATE CASCADE/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_customer_id_fkey/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_finance_confirmed_by_id_fkey/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_handled_by_id_fkey/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_created_by_id_fkey/,
+  );
+  assert.match(
+    afterSalesOrdersMigration,
+    /after_sales_orders_updated_by_id_fkey/,
+  );
+  assert.doesNotMatch(readAllMigrationSql(), /shipped_at|shipped_by_id/i);
 });

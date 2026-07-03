@@ -27,6 +27,17 @@ export class FinanceNestController {
       overview: await this.businessDataService.getFinanceOverview(actor, query),
     };
   }
+
+  @Get('workbench')
+  async workbench(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      workbench: await this.businessDataService.getFinanceWorkbench(
+        actor,
+        query,
+      ),
+    };
+  }
 }
 
 @Controller('reconciliations')

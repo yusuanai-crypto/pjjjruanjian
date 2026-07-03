@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
@@ -18,11 +22,13 @@ class OrderQueryPage extends StatefulWidget {
     required this.apiClient,
     required this.token,
     required this.role,
+    this.documentsDirectoryProvider,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
+  final Future<Directory> Function()? documentsDirectoryProvider;
 
   @override
   State<OrderQueryPage> createState() => _OrderQueryPageState();
@@ -41,6 +47,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   SalesOrderRecord? _selectedOrder;
   bool _loading = true;
   bool _detailLoading = false;
+  bool _exporting = false;
   String? _errorMessage;
   String? _detailErrorMessage;
   final Set<String> _busyOrderIds = <String>{};
@@ -51,6 +58,12 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
 
   bool get _canEditBasics =>
       widget.role == UserRole.admin || widget.role == UserRole.sales;
+
+  bool get _canGenerateQrSalesSheet =>
+      widget.role == UserRole.admin || widget.role == UserRole.sales;
+
+  bool get _canExportSalesOrders =>
+      widget.role == UserRole.admin || widget.role == UserRole.finance;
 
   @override
   void initState() {
@@ -246,6 +259,75 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     }
   }
 
+  Future<void> _openQrSalesSheetDialog(SalesOrderRecord order) async {
+    final generated = await showDialog<bool>(
+      context: context,
+      builder: (context) => _QrSalesSheetDialog(
+        businessApi: _businessApi,
+        order: order,
+        canGenerate: _canGenerateQrSalesSheet,
+      ),
+    );
+    if (generated == true && mounted) {
+      await _selectOrder(order);
+    }
+  }
+
+  Future<void> _exportSalesOrders() async {
+    if (!_canExportSalesOrders || _exporting) {
+      return;
+    }
+
+    setState(() {
+      _exporting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final downloadedFile = await _businessApi.downloadSalesOrdersExcel(
+        start: _start,
+        end: _end,
+        query: _queryController.text.trim(),
+        status: _statusFilter,
+        deliveryType: _deliveryFilter,
+        packingStatus: _packingFilter,
+      );
+      final directory = await (widget.documentsDirectoryProvider?.call() ??
+          getApplicationDocumentsDirectory());
+      final exportDirectory = Directory(
+        '${directory.path}${Platform.pathSeparator}exports',
+      );
+      await exportDirectory.create(recursive: true);
+      final targetFile = await _nextExportFile(
+        exportDirectory,
+        _safeExportFileName(downloadedFile.fileName),
+      );
+      await targetFile.writeAsBytes(downloadedFile.bytes, flush: true);
+
+      if (!mounted) {
+        return;
+      }
+      setState(() => _exporting = false);
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('销售订单已导出：${targetFile.path}')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _messageForError(error);
+      setState(() {
+        _exporting = false;
+        _errorMessage = message;
+      });
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
+
   void _replaceOrder(SalesOrderRecord updated) {
     setState(() {
       _orders = [
@@ -271,9 +353,28 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         if (_loading) const LinearProgressIndicator(),
         FormSection(
           title: '订单管理筛选',
-          trailing: StatusTag(
-            label: '${_orders.length} 笔订单',
-            tone: StatusTone.info,
+          trailing: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              StatusTag(
+                label: '${_orders.length} 笔订单',
+                tone: StatusTone.info,
+              ),
+              if (_canExportSalesOrders)
+                OutlinedButton.icon(
+                  key: const ValueKey('order-export-sales-orders-button'),
+                  onPressed: _loading || _exporting ? null : _exportSalesOrders,
+                  icon: _exporting
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_rounded),
+                  label: Text(_exporting ? '导出中' : '导出 Excel'),
+                ),
+            ],
           ),
           children: [
             ResponsiveFormGrid(
@@ -419,6 +520,9 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
             onEditBasics: selectedOrder == null
                 ? null
                 : () => _openBasicEditDialog(selectedOrder),
+            onOpenQrSalesSheet: selectedOrder == null
+                ? null
+                : () => _openQrSalesSheetDialog(selectedOrder),
           ),
         ),
       ],
@@ -532,6 +636,7 @@ class _OrderDetailPanel extends StatelessWidget {
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
+    required this.onOpenQrSalesSheet,
   });
 
   final SalesOrderRecord? order;
@@ -545,6 +650,7 @@ class _OrderDetailPanel extends StatelessWidget {
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
+  final VoidCallback? onOpenQrSalesSheet;
 
   @override
   Widget build(BuildContext context) {
@@ -575,6 +681,7 @@ class _OrderDetailPanel extends StatelessWidget {
           onToggleOrderMark: onToggleOrderMark,
           onToggleCustomerMark: onToggleCustomerMark,
           onEditBasics: onEditBasics,
+          onOpenQrSalesSheet: onOpenQrSalesSheet,
         ),
         const SizedBox(height: 14),
         const _SectionTitle('基础信息'),
@@ -642,6 +749,7 @@ class _ActionStrip extends StatelessWidget {
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
+    required this.onOpenQrSalesSheet,
   });
 
   final SalesOrderRecord order;
@@ -653,20 +761,16 @@ class _ActionStrip extends StatelessWidget {
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
+  final VoidCallback? onOpenQrSalesSheet;
 
   @override
   Widget build(BuildContext context) {
-    if (role == UserRole.boss) {
-      return const Align(
-        alignment: Alignment.centerLeft,
-        child: StatusTag(label: '老板只读', tone: StatusTone.neutral),
-      );
-    }
-
     return Wrap(
       spacing: 10,
       runSpacing: 10,
       children: [
+        if (role == UserRole.boss)
+          const StatusTag(label: '老板只读', tone: StatusTone.neutral),
         if (canMark) ...[
           MarkInfoButton(
             marked: order.customer?.financeMark ?? false,
@@ -690,9 +794,333 @@ class _ActionStrip extends StatelessWidget {
             icon: const Icon(Icons.edit_rounded),
             label: Text(role == UserRole.sales ? '编辑基础字段' : '编辑订单基础'),
           ),
+        if (_canViewQrSalesSheet(role))
+          OutlinedButton.icon(
+            key: const ValueKey('order-qr-sales-sheet-button'),
+            onPressed: onOpenQrSalesSheet,
+            icon: const Icon(Icons.qr_code_2_rounded),
+            label: Text(
+              _canGenerateQrSalesSheetForRole(role) ? '二维码销售单' : '查看二维码',
+            ),
+          ),
         if (role == UserRole.afterSales)
           const StatusTag(label: '售后查询定位', tone: StatusTone.info),
       ],
+    );
+  }
+}
+
+class _QrSalesSheetDialog extends StatefulWidget {
+  const _QrSalesSheetDialog({
+    required this.businessApi,
+    required this.order,
+    required this.canGenerate,
+  });
+
+  final BusinessApi businessApi;
+  final SalesOrderRecord order;
+  final bool canGenerate;
+
+  @override
+  State<_QrSalesSheetDialog> createState() => _QrSalesSheetDialogState();
+}
+
+class _QrSalesSheetDialogState extends State<_QrSalesSheetDialog> {
+  SalesSheetRecord? _salesSheet;
+  bool _loading = true;
+  bool _generating = false;
+  bool _generated = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadSalesSheet());
+  }
+
+  Future<void> _loadSalesSheet() async {
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final salesSheet =
+          await widget.businessApi.getSalesOrderSalesSheet(widget.order.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _salesSheet = salesSheet;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _generateQrCode() async {
+    if (!widget.canGenerate || _generating) {
+      return;
+    }
+
+    setState(() {
+      _generating = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final salesSheet = await widget.businessApi.generateSalesOrderQrCode(
+        widget.order.id,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _salesSheet = salesSheet;
+        _generating = false;
+        _generated = true;
+      });
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('二维码已生成。')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _generating = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  void _close() {
+    Navigator.of(context).pop(_generated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sheet = _salesSheet;
+    final qrCode = sheet?.qrCode;
+    final url = qrCode?.url;
+    final hasUrl = url != null && url.trim().isNotEmpty;
+    return AlertDialog(
+      title: Text('${widget.order.orderNo} 二维码销售单'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_loading) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 14),
+              ],
+              if (_errorMessage != null) ...[
+                StatusTag(label: _errorMessage!, tone: StatusTone.danger),
+                const SizedBox(height: 14),
+              ],
+              if (sheet == null && !_loading)
+                const _DialogStateLine(
+                  icon: Icons.receipt_long_rounded,
+                  text: '销售单预览暂不可用',
+                )
+              else if (sheet != null)
+                ResponsiveTwoColumn(
+                  breakpoint: 640,
+                  primary: _SalesSheetDialogDetails(sheet: sheet),
+                  secondary: _SalesSheetQrPreview(
+                    qrCode: qrCode,
+                  ),
+                ),
+              if (!hasUrl && !widget.canGenerate) ...[
+                const SizedBox(height: 12),
+                const StatusTag(
+                  label: '当前订单暂无二维码，请联系销售或管理员生成。',
+                  tone: StatusTone.warning,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _close,
+          child: const Text('关闭'),
+        ),
+        if (widget.canGenerate && !hasUrl)
+          FilledButton.icon(
+            key: const ValueKey('order-qr-generate-button'),
+            onPressed: _loading || _generating ? null : _generateQrCode,
+            icon: _generating
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.qr_code_2_rounded),
+            label: Text(_generating ? '生成中' : '生成二维码'),
+          ),
+      ],
+    );
+  }
+}
+
+class _SalesSheetDialogDetails extends StatelessWidget {
+  const _SalesSheetDialogDetails({required this.sheet});
+
+  final SalesSheetRecord sheet;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionTitle('销售单预览'),
+        _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
+        _InfoRow(label: '销售单号', value: _display(sheet.order.salesFormNo)),
+        _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
+        _InfoRow(
+          label: '客户',
+          value:
+              '${_display(sheet.customer.name)} · ${_display(sheet.customer.phoneMasked ?? sheet.customer.phone)}',
+        ),
+        _InfoRow(label: '旅行团', value: _salesSheetTravelGroupLabel(sheet)),
+        _InfoRow(
+          label: '销售',
+          value: _display(sheet.salesUser?.name ?? sheet.salesUser?.username),
+        ),
+        _InfoRow(
+          label: '状态',
+          value: _display(sheet.status.label ?? sheet.status.value),
+        ),
+        const Divider(height: 20),
+        const _SectionTitle('明细'),
+        if (sheet.items.isEmpty)
+          const Text('暂无明细')
+        else
+          for (final item in _sortedSalesSheetItems(sheet.items))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '${_display(item.productName)} x${item.quantity} · ${formatMoneyCents(item.subtotalCents)}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+        const Divider(height: 20),
+        Row(
+          children: [
+            const Expanded(child: Text('订单金额')),
+            MoneyText(cents: sheet.amounts.totalAmountCents, prominent: true),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            const Expanded(child: Text('货到付款')),
+            MoneyText(cents: sheet.amounts.cashOnDeliveryAmountCents),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SalesSheetQrPreview extends StatelessWidget {
+  const _SalesSheetQrPreview({
+    required this.qrCode,
+  });
+
+  final SalesSheetQrCode? qrCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = qrCode?.url;
+    final hasUrl = url != null && url.trim().isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: Theme.of(context).dividerColor),
+            borderRadius: const BorderRadius.all(Radius.circular(8)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: AspectRatio(
+              aspectRatio: 1,
+              child: Center(
+                child: hasUrl
+                    ? QrImageView(
+                        data: url,
+                        version: QrVersions.auto,
+                        errorCorrectionLevel: QrErrorCorrectLevel.M,
+                        backgroundColor: Colors.white,
+                      )
+                    : Icon(
+                        Icons.qr_code_2_rounded,
+                        size: 82,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.45),
+                      ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _InfoRow(label: '公开链接', value: hasUrl ? url : '尚未生成二维码'),
+        _InfoRow(label: '有效期', value: _qrExpiresLabel(qrCode)),
+        Text(
+          hasUrl ? '请客户拍照保存销售单和二维码。' : '生成后将显示公开扫码链接。',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogStateLine extends StatelessWidget {
+  const _DialogStateLine({
+    required this.icon,
+    required this.text,
+  });
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 34, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 10),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -993,6 +1421,24 @@ List<SalesOrderItemRecord> _sortedItems(List<SalesOrderItemRecord> items) {
   return [...items]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 }
 
+List<SalesSheetItemRecord> _sortedSalesSheetItems(
+  List<SalesSheetItemRecord> items,
+) {
+  return [...items]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+}
+
+bool _canViewQrSalesSheet(UserRole role) {
+  return role == UserRole.admin ||
+      role == UserRole.sales ||
+      role == UserRole.finance ||
+      role == UserRole.boss ||
+      role == UserRole.afterSales;
+}
+
+bool _canGenerateQrSalesSheetForRole(UserRole role) {
+  return role == UserRole.admin || role == UserRole.sales;
+}
+
 String _orderAddress(SalesOrderRecord order) {
   final parts = [
     order.province,
@@ -1016,6 +1462,31 @@ String _travelGroupLabel(SalesOrderRecord order) {
     return group.groupNo;
   }
   return '${group.groupNo} · $agency';
+}
+
+String _salesSheetTravelGroupLabel(SalesSheetRecord sheet) {
+  final group = sheet.travelGroup;
+  if (group == null) {
+    return '无旅行团';
+  }
+  final parts = [
+    group.groupNo,
+    group.travelAgency,
+    group.guideName,
+    group.tasterName,
+  ].whereType<String>().where((item) => item.trim().isNotEmpty).toList();
+  return parts.isEmpty ? '无旅行团' : parts.join(' · ');
+}
+
+String _qrExpiresLabel(SalesSheetQrCode? qrCode) {
+  if (qrCode == null) {
+    return '未生成';
+  }
+  final expiresAt = qrCode.expiresAt?.trim();
+  if (expiresAt == null || expiresAt.isEmpty) {
+    return '长期有效';
+  }
+  return expiresAt;
 }
 
 bool _customerMarked(SalesOrderRecord order) {
@@ -1106,6 +1577,41 @@ String _orderTypeLabel(String value) {
 String _display(String? value) {
   final text = value?.trim() ?? '';
   return text.isEmpty ? '未填写' : text;
+}
+
+String _safeExportFileName(String? value) {
+  final fallback = 'sales-orders-${_exportTimestamp(DateTime.now())}.xlsx';
+  final text = value?.trim().isEmpty ?? true ? fallback : value!.trim();
+  final safe = text.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_');
+  return safe.toLowerCase().endsWith('.xlsx') ? safe : '$safe.xlsx';
+}
+
+String _exportTimestamp(DateTime value) {
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${value.year}${two(value.month)}${two(value.day)}-'
+      '${two(value.hour)}${two(value.minute)}${two(value.second)}';
+}
+
+Future<File> _nextExportFile(Directory directory, String fileName) async {
+  final separator = Platform.pathSeparator;
+  final first = File('${directory.path}$separator$fileName');
+  if (!await first.exists()) {
+    return first;
+  }
+
+  final dotIndex = fileName.lastIndexOf('.');
+  final stem = dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
+  final extension = dotIndex <= 0 ? '' : fileName.substring(dotIndex);
+  for (var index = 1; index < 1000; index += 1) {
+    final candidate = File(
+      '${directory.path}$separator$stem-$index$extension',
+    );
+    if (!await candidate.exists()) {
+      return candidate;
+    }
+  }
+  return File(
+      '${directory.path}$separator$stem-${DateTime.now().microsecondsSinceEpoch}$extension');
 }
 
 int? _moneyCentsOrNull(String value) {

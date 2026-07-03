@@ -276,6 +276,25 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.deepEqual(Object.keys(roles.body.data).sort(), ['roles']);
     assert.equal(roles.body.data.roles.length, 8);
     assert.deepEqual(rolePermissionsSnapshot(roles.body.data.roles), EXPECTED_ROLE_PERMISSIONS);
+    const roleMenus = Object.fromEntries(
+      roles.body.data.roles.map((role) => [
+        role.role,
+        role.menus.map((menu) => menu.id),
+      ]),
+    );
+    assert.equal(roleMenus.after_sales.includes('after_sales_orders'), true);
+    assert.equal(roleMenus.after_sales.includes('order_query'), true);
+    assert.equal(roleMenus.finance.includes('finance_workspace'), true);
+    assert.equal(roleMenus.warehouse.includes('warehouse_workspace'), true);
+    assert.equal(roleMenus.boss.includes('after_sales_orders'), true);
+    assert.equal(roleMenus.boss.includes('finance_workspace'), true);
+    assert.equal(roleMenus.boss.includes('warehouse_workspace'), true);
+    assert.equal(roleMenus.sales.includes('after_sales_orders'), true);
+    for (const role of ['front_desk', 'taster']) {
+      assert.equal(roleMenus[role].includes('after_sales_orders'), false);
+      assert.equal(roleMenus[role].includes('finance_workspace'), false);
+      assert.equal(roleMenus[role].includes('warehouse_workspace'), false);
+    }
 
     const tasterRole = roles.body.data.roles.find((role) => role.role === 'taster');
     assert.equal(tasterRole.title, '品鉴师');

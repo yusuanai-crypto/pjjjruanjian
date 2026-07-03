@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
   assertErrorContract,
+  assertOperationLogContract,
   createUser,
   login,
   requestJson,
@@ -295,6 +296,811 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     assert.equal(bonusList.body.data.strikeBonusAwards.length, 1);
   });
 });
+
+test('contract: finance overview uses confirmed after-sales refunds and global mark filtering', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+
+      const overview = await requestJson(
+        baseUrl,
+        '/api/finance/overview?dateFrom=2026-07-01&dateTo=2026-07-01',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(overview.response.status, 200);
+      assertNoShippedFields(overview.body.data.overview);
+      const metrics = overview.body.data.overview.metrics;
+      assert.equal(metrics.grossSalesAmountCents, 34000);
+      assert.equal(metrics.salesAmountCents, 34000);
+      assert.equal(metrics.refundAmountCents, 2000);
+      assert.equal(metrics.pendingAfterSalesRefundAmountCents, 1300);
+      assert.equal(metrics.legacyRefundOrderAmountCents, 14000);
+      assert.equal(metrics.netSalesAmountCents, 32000);
+      assert.equal(metrics.logisticsFeeCents, 1260);
+      assert.equal(metrics.pendingInvoiceCount, 4);
+      assert.equal(metrics.pendingCustomerMarkCount, 1);
+      assert.equal(metrics.pendingTravelGroupMarkCount, 1);
+      assert.equal(metrics.pendingAfterSalesConfirmCount, 2);
+      assert.equal(metrics.cashOnDeliveryAmountCents, 2800);
+      assert.equal(Array.isArray(overview.body.data.overview.recentOrders), true);
+
+      const enabled = await requestJson(
+        baseUrl,
+        '/api/settings/global-mark-query/enable',
+        {
+          method: 'POST',
+          token: admin.token,
+        },
+      );
+      assert.equal(enabled.response.status, 200);
+
+      const markedOverview = await requestJson(
+        baseUrl,
+        '/api/finance/overview?dateFrom=2026-07-01&dateTo=2026-07-01',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(markedOverview.response.status, 200);
+      assertNoShippedFields(markedOverview.body.data.overview);
+      const markedMetrics = markedOverview.body.data.overview.metrics;
+      assert.equal(markedMetrics.travelGroupCount, 1);
+      assert.equal(markedMetrics.orderCount, 4);
+      assert.equal(markedMetrics.grossSalesAmountCents, 18000);
+      assert.equal(markedMetrics.refundAmountCents, 1500);
+      assert.equal(markedMetrics.pendingAfterSalesRefundAmountCents, 700);
+      assert.equal(markedMetrics.legacyRefundOrderAmountCents, 14000);
+      assert.equal(markedMetrics.netSalesAmountCents, 16500);
+      assert.equal(markedMetrics.logisticsFeeCents, 1100);
+      assert.equal(markedMetrics.pendingInvoiceCount, 2);
+      assert.equal(markedMetrics.pendingCustomerMarkCount, 0);
+      assert.equal(markedMetrics.pendingTravelGroupMarkCount, 0);
+      assert.equal(markedMetrics.pendingAfterSalesConfirmCount, 1);
+    },
+    {
+      prisma: createFinanceOverviewPrismaOptions(),
+    },
+  );
+});
+
+test('contract: finance workbench enforces roles and returns scoped pending buckets', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const boss = await login(baseUrl, 'finance_workbench_boss', 'Password123');
+      const finance = await login(
+        baseUrl,
+        'finance_workbench_finance',
+        'Password123',
+      );
+      const sales = await login(baseUrl, 'finance_workbench_sales', 'Password123');
+      const warehouse = await login(
+        baseUrl,
+        'finance_workbench_warehouse',
+        'Password123',
+      );
+      const afterSales = await login(
+        baseUrl,
+        'finance_workbench_after_sales',
+        'Password123',
+      );
+
+      for (const token of [admin.token, boss.token, finance.token]) {
+        const allowed = await requestJson(
+          baseUrl,
+          '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01',
+          {
+            token,
+          },
+        );
+        assert.equal(allowed.response.status, 200);
+        assert.equal(typeof allowed.body.data.workbench.metrics, 'object');
+      }
+
+      for (const token of [sales.token, warehouse.token, afterSales.token]) {
+        const denied = await requestJson(
+          baseUrl,
+          '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01',
+          {
+            token,
+          },
+        );
+        assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      }
+
+      const workbench = await requestJson(
+        baseUrl,
+        '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01&limit=20',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(workbench.response.status, 200);
+      const data = workbench.body.data.workbench;
+      assertNoShippedFields(data);
+      assert.equal(data.metrics.netSalesAmountCents, 32000);
+      assert.equal(data.recentOrders.length, 6);
+      assert.deepEqual(
+        data.pendingAfterSales
+          .map((order) => order.id)
+          .sort(),
+        ['as_fin_pending_marked', 'as_fin_pending_unmarked_group'],
+      );
+      assert.deepEqual(
+        data.pendingMarks.map((entry) => entry.type).sort(),
+        ['customer', 'travel_group'],
+      );
+      const customerMark = data.pendingMarks.find(
+        (entry) => entry.type === 'customer',
+      );
+      assert.equal(customerMark.customer.id, 'cust_fin_unmarked');
+      assert.equal(customerMark.orderCount, 1);
+      const groupMark = data.pendingMarks.find(
+        (entry) => entry.type === 'travel_group',
+      );
+      assert.equal(groupMark.travelGroup.id, 'tg_fin_unmarked');
+      assert.equal(groupMark.orderCount, 1);
+      assert.deepEqual(
+        data.pendingLogistics
+          .map((entry) => entry.order.id)
+          .sort(),
+        [
+          'so_fin_unmarked_customer',
+          'so_fin_unmarked_group',
+          'so_fin_valid_marked',
+        ],
+      );
+      const validLogistics = data.pendingLogistics.find(
+        (entry) => entry.order.id === 'so_fin_valid_marked',
+      );
+      assert.deepEqual(validLogistics.reasons.sort(), [
+        'missing_logistics_no',
+        'pending_invoice',
+      ]);
+
+      const filtered = await requestJson(
+        baseUrl,
+        '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01&query=PARTIAL-MARKED&limit=1',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(filtered.response.status, 200);
+      assert.deepEqual(
+        filtered.body.data.workbench.recentOrders.map((order) => order.id),
+        ['so_fin_partial_marked'],
+      );
+      assert.deepEqual(
+        filtered.body.data.workbench.pendingAfterSales.map(
+          (order) => order.id,
+        ),
+        ['as_fin_pending_marked'],
+      );
+
+      const workbenchLogs = await requestJson(baseUrl, '/api/operation-logs', {
+        token: admin.token,
+      });
+      assert.equal(workbenchLogs.response.status, 200);
+      assert.equal(
+        workbenchLogs.body.data.logs.some(
+          (log) =>
+            String(log.action || '').startsWith('finance.workbench') ||
+            log.entityType === 'finance_workbench',
+        ),
+        false,
+      );
+
+      const enabled = await requestJson(
+        baseUrl,
+        '/api/settings/global-mark-query/enable',
+        {
+          method: 'POST',
+          token: admin.token,
+        },
+      );
+      assert.equal(enabled.response.status, 200);
+
+      const marked = await requestJson(
+        baseUrl,
+        '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01&limit=20',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(marked.response.status, 200);
+      const markedData = marked.body.data.workbench;
+      assertNoShippedFields(markedData);
+      assert.deepEqual(
+        markedData.pendingAfterSales.map((order) => order.id),
+        ['as_fin_pending_marked'],
+      );
+      assert.deepEqual(markedData.pendingMarks, []);
+      assert.deepEqual(
+        markedData.pendingLogistics.map((entry) => entry.order.id),
+        ['so_fin_valid_marked'],
+      );
+      assert.equal(
+        markedData.recentOrders.some(
+          (order) =>
+            order.id === 'so_fin_unmarked_customer' ||
+            order.id === 'so_fin_unmarked_group',
+        ),
+        false,
+      );
+    },
+    {
+      prisma: createFinanceOverviewPrismaOptions(),
+    },
+  );
+});
+
+test('contract: warehouse order wrapper lists shipping orders and saves packing fields', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const warehouse = await login(
+        baseUrl,
+        'warehouse_wrapper_user',
+        'Password123',
+      );
+      const boss = await login(baseUrl, 'warehouse_wrapper_boss', 'Password123');
+      const finance = await login(
+        baseUrl,
+        'warehouse_wrapper_finance',
+        'Password123',
+      );
+      const sales = await login(baseUrl, 'warehouse_wrapper_sales', 'Password123');
+
+      const list = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders?dateFrom=2026-07-04&dateTo=2026-07-04&limit=20',
+        {
+          token: warehouse.token,
+        },
+      );
+      assert.equal(list.response.status, 200);
+      assert.deepEqual(
+        list.body.data.warehouseOrders.map((order) => order.id).sort(),
+        [
+          'so_wh_shipping_marked',
+          'so_wh_shipping_packed',
+          'so_wh_shipping_unmarked_customer',
+          'so_wh_shipping_unmarked_group',
+        ],
+      );
+      for (const order of list.body.data.warehouseOrders) {
+        assertNoShippedFields(order);
+      }
+      assert.equal(
+        list.body.data.warehouseOrders.some(
+          (order) => order.id === 'so_wh_self_pickup',
+        ),
+        false,
+      );
+
+      const filtered = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders?dateFrom=2026-07-04&dateTo=2026-07-04&packingStatus=packed&logisticsMethod=SF&query=PACKED',
+        {
+          token: warehouse.token,
+        },
+      );
+      assert.equal(filtered.response.status, 200);
+      assert.deepEqual(
+        filtered.body.data.warehouseOrders.map((order) => order.id),
+        ['so_wh_shipping_packed'],
+      );
+
+      const bossList = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders?dateFrom=2026-07-04&dateTo=2026-07-04',
+        {
+          token: boss.token,
+        },
+      );
+      assert.equal(bossList.response.status, 200);
+
+      for (const token of [finance.token, sales.token]) {
+        const denied = await requestJson(baseUrl, '/api/warehouse/orders', {
+          token,
+        });
+        assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      }
+
+      const patched = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_marked/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            logisticsMethod: 'Yunda Smoke',
+            packingStatus: 'packed',
+            packageCount: 3,
+            warehouseRemark: 'warehouse wrapper smoke packed',
+          },
+        },
+      );
+      assert.equal(patched.response.status, 200);
+      assert.equal(patched.body.data.warehouseOrder.logisticsMethod, 'Yunda Smoke');
+      assert.equal(patched.body.data.warehouseOrder.packingStatus, 'packed');
+      assert.equal(patched.body.data.warehouseOrder.packageCount, 3);
+      assert.equal(
+        patched.body.data.warehouseOrder.warehouseRemark,
+        'warehouse wrapper smoke packed',
+      );
+      assertNoShippedFields(patched.body.data.warehouseOrder);
+
+      const packingLogs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=sales_orders.packing.update',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(packingLogs.response.status, 200);
+      const packingLog = packingLogs.body.data.logs.find(
+        (log) => log.entityId === 'so_wh_shipping_marked',
+      );
+      assert.ok(packingLog);
+      assertBusinessOperationLog(packingLog, {
+        action: 'sales_orders.packing.update',
+        entityType: 'sales_order',
+        entityId: 'so_wh_shipping_marked',
+        userId: 'usr_warehouse_wrapper',
+      });
+      assert.equal(packingLog.beforeData.packingStatus, 'pending');
+      assert.equal(packingLog.afterData.packingStatus, 'packed');
+      assert.equal(packingLog.afterData.packageCount, 3);
+
+      const bossPatch = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_marked/packing',
+        {
+          method: 'PATCH',
+          token: boss.token,
+          body: {
+            packingStatus: 'packing',
+          },
+        },
+      );
+      assertErrorContract(bossPatch, 403, 'PERMISSION_DENIED');
+
+      const deniedField = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_marked/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            logisticsFeeCents: 100,
+          },
+        },
+      );
+      assertErrorContract(deniedField, 403, 'FIELD_PERMISSION_DENIED');
+
+      const selfPickupPatch = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_self_pickup/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            packingStatus: 'packed',
+          },
+        },
+      );
+      assertErrorContract(selfPickupPatch, 404, 'SALES_ORDER_NOT_FOUND');
+
+      const enabled = await requestJson(
+        baseUrl,
+        '/api/settings/global-mark-query/enable',
+        {
+          method: 'POST',
+          token: admin.token,
+        },
+      );
+      assert.equal(enabled.response.status, 200);
+
+      const markedList = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders?dateFrom=2026-07-04&dateTo=2026-07-04&limit=20',
+        {
+          token: warehouse.token,
+        },
+      );
+      assert.equal(markedList.response.status, 200);
+      assert.deepEqual(
+        markedList.body.data.warehouseOrders.map((order) => order.id).sort(),
+        ['so_wh_shipping_marked', 'so_wh_shipping_packed'],
+      );
+
+      const hiddenPatch = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_unmarked_customer/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            packingStatus: 'packed',
+          },
+        },
+      );
+      assertErrorContract(hiddenPatch, 404, 'SALES_ORDER_NOT_FOUND');
+    },
+    {
+      prisma: createWarehouseOrdersPrismaOptions(),
+    },
+  );
+});
+
+function createWarehouseOrdersPrismaOptions() {
+  return {
+    users: [
+      {
+        id: 'usr_warehouse_wrapper',
+        username: 'warehouse_wrapper_user',
+        name: 'warehouse wrapper smoke warehouse',
+        password: 'Password123',
+        role: 'warehouse',
+      },
+      {
+        id: 'usr_warehouse_wrapper_boss',
+        username: 'warehouse_wrapper_boss',
+        name: 'warehouse wrapper smoke boss',
+        password: 'Password123',
+        role: 'boss',
+      },
+      {
+        id: 'usr_warehouse_wrapper_finance',
+        username: 'warehouse_wrapper_finance',
+        name: 'warehouse wrapper smoke finance',
+        password: 'Password123',
+        role: 'finance',
+      },
+      {
+        id: 'usr_warehouse_wrapper_sales',
+        username: 'warehouse_wrapper_sales',
+        name: 'warehouse wrapper smoke sales',
+        password: 'Password123',
+        role: 'sales',
+      },
+    ],
+    customers: [
+      {
+        id: 'cust_wh_marked',
+        name: 'Warehouse Wrapper Smoke Marked Customer',
+        phone: '13800009001',
+        financeMark: true,
+      },
+      {
+        id: 'cust_wh_unmarked',
+        name: 'Warehouse Wrapper Smoke Unmarked Customer',
+        phone: '13800009002',
+        financeMark: false,
+      },
+      {
+        id: 'cust_wh_group',
+        name: 'Warehouse Wrapper Smoke Group Customer',
+        phone: '13800009003',
+        financeMark: true,
+      },
+    ],
+    travelGroups: [
+      {
+        id: 'tg_wh_unmarked',
+        groupNo: 'TG-WH-SMOKE-UNMARKED',
+        visitDate: '2026-07-04T00:00:00.000Z',
+        travelAgency: 'warehouse wrapper smoke unmarked agency',
+        financeMark: false,
+      },
+    ],
+    salesOrders: [
+      createWarehouseOrderSeed({
+        id: 'so_wh_shipping_marked',
+        orderNo: 'SO-WH-SHIPPING-MARKED',
+        customerId: 'cust_wh_marked',
+        customerName: 'Warehouse Wrapper Smoke Marked Customer',
+        packingStatus: 'PENDING',
+      }),
+      createWarehouseOrderSeed({
+        id: 'so_wh_shipping_packed',
+        orderNo: 'SO-WH-SHIPPING-PACKED',
+        customerId: 'cust_wh_marked',
+        customerName: 'Warehouse Wrapper Smoke Marked Customer',
+        packingStatus: 'PACKED',
+        logisticsMethod: 'SF Smoke',
+        logisticsNo: 'SF-WH-SMOKE-PACKED',
+        packageCount: 1,
+      }),
+      createWarehouseOrderSeed({
+        id: 'so_wh_self_pickup',
+        orderNo: 'SO-WH-SELF-PICKUP',
+        customerId: 'cust_wh_marked',
+        customerName: 'Warehouse Wrapper Smoke Marked Customer',
+        packingStatus: 'PENDING',
+        items: [
+          {
+            productName: 'Warehouse Wrapper Smoke Pickup Wine',
+            quantity: 1,
+            unitPriceCents: 1000,
+            deliveryType: 'SELF_PICKUP',
+          },
+        ],
+      }),
+      createWarehouseOrderSeed({
+        id: 'so_wh_shipping_unmarked_customer',
+        orderNo: 'SO-WH-UNMARKED-CUSTOMER',
+        customerId: 'cust_wh_unmarked',
+        customerName: 'Warehouse Wrapper Smoke Unmarked Customer',
+        packingStatus: 'PACKING',
+      }),
+      createWarehouseOrderSeed({
+        id: 'so_wh_shipping_unmarked_group',
+        orderNo: 'SO-WH-UNMARKED-GROUP',
+        orderType: 'TRAVEL_GROUP',
+        travelGroupId: 'tg_wh_unmarked',
+        customerId: 'cust_wh_group',
+        customerName: 'Warehouse Wrapper Smoke Group Customer',
+        packingStatus: 'ABNORMAL',
+      }),
+    ],
+  };
+}
+
+function createWarehouseOrderSeed(overrides = {}) {
+  return {
+    orderType: 'EXTERNAL',
+    orderDate: '2026-07-04T00:00:00.000Z',
+    status: 'VALID',
+    totalAmountCents: 1000,
+    packingStatus: 'PENDING',
+    financeMark: true,
+    warehouseRemark: 'warehouse wrapper smoke seed',
+    createdAt: '2026-07-04T08:00:00.000Z',
+    updatedAt: '2026-07-04T08:00:00.000Z',
+    items: [
+      {
+        productName: 'Warehouse Wrapper Smoke Shipping Wine',
+        quantity: 1,
+        unitPriceCents: 1000,
+        deliveryType: 'SHIPPING',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function createFinanceOverviewPrismaOptions() {
+  return {
+    users: [
+      {
+        id: 'usr_finance_workbench_boss',
+        username: 'finance_workbench_boss',
+        name: 'finance workbench smoke boss',
+        password: 'Password123',
+        role: 'boss',
+      },
+      {
+        id: 'usr_finance_workbench_finance',
+        username: 'finance_workbench_finance',
+        name: 'finance workbench smoke finance',
+        password: 'Password123',
+        role: 'finance',
+      },
+      {
+        id: 'usr_finance_workbench_sales',
+        username: 'finance_workbench_sales',
+        name: 'finance workbench smoke sales',
+        password: 'Password123',
+        role: 'sales',
+      },
+      {
+        id: 'usr_finance_workbench_warehouse',
+        username: 'finance_workbench_warehouse',
+        name: 'finance workbench smoke warehouse',
+        password: 'Password123',
+        role: 'warehouse',
+      },
+      {
+        id: 'usr_finance_workbench_after_sales',
+        username: 'finance_workbench_after_sales',
+        name: 'finance workbench smoke after sales',
+        password: 'Password123',
+        role: 'after_sales',
+      },
+    ],
+    customers: [
+      {
+        id: 'cust_fin_marked',
+        name: 'Finance Overview Smoke Marked Customer',
+        phone: '13800008001',
+        financeMark: true,
+      },
+      {
+        id: 'cust_fin_unmarked',
+        name: 'Finance Overview Smoke Unmarked Customer',
+        phone: '13800008002',
+        financeMark: false,
+      },
+      {
+        id: 'cust_fin_marked_group',
+        name: 'Finance Overview Smoke Marked Group Customer',
+        phone: '13800008003',
+        financeMark: true,
+      },
+    ],
+    travelGroups: [
+      {
+        id: 'tg_fin_marked',
+        groupNo: 'TG-FIN-MARKED',
+        visitDate: '2026-07-01T00:00:00.000Z',
+        travelAgency: 'finance overview smoke marked agency',
+        financeMark: true,
+      },
+      {
+        id: 'tg_fin_unmarked',
+        groupNo: 'TG-FIN-UNMARKED',
+        visitDate: '2026-07-01T00:00:00.000Z',
+        travelAgency: 'finance overview smoke unmarked agency',
+        financeMark: false,
+      },
+    ],
+    salesOrders: [
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_valid_marked',
+        orderNo: 'SO-FIN-VALID-MARKED',
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        totalAmountCents: 10000,
+        cashOnDeliveryAmountCents: 1000,
+        logisticsFeeCents: 500,
+        invoiceRequired: true,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_partial_marked',
+        orderNo: 'SO-FIN-PARTIAL-MARKED',
+        orderType: 'TRAVEL_GROUP',
+        travelGroupId: 'tg_fin_marked',
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        status: 'PARTIAL_REFUND',
+        totalAmountCents: 8000,
+        cashOnDeliveryAmountCents: 200,
+        logisticsNo: 'SF-SMOKE-PARTIAL-MARKED',
+        logisticsFeeCents: 300,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_refunded_marked',
+        orderNo: 'SO-FIN-REFUNDED-MARKED',
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        status: 'REFUNDED',
+        totalAmountCents: 6000,
+        logisticsFeeCents: 200,
+        invoiceRequired: true,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_cancelled_marked',
+        orderNo: 'SO-FIN-CANCELLED-MARKED',
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        status: 'CANCELLED',
+        totalAmountCents: 4000,
+        logisticsFeeCents: 100,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_unmarked_customer',
+        orderNo: 'SO-FIN-UNMARKED-CUSTOMER',
+        customerId: 'cust_fin_unmarked',
+        customerName: 'Finance Overview Smoke Unmarked Customer',
+        totalAmountCents: 7000,
+        cashOnDeliveryAmountCents: 700,
+        logisticsFeeCents: 70,
+        invoiceRequired: true,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_unmarked_group',
+        orderNo: 'SO-FIN-UNMARKED-GROUP',
+        orderType: 'TRAVEL_GROUP',
+        travelGroupId: 'tg_fin_unmarked',
+        customerId: 'cust_fin_marked_group',
+        customerName: 'Finance Overview Smoke Marked Group Customer',
+        totalAmountCents: 9000,
+        cashOnDeliveryAmountCents: 900,
+        logisticsFeeCents: 90,
+        invoiceRequired: true,
+      }),
+    ],
+    afterSalesOrders: [
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_confirmed_marked',
+        afterSalesNo: 'AS20260701001',
+        salesOrderId: 'so_fin_valid_marked',
+        customerId: 'cust_fin_marked',
+        refundAmountCents: 1500,
+        financeConfirmed: true,
+      }),
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_pending_marked',
+        afterSalesNo: 'AS20260701002',
+        salesOrderId: 'so_fin_partial_marked',
+        customerId: 'cust_fin_marked',
+        refundAmountCents: 700,
+        financeConfirmed: false,
+      }),
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_confirmed_unmarked_customer',
+        afterSalesNo: 'AS20260701003',
+        salesOrderId: 'so_fin_unmarked_customer',
+        customerId: 'cust_fin_unmarked',
+        refundAmountCents: 500,
+        financeConfirmed: true,
+      }),
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_pending_unmarked_group',
+        afterSalesNo: 'AS20260701004',
+        salesOrderId: 'so_fin_unmarked_group',
+        customerId: 'cust_fin_marked_group',
+        refundAmountCents: 600,
+        financeConfirmed: false,
+      }),
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_no_refund',
+        afterSalesNo: 'AS20260701005',
+        salesOrderId: 'so_fin_valid_marked',
+        customerId: 'cust_fin_marked',
+        refundAmountCents: 0,
+        financeConfirmed: false,
+      }),
+      createFinanceOverviewAfterSalesSeed({
+        id: 'as_fin_outside_date',
+        afterSalesNo: 'AS20260702001',
+        salesOrderId: 'so_fin_valid_marked',
+        customerId: 'cust_fin_marked',
+        refundAmountCents: 999,
+        financeConfirmed: true,
+        createdAt: '2026-07-02T00:00:00.000Z',
+      }),
+    ],
+  };
+}
+
+function createFinanceOverviewOrderSeed(overrides = {}) {
+  return {
+    orderType: 'EXTERNAL',
+    orderDate: '2026-07-01T00:00:00.000Z',
+    status: 'VALID',
+    packingStatus: 'PACKED',
+    invoiceIssued: false,
+    financeMark: true,
+    createdAt: '2026-07-01T08:00:00.000Z',
+    updatedAt: '2026-07-01T08:00:00.000Z',
+    items: [
+      {
+        productName: 'Finance Overview Smoke Wine',
+        quantity: 1,
+        unitPriceCents: 1000,
+        deliveryType: 'SHIPPING',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function createFinanceOverviewAfterSalesSeed(overrides = {}) {
+  return {
+    issueType: 'QUALITY_ISSUE',
+    actionType: 'REFUND',
+    description: 'finance overview smoke test refund',
+    status: 'WAITING_REFUND',
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 test('contract: sales order creation generates orderNo from orderDate and ignores client orderNo', async () => {
   await withPhase1Server(async (baseUrl) => {
@@ -4638,6 +5444,32 @@ async function setSalesOrderFinanceMark(baseUrl, token, id, financeMark) {
   return result.body.data.salesOrder;
 }
 
+function assertBusinessOperationLog(log, expected) {
+  assertOperationLogContract(log);
+  assert.equal(log.action, expected.action);
+  assert.equal(log.entityType, expected.entityType);
+  assert.equal(log.entityId, expected.entityId);
+  assert.equal(log.userId, expected.userId);
+  assert.equal(typeof log.ipAddress, 'string');
+  assert.ok(log.ipAddress.length > 0);
+  assert.ok(log.beforeData);
+  assert.ok(log.afterData);
+  assertNoSensitiveLogData(log);
+}
+
+function assertNoSensitiveLogData(value) {
+  const serialized = JSON.stringify(value);
+  assert.equal(/password|token/i.test(serialized), false);
+}
+
+function assertNoShippedFields(value) {
+  const serialized = JSON.stringify(value);
+  assert.equal(
+    /shippedAt|shippedById|shipped_at|shipped_by_id/.test(serialized),
+    false,
+  );
+}
+
 function assertSalesOrderDtoPhase4(order) {
   for (const key of [
     'id',
@@ -4676,6 +5508,7 @@ function assertSalesOrderDtoPhase4(order) {
       `sales order DTO should include ${key}`,
     );
   }
+  assertNoShippedFields(order);
   assert.equal(Array.isArray(order.items), true);
   if (order.customer !== null) {
     for (const key of ['id', 'name', 'phone', 'financeMark']) {

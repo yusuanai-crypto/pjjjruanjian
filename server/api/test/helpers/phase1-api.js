@@ -121,6 +121,7 @@ function createInMemoryPrisma(options = {}) {
   const customers = [];
   const salesOrders = [];
   const salesOrderItems = [];
+  const afterSalesOrders = [];
   let failSalesOrderCreateOrderNoOnce = Boolean(
     options.failSalesOrderCreateOrderNoOnce,
   );
@@ -130,6 +131,7 @@ function createInMemoryPrisma(options = {}) {
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
+  seedAfterSalesOrders(afterSalesOrders, options.afterSalesOrders || [], now);
   const transactionalRows = [
     users,
     systemSettings,
@@ -143,6 +145,7 @@ function createInMemoryPrisma(options = {}) {
     customers,
     salesOrders,
     salesOrderItems,
+    afterSalesOrders,
     dailyReconciliations,
     reconciliationPaymentMethods,
     strikeBonusAwards,
@@ -381,6 +384,13 @@ function createInMemoryPrisma(options = {}) {
         );
       },
     },
+    afterSalesOrder: createAfterSalesOrderDelegate(afterSalesOrders, {
+      salesOrders,
+      salesOrderItems,
+      travelGroups,
+      customers,
+      users,
+    }),
     dailyReconciliation: {
       findUnique: async ({ where, include } = {}) => {
         const row = dailyReconciliations.find((item) =>
@@ -574,6 +584,56 @@ function createCustomerDelegate(rows) {
         updatedAt: asDate(data.updatedAt) || new Date(),
       };
       return copyRow(rows[index]);
+    },
+  };
+}
+
+function createAfterSalesOrderDelegate(rows, relations = {}) {
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? withAfterSalesOrderIncludes(row, include, relations) : null;
+    },
+    findMany: async ({ where, select, include, orderBy, take } = {}) => {
+      const rowsForFilter = rows.map((row) =>
+        withAfterSalesOrderIncludes(row, getAfterSalesOrderFilterInclude(), relations),
+      );
+      const result = sortRows(
+        rowsForFilter.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      ).slice(0, take || rowsForFilter.length);
+      if (select) {
+        return result.map((row) => selectRow(row, select));
+      }
+      return result.map((row) =>
+        withAfterSalesOrderIncludes(row, include, relations),
+      );
+    },
+    create: async ({ data, include } = {}) => {
+      if (rows.some((item) => item.afterSalesNo === data.afterSalesNo)) {
+        throw createPrismaUniqueError('afterSalesNo');
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        financeConfirmed: Boolean(data.financeConfirmed),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return withAfterSalesOrderIncludes(row, include, relations);
+    },
+    update: async ({ where, data, include } = {}) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('After-sales order not found in test Prisma store.');
+      }
+      rows[index] = {
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return withAfterSalesOrderIncludes(rows[index], include, relations);
     },
   };
 }
@@ -841,6 +901,34 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
   }
 }
 
+function seedAfterSalesOrders(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      afterSalesNo: seed.afterSalesNo || `AS20260702${String(rows.length + 1).padStart(3, '0')}`,
+      salesOrderId: seed.salesOrderId,
+      customerId: seed.customerId ?? null,
+      issueType: seed.issueType || 'OTHER',
+      actionType: seed.actionType || 'RECORD_ONLY',
+      description: seed.description || 'seed smoke test after sales description',
+      resolution: seed.resolution ?? null,
+      refundAmountCents: seed.refundAmountCents ?? 0,
+      status: seed.status || 'NEGOTIATING',
+      financeConfirmed: Boolean(seed.financeConfirmed),
+      financeConfirmedById: seed.financeConfirmedById ?? null,
+      financeConfirmedAt: asDate(seed.financeConfirmedAt) || null,
+      handledById: seed.handledById ?? null,
+      handledAt: asDate(seed.handledAt) || null,
+      completedAt: asDate(seed.completedAt) || null,
+      notes: seed.notes ?? null,
+      createdById: seed.createdById ?? null,
+      updatedById: seed.updatedById ?? null,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
 function restoreRows(rowGroups, snapshot) {
   for (let index = 0; index < rowGroups.length; index += 1) {
     rowGroups[index].splice(
@@ -943,6 +1031,14 @@ function copyRow(row) {
   return { ...row };
 }
 
+function selectRow(row, select) {
+  return Object.fromEntries(
+    Object.entries(select)
+      .filter(([, enabled]) => enabled)
+      .map(([key]) => [key, row[key]]),
+  );
+}
+
 function createPrismaUniqueError(target) {
   const error = new Error(`Unique constraint failed on ${target}`);
   error.code = 'P2002';
@@ -1034,6 +1130,47 @@ function withSalesOrderIncludes(
   if (include?.salesUser) {
     const user = users.find((item) => item.id === order.salesUserId);
     row.salesUser = user ? copyRow(user) : null;
+  }
+  return row;
+}
+
+function getAfterSalesOrderFilterInclude() {
+  return {
+    salesOrder: {
+      include: {
+        items: true,
+        travelGroup: true,
+        customer: true,
+      },
+    },
+    customer: true,
+  };
+}
+
+function withAfterSalesOrderIncludes(order, include, relations = {}) {
+  const row = copyRow(order);
+  if (include?.salesOrder) {
+    const salesOrder = (relations.salesOrders || []).find(
+      (item) => item.id === order.salesOrderId,
+    );
+    const salesOrderInclude =
+      typeof include.salesOrder === 'object' ? include.salesOrder.include : {};
+    row.salesOrder = salesOrder
+      ? withSalesOrderIncludes(
+          salesOrder,
+          salesOrderInclude,
+          relations.salesOrderItems || [],
+          relations.travelGroups || [],
+          relations.customers || [],
+          relations.users || [],
+        )
+      : null;
+  }
+  if (include?.customer) {
+    const customer = (relations.customers || []).find(
+      (item) => item.id === order.customerId,
+    );
+    row.customer = customer ? copyRow(customer) : null;
   }
   return row;
 }

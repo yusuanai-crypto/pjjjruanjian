@@ -1,131 +1,1062 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
+import '../../core/api/api_client.dart';
+import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
-import '../../shared/widgets/search_filter_bar.dart';
+import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 
 class AfterSalesFormPage extends StatefulWidget {
-  const AfterSalesFormPage({super.key});
+  const AfterSalesFormPage({
+    super.key,
+    required this.apiClient,
+    required this.token,
+    required this.role,
+  });
+
+  final ApiClient apiClient;
+  final String token;
+  final UserRole role;
 
   @override
   State<AfterSalesFormPage> createState() => _AfterSalesFormPageState();
 }
 
 class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
-  AfterSalesStatus _status = AfterSalesStatus.negotiating;
-  String _filter = '处理中';
-  bool _showHideMarkInfoAction = true;
+  late BusinessApi _businessApi;
+  final TextEditingController _queryController = TextEditingController();
+  final GlobalKey<FormState> _afterSalesFormKey = GlobalKey<FormState>();
+  final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _resolutionController = TextEditingController();
+  final TextEditingController _refundAmountController =
+      TextEditingController(text: '0');
+  final TextEditingController _notesController = TextEditingController();
+
+  bool _loading = false;
+  bool _searched = false;
+  bool _historyLoading = false;
+  bool _savingAfterSales = false;
+  bool _statusUpdating = false;
+  String? _errorMessage;
+  String? _historyErrorMessage;
+  String? _formErrorMessage;
+  String? _statusErrorMessage;
+  String? _createdAfterSalesNo;
+  List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
+  List<AfterSalesOrderRecord> _afterSalesHistory =
+      const <AfterSalesOrderRecord>[];
+  SalesOrderRecord? _selectedOrder;
+  AfterSalesOrderRecord? _selectedAfterSales;
+  String _issueType = _issueTypeOptions.first.value;
+  String _actionType = _actionTypeOptions.first.value;
+  String _status = _afterSalesStatusOptions.first.value;
+
+  bool get _canManageAfterSales =>
+      widget.role == UserRole.admin || widget.role == UserRole.afterSales;
+
+  @override
+  void initState() {
+    super.initState();
+    _businessApi =
+        BusinessApi(apiClient: widget.apiClient, token: widget.token);
+  }
+
+  @override
+  void didUpdateWidget(covariant AfterSalesFormPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiClient != widget.apiClient ||
+        oldWidget.token != widget.token) {
+      _businessApi =
+          BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    }
+  }
+
+  @override
+  void dispose() {
+    _queryController.dispose();
+    _descriptionController.dispose();
+    _resolutionController.dispose();
+    _refundAmountController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _searchOrders() async {
+    final query = _queryController.text.trim();
+    if (query.isEmpty) {
+      setState(() {
+        _searched = true;
+        _orders = const <SalesOrderRecord>[];
+        _selectedOrder = null;
+        _afterSalesHistory = const <AfterSalesOrderRecord>[];
+        _selectedAfterSales = null;
+        _historyErrorMessage = null;
+        _formErrorMessage = null;
+        _statusErrorMessage = null;
+        _createdAfterSalesNo = null;
+        _errorMessage = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _searched = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final orders = await _businessApi.listSalesOrders(
+        query: query,
+        limit: 50,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _orders = orders;
+        if (!orders.any((order) => order.id == _selectedOrder?.id)) {
+          _selectedOrder = null;
+          _afterSalesHistory = const <AfterSalesOrderRecord>[];
+          _selectedAfterSales = null;
+          _historyErrorMessage = null;
+          _formErrorMessage = null;
+          _statusErrorMessage = null;
+          _createdAfterSalesNo = null;
+        }
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _selectOrder(SalesOrderRecord order) async {
+    setState(() {
+      _selectedOrder = order;
+      _selectedAfterSales = null;
+      _createdAfterSalesNo = null;
+      _formErrorMessage = null;
+      _statusErrorMessage = null;
+    });
+    _resetAfterSalesDraft();
+    await _loadAfterSalesHistory();
+  }
+
+  void _resetAfterSalesDraft() {
+    _afterSalesFormKey.currentState?.reset();
+    _descriptionController.clear();
+    _resolutionController.clear();
+    _refundAmountController.text = '0';
+    _notesController.clear();
+    setState(() {
+      _issueType = _issueTypeOptions.first.value;
+      _actionType = _actionTypeOptions.first.value;
+      _status = _afterSalesStatusOptions.first.value;
+    });
+  }
+
+  Future<void> _loadAfterSalesHistory({String? preserveSelectedId}) async {
+    final order = _selectedOrder;
+    if (order == null) {
+      setState(() {
+        _afterSalesHistory = const <AfterSalesOrderRecord>[];
+        _selectedAfterSales = null;
+        _historyErrorMessage = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _historyLoading = true;
+      _historyErrorMessage = null;
+    });
+    try {
+      final history = await _businessApi.listAfterSalesOrders(
+        salesOrderId: order.id,
+        limit: 50,
+      );
+      if (!mounted) {
+        return;
+      }
+      final selectedId = preserveSelectedId ?? _selectedAfterSales?.id;
+      setState(() {
+        _afterSalesHistory = history;
+        _selectedAfterSales = _selectedAfterSalesFrom(history, selectedId);
+        _historyLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _afterSalesHistory = const <AfterSalesOrderRecord>[];
+        _selectedAfterSales = null;
+        _historyLoading = false;
+        _historyErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _saveAfterSalesOrder() async {
+    final order = _selectedOrder;
+    if (!_canManageAfterSales) {
+      setState(() => _formErrorMessage = '当前角色只能查看售后记录。');
+      return;
+    }
+    if (order == null || _savingAfterSales) {
+      return;
+    }
+    if (!(_afterSalesFormKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    final refundAmountCents =
+        int.tryParse(_refundAmountController.text.trim()) ?? -1;
+    if (refundAmountCents < 0) {
+      setState(() => _formErrorMessage = '退款金额不能小于 0。');
+      return;
+    }
+
+    setState(() {
+      _savingAfterSales = true;
+      _formErrorMessage = null;
+      _createdAfterSalesNo = null;
+    });
+    try {
+      final created = await _businessApi.createAfterSalesOrder({
+        'salesOrderId': order.id,
+        'issueType': _issueType,
+        'actionType': _actionType,
+        'description': _descriptionController.text.trim(),
+        'resolution': _resolutionController.text.trim(),
+        'refundAmountCents': refundAmountCents,
+        'status': _status,
+        'notes': _notesController.text.trim(),
+      });
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _createdAfterSalesNo = created.afterSalesNo;
+        _selectedAfterSales = created;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('售后单 ${created.afterSalesNo} 已创建。')),
+      );
+      _resetAfterSalesDraft();
+      await _loadAfterSalesHistory(preserveSelectedId: created.id);
+      await _refreshSelectedOrder();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _formErrorMessage = _messageForError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _savingAfterSales = false);
+      }
+    }
+  }
+
+  void _selectAfterSales(AfterSalesOrderRecord record) {
+    setState(() {
+      _selectedAfterSales = record;
+      _statusErrorMessage = null;
+    });
+  }
+
+  Future<void> _updateAfterSalesStatus(String status) async {
+    final record = _selectedAfterSales;
+    if (!_canManageAfterSales) {
+      setState(() => _statusErrorMessage = '当前角色只能查看售后记录。');
+      return;
+    }
+    if (record == null || _statusUpdating) {
+      return;
+    }
+    if (status == 'completed' &&
+        (record.resolution?.trim().isNotEmpty != true) &&
+        (record.notes?.trim().isNotEmpty != true)) {
+      setState(() {
+        _statusErrorMessage = '已完成状态需要处理方案或备注。';
+      });
+      return;
+    }
+
+    setState(() {
+      _statusUpdating = true;
+      _statusErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.updateAfterSalesOrderStatus(
+        record.id,
+        {'status': status},
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedAfterSales = updated;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${updated.afterSalesNo} 已更新为 ${_afterSalesStatusLabel(updated.status)}。',
+          ),
+        ),
+      );
+      await _loadAfterSalesHistory(preserveSelectedId: updated.id);
+      await _refreshSelectedOrder();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusErrorMessage = _messageForError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _statusUpdating = false);
+      }
+    }
+  }
+
+  Future<void> _refreshSelectedOrder() async {
+    final order = _selectedOrder;
+    if (order == null) {
+      return;
+    }
+    try {
+      final updated = await _businessApi.getSalesOrder(order.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedOrder = updated;
+        _orders = [
+          for (final item in _orders)
+            if (item.id == updated.id) updated else item,
+        ];
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusErrorMessage = _messageForError(error);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ResponsivePage(
       children: [
         ResponsiveTwoColumn(
-          primary: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          primary: FormSection(
+            title: '订单定位',
+            trailing: StatusTag(
+              label: _loading ? '搜索中' : '${_orders.length} 笔',
+              tone: _loading ? StatusTone.warning : StatusTone.info,
+            ),
             children: [
-              const AppSearchField(hintText: '按姓名、电话、单号查询订单'),
-              const SizedBox(height: 12),
-              AppFilterBar(
-                filters: const ['处理中', '待收货', '待退款', '已完成'],
-                selected: _filter,
-                onSelected: (value) => setState(() => _filter = value),
-              ),
-              const SizedBox(height: 12),
-              const AppRecordList(
-                items: [
-                  AppRecordItem(
-                    title: 'SO-20260622-031',
-                    subtitle: '王女士 · 138****6621',
-                    meta: ['订单金额 ¥6,478.00', '邮寄'],
-                    icon: Icons.receipt_long_rounded,
-                    trailing: StatusTag(label: '可开售后', tone: StatusTone.info),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('after-sales-order-search-field'),
+                      controller: _queryController,
+                      onSubmitted: (_) => _searchOrders(),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search_rounded),
+                        hintText: '按姓名、电话、订单号搜索',
+                      ),
+                    ),
                   ),
-                  AppRecordItem(
-                    title: 'AS-20260621-008',
-                    subtitle: '李女士 · 退款',
-                    meta: ['关联 SO-20260620-018'],
-                    icon: Icons.support_agent_rounded,
-                    trailing: StatusTag(label: '待退款', tone: StatusTone.warning),
-                  ),
-                  AppRecordItem(
-                    title: 'AS-20260620-004',
-                    subtitle: '张先生 · 补发',
-                    meta: ['已完成'],
-                    icon: Icons.support_agent_rounded,
-                    trailing: StatusTag(label: '已完成', tone: StatusTone.success),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    key: const ValueKey('after-sales-order-search-button'),
+                    onPressed: _loading ? null : _searchOrders,
+                    icon: const Icon(Icons.search_rounded),
+                    label: const Text('搜索'),
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _buildSearchResults(),
             ],
           ),
-          secondary: FormSection(
-            title: '售后开单',
-            trailing: _showHideMarkInfoAction
-                ? OutlinedButton.icon(
-                    onPressed: () =>
-                        setState(() => _showHideMarkInfoAction = false),
-                    icon: const Icon(Icons.visibility_off_rounded),
-                    label: const Text('隐藏标记信息'),
-                  )
-                : null,
+          secondary: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const TextField(
-                readOnly: true,
-                decoration: InputDecoration(
-                    labelText: '关联订单', hintText: 'SO-20260622-031'),
-              ),
-              const SizedBox(height: 12),
-              ResponsiveFormGrid(
+              FormSection(
+                title: '关联订单信息',
+                trailing: _selectedOrder == null
+                    ? null
+                    : StatusTag(
+                        label: _statusLabel(_selectedOrder!.status),
+                        tone: _statusTone(_selectedOrder!.status),
+                      ),
                 children: [
-                  const TextField(
-                      decoration: InputDecoration(labelText: '问题类型')),
-                  DropdownButtonFormField<AfterSalesStatus>(
-                    initialValue: _status,
-                    decoration: const InputDecoration(labelText: '售后状态'),
-                    items: [
-                      for (final status in AfterSalesStatus.values)
-                        DropdownMenuItem(
-                            value: status, child: Text(status.label)),
+                  _buildSelectedOrder(),
+                ],
+              ),
+              if (_selectedOrder != null) ...[
+                if (_canManageAfterSales) ...[
+                  const SizedBox(height: 16),
+                  FormSection(
+                    title: '创建售后单',
+                    trailing: _createdAfterSalesNo == null
+                        ? null
+                        : StatusTag(
+                            label: _createdAfterSalesNo!,
+                            tone: StatusTone.success,
+                          ),
+                    children: [
+                      _buildAfterSalesForm(),
                     ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _status = value);
-                      }
-                    },
-                  ),
-                  const TextField(
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(labelText: '退款金额（分）'),
                   ),
                 ],
-              ),
-              const SizedBox(height: 12),
-              const TextField(
-                  maxLines: 5,
-                  decoration: InputDecoration(labelText: '问题描述和处理内容')),
-              const SizedBox(height: 12),
-              const Row(
-                children: [
-                  Expanded(child: Text('原订单金额')),
-                  MoneyText(cents: 647800),
+                const SizedBox(height: 16),
+                FormSection(
+                  title: '售后历史',
+                  trailing: StatusTag(
+                    label: _historyLoading
+                        ? '刷新中'
+                        : '${_afterSalesHistory.length} 笔',
+                    tone:
+                        _historyLoading ? StatusTone.warning : StatusTone.info,
+                  ),
+                  children: [
+                    _buildAfterSalesHistory(),
+                  ],
+                ),
+                if (_selectedAfterSales != null) ...[
+                  const SizedBox(height: 16),
+                  FormSection(
+                    title: '售后详情',
+                    trailing: StatusTag(
+                      label:
+                          _afterSalesStatusLabel(_selectedAfterSales!.status),
+                      tone: _afterSalesStatusTone(_selectedAfterSales!.status),
+                    ),
+                    children: [
+                      _buildAfterSalesDetail(_selectedAfterSales!),
+                    ],
+                  ),
                 ],
-              ),
-              const SizedBox(height: 14),
-              SectionActions(
-                primaryLabel: '创建售后单',
-                secondaryLabel: '保存草稿',
-                onPrimaryPressed: () {},
-                onSecondaryPressed: () {},
-              ),
+              ],
             ],
           ),
         ),
       ],
     );
   }
+
+  Widget _buildSearchResults() {
+    if (_loading) {
+      return const LoadingState(title: '正在搜索订单');
+    }
+    if (_errorMessage != null) {
+      return ErrorState(title: _errorMessage!, onRetry: _searchOrders);
+    }
+    if (!_searched) {
+      return const EmptyState(title: '输入客户姓名、电话或订单号搜索');
+    }
+    if (_orders.isEmpty) {
+      return const EmptyState(title: '未找到匹配订单');
+    }
+
+    return AppRecordList(
+      items: [
+        for (final order in _orders)
+          AppRecordItem(
+            title: order.orderNo,
+            subtitle:
+                '${order.customerName} · ${_fieldValue(order.customerPhone)}',
+            meta: [
+              '订单金额 ${formatMoneyCents(order.totalAmountCents)}',
+              _deliverySummaryLabel(order.deliverySummary),
+              _customerMarkLabel(order),
+              if (order.travelGroup?.groupNo != null)
+                '旅行团 ${order.travelGroup!.groupNo}',
+            ],
+            icon: Icons.receipt_long_rounded,
+            trailing: StatusTag(
+              label: _statusLabel(order.status),
+              tone: _statusTone(order.status),
+            ),
+            onTap: () => _selectOrder(order),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSelectedOrder() {
+    final order = _selectedOrder;
+    if (order == null) {
+      return const EmptyState(title: '请选择一笔订单');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _InfoLine(label: '关联订单', value: order.orderNo),
+        _InfoLine(label: '客户', value: order.customerName),
+        _InfoLine(label: '电话', value: _fieldValue(order.customerPhone)),
+        _InfoLine(label: '地址', value: _orderAddress(order)),
+        _InfoLine(
+          label: '旅行团',
+          value: order.travelGroup?.groupNo ??
+              order.travelGroup?.travelAgency ??
+              '未关联',
+        ),
+        _InfoLine(
+            label: '配送', value: _deliverySummaryLabel(order.deliverySummary)),
+        _InfoLine(label: '物流单号', value: _fieldValue(order.logisticsNo)),
+        Row(
+          children: [
+            const Expanded(child: Text('订单金额')),
+            MoneyText(cents: order.totalAmountCents),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Divider(height: 1),
+        const SizedBox(height: 12),
+        Text(
+          '订单明细',
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        if (order.items.isEmpty)
+          Text('暂无明细', style: Theme.of(context).textTheme.bodySmall)
+        else
+          for (final item in order.items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '${item.productName} x${item.quantity} · ${formatMoneyCents(item.subtotalCents)} · ${_deliveryTypeLabel(item.deliveryType)}',
+              ),
+            ),
+      ],
+    );
+  }
+
+  Widget _buildAfterSalesForm() {
+    return Form(
+      key: _afterSalesFormKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ResponsiveFormGrid(
+            children: [
+              DropdownButtonFormField<String>(
+                key: const ValueKey('after-sales-issue-type-field'),
+                initialValue: _issueType,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '问题类型'),
+                items: [
+                  for (final option in _issueTypeOptions)
+                    DropdownMenuItem(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                ],
+                validator: _requiredValidator,
+                onChanged: _savingAfterSales
+                    ? null
+                    : (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() => _issueType = value);
+                      },
+              ),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('after-sales-action-type-field'),
+                initialValue: _actionType,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '处理类型'),
+                items: [
+                  for (final option in _actionTypeOptions)
+                    DropdownMenuItem(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                ],
+                validator: _requiredValidator,
+                onChanged: _savingAfterSales
+                    ? null
+                    : (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() => _actionType = value);
+                      },
+              ),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('after-sales-status-field'),
+                initialValue: _status,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '售后状态'),
+                items: [
+                  for (final option in _afterSalesStatusOptions)
+                    DropdownMenuItem(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                ],
+                validator: _requiredValidator,
+                onChanged: _savingAfterSales
+                    ? null
+                    : (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() => _status = value);
+                      },
+              ),
+              TextFormField(
+                key: const ValueKey('after-sales-refund-amount-field'),
+                controller: _refundAmountController,
+                enabled: !_savingAfterSales,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(labelText: '退款金额（分）'),
+                validator: _refundAmountValidator,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            key: const ValueKey('after-sales-description-field'),
+            controller: _descriptionController,
+            enabled: !_savingAfterSales,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: '问题描述'),
+            validator: _requiredValidator,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            key: const ValueKey('after-sales-resolution-field'),
+            controller: _resolutionController,
+            enabled: !_savingAfterSales,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: '处理方案'),
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            key: const ValueKey('after-sales-notes-field'),
+            controller: _notesController,
+            enabled: !_savingAfterSales,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: '备注'),
+          ),
+          if (_formErrorMessage != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _formErrorMessage!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SectionActions(
+            primaryLabel: _savingAfterSales ? '保存中' : '创建售后单',
+            onPrimaryPressed: _savingAfterSales ? null : _saveAfterSalesOrder,
+            secondaryLabel: '刷新历史',
+            onSecondaryPressed: _historyLoading ? null : _loadAfterSalesHistory,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAfterSalesHistory() {
+    if (_historyLoading) {
+      return const LoadingState(title: '正在刷新售后历史');
+    }
+    if (_historyErrorMessage != null) {
+      return ErrorState(
+        title: _historyErrorMessage!,
+        onRetry: _loadAfterSalesHistory,
+      );
+    }
+    if (_afterSalesHistory.isEmpty) {
+      return const EmptyState(title: '暂无售后历史');
+    }
+
+    return AppRecordList(
+      compact: true,
+      items: [
+        for (final record in _afterSalesHistory)
+          AppRecordItem(
+            title: record.afterSalesNo,
+            subtitle: record.description,
+            meta: [
+              _issueTypeLabel(record.issueType),
+              _actionTypeLabel(record.actionType),
+              '退款 ${formatMoneyCents(record.refundAmountCents)}',
+              record.financeConfirmed ? '财务已确认' : '财务未确认',
+              if (record.createdAt != null) _dateTimeLabel(record.createdAt),
+            ],
+            icon: Icons.support_agent_rounded,
+            trailing: StatusTag(
+              label: _afterSalesStatusLabel(record.status),
+              tone: _afterSalesStatusTone(record.status),
+            ),
+            onTap: () => _selectAfterSales(record),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAfterSalesDetail(AfterSalesOrderRecord record) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _InfoLine(label: '售后单号', value: record.afterSalesNo),
+        _InfoLine(label: '状态', value: _afterSalesStatusLabel(record.status)),
+        _InfoLine(label: '问题类型', value: _issueTypeLabel(record.issueType)),
+        _InfoLine(label: '处理类型', value: _actionTypeLabel(record.actionType)),
+        _InfoLine(
+          label: '退款金额',
+          value: formatMoneyCents(record.refundAmountCents),
+        ),
+        _InfoLine(label: '创建时间', value: _dateTimeLabel(record.createdAt)),
+        _InfoLine(label: '问题描述', value: record.description),
+        _InfoLine(label: '处理方案', value: _fieldValue(record.resolution)),
+        _InfoLine(label: '备注', value: _fieldValue(record.notes)),
+        if (_canManageAfterSales) ...[
+          const SizedBox(height: 8),
+          Text(
+            '状态流转',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final option in _afterSalesStatusOptions)
+                _AfterSalesStatusButton(
+                  key: ValueKey('after-sales-status-button-${option.value}'),
+                  label: option.label,
+                  selected: record.status == option.value,
+                  updating: _statusUpdating,
+                  onPressed: () => _updateAfterSalesStatus(option.value),
+                ),
+            ],
+          ),
+          if (_statusErrorMessage != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _statusErrorMessage!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  String? _requiredValidator(String? value) {
+    if ((value ?? '').trim().isEmpty) {
+      return '必填';
+    }
+    return null;
+  }
+
+  String? _refundAmountValidator(String? value) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) {
+      return '请输入 0 或正整数';
+    }
+    final amount = int.tryParse(text);
+    if (amount == null) {
+      return '请输入 0 或正整数';
+    }
+    if (amount < 0) {
+      return '退款金额不能小于 0';
+    }
+    return null;
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AfterSalesStatusButton extends StatelessWidget {
+  const _AfterSalesStatusButton({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.updating,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final bool updating;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return FilledButton.icon(
+        onPressed: updating ? null : onPressed,
+        icon: const Icon(Icons.check_rounded),
+        label: Text(label),
+      );
+    }
+    return OutlinedButton(
+      onPressed: updating ? null : onPressed,
+      child: Text(label),
+    );
+  }
+}
+
+class _Option {
+  const _Option(this.value, this.label);
+
+  final String value;
+  final String label;
+}
+
+const _issueTypeOptions = [
+  _Option('quality_issue', '质量问题'),
+  _Option('logistics_damage', '物流破损'),
+  _Option('wrong_item', '错发商品'),
+  _Option('missing_item', '少发漏发'),
+  _Option('customer_return', '客户退货'),
+  _Option('invoice_issue', '发票问题'),
+  _Option('other', '其他'),
+];
+
+const _actionTypeOptions = [
+  _Option('record_only', '仅记录'),
+  _Option('refund', '部分退款'),
+  _Option('return_refund', '退货退款'),
+  _Option('resend', '补发'),
+  _Option('exchange', '换货'),
+  _Option('cancel_order', '取消订单'),
+];
+
+const _afterSalesStatusOptions = [
+  _Option('negotiating', '协商中'),
+  _Option('waiting_receive', '待收货'),
+  _Option('waiting_resend', '待补发'),
+  _Option('waiting_refund', '待退款'),
+  _Option('completed', '已完成'),
+];
+
+String _messageForError(Object error) {
+  if (error is ApiException) {
+    return error.message;
+  }
+  return '操作失败，请稍后重试。';
+}
+
+String _fieldValue(String? value) {
+  final normalized = value?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return '未填写';
+  }
+  return normalized;
+}
+
+String _dateTimeLabel(String? value) {
+  final text = value?.trim();
+  if (text == null || text.isEmpty) {
+    return '未填写';
+  }
+  return text.replaceFirst('T', ' ').replaceFirst(RegExp(r'\.\d{3}Z$'), '');
+}
+
+AfterSalesOrderRecord? _selectedAfterSalesFrom(
+  List<AfterSalesOrderRecord> records,
+  String? selectedId,
+) {
+  if (selectedId == null) {
+    return null;
+  }
+  for (final record in records) {
+    if (record.id == selectedId) {
+      return record;
+    }
+  }
+  return null;
+}
+
+String _orderAddress(SalesOrderRecord order) {
+  final snapshotAddress = order.address?.trim();
+  if (snapshotAddress != null && snapshotAddress.isNotEmpty) {
+    return snapshotAddress;
+  }
+  final parts = [
+    order.province,
+    order.city,
+    order.district,
+    order.address,
+  ]
+      .map((part) => part?.trim())
+      .where((part) => part != null && part.isNotEmpty)
+      .cast<String>()
+      .toList();
+  if (parts.isEmpty) {
+    return '未填写';
+  }
+  return parts.join('');
+}
+
+String _customerMarkLabel(SalesOrderRecord order) {
+  return (order.customer?.financeMark ?? false) ? '客户已标记' : '客户未标记';
+}
+
+String _deliverySummaryLabel(String? deliverySummary) {
+  switch (deliverySummary) {
+    case 'shipping':
+      return '邮寄';
+    case 'self_pickup':
+      return '自带';
+    case 'mixed':
+      return '自带+邮寄';
+    default:
+      return '未填写配送';
+  }
+}
+
+String _deliveryTypeLabel(String deliveryType) {
+  switch (deliveryType) {
+    case 'shipping':
+      return '邮寄';
+    case 'self_pickup':
+      return '自带';
+    default:
+      return deliveryType;
+  }
+}
+
+String _statusLabel(String status) {
+  switch (status) {
+    case 'valid':
+      return '有效';
+    case 'partial_refund':
+      return '部分退款';
+    case 'refunded':
+      return '已退款';
+    case 'cancelled':
+      return '已取消';
+    default:
+      return status;
+  }
+}
+
+StatusTone _statusTone(String status) {
+  switch (status) {
+    case 'valid':
+      return StatusTone.success;
+    case 'partial_refund':
+      return StatusTone.warning;
+    case 'refunded':
+    case 'cancelled':
+      return StatusTone.danger;
+    default:
+      return StatusTone.info;
+  }
+}
+
+String _issueTypeLabel(String issueType) {
+  return _labelFor(_issueTypeOptions, issueType);
+}
+
+String _actionTypeLabel(String actionType) {
+  return _labelFor(_actionTypeOptions, actionType);
+}
+
+String _afterSalesStatusLabel(String status) {
+  return _labelFor(_afterSalesStatusOptions, status);
+}
+
+StatusTone _afterSalesStatusTone(String status) {
+  switch (status) {
+    case 'completed':
+      return StatusTone.success;
+    case 'waiting_refund':
+    case 'waiting_resend':
+    case 'waiting_receive':
+      return StatusTone.warning;
+    case 'negotiating':
+      return StatusTone.info;
+    default:
+      return StatusTone.info;
+  }
+}
+
+String _labelFor(List<_Option> options, String value) {
+  for (final option in options) {
+    if (option.value == value) {
+      return option.label;
+    }
+  }
+  return value;
 }

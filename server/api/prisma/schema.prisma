@@ -9,8 +9,8 @@ datasource db {
 
 // 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
 // 已落库业务表：travel_agencies、guides、travel_groups、guide_carried_groups、pending_travel_groups、customers、sales_orders、
-// sales_order_items、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
-// 售后、提成和 AI 等完整目标表仍按后续阶段追加 migration。
+// sales_order_items、after_sales_orders、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
+// 提成和 AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -36,19 +36,23 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  leader                User?                @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  members               User[]               @relation("UserLeader")
-  updatedSystemSettings SystemSetting[]      @relation("SystemSettingUpdatedBy")
-  operationLogs         OperationLog[]
-  tasterTravelGroups    TravelGroup[]        @relation("TravelGroupTaster")
-  tasterGuideGroups     GuideCarriedGroup[]  @relation("GuideCarriedGroupTaster")
-  tasterPendingGroups   PendingTravelGroup[] @relation("PendingTravelGroupTaster")
-  salesOrders           SalesOrder[]         @relation("SalesOrderSalesUser")
-  markedTravelGroups    TravelGroup[]        @relation("TravelGroupMarkedBy")
-  markedGuideGroups     GuideCarriedGroup[]  @relation("GuideCarriedGroupMarkedBy")
-  markedPendingGroups   PendingTravelGroup[] @relation("PendingTravelGroupMarkedBy")
-  markedSalesOrders     SalesOrder[]         @relation("SalesOrderMarkedBy")
-  markedCustomers       Customer[]           @relation("CustomerMarkedBy")
+  leader                           User?                @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members                          User[]               @relation("UserLeader")
+  updatedSystemSettings            SystemSetting[]      @relation("SystemSettingUpdatedBy")
+  operationLogs                    OperationLog[]
+  tasterTravelGroups               TravelGroup[]        @relation("TravelGroupTaster")
+  tasterGuideGroups                GuideCarriedGroup[]  @relation("GuideCarriedGroupTaster")
+  tasterPendingGroups              PendingTravelGroup[] @relation("PendingTravelGroupTaster")
+  salesOrders                      SalesOrder[]         @relation("SalesOrderSalesUser")
+  markedTravelGroups               TravelGroup[]        @relation("TravelGroupMarkedBy")
+  markedGuideGroups                GuideCarriedGroup[]  @relation("GuideCarriedGroupMarkedBy")
+  markedPendingGroups              PendingTravelGroup[] @relation("PendingTravelGroupMarkedBy")
+  markedSalesOrders                SalesOrder[]         @relation("SalesOrderMarkedBy")
+  markedCustomers                  Customer[]           @relation("CustomerMarkedBy")
+  financeConfirmedAfterSalesOrders AfterSalesOrder[]    @relation("AfterSalesOrderFinanceConfirmedBy")
+  handledAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderHandledBy")
+  createdAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderCreatedBy")
+  updatedAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderUpdatedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -159,6 +163,39 @@ enum SalesOrderPackingStatus {
   ABNORMAL @map("abnormal")
 
   @@map("sales_order_packing_status")
+}
+
+enum AfterSalesIssueType {
+  QUALITY_ISSUE    @map("quality_issue")
+  LOGISTICS_DAMAGE @map("logistics_damage")
+  WRONG_ITEM       @map("wrong_item")
+  MISSING_ITEM     @map("missing_item")
+  CUSTOMER_RETURN  @map("customer_return")
+  INVOICE_ISSUE    @map("invoice_issue")
+  OTHER            @map("other")
+
+  @@map("after_sales_issue_type")
+}
+
+enum AfterSalesActionType {
+  RECORD_ONLY   @map("record_only")
+  REFUND        @map("refund")
+  RETURN_REFUND @map("return_refund")
+  RESEND        @map("resend")
+  EXCHANGE      @map("exchange")
+  CANCEL_ORDER  @map("cancel_order")
+
+  @@map("after_sales_action_type")
+}
+
+enum AfterSalesStatus {
+  NEGOTIATING     @map("negotiating")
+  WAITING_RECEIVE @map("waiting_receive")
+  WAITING_RESEND  @map("waiting_resend")
+  WAITING_REFUND  @map("waiting_refund")
+  COMPLETED       @map("completed")
+
+  @@map("after_sales_status")
 }
 
 model TravelGroup {
@@ -356,8 +393,9 @@ model Customer {
   createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
-  markedBy    User?        @relation("CustomerMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
-  salesOrders SalesOrder[]
+  markedBy         User?             @relation("CustomerMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  salesOrders      SalesOrder[]
+  afterSalesOrders AfterSalesOrder[]
 
   @@index([name])
   @@index([phone])
@@ -407,11 +445,12 @@ model SalesOrder {
   createdAt                 DateTime                @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt                 DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
 
-  customer    Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  travelGroup TravelGroup?     @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
-  salesUser   User?            @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
-  markedBy    User?            @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
-  items       SalesOrderItem[]
+  customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  travelGroup      TravelGroup?      @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
+  salesUser        User?             @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
+  markedBy         User?             @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  items            SalesOrderItem[]
+  afterSalesOrders AfterSalesOrder[]
 
   @@index([customerId])
   @@index([travelGroupId])
@@ -446,6 +485,52 @@ model SalesOrderItem {
   @@index([salesOrderId])
   @@index([salesOrderId, sortOrder])
   @@map("sales_order_items")
+}
+
+model AfterSalesOrder {
+  id                   String               @id @default(uuid()) @db.Char(36)
+  afterSalesNo         String               @unique @map("after_sales_no") @db.VarChar(80)
+  salesOrderId         String               @map("sales_order_id") @db.Char(36)
+  customerId           String?              @map("customer_id") @db.Char(36)
+  issueType            AfterSalesIssueType  @map("issue_type")
+  actionType           AfterSalesActionType @map("action_type")
+  description          String               @db.Text
+  resolution           String?              @db.Text
+  refundAmountCents    Int                  @default(0) @map("refund_amount_cents")
+  status               AfterSalesStatus     @default(NEGOTIATING)
+  financeConfirmed     Boolean              @default(false) @map("finance_confirmed")
+  financeConfirmedById String?              @map("finance_confirmed_by_id") @db.Char(36)
+  financeConfirmedAt   DateTime?            @map("finance_confirmed_at") @db.DateTime(0)
+  handledById          String?              @map("handled_by_id") @db.Char(36)
+  handledAt            DateTime?            @map("handled_at") @db.DateTime(0)
+  completedAt          DateTime?            @map("completed_at") @db.DateTime(0)
+  notes                String?              @db.Text
+  createdById          String?              @map("created_by_id") @db.Char(36)
+  updatedById          String?              @map("updated_by_id") @db.Char(36)
+  createdAt            DateTime             @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrder         SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  customer           Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  financeConfirmedBy User?      @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
+  handledBy          User?      @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
+  createdBy          User?      @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy          User?      @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([salesOrderId])
+  @@index([customerId])
+  @@index([status])
+  @@index([issueType])
+  @@index([actionType])
+  @@index([financeConfirmed])
+  @@index([createdAt])
+  @@index([handledById])
+  @@index([status, createdAt])
+  @@index([financeConfirmed, createdAt])
+  @@index([financeConfirmedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("after_sales_orders")
 }
 
 model DailyReconciliation {

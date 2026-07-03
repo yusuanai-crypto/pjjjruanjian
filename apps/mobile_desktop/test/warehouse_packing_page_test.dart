@@ -9,9 +9,8 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpWarehousePacking(tester, apiClient);
 
-    var uri = Uri.parse(apiClient.salesOrderListPaths.last);
-    expect(uri.path, '/api/sales-orders');
-    expect(uri.queryParameters['deliveryType'], 'shipping');
+    var uri = Uri.parse(apiClient.warehouseOrderListPaths.last);
+    expect(uri.path, '/api/warehouse/orders');
     expect(uri.queryParameters['packingStatus'], 'pending');
     expect(uri.queryParameters['limit'], '100');
 
@@ -24,8 +23,18 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    uri = Uri.parse(apiClient.salesOrderListPaths.last);
+    uri = Uri.parse(apiClient.warehouseOrderListPaths.last);
     expect(uri.queryParameters['query'], 'SO20260630001');
+
+    await tester.tap(
+      find.byKey(const ValueKey('warehouse-logistics-method-filter')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('顺丰').last);
+    await tester.pumpAndSettle();
+
+    uri = Uri.parse(apiClient.warehouseOrderListPaths.last);
+    expect(uri.queryParameters['logisticsMethod'], '顺丰');
 
     for (final status in [
       PackingStatus.packing,
@@ -36,8 +45,7 @@ void main() {
         find.byKey(ValueKey('warehouse-packing-filter-${status.value}')),
       );
       await tester.pumpAndSettle();
-      uri = Uri.parse(apiClient.salesOrderListPaths.last);
-      expect(uri.queryParameters['deliveryType'], 'shipping');
+      uri = Uri.parse(apiClient.warehouseOrderListPaths.last);
       expect(uri.queryParameters['packingStatus'], status.value);
     }
   });
@@ -50,11 +58,11 @@ void main() {
     expect(find.textContaining('张女士'), findsWidgets);
     expect(find.textContaining('贵州省贵阳市观山湖区测试路 1 号'), findsWidgets);
     expect(find.textContaining('酱香珍藏 x2'), findsWidgets);
+    expect(find.text('物流单号已补'), findsWidgets);
     expect(find.text('待打包'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('warehouse-order-order-1')));
     await tester.pumpAndSettle();
-    expect(apiClient.detailPaths, contains('/api/sales-orders/order-1'));
 
     final statusField =
         find.byKey(const ValueKey('warehouse-packing-status-field'));
@@ -89,12 +97,27 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(apiClient.packingPatchPaths,
-        contains('/api/sales-orders/order-1/packing'));
+        contains('/api/warehouse/orders/order-1/packing'));
     expect(apiClient.lastPackingBody?['logisticsMethod'], '顺丰');
     expect(apiClient.lastPackingBody?['packingStatus'], 'packed');
     expect(apiClient.lastPackingBody?['packageCount'], 3);
     expect(apiClient.lastPackingBody?['warehouseRemark'], '外箱加固');
     expect(find.text('已打包'), findsWidgets);
+  });
+
+  testWidgets('highlights abnormal orders in the queue', (tester) async {
+    final apiClient = _FakeApiClient()..packingStatus = 'abnormal';
+    await _pumpWarehousePacking(tester, apiClient);
+
+    await tester.tap(
+      find.byKey(const ValueKey('warehouse-packing-filter-abnormal')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const ValueKey('warehouse-order-order-1')), findsOneWidget);
+    expect(find.text('异常'), findsWidgets);
+    expect(find.byIcon(Icons.report_problem_rounded), findsWidgets);
   });
 
   testWidgets('shows API error when packing save fails', (tester) async {
@@ -109,18 +132,42 @@ void main() {
 
     expect(find.text('打包状态非法'), findsOneWidget);
   });
+
+  testWidgets('boss can inspect warehouse orders without packing buttons',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpWarehousePacking(tester, apiClient, role: UserRole.boss);
+
+    expect(find.text('SO20260630001'), findsWidgets);
+    expect(find.text('只读'), findsWidgets);
+    expect(find.widgetWithText(FilledButton, '保存打包'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, '标记异常'), findsNothing);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('warehouse-package-count-field')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('warehouse-package-count-field')),
+      '5',
+    );
+    await tester.pumpAndSettle();
+
+    expect(apiClient.packingPatchPaths, isEmpty);
+  });
 }
 
 Future<void> _pumpWarehousePacking(
   WidgetTester tester,
-  _FakeApiClient apiClient,
-) async {
+  _FakeApiClient apiClient, {
+  UserRole role = UserRole.warehouse,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
         body: WarehousePackingPage(
           apiClient: apiClient,
           token: 'test-token',
+          role: role,
         ),
       ),
     ),
@@ -133,8 +180,7 @@ class _FakeApiClient extends ApiClient {
       : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool failPackingPatch;
-  final List<String> salesOrderListPaths = <String>[];
-  final List<String> detailPaths = <String>[];
+  final List<String> warehouseOrderListPaths = <String>[];
   final List<String> packingPatchPaths = <String>[];
   Map<String, dynamic>? lastPackingBody;
 
@@ -145,28 +191,18 @@ class _FakeApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
-    if (path == '/api/sales-orders/order-1') {
-      detailPaths.add(path);
-      return {
-        'data': {
-          'salesOrder': _orderJson(
-            packingStatus: packingStatus,
-            packageCount: packageCount,
-            warehouseRemark: warehouseRemark,
-            logisticsMethod: logisticsMethod,
-          ),
-        },
-      };
-    }
-
-    if (path.startsWith('/api/sales-orders')) {
-      salesOrderListPaths.add(path);
+    if (path.startsWith('/api/warehouse/orders')) {
+      warehouseOrderListPaths.add(path);
       final uri = Uri.parse(path);
       final requestedStatus =
           uri.queryParameters['packingStatus'] ?? packingStatus;
+      final requestedLogisticsMethod = uri.queryParameters['logisticsMethod'];
+      final statusMatched = requestedStatus == packingStatus;
+      final logisticsMethodMatched = requestedLogisticsMethod == null ||
+          requestedLogisticsMethod == logisticsMethod;
       return {
         'data': {
-          'salesOrders': requestedStatus == packingStatus
+          'warehouseOrders': statusMatched && logisticsMethodMatched
               ? [
                   _orderJson(
                     packingStatus: packingStatus,
@@ -189,7 +225,7 @@ class _FakeApiClient extends ApiClient {
     Map<String, dynamic>? body,
     String? token,
   }) async {
-    if (path == '/api/sales-orders/order-1/packing') {
+    if (path == '/api/warehouse/orders/order-1/packing') {
       packingPatchPaths.add(path);
       lastPackingBody = Map<String, dynamic>.from(body ?? {});
       if (failPackingPatch) {

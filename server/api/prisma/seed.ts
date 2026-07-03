@@ -593,6 +593,323 @@ async function main() {
     },
   });
 
+  const phase6Customer = await prisma.customer.upsert({
+    where: {
+      id: 'cust_stage6_smoke_after_sales',
+    },
+    update: {
+      name: 'Stage6 Smoke Test After Sales Customer',
+      phone: '13800006661',
+      province: 'Guizhou',
+      city: 'Guiyang',
+      district: 'Yunyan',
+      address: 'stage6 smoke test after sales shipping address',
+      financeMark: true,
+      markedById: admin.id,
+      markedAt: now,
+      notes: 'stage6 smoke test customer for after sales, finance and warehouse',
+      updatedById: admin.id,
+      updatedAt: now,
+    },
+    create: {
+      id: 'cust_stage6_smoke_after_sales',
+      name: 'Stage6 Smoke Test After Sales Customer',
+      phone: '13800006661',
+      province: 'Guizhou',
+      city: 'Guiyang',
+      district: 'Yunyan',
+      address: 'stage6 smoke test after sales shipping address',
+      financeMark: true,
+      markedById: admin.id,
+      markedAt: now,
+      notes: 'stage6 smoke test customer for after sales, finance and warehouse',
+      createdById: admin.id,
+      updatedById: admin.id,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+
+  const phase6PartialRefundOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE6-SMOKE-REFUND-001',
+      customer: phase6Customer,
+      orderDate: businessDate('2026-07-02'),
+      salesFormNo: 'SMOKE-FORM-STAGE6-REFUND-001',
+      totalAmountCents: 268000,
+      logisticsMethod: 'stage6 smoke express',
+      packingStatus: 'PACKING',
+      packageCount: 1,
+      warehouseRemark: 'stage6 smoke test warehouse packing order',
+      logisticsNo: 'STAGE6-SMOKE-LOGISTICS-001',
+      logisticsFeeCents: 1800,
+      invoiceRequired: true,
+      invoiceIssued: false,
+      financeRemark: 'stage6 smoke test partial refund finance sample',
+      remark: 'stage6 smoke test partial_refund order with confirmed refund after sales',
+      status: 'PARTIAL_REFUND',
+      items: [
+        {
+          productName: 'Stage6 Smoke Test Refund Wine',
+          quantity: 2,
+          unitPriceCents: 134000,
+          subtotalCents: 268000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage6 smoke test refund shipping item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const phase6WaitingResendOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE6-SMOKE-RESEND-001',
+      customer: phase6Customer,
+      orderDate: businessDate('2026-07-02'),
+      salesFormNo: 'SMOKE-FORM-STAGE6-RESEND-001',
+      totalAmountCents: 188000,
+      logisticsMethod: null,
+      packingStatus: 'PENDING',
+      packageCount: 0,
+      warehouseRemark: 'stage6 smoke test warehouse pending resend order',
+      logisticsNo: null,
+      logisticsFeeCents: 0,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark: 'stage6 smoke test waiting resend finance sample',
+      remark: 'stage6 smoke test pending warehouse order with waiting resend after sales',
+      status: 'VALID',
+      items: [
+        {
+          productName: 'Stage6 Smoke Test Resend Wine',
+          quantity: 1,
+          unitPriceCents: 188000,
+          subtotalCents: 188000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage6 smoke test resend shipping item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const phase6PendingRefundOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE6-SMOKE-PENDING-REFUND-001',
+      customer: phase6Customer,
+      orderDate: businessDate('2026-07-02'),
+      salesFormNo: 'SMOKE-FORM-STAGE6-PENDING-REFUND-001',
+      totalAmountCents: 328000,
+      logisticsMethod: 'stage6 smoke express',
+      packingStatus: 'PACKED',
+      packageCount: 2,
+      warehouseRemark: 'stage6 smoke test packed order with logistics fee pending',
+      logisticsNo: null,
+      logisticsFeeCents: 0,
+      invoiceRequired: true,
+      invoiceIssued: false,
+      financeRemark: 'stage6 smoke test logistics number and fee pending sample',
+      remark: 'stage6 smoke test order for unconfirmed waiting_refund after sales',
+      status: 'VALID',
+      items: [
+        {
+          productName: 'Stage6 Smoke Test Pending Refund Wine',
+          quantity: 2,
+          unitPriceCents: 164000,
+          subtotalCents: 328000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage6 smoke test pending refund shipping item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const phase6RefundedOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE6-SMOKE-REFUNDED-001',
+      customer: phase6Customer,
+      orderDate: businessDate('2026-07-02'),
+      salesFormNo: 'SMOKE-FORM-STAGE6-REFUNDED-001',
+      totalAmountCents: 98000,
+      logisticsMethod: 'stage6 smoke express',
+      packingStatus: 'PACKED',
+      packageCount: 1,
+      warehouseRemark: 'stage6 smoke test packed refunded order',
+      logisticsNo: 'STAGE6-SMOKE-LOGISTICS-REFUNDED',
+      logisticsFeeCents: 1200,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark: 'stage6 smoke test refunded finance sample',
+      remark: 'stage6 smoke test refunded order with completed after sales',
+      status: 'REFUNDED',
+      items: [
+        {
+          productName: 'Stage6 Smoke Test Refunded Wine',
+          quantity: 1,
+          unitPriceCents: 98000,
+          subtotalCents: 98000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage6 smoke test refunded shipping item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const phase6CancelledOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE6-SMOKE-CANCELLED-001',
+      customer: phase6Customer,
+      orderDate: businessDate('2026-07-02'),
+      salesFormNo: 'SMOKE-FORM-STAGE6-CANCELLED-001',
+      totalAmountCents: 158000,
+      logisticsMethod: null,
+      packingStatus: 'ABNORMAL',
+      packageCount: 0,
+      warehouseRemark: 'stage6 smoke test abnormal cancelled order',
+      logisticsNo: null,
+      logisticsFeeCents: 0,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark: 'stage6 smoke test cancelled finance sample',
+      remark: 'stage6 smoke test cancelled order with completed cancel after sales',
+      status: 'CANCELLED',
+      items: [
+        {
+          productName: 'Stage6 Smoke Test Cancelled Wine',
+          quantity: 1,
+          unitPriceCents: 158000,
+          subtotalCents: 158000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage6 smoke test cancelled shipping item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS20260702001',
+      salesOrder: phase6PartialRefundOrder,
+      customer: phase6Customer,
+      issueType: 'QUALITY_ISSUE',
+      actionType: 'REFUND',
+      description: 'stage6 smoke test customer reports bottle seal issue and requests partial refund',
+      resolution: 'stage6 smoke test finance confirmed partial refund',
+      refundAmountCents: 5000,
+      status: 'WAITING_REFUND',
+      financeConfirmed: true,
+      financeConfirmedById: 'usr_finance_demo',
+      financeConfirmedAt: now,
+      handledById: 'usr_after_sales_demo',
+      handledAt: now,
+      completedAt: null,
+      notes: 'stage6 smoke test confirmed refund after sales order',
+    },
+    admin,
+    now,
+  );
+
+  await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS20260702002',
+      salesOrder: phase6WaitingResendOrder,
+      customer: phase6Customer,
+      issueType: 'MISSING_ITEM',
+      actionType: 'RESEND',
+      description: 'stage6 smoke test customer reports one missing item and waits for resend',
+      resolution: 'stage6 smoke test after sales arranged resend package',
+      refundAmountCents: 0,
+      status: 'WAITING_RESEND',
+      financeConfirmed: false,
+      financeConfirmedById: null,
+      financeConfirmedAt: null,
+      handledById: 'usr_after_sales_demo',
+      handledAt: now,
+      completedAt: null,
+      notes: 'stage6 smoke test waiting resend after sales order',
+    },
+    admin,
+    now,
+  );
+
+  await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS20260702003',
+      salesOrder: phase6PendingRefundOrder,
+      customer: phase6Customer,
+      issueType: 'LOGISTICS_DAMAGE',
+      actionType: 'REFUND',
+      description: 'stage6 smoke test logistics damage refund is waiting for finance confirmation',
+      resolution: 'stage6 smoke test negotiated refund waiting finance confirmation',
+      refundAmountCents: 2000,
+      status: 'WAITING_REFUND',
+      financeConfirmed: false,
+      financeConfirmedById: null,
+      financeConfirmedAt: null,
+      handledById: 'usr_after_sales_demo',
+      handledAt: now,
+      completedAt: null,
+      notes: 'stage6 smoke test unconfirmed waiting refund after sales order',
+    },
+    admin,
+    now,
+  );
+
+  await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS20260702004',
+      salesOrder: phase6RefundedOrder,
+      customer: phase6Customer,
+      issueType: 'CUSTOMER_RETURN',
+      actionType: 'RETURN_REFUND',
+      description: 'stage6 smoke test customer return completed with full refund',
+      resolution: 'stage6 smoke test returned goods received and refund completed',
+      refundAmountCents: 98000,
+      status: 'COMPLETED',
+      financeConfirmed: true,
+      financeConfirmedById: 'usr_finance_demo',
+      financeConfirmedAt: now,
+      handledById: 'usr_after_sales_demo',
+      handledAt: now,
+      completedAt: now,
+      notes: 'stage6 smoke test completed refunded after sales order',
+    },
+    admin,
+    now,
+  );
+
+  await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS20260702005',
+      salesOrder: phase6CancelledOrder,
+      customer: phase6Customer,
+      issueType: 'OTHER',
+      actionType: 'CANCEL_ORDER',
+      description: 'stage6 smoke test customer cancels order before delivery',
+      resolution: 'stage6 smoke test cancelled order recorded by after sales',
+      refundAmountCents: 0,
+      status: 'COMPLETED',
+      financeConfirmed: false,
+      financeConfirmedById: null,
+      financeConfirmedAt: null,
+      handledById: 'usr_after_sales_demo',
+      handledAt: now,
+      completedAt: now,
+      notes: 'stage6 smoke test completed cancelled after sales order',
+    },
+    admin,
+    now,
+  );
+
   await prisma.dailyReconciliation.upsert({
     where: {
       businessDate: businessDate('2026-06-22'),
@@ -825,6 +1142,188 @@ async function upsertSetting(
       settingValue,
       updatedBy,
       updatedAt,
+    },
+  });
+}
+
+type SeedUser = {
+  id: string;
+};
+
+type SeedCustomer = {
+  id: string;
+  name: string;
+  phone?: string | null;
+  province?: string | null;
+  city?: string | null;
+  district?: string | null;
+  address?: string | null;
+};
+
+type SeedSalesOrderItem = {
+  productName: string;
+  quantity: number;
+  unitPriceCents: number;
+  subtotalCents: number;
+  deliveryType: string;
+  notes?: string | null;
+};
+
+type SeedSalesOrderInput = {
+  orderNo: string;
+  customer: SeedCustomer;
+  orderDate: Date;
+  salesFormNo: string;
+  totalAmountCents: number;
+  cashOnDeliveryAmountCents?: number;
+  logisticsMethod?: string | null;
+  packingStatus: string;
+  packageCount: number;
+  warehouseRemark: string;
+  logisticsNo?: string | null;
+  logisticsFeeCents: number;
+  invoiceRequired: boolean;
+  invoiceIssued: boolean;
+  financeRemark: string;
+  remark: string;
+  status: string;
+  items: SeedSalesOrderItem[];
+};
+
+type SeedAfterSalesOrderInput = {
+  afterSalesNo: string;
+  salesOrder: {
+    id: string;
+  };
+  customer?: {
+    id: string;
+  } | null;
+  issueType: string;
+  actionType: string;
+  description: string;
+  resolution?: string | null;
+  refundAmountCents: number;
+  status: string;
+  financeConfirmed: boolean;
+  financeConfirmedById?: string | null;
+  financeConfirmedAt?: Date | null;
+  handledById?: string | null;
+  handledAt?: Date | null;
+  completedAt?: Date | null;
+  notes?: string | null;
+};
+
+async function upsertSeedSalesOrder(
+  order: SeedSalesOrderInput,
+  admin: SeedUser,
+  now: Date,
+) {
+  const customer = order.customer;
+  const orderData = {
+    orderType: 'EXTERNAL',
+    travelGroupId: null,
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone ?? null,
+    province: customer.province ?? null,
+    city: customer.city ?? null,
+    district: customer.district ?? null,
+    address: customer.address ?? null,
+    orderDate: order.orderDate,
+    salesFormNo: order.salesFormNo,
+    totalAmountCents: order.totalAmountCents,
+    cashOnDeliveryAmountCents: order.cashOnDeliveryAmountCents ?? 0,
+    logisticsMethod: order.logisticsMethod ?? null,
+    packingStatus: order.packingStatus,
+    packageCount: order.packageCount,
+    warehouseRemark: order.warehouseRemark,
+    logisticsNo: order.logisticsNo ?? null,
+    logisticsFeeCents: order.logisticsFeeCents,
+    invoiceRequired: order.invoiceRequired,
+    invoiceIssued: order.invoiceIssued,
+    financeRemark: order.financeRemark,
+    remark: order.remark,
+    status: order.status,
+    financeMark: true,
+    markedById: admin.id,
+    markedAt: now,
+    salesUserId: 'usr_sales_demo',
+    updatedById: admin.id,
+    updatedAt: now,
+  };
+  const items = buildSeedSalesOrderItems(order.items, now);
+
+  return prisma.salesOrder.upsert({
+    where: {
+      orderNo: order.orderNo,
+    },
+    update: {
+      ...orderData,
+      items: {
+        deleteMany: {},
+        create: items,
+      },
+    },
+    create: {
+      orderNo: order.orderNo,
+      ...orderData,
+      createdById: admin.id,
+      createdAt: now,
+      items: {
+        create: items,
+      },
+    },
+  });
+}
+
+function buildSeedSalesOrderItems(items: SeedSalesOrderItem[], now: Date) {
+  return items.map((item, index) => ({
+    productName: item.productName,
+    quantity: item.quantity,
+    unitPriceCents: item.unitPriceCents,
+    subtotalCents: item.subtotalCents,
+    deliveryType: item.deliveryType,
+    notes: item.notes ?? null,
+    sortOrder: index + 1,
+    createdAt: now,
+  }));
+}
+
+async function upsertSeedAfterSalesOrder(
+  afterSalesOrder: SeedAfterSalesOrderInput,
+  admin: SeedUser,
+  now: Date,
+) {
+  const afterSalesData = {
+    salesOrderId: afterSalesOrder.salesOrder.id,
+    customerId: afterSalesOrder.customer?.id ?? null,
+    issueType: afterSalesOrder.issueType,
+    actionType: afterSalesOrder.actionType,
+    description: afterSalesOrder.description,
+    resolution: afterSalesOrder.resolution ?? null,
+    refundAmountCents: afterSalesOrder.refundAmountCents,
+    status: afterSalesOrder.status,
+    financeConfirmed: afterSalesOrder.financeConfirmed,
+    financeConfirmedById: afterSalesOrder.financeConfirmedById ?? null,
+    financeConfirmedAt: afterSalesOrder.financeConfirmedAt ?? null,
+    handledById: afterSalesOrder.handledById ?? null,
+    handledAt: afterSalesOrder.handledAt ?? null,
+    completedAt: afterSalesOrder.completedAt ?? null,
+    notes: afterSalesOrder.notes ?? null,
+    updatedById: admin.id,
+    updatedAt: now,
+  };
+
+  return prisma.afterSalesOrder.upsert({
+    where: {
+      afterSalesNo: afterSalesOrder.afterSalesNo,
+    },
+    update: afterSalesData,
+    create: {
+      afterSalesNo: afterSalesOrder.afterSalesNo,
+      ...afterSalesData,
+      createdById: admin.id,
+      createdAt: now,
     },
   });
 }

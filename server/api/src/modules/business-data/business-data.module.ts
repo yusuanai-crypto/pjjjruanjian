@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { OperationLogsModule } from '../operation-logs/operation-logs.module';
 import { SettingsModule } from '../settings/settings.module';
 import { BusinessDataNestService } from './business-data.nest.service';
+import { AfterSalesOrdersNestController } from './after-sales-orders.nest.controller';
 import {
   FinanceNestController,
   ReconciliationsNestController,
@@ -11,6 +12,7 @@ import {
 } from './finance.nest.controller';
 import { PublicSalesSheetsNestController } from './public-sales-sheets.nest.controller';
 import { SalesOrdersNestController } from './sales-orders.nest.controller';
+import { WarehouseOrdersNestController } from './warehouse-orders.nest.controller';
 import {
   GuideCarriedGroupsNestController,
   PendingTravelGroupsNestController,
@@ -25,6 +27,8 @@ import {
     PendingTravelGroupsNestController,
     PublicSalesSheetsNestController,
     SalesOrdersNestController,
+    AfterSalesOrdersNestController,
+    WarehouseOrdersNestController,
     FinanceNestController,
     ReconciliationsNestController,
     StrikeBonusAwardsNestController,

@@ -87,7 +87,7 @@ const appDestinations = <AppDestination>[
       phase: 6),
   AppDestination(
       id: 'after_sales_form',
-      label: '售后开单',
+      label: '售后处理',
       icon: Icons.support_agent_rounded,
       phase: 6),
   AppDestination(

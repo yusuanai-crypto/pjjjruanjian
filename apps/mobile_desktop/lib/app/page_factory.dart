@@ -58,19 +58,27 @@ Widget buildPageForDestination({
     case 'order_form':
       return OrderFormPage(apiClient: apiClient, token: token);
     case 'order_query':
-      return OrderQueryPage(apiClient: apiClient, token: token);
+      return OrderQueryPage(apiClient: apiClient, token: token, role: role);
     case 'qr_sales_sheet':
-      return const QrSalesSheetPage();
+      return QrSalesSheetPage(apiClient: apiClient, token: token);
     case 'taster_summary':
       return const TasterSummaryPage();
     case 'finance_query':
-      return FinanceQueryPage(apiClient: apiClient, token: token);
+      return FinanceQueryPage(apiClient: apiClient, token: token, role: role);
     case 'reconciliation_table':
       return ReconciliationTablePage(apiClient: apiClient, token: token);
     case 'warehouse_packing':
-      return const WarehousePackingPage();
+      return WarehousePackingPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'after_sales_form':
-      return const AfterSalesFormPage();
+      return AfterSalesFormPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'analytics':
       return const AnalyticsPage();
     case 'ai_assistant':
