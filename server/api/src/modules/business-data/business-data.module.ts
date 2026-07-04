@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module';
+import { CommissionsModule } from '../commissions/commissions.module';
 import { OperationLogsModule } from '../operation-logs/operation-logs.module';
 import { SettingsModule } from '../settings/settings.module';
 import { BusinessDataNestService } from './business-data.nest.service';
@@ -20,7 +21,7 @@ import {
 } from './travel-groups.nest.controller';
 
 @Module({
-  imports: [AuthModule, OperationLogsModule, SettingsModule],
+  imports: [AuthModule, OperationLogsModule, SettingsModule, CommissionsModule],
   controllers: [
     TravelGroupsNestController,
     GuideCarriedGroupsNestController,

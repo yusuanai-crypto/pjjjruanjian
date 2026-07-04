@@ -308,6 +308,233 @@ void main() {
     expect(completed.completedAt, '2026-07-02T09:10:00.000Z');
   });
 
+  test('parses phase 7 commission and rebate JSON records', () {
+    final commissionRule = CommissionRuleRecord.fromJson({
+      'id': 'rule-commission-1',
+      'ruleName': 'test sales commission',
+      'targetType': 'sales_commission',
+      'rate': '0.0200',
+      'effectiveFrom': '2026-07-01',
+      'effectiveTo': null,
+      'isActive': 'true',
+      'notes': 'smoke rule',
+      'createdById': 'usr_finance',
+      'updatedById': 'usr_finance',
+      'createdAt': '2026-07-03T08:00:00.000Z',
+      'updatedAt': '2026-07-03T09:00:00.000Z',
+    });
+    expect(commissionRule.targetType, 'sales_commission');
+    expect(commissionRule.rate, '0.0200');
+    expect(commissionRule.isActive, isTrue);
+
+    final salesDeductionRule = SalesDeductionRuleRecord.fromJson({
+      'id': 'rule-sales-deduction-1',
+      'productName': 'test liquor',
+      'deductionCostCents': '1200',
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    });
+    expect(salesDeductionRule.productName, 'test liquor');
+    expect(salesDeductionRule.deductionCostCents, 1200);
+
+    final agencyDeductionRule = AgencyDeductionRuleRecord.fromJson({
+      'id': 'rule-agency-deduction-1',
+      'agencyId': 'agency-1',
+      'agencyName': 'test agency',
+      'productName': 'test liquor',
+      'deductionCostCents': 800,
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    });
+    expect(agencyDeductionRule.agencyId, 'agency-1');
+    expect(agencyDeductionRule.productName, 'test liquor');
+
+    final agencyRebateRule = AgencyRebateRuleRecord.fromJson({
+      'id': 'rule-agency-rebate-1',
+      'agencyName': 'test agency',
+      'dailyRebateRate': '0.0300',
+      'monthlyRebateRate': '0.0100',
+      'totalRebateRate': '0.0400',
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    });
+    expect(agencyRebateRule.dailyRebateRate, '0.0300');
+    expect(agencyRebateRule.totalRebateRate, '0.0400');
+
+    final importResult = Stage7RuleImportResult.fromJson({
+      'totalCount': 2,
+      'successCount': 1,
+      'failureCount': 1,
+      'createdIdsSample': ['rule-sales-deduction-1'],
+      'failureSamples': [
+        {
+          'index': 1,
+          'rowNumber': 2,
+          'code': 'RULE_EFFECTIVE_RANGE_OVERLAP',
+          'message': 'overlap rule',
+        },
+      ],
+      'results': [
+        {
+          'index': 0,
+          'rowNumber': 1,
+          'success': true,
+          'rule': {
+            'id': 'rule-sales-deduction-1',
+            'productName': 'test liquor',
+          },
+        },
+        {
+          'index': 1,
+          'rowNumber': 2,
+          'success': false,
+          'error': {
+            'code': 'RULE_EFFECTIVE_RANGE_OVERLAP',
+            'message': 'overlap rule',
+          },
+        },
+      ],
+    });
+    expect(importResult.successCount, 1);
+    expect(importResult.failureSamples.single.rowNumber, 2);
+    expect(importResult.results.last.errorCode, 'RULE_EFFECTIVE_RANGE_OVERLAP');
+
+    final commissionJson = {
+      'id': 'commission-1',
+      'salesOrderId': 'order-1',
+      'travelGroupId': 'group-1',
+      'commissionRuleId': 'rule-commission-1',
+      'targetType': 'sales_commission',
+      'targetUserId': 'usr_sales',
+      'agencyId': 'agency-1',
+      'agencyName': 'test agency',
+      'salesOrderNo': 'SO20260703001',
+      'salesOrder': {
+        'id': 'order-1',
+        'orderNo': 'SO20260703001',
+        'orderDate': '2026-07-03',
+        'status': 'valid',
+        'customerName': 'Smoke Customer',
+      },
+      'travelGroup': {
+        'id': 'group-1',
+        'groupNo': 'TG-SMOKE-001',
+        'visitDate': '2026-07-03',
+        'travelAgency': 'test agency',
+        'guideName': 'test guide',
+        'tasterId': 'usr_taster',
+        'tasterName': 'test taster',
+        'financeMark': true,
+      },
+      'customer': {'id': 'customer-1', 'name': 'Smoke Customer'},
+      'targetUser': {
+        'id': 'usr_sales',
+        'name': 'Smoke Sales',
+        'username': 'smoke_sales',
+        'role': 'sales',
+      },
+      'agency': {'id': 'agency-1', 'name': 'test agency'},
+      'grossAmountCents': 100000,
+      'confirmedRefundAmountCents': 10000,
+      'baseAmountCents': 90000,
+      'deductionAmountCents': 1200,
+      'rateSnapshot': '0.0200',
+      'amountCents': 1776,
+      'pointsCents': 0,
+      'manualInput': false,
+      'isConfirmed': false,
+      'confirmedBy': null,
+      'confirmedAt': null,
+      'calculationVersion': 'stage7-v1',
+      'calculationNote': 'test calculation note',
+      'calculationNoteSummary': 'test calculation note',
+      'ruleSnapshot': {'rate': '0.0200'},
+      'sourceSnapshot': {
+        'salesOrder': {'id': 'order-1'},
+        'warnings': ['missing_outreach'],
+      },
+      'createdAt': '2026-07-03T08:00:00.000Z',
+      'updatedAt': '2026-07-03T09:00:00.000Z',
+    };
+    final commission = CommissionRecord.fromJson(commissionJson);
+    expect(commission.salesOrderNo, 'SO20260703001');
+    expect(commission.travelGroup?.groupNo, 'TG-SMOKE-001');
+    expect(commission.customer?.name, 'Smoke Customer');
+    expect(commission.targetUser?.username, 'smoke_sales');
+    expect(commission.agency?.name, 'test agency');
+    expect(commission.baseAmountCents, 90000);
+    expect(commission.amountCents, 1776);
+    expect(commission.rateSnapshot, '0.0200');
+    expect(commission.ruleSnapshot?['rate'], '0.0200');
+    expect(commission.sourceSnapshot?['warnings'], ['missing_outreach']);
+
+    final recalculation = CommissionRecalculationResult.fromJson({
+      'generatedRecords': [commissionJson],
+      'updatedRecords': const [],
+      'unchangedRecords': const [],
+      'warnings': ['missing_outreach'],
+    });
+    expect(recalculation.records.single.id, 'commission-1');
+    expect(recalculation.warnings, ['missing_outreach']);
+
+    final summaryJson = {
+      'id': 'summary-1',
+      'travelGroupId': 'group-1',
+      'travelGroup': {
+        'id': 'group-1',
+        'groupNo': 'TG-SMOKE-001',
+        'visitDate': '2026-07-03',
+        'travelAgency': 'test agency',
+        'guideName': 'test guide',
+        'financeMark': true,
+      },
+      'totalSalesAmountCents': 100000,
+      'confirmedRefundAmountCents': 10000,
+      'effectiveSalesAmountCents': 90000,
+      'totalAgencyDeductionCents': 800,
+      'agencyDeductionConfirmed': true,
+      'agencyDeductionConfirmedById': 'usr_finance',
+      'agencyDeductionConfirmedBy': {
+        'id': 'usr_finance',
+        'name': 'Smoke Finance',
+        'username': 'finance',
+        'role': 'finance',
+      },
+      'agencyDeductionConfirmedAt': '2026-07-03T09:10:00.000Z',
+      'totalAgencyNetAmountCents': 89200,
+      'totalDailyRebateCents': 2676,
+      'totalMonthlyRebateCents': 892,
+      'paidRebateCents': 1000,
+      'unpaidRebateCents': 2568,
+      'notes': 'test summary note',
+      'guideInfoSent': true,
+      'travelAgencyInfoSent': false,
+      'calculationVersion': 'stage7-v1',
+      'sourceSnapshot': {'orders': []},
+      'updatedBy': {
+        'id': 'usr_finance',
+        'name': 'Smoke Finance',
+        'username': 'finance',
+        'role': 'finance',
+      },
+    };
+    final summary = TravelGroupFinanceSummaryRecord.fromJson(summaryJson);
+    expect(summary.travelGroup?.guideName, 'test guide');
+    expect(summary.effectiveSalesAmountCents, 90000);
+    expect(summary.totalAgencyNetAmountCents, 89200);
+    expect(summary.agencyDeductionConfirmedBy?.role, 'finance');
+    expect(summary.sourceSnapshot?['orders'], const []);
+
+    final refresh = TravelGroupFinanceSummaryRefreshResult.fromJson({
+      'travelGroupFinanceSummary': summaryJson,
+      'amountChanged': true,
+      'agencyDeductionConfirmationReset': false,
+    });
+    expect(refresh.travelGroupFinanceSummary?.id, 'summary-1');
+    expect(refresh.amountChanged, isTrue);
+    expect(refresh.agencyDeductionConfirmationReset, isFalse);
+  });
+
   test('parses sales sheet JSON and tolerates missing fields', () {
     final sheet = SalesSheetRecord.fromJson({
       'visibility': 'internal',
@@ -545,6 +772,453 @@ void main() {
     expect(travelUri.queryParameters['guideId'], 'guide-1');
     expect(travelUri.queryParameters['financeMark'], 'false');
     expect(travelUri.queryParameters['pendingStatus'], 'pending_finance');
+  });
+
+  test('business API calls phase 7 commission endpoints', () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+    final commissionRuleJson = {
+      'id': 'rule-commission-1',
+      'ruleName': 'test sales commission',
+      'targetType': 'sales_commission',
+      'rate': '0.0200',
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    };
+    final salesDeductionRuleJson = {
+      'id': 'rule-sales-deduction-1',
+      'productName': 'test liquor',
+      'deductionCostCents': 1200,
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    };
+    final agencyDeductionRuleJson = {
+      'id': 'rule-agency-deduction-1',
+      'agencyId': 'agency-1',
+      'agencyName': 'test agency',
+      'productName': 'test liquor',
+      'deductionCostCents': 800,
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    };
+    final agencyRebateRuleJson = {
+      'id': 'rule-agency-rebate-1',
+      'agencyId': 'agency-1',
+      'agencyName': 'test agency',
+      'dailyRebateRate': '0.0300',
+      'monthlyRebateRate': '0.0100',
+      'effectiveFrom': '2026-07-01',
+      'isActive': true,
+    };
+    final commissionJson = {
+      'id': 'commission-1',
+      'salesOrderId': 'order-1',
+      'travelGroupId': 'group-1',
+      'targetType': 'sales_commission',
+      'targetUserId': 'usr_sales',
+      'grossAmountCents': 100000,
+      'confirmedRefundAmountCents': 10000,
+      'baseAmountCents': 90000,
+      'deductionAmountCents': 1200,
+      'rateSnapshot': '0.0200',
+      'amountCents': 1776,
+      'pointsCents': 0,
+      'manualInput': false,
+      'isConfirmed': false,
+      'calculationVersion': 'stage7-v1',
+    };
+    final summaryJson = {
+      'id': 'summary-1',
+      'travelGroupId': 'group-1',
+      'totalSalesAmountCents': 100000,
+      'confirmedRefundAmountCents': 10000,
+      'effectiveSalesAmountCents': 90000,
+      'totalAgencyDeductionCents': 800,
+      'agencyDeductionConfirmed': false,
+      'totalAgencyNetAmountCents': 89200,
+      'totalDailyRebateCents': 2676,
+      'totalMonthlyRebateCents': 892,
+      'paidRebateCents': 1000,
+      'unpaidRebateCents': 2568,
+      'guideInfoSent': false,
+      'travelAgencyInfoSent': false,
+    };
+
+    apiClient.nextJson = {
+      'data': {
+        'commissionRules': [commissionRuleJson],
+      },
+    };
+    await api.listCommissionRules(
+      targetType: 'sales_commission',
+      keyword: 'test',
+      isActive: true,
+      limit: 10,
+    );
+    var uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'GET');
+    expect(uri.path, '/api/commission-rules');
+    expect(uri.queryParameters['targetType'], 'sales_commission');
+    expect(uri.queryParameters['keyword'], 'test');
+    expect(uri.queryParameters['isActive'], 'true');
+
+    apiClient.nextJson = {
+      'data': {'commissionRule': commissionRuleJson},
+    };
+    await api.createCommissionRule({'ruleName': 'test sales commission'});
+    expect(apiClient.lastMethod, 'POST');
+    expect(apiClient.lastPath, '/api/commission-rules');
+    expect(apiClient.lastBody?['ruleName'], 'test sales commission');
+
+    await api.updateCommissionRule('rule-commission-1', {'isActive': false});
+    expect(apiClient.lastMethod, 'PATCH');
+    expect(apiClient.lastPath, '/api/commission-rules/rule-commission-1');
+    expect(apiClient.lastBody?['isActive'], isFalse);
+
+    apiClient.nextJson = {
+      'data': {
+        'salesDeductionRules': [salesDeductionRuleJson],
+      },
+    };
+    await api.listSalesDeductionRules(
+      productName: 'liquor',
+      query: 'smoke',
+      isActive: true,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/sales-deduction-rules');
+    expect(uri.queryParameters['productName'], 'liquor');
+    expect(uri.queryParameters['query'], 'smoke');
+
+    apiClient.nextJson = {
+      'data': {'salesDeductionRule': salesDeductionRuleJson},
+    };
+    await api.createSalesDeductionRule({'productName': 'test liquor'});
+    expect(apiClient.lastPath, '/api/sales-deduction-rules');
+    await api.updateSalesDeductionRule(
+      'rule-sales-deduction-1',
+      {'deductionCostCents': 1300},
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/sales-deduction-rules/rule-sales-deduction-1',
+    );
+    apiClient.nextJson = {
+      'data': {
+        'importResult': {
+          'totalCount': 2,
+          'successCount': 1,
+          'failureCount': 1,
+          'createdIdsSample': ['rule-sales-deduction-2'],
+          'failureSamples': [
+            {
+              'index': 1,
+              'rowNumber': 2,
+              'code': 'VALIDATION_FAILED',
+              'message': 'deductionCostCents must be non-negative',
+            },
+          ],
+          'results': [
+            {
+              'index': 0,
+              'rowNumber': 1,
+              'success': true,
+              'rule': salesDeductionRuleJson,
+            },
+            {
+              'index': 1,
+              'rowNumber': 2,
+              'success': false,
+              'error': {
+                'code': 'VALIDATION_FAILED',
+                'message': 'deductionCostCents must be non-negative',
+              },
+            },
+          ],
+        },
+      },
+    };
+    final salesImport = await api.importSalesDeductionRules([
+      {'productName': 'test liquor', 'deductionCostCents': 1200},
+      {'productName': 'bad liquor', 'deductionCostCents': -1},
+    ]);
+    expect(apiClient.lastPath, '/api/sales-deduction-rules/batch-import');
+    expect((apiClient.lastBody?['rules'] as List), hasLength(2));
+    expect(salesImport.successCount, 1);
+    expect(salesImport.failureSamples.single.code, 'VALIDATION_FAILED');
+
+    apiClient.nextJson = {
+      'data': {
+        'agencyDeductionRules': [agencyDeductionRuleJson],
+      },
+    };
+    await api.listAgencyDeductionRules(
+      agencyId: 'agency-1',
+      agencyName: 'test agency',
+      productName: 'liquor',
+      isActive: true,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/agency-deduction-rules');
+    expect(uri.queryParameters['agencyId'], 'agency-1');
+    expect(uri.queryParameters['agencyName'], 'test agency');
+
+    apiClient.nextJson = {
+      'data': {'agencyDeductionRule': agencyDeductionRuleJson},
+    };
+    await api.createAgencyDeductionRule({'agencyName': 'test agency'});
+    expect(apiClient.lastPath, '/api/agency-deduction-rules');
+    await api.updateAgencyDeductionRule(
+      'rule-agency-deduction-1',
+      {'deductionCostCents': 900},
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/agency-deduction-rules/rule-agency-deduction-1',
+    );
+    apiClient.nextJson = {
+      'data': {
+        'importResult': {
+          'totalCount': 1,
+          'successCount': 1,
+          'failureCount': 0,
+          'createdIdsSample': ['rule-agency-deduction-2'],
+          'failureSamples': const [],
+          'results': [
+            {
+              'index': 0,
+              'rowNumber': 1,
+              'success': true,
+              'rule': agencyDeductionRuleJson,
+            },
+          ],
+        },
+      },
+    };
+    final agencyDeductionImport = await api.importAgencyDeductionRules([
+      {
+        'agencyName': 'test agency',
+        'productName': 'test liquor',
+        'deductionCostCents': 800,
+      },
+    ]);
+    expect(
+      apiClient.lastPath,
+      '/api/agency-deduction-rules/batch-import',
+    );
+    expect(agencyDeductionImport.failureCount, 0);
+
+    apiClient.nextJson = {
+      'data': {
+        'agencyRebateRules': [agencyRebateRuleJson],
+      },
+    };
+    await api.listAgencyRebateRules(
+      agencyName: 'test agency',
+      keyword: 'smoke',
+      isActive: false,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/agency-rebate-rules');
+    expect(uri.queryParameters['agencyName'], 'test agency');
+    expect(uri.queryParameters['keyword'], 'smoke');
+    expect(uri.queryParameters['isActive'], 'false');
+
+    apiClient.nextJson = {
+      'data': {'agencyRebateRule': agencyRebateRuleJson},
+    };
+    await api.createAgencyRebateRule({'agencyName': 'test agency'});
+    expect(apiClient.lastPath, '/api/agency-rebate-rules');
+    await api.updateAgencyRebateRule(
+      'rule-agency-rebate-1',
+      {'monthlyRebateRate': '0.0200'},
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/agency-rebate-rules/rule-agency-rebate-1',
+    );
+    apiClient.nextJson = {
+      'data': {
+        'importResult': {
+          'totalCount': 1,
+          'successCount': 1,
+          'failureCount': 0,
+          'createdIdsSample': ['rule-agency-rebate-2'],
+          'failureSamples': const [],
+          'results': [
+            {
+              'index': 0,
+              'rowNumber': 1,
+              'success': true,
+              'rule': agencyRebateRuleJson,
+            },
+          ],
+        },
+      },
+    };
+    final agencyRebateImport = await api.importAgencyRebateRules([
+      {
+        'agencyName': 'test agency',
+        'dailyRebateRate': '0.0300',
+        'monthlyRebateRate': '0.0200',
+      },
+    ]);
+    expect(apiClient.lastPath, '/api/agency-rebate-rules/batch-import');
+    expect(agencyRebateImport.successCount, 1);
+
+    apiClient.nextJson = {
+      'data': {
+        'generatedRecords': [commissionJson],
+        'warnings': ['missing_outreach'],
+      },
+    };
+    final recalculation = await api.recalculateCommissions('order-1');
+    expect(apiClient.lastMethod, 'POST');
+    expect(apiClient.lastPath, '/api/commission-records/recalculate');
+    expect(apiClient.lastBody?['salesOrderId'], 'order-1');
+    expect(recalculation.records.single.id, 'commission-1');
+
+    apiClient.nextJson = {
+      'data': {
+        'commissionRecords': [commissionJson],
+      },
+    };
+    await api.listCommissionRecords(
+      start: DateTime(2026, 7, 1),
+      end: DateTime(2026, 7, 3),
+      targetType: 'sales_commission',
+      targetUserId: 'usr_sales',
+      agencyId: 'agency-1',
+      travelGroupId: 'group-1',
+      salesOrderId: 'order-1',
+      isConfirmed: false,
+      manualInput: false,
+      query: 'smoke',
+      limit: 20,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/commission-records');
+    expect(uri.queryParameters['dateFrom'], '2026-07-01');
+    expect(uri.queryParameters['dateTo'], '2026-07-03');
+    expect(uri.queryParameters['targetType'], 'sales_commission');
+    expect(uri.queryParameters['targetUserId'], 'usr_sales');
+    expect(uri.queryParameters['agencyId'], 'agency-1');
+    expect(uri.queryParameters['isConfirmed'], 'false');
+    expect(uri.queryParameters['manualInput'], 'false');
+
+    apiClient.nextJson = {
+      'data': {'commissionRecord': commissionJson},
+    };
+    await api.getCommissionRecord('commission-1');
+    expect(apiClient.lastPath, '/api/commission-records/commission-1');
+    await api.updateTasterCommissionManualAmount(
+      'commission-1',
+      {'amountCents': 5000},
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/commission-records/commission-1/manual-amount',
+    );
+    expect(apiClient.lastBody?['amountCents'], 5000);
+    await api.confirmTasterCommission('commission-1', true);
+    expect(apiClient.lastPath, '/api/commission-records/commission-1/confirm');
+    expect(apiClient.lastBody?['isConfirmed'], isTrue);
+
+    apiClient.nextJson = {
+      'data': {
+        'commissionRecords': [commissionJson],
+      },
+    };
+    await api.listMyCommissionRecords(isConfirmed: true, limit: 5);
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/commission-records/me');
+    expect(uri.queryParameters['isConfirmed'], 'true');
+
+    await api.downloadCommissionRecordsExcel(
+      start: DateTime(2026, 7, 1),
+      targetType: 'agency_daily_rebate',
+      query: 'smoke',
+      limit: 100,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(apiClient.lastDefaultFileName, 'commission-records.xlsx');
+    expect(uri.path, '/api/commission-records/export');
+    expect(uri.queryParameters['targetType'], 'agency_daily_rebate');
+
+    apiClient.nextJson = {
+      'data': {
+        'travelGroupFinanceSummaries': [summaryJson],
+      },
+    };
+    await api.listTravelGroupFinanceSummaries(
+      start: DateTime(2026, 7, 1),
+      end: DateTime(2026, 7, 3),
+      travelGroupId: 'group-1',
+      agencyName: 'test agency',
+      guideName: 'test guide',
+      agencyDeductionConfirmed: false,
+      query: 'smoke',
+      limit: 20,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/travel-group-finance-summaries');
+    expect(uri.queryParameters['travelGroupId'], 'group-1');
+    expect(uri.queryParameters['agencyName'], 'test agency');
+    expect(uri.queryParameters['guideName'], 'test guide');
+    expect(uri.queryParameters['agencyDeductionConfirmed'], 'false');
+
+    apiClient.nextJson = {
+      'data': {'travelGroupFinanceSummary': summaryJson},
+    };
+    await api.getTravelGroupFinanceSummary('group-1');
+    expect(apiClient.lastPath, '/api/travel-group-finance-summaries/group-1');
+    await api.updateTravelGroupFinanceSummary(
+      'group-1',
+      {'paidRebateCents': 2000},
+    );
+    expect(apiClient.lastPath, '/api/travel-group-finance-summaries/group-1');
+    expect(apiClient.lastBody?['paidRebateCents'], 2000);
+    await api.confirmAgencyDeduction('group-1', true);
+    expect(
+      apiClient.lastPath,
+      '/api/travel-group-finance-summaries/group-1/'
+      'agency-deduction-confirm',
+    );
+    expect(apiClient.lastBody?['isConfirmed'], isTrue);
+
+    apiClient.nextJson = {
+      'data': {
+        'travelGroupFinanceSummary': summaryJson,
+        'amountChanged': true,
+        'agencyDeductionConfirmationReset': false,
+      },
+    };
+    final refresh = await api.refreshTravelGroupFinanceSummary('group-1');
+    expect(
+      apiClient.lastPath,
+      '/api/travel-group-finance-summaries/group-1/refresh',
+    );
+    expect(refresh.amountChanged, isTrue);
+
+    await api.downloadTravelGroupFinanceSummariesExcel(
+      start: DateTime(2026, 7, 1),
+      agencyName: 'test agency',
+      guideName: 'test guide',
+      agencyDeductionConfirmed: true,
+      query: 'smoke',
+      limit: 100,
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(
+      apiClient.lastDefaultFileName,
+      'travel-group-finance-summaries.xlsx',
+    );
+    expect(uri.path, '/api/travel-group-finance-summaries/export');
+    expect(uri.queryParameters['agencyName'], 'test agency');
+    expect(uri.queryParameters['guideName'], 'test guide');
+    expect(uri.queryParameters['agencyDeductionConfirmed'], 'true');
   });
 
   test('parses reconciliation JSON with positive refunds deduction', () {

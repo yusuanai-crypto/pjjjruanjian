@@ -63,10 +63,12 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'order_query', label: '订单管理', phase: 4),
   SharedMenuEntry(id: 'qr_sales_sheet', label: '二维码销售单', phase: 5),
   SharedMenuEntry(id: 'taster_summary', label: '品鉴师接待总结', phase: 3),
+  SharedMenuEntry(id: 'taster_commissions', label: '我的提成', phase: 7),
   SharedMenuEntry(id: 'finance_query', label: '财务查询', phase: 6),
+  SharedMenuEntry(id: 'commission_rules', label: '提成规则', phase: 7),
   SharedMenuEntry(id: 'reconciliation_table', label: '对账表', phase: 6),
   SharedMenuEntry(id: 'warehouse_packing', label: '库管打包', phase: 6),
-  SharedMenuEntry(id: 'after_sales_form', label: '售后开单', phase: 6),
+  SharedMenuEntry(id: 'after_sales_form', label: '售后处理', phase: 6),
   SharedMenuEntry(id: 'analytics', label: '数据分析', phase: 8),
   SharedMenuEntry(id: 'ai_assistant', label: 'AI 助手', phase: 9),
 ];
@@ -85,6 +87,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'qr_sales_sheet',
     'taster_summary',
     'finance_query',
+    'commission_rules',
     'reconciliation_table',
     'warehouse_packing',
     'after_sales_form',
@@ -97,8 +100,10 @@ const roleMenuIds = <UserRole, List<String>>{
     'travel_group_query',
     'pending_travel_groups',
     'order_query',
+    'after_sales_form',
     'finance_query',
     'reconciliation_table',
+    'warehouse_packing',
     'analytics',
     'ai_assistant',
   ],
@@ -118,6 +123,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'order_form',
     'order_query',
     'qr_sales_sheet',
+    'after_sales_form',
   ],
   UserRole.finance: [
     'dashboard',
@@ -126,6 +132,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'pending_travel_groups',
     'order_query',
     'finance_query',
+    'commission_rules',
     'reconciliation_table',
   ],
   UserRole.warehouse: [
@@ -141,7 +148,12 @@ const roleMenuIds = <UserRole, List<String>>{
     'order_query',
     'after_sales_form',
   ],
-  UserRole.taster: ['dashboard', 'role_menu', 'taster_summary'],
+  UserRole.taster: [
+    'dashboard',
+    'role_menu',
+    'taster_summary',
+    'taster_commissions',
+  ],
 };
 
 enum OrderStatus {

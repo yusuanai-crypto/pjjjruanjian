@@ -825,6 +825,603 @@ class BusinessApi {
     return ReconciliationRecord.fromJson(
         _map(_data(payload)['reconciliation']));
   }
+
+  Future<List<CommissionRuleRecord>> listCommissionRules({
+    int limit = 100,
+    String? targetType,
+    String? keyword,
+    String? query,
+    bool? isActive,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/commission-rules',
+        _stage7RuleQueryParameters(
+          limit: limit,
+          targetType: targetType,
+          keyword: keyword,
+          query: query,
+          isActive: isActive,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['commissionRules'])
+        .map((item) => CommissionRuleRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<CommissionRuleRecord> createCommissionRule(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/commission-rules',
+      body: body,
+      token: _token,
+    );
+    return CommissionRuleRecord.fromJson(
+      _map(_data(payload)['commissionRule']),
+    );
+  }
+
+  Future<CommissionRuleRecord> updateCommissionRule(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/commission-rules/$id',
+      body: body,
+      token: _token,
+    );
+    return CommissionRuleRecord.fromJson(
+      _map(_data(payload)['commissionRule']),
+    );
+  }
+
+  Future<List<SalesDeductionRuleRecord>> listSalesDeductionRules({
+    int limit = 100,
+    String? productName,
+    String? keyword,
+    String? query,
+    bool? isActive,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/sales-deduction-rules',
+        _stage7RuleQueryParameters(
+          limit: limit,
+          productName: productName,
+          keyword: keyword,
+          query: query,
+          isActive: isActive,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['salesDeductionRules'])
+        .map((item) => SalesDeductionRuleRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<SalesDeductionRuleRecord> createSalesDeductionRule(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/sales-deduction-rules',
+      body: body,
+      token: _token,
+    );
+    return SalesDeductionRuleRecord.fromJson(
+      _map(_data(payload)['salesDeductionRule']),
+    );
+  }
+
+  Future<SalesDeductionRuleRecord> updateSalesDeductionRule(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-deduction-rules/$id',
+      body: body,
+      token: _token,
+    );
+    return SalesDeductionRuleRecord.fromJson(
+      _map(_data(payload)['salesDeductionRule']),
+    );
+  }
+
+  Future<Stage7RuleImportResult> importSalesDeductionRules(
+    List<Map<String, dynamic>> rules,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/sales-deduction-rules/batch-import',
+      body: {'rules': rules},
+      token: _token,
+    );
+    return Stage7RuleImportResult.fromJson(
+        _map(_data(payload)['importResult']));
+  }
+
+  Future<List<AgencyDeductionRuleRecord>> listAgencyDeductionRules({
+    int limit = 100,
+    String? agencyId,
+    String? agencyName,
+    String? productName,
+    String? keyword,
+    String? query,
+    bool? isActive,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/agency-deduction-rules',
+        _stage7RuleQueryParameters(
+          limit: limit,
+          agencyId: agencyId,
+          agencyName: agencyName,
+          productName: productName,
+          keyword: keyword,
+          query: query,
+          isActive: isActive,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['agencyDeductionRules'])
+        .map((item) => AgencyDeductionRuleRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<AgencyDeductionRuleRecord> createAgencyDeductionRule(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/agency-deduction-rules',
+      body: body,
+      token: _token,
+    );
+    return AgencyDeductionRuleRecord.fromJson(
+      _map(_data(payload)['agencyDeductionRule']),
+    );
+  }
+
+  Future<AgencyDeductionRuleRecord> updateAgencyDeductionRule(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/agency-deduction-rules/$id',
+      body: body,
+      token: _token,
+    );
+    return AgencyDeductionRuleRecord.fromJson(
+      _map(_data(payload)['agencyDeductionRule']),
+    );
+  }
+
+  Future<Stage7RuleImportResult> importAgencyDeductionRules(
+    List<Map<String, dynamic>> rules,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/agency-deduction-rules/batch-import',
+      body: {'rules': rules},
+      token: _token,
+    );
+    return Stage7RuleImportResult.fromJson(
+        _map(_data(payload)['importResult']));
+  }
+
+  Future<List<AgencyRebateRuleRecord>> listAgencyRebateRules({
+    int limit = 100,
+    String? agencyId,
+    String? agencyName,
+    String? keyword,
+    String? query,
+    bool? isActive,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/agency-rebate-rules',
+        _stage7RuleQueryParameters(
+          limit: limit,
+          agencyId: agencyId,
+          agencyName: agencyName,
+          keyword: keyword,
+          query: query,
+          isActive: isActive,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['agencyRebateRules'])
+        .map((item) => AgencyRebateRuleRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<AgencyRebateRuleRecord> createAgencyRebateRule(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/agency-rebate-rules',
+      body: body,
+      token: _token,
+    );
+    return AgencyRebateRuleRecord.fromJson(
+      _map(_data(payload)['agencyRebateRule']),
+    );
+  }
+
+  Future<AgencyRebateRuleRecord> updateAgencyRebateRule(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/agency-rebate-rules/$id',
+      body: body,
+      token: _token,
+    );
+    return AgencyRebateRuleRecord.fromJson(
+      _map(_data(payload)['agencyRebateRule']),
+    );
+  }
+
+  Future<Stage7RuleImportResult> importAgencyRebateRules(
+    List<Map<String, dynamic>> rules,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/agency-rebate-rules/batch-import',
+      body: {'rules': rules},
+      token: _token,
+    );
+    return Stage7RuleImportResult.fromJson(
+        _map(_data(payload)['importResult']));
+  }
+
+  Future<CommissionRecalculationResult> recalculateCommissions(
+    String salesOrderId,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/commission-records/recalculate',
+      body: {'salesOrderId': salesOrderId},
+      token: _token,
+    );
+    return CommissionRecalculationResult.fromJson(_data(payload));
+  }
+
+  Future<List<CommissionRecord>> listCommissionRecords({
+    int limit = 50,
+    DateTime? start,
+    DateTime? end,
+    String? targetType,
+    String? targetUserId,
+    String? agencyId,
+    String? travelGroupId,
+    String? salesOrderId,
+    bool? isConfirmed,
+    bool? manualInput,
+    String? query,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/commission-records',
+        _commissionRecordQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          targetType: targetType,
+          targetUserId: targetUserId,
+          agencyId: agencyId,
+          travelGroupId: travelGroupId,
+          salesOrderId: salesOrderId,
+          isConfirmed: isConfirmed,
+          manualInput: manualInput,
+          query: query,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['commissionRecords'])
+        .map((item) => CommissionRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<CommissionRecord> getCommissionRecord(String id) async {
+    final payload = await _apiClient.getJson(
+      '/api/commission-records/$id',
+      token: _token,
+    );
+    return CommissionRecord.fromJson(_map(_data(payload)['commissionRecord']));
+  }
+
+  Future<List<CommissionRecord>> listMyCommissionRecords({
+    int limit = 50,
+    DateTime? start,
+    DateTime? end,
+    bool? isConfirmed,
+    bool? manualInput,
+    String? query,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/commission-records/me',
+        _commissionRecordQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          isConfirmed: isConfirmed,
+          manualInput: manualInput,
+          query: query,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['commissionRecords'])
+        .map((item) => CommissionRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<CommissionRecord> updateTasterCommissionManualAmount(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/commission-records/$id/manual-amount',
+      body: body,
+      token: _token,
+    );
+    return CommissionRecord.fromJson(_map(_data(payload)['commissionRecord']));
+  }
+
+  Future<CommissionRecord> confirmTasterCommission(
+    String id,
+    bool isConfirmed,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/commission-records/$id/confirm',
+      body: {'isConfirmed': isConfirmed},
+      token: _token,
+    );
+    return CommissionRecord.fromJson(_map(_data(payload)['commissionRecord']));
+  }
+
+  Future<DownloadedFile> downloadCommissionRecordsExcel({
+    int? limit,
+    DateTime? start,
+    DateTime? end,
+    String? targetType,
+    String? targetUserId,
+    String? agencyId,
+    String? travelGroupId,
+    String? salesOrderId,
+    bool? isConfirmed,
+    bool? manualInput,
+    String? query,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/commission-records/export',
+        _commissionRecordQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          targetType: targetType,
+          targetUserId: targetUserId,
+          agencyId: agencyId,
+          travelGroupId: travelGroupId,
+          salesOrderId: salesOrderId,
+          isConfirmed: isConfirmed,
+          manualInput: manualInput,
+          query: query,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'commission-records.xlsx',
+    );
+  }
+
+  Future<List<TravelGroupFinanceSummaryRecord>>
+      listTravelGroupFinanceSummaries({
+    int limit = 50,
+    DateTime? start,
+    DateTime? end,
+    String? travelGroupId,
+    String? agencyName,
+    String? guideName,
+    bool? agencyDeductionConfirmed,
+    String? query,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/travel-group-finance-summaries',
+        _travelGroupFinanceSummaryQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          travelGroupId: travelGroupId,
+          agencyName: agencyName,
+          guideName: guideName,
+          agencyDeductionConfirmed: agencyDeductionConfirmed,
+          query: query,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['travelGroupFinanceSummaries'])
+        .map((item) => TravelGroupFinanceSummaryRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<TravelGroupFinanceSummaryRecord> getTravelGroupFinanceSummary(
+    String travelGroupId,
+  ) async {
+    final payload = await _apiClient.getJson(
+      '/api/travel-group-finance-summaries/$travelGroupId',
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
+  Future<TravelGroupFinanceSummaryRecord> updateTravelGroupFinanceSummary(
+    String travelGroupId,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-group-finance-summaries/$travelGroupId',
+      body: body,
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
+  Future<TravelGroupFinanceSummaryRecord> confirmAgencyDeduction(
+    String travelGroupId,
+    bool agencyDeductionConfirmed,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-group-finance-summaries/$travelGroupId/'
+      'agency-deduction-confirm',
+      body: {'isConfirmed': agencyDeductionConfirmed},
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
+  Future<TravelGroupFinanceSummaryRefreshResult>
+      refreshTravelGroupFinanceSummary(String travelGroupId) async {
+    final payload = await _apiClient.postJson(
+      '/api/travel-group-finance-summaries/$travelGroupId/refresh',
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRefreshResult.fromJson(_data(payload));
+  }
+
+  Future<DownloadedFile> downloadTravelGroupFinanceSummariesExcel({
+    int? limit,
+    DateTime? start,
+    DateTime? end,
+    String? travelGroupId,
+    String? agencyName,
+    String? guideName,
+    bool? agencyDeductionConfirmed,
+    String? query,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/travel-group-finance-summaries/export',
+        _travelGroupFinanceSummaryQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          travelGroupId: travelGroupId,
+          agencyName: agencyName,
+          guideName: guideName,
+          agencyDeductionConfirmed: agencyDeductionConfirmed,
+          query: query,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'travel-group-finance-summaries.xlsx',
+    );
+  }
+
+  Map<String, String> _stage7RuleQueryParameters({
+    int? limit,
+    String? targetType,
+    String? agencyId,
+    String? agencyName,
+    String? productName,
+    String? keyword,
+    String? query,
+    bool? isActive,
+  }) {
+    final queryParameters = <String, String>{};
+    if (limit != null) {
+      queryParameters['limit'] = '$limit';
+    }
+    _putNonEmpty(queryParameters, 'targetType', targetType);
+    _putNonEmpty(queryParameters, 'agencyId', agencyId);
+    _putNonEmpty(queryParameters, 'agencyName', agencyName);
+    _putNonEmpty(queryParameters, 'productName', productName);
+    _putNonEmpty(queryParameters, 'keyword', keyword);
+    _putNonEmpty(queryParameters, 'query', query);
+    if (isActive != null) {
+      queryParameters['isActive'] = '$isActive';
+    }
+    return queryParameters;
+  }
+
+  Map<String, String> _commissionRecordQueryParameters({
+    int? limit,
+    DateTime? start,
+    DateTime? end,
+    String? targetType,
+    String? targetUserId,
+    String? agencyId,
+    String? travelGroupId,
+    String? salesOrderId,
+    bool? isConfirmed,
+    bool? manualInput,
+    String? query,
+  }) {
+    final queryParameters = <String, String>{};
+    if (limit != null) {
+      queryParameters['limit'] = '$limit';
+    }
+    if (start != null) {
+      queryParameters['dateFrom'] = formatDate(start);
+    }
+    if (end != null) {
+      queryParameters['dateTo'] = formatDate(end);
+    }
+    _putNonEmpty(queryParameters, 'targetType', targetType);
+    _putNonEmpty(queryParameters, 'targetUserId', targetUserId);
+    _putNonEmpty(queryParameters, 'agencyId', agencyId);
+    _putNonEmpty(queryParameters, 'travelGroupId', travelGroupId);
+    _putNonEmpty(queryParameters, 'salesOrderId', salesOrderId);
+    if (isConfirmed != null) {
+      queryParameters['isConfirmed'] = '$isConfirmed';
+    }
+    if (manualInput != null) {
+      queryParameters['manualInput'] = '$manualInput';
+    }
+    _putNonEmpty(queryParameters, 'query', query);
+    return queryParameters;
+  }
+
+  Map<String, String> _travelGroupFinanceSummaryQueryParameters({
+    int? limit,
+    DateTime? start,
+    DateTime? end,
+    String? travelGroupId,
+    String? agencyName,
+    String? guideName,
+    bool? agencyDeductionConfirmed,
+    String? query,
+  }) {
+    final queryParameters = <String, String>{};
+    if (limit != null) {
+      queryParameters['limit'] = '$limit';
+    }
+    if (start != null) {
+      queryParameters['dateFrom'] = formatDate(start);
+    }
+    if (end != null) {
+      queryParameters['dateTo'] = formatDate(end);
+    }
+    _putNonEmpty(queryParameters, 'travelGroupId', travelGroupId);
+    _putNonEmpty(queryParameters, 'agencyName', agencyName);
+    _putNonEmpty(queryParameters, 'guideName', guideName);
+    if (agencyDeductionConfirmed != null) {
+      queryParameters['agencyDeductionConfirmed'] = '$agencyDeductionConfirmed';
+    }
+    _putNonEmpty(queryParameters, 'query', query);
+    return queryParameters;
+  }
 }
 
 class TasterOption {
@@ -1284,6 +1881,7 @@ class SalesOrderRecord {
     required this.logisticsFeeCents,
     required this.invoiceRequired,
     required this.invoiceIssued,
+    required this.remark,
     required this.financeRemark,
     required this.travelGroup,
     required this.travelGroupId,
@@ -1321,6 +1919,7 @@ class SalesOrderRecord {
   final int logisticsFeeCents;
   final bool invoiceRequired;
   final bool invoiceIssued;
+  final String? remark;
   final String? financeRemark;
   final TravelGroupRecord? travelGroup;
   final String? travelGroupId;
@@ -1365,6 +1964,7 @@ class SalesOrderRecord {
       logisticsFeeCents: _intValue(json['logisticsFeeCents']),
       invoiceRequired: _boolValue(json['invoiceRequired']),
       invoiceIssued: _boolValue(json['invoiceIssued']),
+      remark: _stringOrNull(json['remark']),
       financeRemark: _stringOrNull(json['financeRemark']),
       travelGroup: travelGroup,
       travelGroupId: _stringOrNull(json['travelGroupId']),
@@ -1504,6 +2104,708 @@ class AfterSalesOrderRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class CommissionRuleRecord {
+  const CommissionRuleRecord({
+    required this.id,
+    required this.ruleName,
+    required this.targetType,
+    required this.rate,
+    required this.effectiveFrom,
+    required this.effectiveTo,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String ruleName;
+  final String targetType;
+  final String rate;
+  final String effectiveFrom;
+  final String? effectiveTo;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory CommissionRuleRecord.fromJson(Map<String, dynamic> json) {
+    return CommissionRuleRecord(
+      id: '${json['id'] ?? ''}',
+      ruleName: '${json['ruleName'] ?? ''}',
+      targetType: '${json['targetType'] ?? ''}',
+      rate: '${json['rate'] ?? ''}',
+      effectiveFrom: '${json['effectiveFrom'] ?? ''}',
+      effectiveTo: _stringOrNull(json['effectiveTo']),
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class SalesDeductionRuleRecord {
+  const SalesDeductionRuleRecord({
+    required this.id,
+    required this.productName,
+    required this.deductionCostCents,
+    required this.effectiveFrom,
+    required this.effectiveTo,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String productName;
+  final int deductionCostCents;
+  final String effectiveFrom;
+  final String? effectiveTo;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory SalesDeductionRuleRecord.fromJson(Map<String, dynamic> json) {
+    return SalesDeductionRuleRecord(
+      id: '${json['id'] ?? ''}',
+      productName: '${json['productName'] ?? ''}',
+      deductionCostCents: _intValue(json['deductionCostCents']),
+      effectiveFrom: '${json['effectiveFrom'] ?? ''}',
+      effectiveTo: _stringOrNull(json['effectiveTo']),
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class AgencyDeductionRuleRecord {
+  const AgencyDeductionRuleRecord({
+    required this.id,
+    required this.agencyId,
+    required this.agencyName,
+    required this.productName,
+    required this.deductionCostCents,
+    required this.effectiveFrom,
+    required this.effectiveTo,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String? agencyId;
+  final String? agencyName;
+  final String productName;
+  final int deductionCostCents;
+  final String effectiveFrom;
+  final String? effectiveTo;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory AgencyDeductionRuleRecord.fromJson(Map<String, dynamic> json) {
+    return AgencyDeductionRuleRecord(
+      id: '${json['id'] ?? ''}',
+      agencyId: _stringOrNull(json['agencyId']),
+      agencyName: _stringOrNull(json['agencyName']),
+      productName: '${json['productName'] ?? ''}',
+      deductionCostCents: _intValue(json['deductionCostCents']),
+      effectiveFrom: '${json['effectiveFrom'] ?? ''}',
+      effectiveTo: _stringOrNull(json['effectiveTo']),
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class AgencyRebateRuleRecord {
+  const AgencyRebateRuleRecord({
+    required this.id,
+    required this.agencyId,
+    required this.agencyName,
+    required this.dailyRebateRate,
+    required this.monthlyRebateRate,
+    required this.totalRebateRate,
+    required this.effectiveFrom,
+    required this.effectiveTo,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String? agencyId;
+  final String? agencyName;
+  final String dailyRebateRate;
+  final String monthlyRebateRate;
+  final String? totalRebateRate;
+  final String effectiveFrom;
+  final String? effectiveTo;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory AgencyRebateRuleRecord.fromJson(Map<String, dynamic> json) {
+    return AgencyRebateRuleRecord(
+      id: '${json['id'] ?? ''}',
+      agencyId: _stringOrNull(json['agencyId']),
+      agencyName: _stringOrNull(json['agencyName']),
+      dailyRebateRate: '${json['dailyRebateRate'] ?? ''}',
+      monthlyRebateRate: '${json['monthlyRebateRate'] ?? ''}',
+      totalRebateRate: _stringOrNull(json['totalRebateRate']),
+      effectiveFrom: '${json['effectiveFrom'] ?? ''}',
+      effectiveTo: _stringOrNull(json['effectiveTo']),
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class Stage7RuleImportResult {
+  const Stage7RuleImportResult({
+    required this.totalCount,
+    required this.successCount,
+    required this.failureCount,
+    required this.createdIdsSample,
+    required this.failureSamples,
+    required this.results,
+  });
+
+  final int totalCount;
+  final int successCount;
+  final int failureCount;
+  final List<String> createdIdsSample;
+  final List<Stage7RuleImportFailureSample> failureSamples;
+  final List<Stage7RuleImportRowResult> results;
+
+  factory Stage7RuleImportResult.fromJson(Map<String, dynamic> json) {
+    return Stage7RuleImportResult(
+      totalCount: _intValue(json['totalCount']),
+      successCount: _intValue(json['successCount']),
+      failureCount: _intValue(json['failureCount']),
+      createdIdsSample: _stringList(json['createdIdsSample']),
+      failureSamples: _list(json['failureSamples'])
+          .map((item) => Stage7RuleImportFailureSample.fromJson(item))
+          .toList(),
+      results: _list(json['results'])
+          .map((item) => Stage7RuleImportRowResult.fromJson(item))
+          .toList(),
+    );
+  }
+}
+
+class Stage7RuleImportFailureSample {
+  const Stage7RuleImportFailureSample({
+    required this.index,
+    required this.rowNumber,
+    required this.code,
+    required this.message,
+  });
+
+  final int index;
+  final int rowNumber;
+  final String? code;
+  final String? message;
+
+  factory Stage7RuleImportFailureSample.fromJson(Map<String, dynamic> json) {
+    return Stage7RuleImportFailureSample(
+      index: _intValue(json['index']),
+      rowNumber: _intValue(json['rowNumber']),
+      code: _stringOrNull(json['code']),
+      message: _stringOrNull(json['message']),
+    );
+  }
+}
+
+class Stage7RuleImportRowResult {
+  const Stage7RuleImportRowResult({
+    required this.index,
+    required this.rowNumber,
+    required this.success,
+    required this.rule,
+    required this.errorCode,
+    required this.errorMessage,
+  });
+
+  final int index;
+  final int rowNumber;
+  final bool success;
+  final Map<String, dynamic>? rule;
+  final String? errorCode;
+  final String? errorMessage;
+
+  factory Stage7RuleImportRowResult.fromJson(Map<String, dynamic> json) {
+    final error = _map(json['error']);
+    return Stage7RuleImportRowResult(
+      index: _intValue(json['index']),
+      rowNumber: _intValue(json['rowNumber']),
+      success: _boolValue(json['success']),
+      rule: json['rule'] is Map ? _map(json['rule']) : null,
+      errorCode: _stringOrNull(error['code']),
+      errorMessage: _stringOrNull(error['message']),
+    );
+  }
+}
+
+class CommissionRecord {
+  const CommissionRecord({
+    required this.id,
+    required this.salesOrderId,
+    required this.travelGroupId,
+    required this.afterSalesOrderId,
+    required this.commissionRuleId,
+    required this.agencyRebateRuleId,
+    required this.targetType,
+    required this.targetUserId,
+    required this.agencyId,
+    required this.agencyName,
+    required this.salesOrderNo,
+    required this.salesOrder,
+    required this.travelGroup,
+    required this.customer,
+    required this.targetUser,
+    required this.agency,
+    required this.grossAmountCents,
+    required this.confirmedRefundAmountCents,
+    required this.baseAmountCents,
+    required this.deductionAmountCents,
+    required this.rateSnapshot,
+    required this.amountCents,
+    required this.pointsCents,
+    required this.manualInput,
+    required this.isConfirmed,
+    required this.confirmedById,
+    required this.confirmedBy,
+    required this.confirmedAt,
+    required this.calculationVersion,
+    required this.calculationNote,
+    required this.calculationNoteSummary,
+    required this.ruleSnapshot,
+    required this.sourceSnapshot,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String? salesOrderId;
+  final String? travelGroupId;
+  final String? afterSalesOrderId;
+  final String? commissionRuleId;
+  final String? agencyRebateRuleId;
+  final String targetType;
+  final String? targetUserId;
+  final String? agencyId;
+  final String? agencyName;
+  final String? salesOrderNo;
+  final Stage7SalesOrderSummaryRecord? salesOrder;
+  final Stage7TravelGroupSummaryRecord? travelGroup;
+  final Stage7CustomerSummaryRecord? customer;
+  final Stage7UserSummaryRecord? targetUser;
+  final Stage7AgencySummaryRecord? agency;
+  final int grossAmountCents;
+  final int confirmedRefundAmountCents;
+  final int baseAmountCents;
+  final int deductionAmountCents;
+  final String? rateSnapshot;
+  final int amountCents;
+  final int pointsCents;
+  final bool manualInput;
+  final bool isConfirmed;
+  final String? confirmedById;
+  final Stage7UserSummaryRecord? confirmedBy;
+  final String? confirmedAt;
+  final String? calculationVersion;
+  final String? calculationNote;
+  final String? calculationNoteSummary;
+  final Map<String, dynamic>? ruleSnapshot;
+  final Map<String, dynamic>? sourceSnapshot;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory CommissionRecord.fromJson(Map<String, dynamic> json) {
+    return CommissionRecord(
+      id: '${json['id'] ?? ''}',
+      salesOrderId: _stringOrNull(json['salesOrderId']),
+      travelGroupId: _stringOrNull(json['travelGroupId']),
+      afterSalesOrderId: _stringOrNull(json['afterSalesOrderId']),
+      commissionRuleId: _stringOrNull(json['commissionRuleId']),
+      agencyRebateRuleId: _stringOrNull(json['agencyRebateRuleId']),
+      targetType: '${json['targetType'] ?? ''}',
+      targetUserId: _stringOrNull(json['targetUserId']),
+      agencyId: _stringOrNull(json['agencyId']),
+      agencyName: _stringOrNull(json['agencyName']),
+      salesOrderNo: _stringOrNull(json['salesOrderNo']),
+      salesOrder: json['salesOrder'] is Map
+          ? Stage7SalesOrderSummaryRecord.fromJson(_map(json['salesOrder']))
+          : null,
+      travelGroup: json['travelGroup'] is Map
+          ? Stage7TravelGroupSummaryRecord.fromJson(_map(json['travelGroup']))
+          : null,
+      customer: json['customer'] is Map
+          ? Stage7CustomerSummaryRecord.fromJson(_map(json['customer']))
+          : null,
+      targetUser: json['targetUser'] is Map
+          ? Stage7UserSummaryRecord.fromJson(_map(json['targetUser']))
+          : null,
+      agency: json['agency'] is Map
+          ? Stage7AgencySummaryRecord.fromJson(_map(json['agency']))
+          : null,
+      grossAmountCents: _intValue(json['grossAmountCents']),
+      confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
+      baseAmountCents: _intValue(json['baseAmountCents']),
+      deductionAmountCents: _intValue(json['deductionAmountCents']),
+      rateSnapshot: _stringOrNull(json['rateSnapshot']),
+      amountCents: _intValue(json['amountCents']),
+      pointsCents: _intValue(json['pointsCents']),
+      manualInput: _boolValue(json['manualInput']),
+      isConfirmed: _boolValue(json['isConfirmed']),
+      confirmedById: _stringOrNull(json['confirmedById']),
+      confirmedBy: json['confirmedBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(_map(json['confirmedBy']))
+          : null,
+      confirmedAt: _stringOrNull(json['confirmedAt']),
+      calculationVersion: _stringOrNull(json['calculationVersion']),
+      calculationNote: _stringOrNull(json['calculationNote']),
+      calculationNoteSummary: _stringOrNull(json['calculationNoteSummary']),
+      ruleSnapshot:
+          json['ruleSnapshot'] is Map ? _map(json['ruleSnapshot']) : null,
+      sourceSnapshot:
+          json['sourceSnapshot'] is Map ? _map(json['sourceSnapshot']) : null,
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class CommissionRecalculationResult {
+  const CommissionRecalculationResult({
+    required this.generatedRecords,
+    required this.updatedRecords,
+    required this.unchangedRecords,
+    required this.warnings,
+  });
+
+  final List<CommissionRecord> generatedRecords;
+  final List<CommissionRecord> updatedRecords;
+  final List<CommissionRecord> unchangedRecords;
+  final List<String> warnings;
+
+  List<CommissionRecord> get records => [
+        ...generatedRecords,
+        ...updatedRecords,
+        ...unchangedRecords,
+      ];
+
+  factory CommissionRecalculationResult.fromJson(Map<String, dynamic> json) {
+    final directRecords = _list(json['commissionRecords'])
+        .map((item) => CommissionRecord.fromJson(item))
+        .toList();
+    final generatedRecords = _list(json['generatedRecords'])
+        .map((item) => CommissionRecord.fromJson(item))
+        .toList();
+    return CommissionRecalculationResult(
+      generatedRecords:
+          generatedRecords.isNotEmpty ? generatedRecords : directRecords,
+      updatedRecords: _list(json['updatedRecords'])
+          .map((item) => CommissionRecord.fromJson(item))
+          .toList(),
+      unchangedRecords: _list(json['unchangedRecords'])
+          .map((item) => CommissionRecord.fromJson(item))
+          .toList(),
+      warnings: _stringList(json['warnings']),
+    );
+  }
+}
+
+class TravelGroupFinanceSummaryRecord {
+  const TravelGroupFinanceSummaryRecord({
+    required this.id,
+    required this.travelGroupId,
+    required this.travelGroup,
+    required this.totalSalesAmountCents,
+    required this.confirmedRefundAmountCents,
+    required this.effectiveSalesAmountCents,
+    required this.totalAgencyDeductionCents,
+    required this.agencyDeductionConfirmed,
+    required this.agencyDeductionConfirmedById,
+    required this.agencyDeductionConfirmedBy,
+    required this.agencyDeductionConfirmedAt,
+    required this.totalAgencyNetAmountCents,
+    required this.totalDailyRebateCents,
+    required this.totalMonthlyRebateCents,
+    required this.paidRebateCents,
+    required this.unpaidRebateCents,
+    required this.notes,
+    required this.guideInfoSent,
+    required this.travelAgencyInfoSent,
+    required this.calculationVersion,
+    required this.sourceSnapshot,
+    required this.updatedById,
+    required this.updatedBy,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String travelGroupId;
+  final Stage7TravelGroupSummaryRecord? travelGroup;
+  final int totalSalesAmountCents;
+  final int confirmedRefundAmountCents;
+  final int effectiveSalesAmountCents;
+  final int totalAgencyDeductionCents;
+  final bool agencyDeductionConfirmed;
+  final String? agencyDeductionConfirmedById;
+  final Stage7UserSummaryRecord? agencyDeductionConfirmedBy;
+  final String? agencyDeductionConfirmedAt;
+  final int totalAgencyNetAmountCents;
+  final int totalDailyRebateCents;
+  final int totalMonthlyRebateCents;
+  final int paidRebateCents;
+  final int unpaidRebateCents;
+  final String? notes;
+  final bool guideInfoSent;
+  final bool travelAgencyInfoSent;
+  final String? calculationVersion;
+  final Map<String, dynamic>? sourceSnapshot;
+  final String? updatedById;
+  final Stage7UserSummaryRecord? updatedBy;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory TravelGroupFinanceSummaryRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupFinanceSummaryRecord(
+      id: '${json['id'] ?? ''}',
+      travelGroupId: '${json['travelGroupId'] ?? ''}',
+      travelGroup: json['travelGroup'] is Map
+          ? Stage7TravelGroupSummaryRecord.fromJson(_map(json['travelGroup']))
+          : null,
+      totalSalesAmountCents: _intValue(json['totalSalesAmountCents']),
+      confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
+      effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
+      totalAgencyDeductionCents: _intValue(json['totalAgencyDeductionCents']),
+      agencyDeductionConfirmed: _boolValue(json['agencyDeductionConfirmed']),
+      agencyDeductionConfirmedById:
+          _stringOrNull(json['agencyDeductionConfirmedById']),
+      agencyDeductionConfirmedBy: json['agencyDeductionConfirmedBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(
+              _map(json['agencyDeductionConfirmedBy']),
+            )
+          : null,
+      agencyDeductionConfirmedAt:
+          _stringOrNull(json['agencyDeductionConfirmedAt']),
+      totalAgencyNetAmountCents: _intValue(json['totalAgencyNetAmountCents']),
+      totalDailyRebateCents: _intValue(json['totalDailyRebateCents']),
+      totalMonthlyRebateCents: _intValue(json['totalMonthlyRebateCents']),
+      paidRebateCents: _intValue(json['paidRebateCents']),
+      unpaidRebateCents: _intValue(json['unpaidRebateCents']),
+      notes: _stringOrNull(json['notes']),
+      guideInfoSent: _boolValue(json['guideInfoSent']),
+      travelAgencyInfoSent: _boolValue(json['travelAgencyInfoSent']),
+      calculationVersion: _stringOrNull(json['calculationVersion']),
+      sourceSnapshot:
+          json['sourceSnapshot'] is Map ? _map(json['sourceSnapshot']) : null,
+      updatedById: _stringOrNull(json['updatedById']),
+      updatedBy: json['updatedBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(_map(json['updatedBy']))
+          : null,
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class TravelGroupFinanceSummaryRefreshResult {
+  const TravelGroupFinanceSummaryRefreshResult({
+    required this.travelGroupFinanceSummary,
+    required this.amountChanged,
+    required this.agencyDeductionConfirmationReset,
+  });
+
+  final TravelGroupFinanceSummaryRecord? travelGroupFinanceSummary;
+  final bool amountChanged;
+  final bool agencyDeductionConfirmationReset;
+
+  factory TravelGroupFinanceSummaryRefreshResult.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupFinanceSummaryRefreshResult(
+      travelGroupFinanceSummary: json['travelGroupFinanceSummary'] is Map
+          ? TravelGroupFinanceSummaryRecord.fromJson(
+              _map(json['travelGroupFinanceSummary']),
+            )
+          : null,
+      amountChanged: _boolValue(json['amountChanged']),
+      agencyDeductionConfirmationReset:
+          _boolValue(json['agencyDeductionConfirmationReset']),
+    );
+  }
+}
+
+class Stage7SalesOrderSummaryRecord {
+  const Stage7SalesOrderSummaryRecord({
+    required this.id,
+    required this.orderNo,
+    required this.orderDate,
+    required this.status,
+    required this.customerName,
+  });
+
+  final String? id;
+  final String? orderNo;
+  final String? orderDate;
+  final String? status;
+  final String? customerName;
+
+  factory Stage7SalesOrderSummaryRecord.fromJson(Map<String, dynamic> json) {
+    return Stage7SalesOrderSummaryRecord(
+      id: _stringOrNull(json['id']),
+      orderNo: _stringOrNull(json['orderNo']),
+      orderDate: _stringOrNull(json['orderDate']),
+      status: _stringOrNull(json['status']),
+      customerName: _stringOrNull(json['customerName']),
+    );
+  }
+}
+
+class Stage7TravelGroupSummaryRecord {
+  const Stage7TravelGroupSummaryRecord({
+    required this.id,
+    required this.groupNo,
+    required this.visitDate,
+    required this.travelAgency,
+    required this.guideName,
+    required this.tasterId,
+    required this.tasterName,
+    required this.financeMark,
+  });
+
+  final String? id;
+  final String? groupNo;
+  final String? visitDate;
+  final String? travelAgency;
+  final String? guideName;
+  final String? tasterId;
+  final String? tasterName;
+  final bool? financeMark;
+
+  factory Stage7TravelGroupSummaryRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return Stage7TravelGroupSummaryRecord(
+      id: _stringOrNull(json['id']),
+      groupNo: _stringOrNull(json['groupNo']),
+      visitDate: _stringOrNull(json['visitDate']),
+      travelAgency: _stringOrNull(json['travelAgency']),
+      guideName: _stringOrNull(json['guideName']),
+      tasterId: _stringOrNull(json['tasterId']),
+      tasterName: _stringOrNull(json['tasterName']),
+      financeMark: _boolOrNull(json['financeMark']),
+    );
+  }
+}
+
+class Stage7CustomerSummaryRecord {
+  const Stage7CustomerSummaryRecord({
+    required this.id,
+    required this.name,
+  });
+
+  final String? id;
+  final String? name;
+
+  factory Stage7CustomerSummaryRecord.fromJson(Map<String, dynamic> json) {
+    return Stage7CustomerSummaryRecord(
+      id: _stringOrNull(json['id']),
+      name: _stringOrNull(json['name']),
+    );
+  }
+}
+
+class Stage7UserSummaryRecord {
+  const Stage7UserSummaryRecord({
+    required this.id,
+    required this.name,
+    required this.username,
+    required this.role,
+  });
+
+  final String? id;
+  final String? name;
+  final String? username;
+  final String? role;
+
+  factory Stage7UserSummaryRecord.fromJson(Map<String, dynamic> json) {
+    return Stage7UserSummaryRecord(
+      id: _stringOrNull(json['id']),
+      name: _stringOrNull(json['name']),
+      username: _stringOrNull(json['username']),
+      role: _stringOrNull(json['role']),
+    );
+  }
+}
+
+class Stage7AgencySummaryRecord {
+  const Stage7AgencySummaryRecord({
+    required this.id,
+    required this.name,
+  });
+
+  final String? id;
+  final String? name;
+
+  factory Stage7AgencySummaryRecord.fromJson(Map<String, dynamic> json) {
+    return Stage7AgencySummaryRecord(
+      id: _stringOrNull(json['id']),
+      name: _stringOrNull(json['name']),
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
 import 'package:jiangjiu_mobile_desktop/core/config/app_config.dart';
 import 'package:jiangjiu_mobile_desktop/features/after_sales/after_sales_form_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rule_config_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
@@ -13,6 +14,7 @@ import 'package:jiangjiu_mobile_desktop/features/pending_travel_groups/pending_t
 import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_table_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/role_menu/role_menu_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/taster_commissions/taster_commission_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/travel_group_form_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_page.dart';
@@ -40,6 +42,7 @@ void main() {
         'warehouse_workspace',
         'after_sales_orders',
         'own_taster_receptions',
+        'own_commissions',
       ],
       UserRole.admin,
     );
@@ -59,6 +62,7 @@ void main() {
         'taster_summary',
       ]),
     );
+    expect(adminIds, isNot(contains('taster_commissions')));
 
     final salesIds = _destinationIds(
       [
@@ -87,6 +91,8 @@ void main() {
         'order_query',
         'after_sales_orders',
         'finance_workspace',
+        'commission_rules',
+        'own_commissions',
         'warehouse_workspace',
       ],
       UserRole.boss,
@@ -100,14 +106,50 @@ void main() {
         'warehouse_packing',
       ]),
     );
+    expect(bossIds, isNot(contains('commission_rules')));
+    expect(bossIds, isNot(contains('taster_commissions')));
+
+    final financeRuleIds = _destinationIds(
+      ['commission_rules'],
+      UserRole.finance,
+    );
+    expect(financeRuleIds, contains('commission_rules'));
+
+    final tasterStage7Ids = _destinationIds(
+      ['commissions', 'commission_rules', 'own_commissions'],
+      UserRole.taster,
+    );
+    expect(tasterStage7Ids, contains('taster_commissions'));
+    expect(tasterStage7Ids, isNot(contains('finance_query')));
+    expect(tasterStage7Ids, isNot(contains('commission_rules')));
+
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+    ]) {
+      final ids = _destinationIds(
+        ['commissions', 'commission_rules', 'own_commissions'],
+        role,
+      );
+      expect(ids, isNot(contains('finance_query')));
+      expect(ids, isNot(contains('commission_rules')));
+      expect(ids, isNot(contains('taster_commissions')));
+    }
   });
 
-  test(
-      'phase 6 role menus expose only allowed after-sales finance warehouse entries',
-      () {
+  test('phase 6 and 7 role menus expose only allowed business entries', () {
     expect(_roleIds(UserRole.afterSales), contains('after_sales_form'));
     expect(_roleIds(UserRole.afterSales), contains('order_query'));
     expect(_roleIds(UserRole.finance), contains('finance_query'));
+    expect(_roleIds(UserRole.finance), contains('commission_rules'));
+    expect(_roleIds(UserRole.admin), contains('finance_query'));
+    expect(_roleIds(UserRole.admin), contains('commission_rules'));
+    expect(_roleIds(UserRole.boss), contains('finance_query'));
+    expect(_roleIds(UserRole.boss), isNot(contains('commission_rules')));
+    expect(_roleIds(UserRole.boss), isNot(contains('taster_commissions')));
+    expect(_roleIds(UserRole.taster), contains('taster_commissions'));
     expect(_roleIds(UserRole.warehouse), contains('warehouse_packing'));
     expect(
         _roleIds(UserRole.boss),
@@ -118,7 +160,27 @@ void main() {
     for (final role in [UserRole.frontDesk, UserRole.taster]) {
       expect(_roleIds(role), isNot(contains('after_sales_form')));
       expect(_roleIds(role), isNot(contains('finance_query')));
+      expect(_roleIds(role), isNot(contains('commission_rules')));
       expect(_roleIds(role), isNot(contains('warehouse_packing')));
+    }
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+      UserRole.taster,
+      UserRole.boss,
+    ]) {
+      expect(_roleIds(role), isNot(contains('commission_rules')));
+    }
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+    ]) {
+      expect(_roleIds(role), isNot(contains('finance_query')));
+      expect(_roleIds(role), isNot(contains('taster_commissions')));
     }
   });
 
@@ -144,6 +206,8 @@ void main() {
     expect(_page('order_form'), isA<OrderFormPage>());
     expect(_page('order_query'), isA<OrderQueryPage>());
     expect(_page('finance_query'), isA<FinanceQueryPage>());
+    expect(_page('commission_rules'), isA<CommissionRuleConfigPage>());
+    expect(_page('taster_commissions'), isA<TasterCommissionPage>());
     expect(_page('reconciliation_table'), isA<ReconciliationTablePage>());
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());

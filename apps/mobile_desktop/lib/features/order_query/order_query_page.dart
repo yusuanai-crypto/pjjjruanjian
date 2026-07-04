@@ -15,6 +15,7 @@ import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../travel_groups/travel_group_picker_dialog.dart';
 
 class OrderQueryPage extends StatefulWidget {
   const OrderQueryPage({
@@ -57,7 +58,12 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       widget.role == UserRole.admin || widget.role == UserRole.finance;
 
   bool get _canEditBasics =>
-      widget.role == UserRole.admin || widget.role == UserRole.sales;
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.sales ||
+      widget.role == UserRole.finance;
+
+  bool get _canEditFullOrder =>
+      widget.role == UserRole.admin || widget.role == UserRole.finance;
 
   bool get _canGenerateQrSalesSheet =>
       widget.role == UserRole.admin || widget.role == UserRole.sales;
@@ -226,9 +232,13 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   }
 
   Future<void> _openBasicEditDialog(SalesOrderRecord order) async {
-    final result = await showDialog<Map<String, dynamic>>(
+    final result = await showDialog<_OrderEditResult>(
       context: context,
-      builder: (context) => _OrderBasicEditDialog(order: order),
+      builder: (context) => _OrderEditDialog(
+        businessApi: _businessApi,
+        order: order,
+        fullEdit: _canEditFullOrder,
+      ),
     );
     if (result == null) {
       return;
@@ -239,14 +249,29 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       _detailErrorMessage = null;
     });
     try {
-      final updated = await _businessApi.updateSalesOrder(order.id, result);
+      var updated = await _businessApi.updateSalesOrder(
+        order.id,
+        result.orderPayload,
+      );
+      if (result.financePayload.isNotEmpty) {
+        updated = await _businessApi.updateSalesOrderFinance(
+          order.id,
+          result.financePayload,
+        );
+      }
+      if (result.packingPayload.isNotEmpty) {
+        updated = await _businessApi.updateSalesOrderPacking(
+          order.id,
+          result.packingPayload,
+        );
+      }
       if (!mounted) {
         return;
       }
       _replaceOrder(updated);
       setState(() => _busyOrderIds.remove(order.id));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${updated.orderNo} 已保存基础字段。')),
+        SnackBar(content: Text('${updated.orderNo} 已保存订单信息。')),
       );
     } catch (error) {
       if (!mounted) {
@@ -352,7 +377,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
           ),
         if (_loading) const LinearProgressIndicator(),
         FormSection(
-          title: '订单管理筛选',
+          title: '订单管理工作台',
           trailing: Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -378,6 +403,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
           ),
           children: [
             ResponsiveFormGrid(
+              minItemWidth: 220,
               children: [
                 TextField(
                   key: const ValueKey('order-query-search-field'),
@@ -450,14 +476,23 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
               ],
             ),
             const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                key: const ValueKey('order-query-search-button'),
-                onPressed: _loading ? null : _loadOrders,
-                icon: const Icon(Icons.search_rounded),
-                label: const Text('查询'),
-              ),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: _loading ? null : _loadOrders,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('刷新'),
+                ),
+                FilledButton.icon(
+                  key: const ValueKey('order-query-search-button'),
+                  onPressed: _loading ? null : _loadOrders,
+                  icon: const Icon(Icons.search_rounded),
+                  label: const Text('查询订单'),
+                ),
+              ],
             ),
           ],
         ),
@@ -492,11 +527,24 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
           ],
         ),
         ResponsiveTwoColumn(
-          primary: _OrderList(
-            orders: _orders,
-            selectedId: selectedOrder?.id,
-            loading: _loading,
-            onSelect: _selectOrder,
+          primaryFlex: 3,
+          secondaryFlex: 2,
+          primary: FormSection(
+            title: '订单列表',
+            trailing: StatusTag(
+              label:
+                  selectedOrder == null ? '未选择' : '已选 ${selectedOrder.orderNo}',
+              tone:
+                  selectedOrder == null ? StatusTone.neutral : StatusTone.info,
+            ),
+            children: [
+              _OrderList(
+                orders: _orders,
+                selectedId: selectedOrder?.id,
+                loading: _loading,
+                onSelect: _selectOrder,
+              ),
+            ],
           ),
           secondary: _OrderDetailPanel(
             order: selectedOrder,
@@ -546,79 +594,89 @@ class _OrderList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!loading && orders.isEmpty) {
-      return const EmptyState(title: '暂无匹配订单');
+      return const _InlinePanelState(
+        icon: Icons.inbox_rounded,
+        title: '暂无匹配订单',
+      );
+    }
+    if (loading && orders.isEmpty) {
+      return const _InlinePanelState(
+        icon: Icons.hourglass_top_rounded,
+        title: '正在加载订单',
+        loading: true,
+      );
     }
 
-    return Card(
-      child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: orders.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          final order = orders[index];
-          final selected = selectedId == order.id;
-          return ListTile(
-            selected: selected,
-            selectedTileColor:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.07),
-            leading: CircleAvatar(
-              child: Icon(
-                selected
-                    ? Icons.radio_button_checked_rounded
-                    : Icons.receipt_long_rounded,
-                size: 20,
-              ),
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: orders.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        final selected = selectedId == order.id;
+        return ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          selected: selected,
+          selectedTileColor:
+              Theme.of(context).colorScheme.primary.withValues(alpha: 0.07),
+          leading: CircleAvatar(
+            child: Icon(
+              selected
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.receipt_long_rounded,
+              size: 20,
             ),
-            title: Wrap(
-              spacing: 8,
-              runSpacing: 6,
+          ),
+          title: Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                order.orderNo,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              StatusTag(
+                label: _statusLabel(order.status),
+                tone: _statusTone(order.status),
+              ),
+              StatusTag(
+                label: _deliverySummaryLabel(order),
+                tone: StatusTone.info,
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 5,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  order.orderNo,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                    '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
+                Text(_travelGroupLabel(order)),
+                StatusTag(
+                  label: _customerMarked(order) ? '客户已标记' : '客户未标记',
+                  tone: _customerMarked(order)
+                      ? StatusTone.success
+                      : StatusTone.neutral,
                 ),
                 StatusTag(
-                  label: _statusLabel(order.status),
-                  tone: _statusTone(order.status),
-                ),
-                StatusTag(
-                  label: _deliverySummaryLabel(order),
-                  tone: StatusTone.info,
+                  label: order.financeMark ? '订单已标记' : '订单未标记',
+                  tone: order.financeMark
+                      ? StatusTone.success
+                      : StatusTone.neutral,
                 ),
               ],
             ),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 5,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                      '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
-                  Text(_travelGroupLabel(order)),
-                  StatusTag(
-                    label: _customerMarked(order) ? '客户已标记' : '客户未标记',
-                    tone: _customerMarked(order)
-                        ? StatusTone.success
-                        : StatusTone.neutral,
-                  ),
-                  StatusTag(
-                    label: order.financeMark ? '订单已标记' : '订单未标记',
-                    tone: order.financeMark
-                        ? StatusTone.success
-                        : StatusTone.neutral,
-                  ),
-                ],
-              ),
-            ),
-            trailing: MoneyText(cents: order.totalAmountCents),
-            onTap: () => onSelect(order),
-          );
-        },
-      ),
+          ),
+          trailing: MoneyText(cents: order.totalAmountCents),
+          onTap: () => onSelect(order),
+        );
+      },
     );
   }
 }
@@ -659,81 +717,241 @@ class _OrderDetailPanel extends StatelessWidget {
       return const EmptyState(title: '请选择订单');
     }
 
-    return FormSection(
-      title: '订单详情',
-      trailing: StatusTag(
-        label: _statusLabel(order.status),
-        tone: _statusTone(order.status),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (loading) const LinearProgressIndicator(),
-        if (errorMessage != null) ...[
-          StatusTag(label: errorMessage!, tone: StatusTone.danger),
-          const SizedBox(height: 12),
-        ],
-        _ActionStrip(
-          order: order,
-          role: role,
-          canMark: canMark,
-          canEditBasics: canEditBasics,
-          orderBusy: orderBusy,
-          customerBusy: customerBusy,
-          onToggleOrderMark: onToggleOrderMark,
-          onToggleCustomerMark: onToggleCustomerMark,
-          onEditBasics: onEditBasics,
-          onOpenQrSalesSheet: onOpenQrSalesSheet,
-        ),
-        const SizedBox(height: 14),
-        const _SectionTitle('基础信息'),
-        _InfoRow(label: '系统单号', value: order.orderNo),
-        _InfoRow(label: '订单日期', value: order.orderDate),
-        _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
-        _InfoRow(label: '销售单号', value: _display(order.salesFormNo)),
-        _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
-        _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
-        const Divider(height: 24),
-        const _SectionTitle('客户快照'),
-        _InfoRow(label: '客户姓名', value: _display(order.customerName)),
-        _InfoRow(label: '客户电话', value: _display(order.customerPhone)),
-        _InfoRow(label: '收货地址', value: _orderAddress(order)),
-        _InfoRow(
-          label: '客户标记',
-          value: order.customer == null
-              ? '旧订单未关联客户'
-              : order.customer!.financeMark
-                  ? '已标记'
-                  : '未标记',
-        ),
-        const Divider(height: 24),
-        const _SectionTitle('订单明细'),
-        if (order.items.isEmpty)
-          const Text('暂无明细')
-        else
-          for (final item in _sortedItems(order.items))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _OrderItemLine(item: item),
+        FormSection(
+          title: '订单操作',
+          trailing: StatusTag(
+            label: _statusLabel(order.status),
+            tone: _statusTone(order.status),
+          ),
+          children: [
+            if (loading) const LinearProgressIndicator(),
+            if (errorMessage != null) ...[
+              StatusTag(label: errorMessage!, tone: StatusTone.danger),
+              const SizedBox(height: 12),
+            ],
+            _OrderOverviewBlock(order: order),
+            const SizedBox(height: 14),
+            _ActionStrip(
+              order: order,
+              role: role,
+              canMark: canMark,
+              canEditBasics: canEditBasics,
+              orderBusy: orderBusy,
+              customerBusy: customerBusy,
+              onToggleOrderMark: onToggleOrderMark,
+              onToggleCustomerMark: onToggleCustomerMark,
+              onEditBasics: onEditBasics,
+              onOpenQrSalesSheet: onOpenQrSalesSheet,
             ),
-        const Divider(height: 24),
-        const _SectionTitle('金额与开票'),
-        _InfoMoneyRow(label: '订单金额', cents: order.totalAmountCents),
-        _InfoMoneyRow(label: '货到付款', cents: order.cashOnDeliveryAmountCents),
-        _InfoRow(label: '客户需开票', value: order.invoiceRequired ? '是' : '否'),
-        _InfoRow(label: '财务已开票', value: order.invoiceIssued ? '是' : '否'),
-        _InfoRow(label: '财务备注', value: _display(order.financeRemark)),
-        const Divider(height: 24),
-        const _SectionTitle('物流与库管'),
-        _InfoRow(label: '配送摘要', value: _deliverySummaryLabel(order)),
-        _InfoRow(
-            label: '打包状态', value: _packingStatusLabel(order.packingStatus)),
-        _InfoRow(label: '物流方式', value: _display(order.logisticsMethod)),
-        _InfoRow(label: '物流单号', value: _display(order.logisticsNo)),
-        _InfoMoneyRow(label: '物流运费', cents: order.logisticsFeeCents),
-        _InfoRow(label: '打包件数', value: '${order.packageCount}'),
-        _InfoRow(label: '库管备注', value: _display(order.warehouseRemark)),
-        const Divider(height: 24),
-        _InfoRow(label: '订单标记', value: order.financeMark ? '已标记' : '未标记'),
+          ],
+        ),
+        const SizedBox(height: 16),
+        FormSection(
+          title: '订单详情',
+          trailing: StatusTag(
+            label: order.financeMark ? '订单已标记' : '订单未标记',
+            tone: order.financeMark ? StatusTone.success : StatusTone.neutral,
+          ),
+          children: [
+            const _SectionTitle('基础信息'),
+            _InfoRow(label: '系统单号', value: order.orderNo),
+            _InfoRow(label: '订单日期', value: order.orderDate),
+            _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
+            _InfoRow(label: '销售单号', value: _display(order.salesFormNo)),
+            _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
+            _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
+            const Divider(height: 24),
+            const _SectionTitle('客户快照'),
+            _InfoRow(label: '客户姓名', value: _display(order.customerName)),
+            _InfoRow(label: '客户电话', value: _display(order.customerPhone)),
+            _InfoRow(label: '收货地址', value: _orderAddress(order)),
+            _InfoRow(
+              label: '客户标记',
+              value: order.customer == null
+                  ? '旧订单未关联客户'
+                  : order.customer!.financeMark
+                      ? '已标记'
+                      : '未标记',
+            ),
+            const Divider(height: 24),
+            const _SectionTitle('订单明细'),
+            if (order.items.isEmpty)
+              const Text('暂无明细')
+            else
+              for (final item in _sortedItems(order.items))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _OrderItemLine(item: item),
+                ),
+            const Divider(height: 24),
+            const _SectionTitle('金额与开票'),
+            _InfoMoneyRow(label: '订单金额', cents: order.totalAmountCents),
+            _InfoMoneyRow(
+                label: '货到付款', cents: order.cashOnDeliveryAmountCents),
+            _InfoRow(label: '客户需开票', value: order.invoiceRequired ? '是' : '否'),
+            _InfoRow(label: '财务已开票', value: order.invoiceIssued ? '是' : '否'),
+            _InfoRow(label: '财务备注', value: _display(order.financeRemark)),
+            const Divider(height: 24),
+            const _SectionTitle('物流与库管'),
+            _InfoRow(label: '配送摘要', value: _deliverySummaryLabel(order)),
+            _InfoRow(
+              label: '打包状态',
+              value: _packingStatusLabel(order.packingStatus),
+            ),
+            _InfoRow(label: '物流方式', value: _display(order.logisticsMethod)),
+            _InfoRow(label: '物流单号', value: _display(order.logisticsNo)),
+            _InfoMoneyRow(label: '物流运费', cents: order.logisticsFeeCents),
+            _InfoRow(label: '打包件数', value: '${order.packageCount}'),
+            _InfoRow(label: '库管备注', value: _display(order.warehouseRemark)),
+            const Divider(height: 24),
+            _InfoRow(label: '订单标记', value: order.financeMark ? '已标记' : '未标记'),
+          ],
+        ),
       ],
+    );
+  }
+}
+
+class _OrderOverviewBlock extends StatelessWidget {
+  const _OrderOverviewBlock({required this.order});
+
+  final SalesOrderRecord order;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  order.orderNo,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                StatusTag(
+                  label: _orderTypeLabel(order.orderType),
+                  tone: StatusTone.info,
+                ),
+                StatusTag(
+                  label: _packingStatusLabel(order.packingStatus),
+                  tone: StatusTone.neutral,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _OverviewValue(
+                  label: '客户',
+                  value:
+                      '${_display(order.customerName)} · ${_display(order.customerPhone)}',
+                ),
+                _OverviewValue(
+                  label: '订单金额',
+                  value: formatMoneyCents(order.totalAmountCents),
+                ),
+                _OverviewValue(
+                  label: '旅行团',
+                  value: _travelGroupLabel(order),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OverviewValue extends StatelessWidget {
+  const _OverviewValue({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 130, maxWidth: 260),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InlinePanelState extends StatelessWidget {
+  const _InlinePanelState({
+    required this.icon,
+    required this.title,
+    this.loading = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (loading)
+            const SizedBox.square(
+              dimension: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            )
+          else
+            Icon(icon, size: 30, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -771,6 +989,8 @@ class _ActionStrip extends StatelessWidget {
       children: [
         if (role == UserRole.boss)
           const StatusTag(label: '老板只读', tone: StatusTone.neutral),
+        if (role == UserRole.finance)
+          const StatusTag(label: '财务可维护订单信息', tone: StatusTone.info),
         if (canMark) ...[
           MarkInfoButton(
             marked: order.customer?.financeMark ?? false,
@@ -792,7 +1012,7 @@ class _ActionStrip extends StatelessWidget {
             key: const ValueKey('order-basic-edit-button'),
             onPressed: orderBusy ? null : onEditBasics,
             icon: const Icon(Icons.edit_rounded),
-            label: Text(role == UserRole.sales ? '编辑基础字段' : '编辑订单基础'),
+            label: Text(role == UserRole.sales ? '编辑基础字段' : '编辑订单信息'),
           ),
         if (_canViewQrSalesSheet(role))
           OutlinedButton.icon(
@@ -1174,38 +1394,133 @@ class _OrderItemLine extends StatelessWidget {
   }
 }
 
-class _OrderBasicEditDialog extends StatefulWidget {
-  const _OrderBasicEditDialog({required this.order});
+class _OrderEditResult {
+  const _OrderEditResult({
+    required this.orderPayload,
+    this.financePayload = const <String, dynamic>{},
+    this.packingPayload = const <String, dynamic>{},
+  });
 
-  final SalesOrderRecord order;
-
-  @override
-  State<_OrderBasicEditDialog> createState() => _OrderBasicEditDialogState();
+  final Map<String, dynamic> orderPayload;
+  final Map<String, dynamic> financePayload;
+  final Map<String, dynamic> packingPayload;
 }
 
-class _OrderBasicEditDialogState extends State<_OrderBasicEditDialog> {
+class _OrderEditDialog extends StatefulWidget {
+  const _OrderEditDialog({
+    required this.businessApi,
+    required this.order,
+    required this.fullEdit,
+  });
+
+  final BusinessApi businessApi;
+  final SalesOrderRecord order;
+  final bool fullEdit;
+
+  @override
+  State<_OrderEditDialog> createState() => _OrderEditDialogState();
+}
+
+class _OrderEditDialogState extends State<_OrderEditDialog> {
   late DateTime _orderDate;
+  late String _orderType;
+  late String _status;
+  late String _packingStatus;
   late final TextEditingController _salesFormNoController;
+  late final TextEditingController _salesUserIdController;
   late final TextEditingController _codController;
+  late final TextEditingController _remarkController;
+  late final TextEditingController _travelGroupIdController;
+  late final TextEditingController _customerNameController;
+  late final TextEditingController _customerPhoneController;
+  late final TextEditingController _addressController;
+  late final TextEditingController _logisticsNoController;
+  late final TextEditingController _logisticsFeeController;
+  late final TextEditingController _financeRemarkController;
+  late final TextEditingController _logisticsMethodController;
+  late final TextEditingController _packageCountController;
+  late final TextEditingController _warehouseRemarkController;
+  late final List<String> _provinceOptions;
+  late List<_EditableOrderItemDraft> _items;
+  String? _province;
+  String? _city;
+  String? _district;
   late bool _invoiceRequired;
+  late bool _invoiceIssued;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
     _orderDate = DateTime.tryParse(widget.order.orderDate) ?? DateTime.now();
+    _orderType = _knownOrderTypeValue(widget.order.orderType);
+    _status = _knownOrderStatusValue(widget.order.status);
+    _packingStatus = _knownPackingStatusValue(widget.order.packingStatus);
     _salesFormNoController =
         TextEditingController(text: widget.order.salesFormNo ?? '');
+    _salesUserIdController =
+        TextEditingController(text: widget.order.salesUserId ?? '');
     _codController = TextEditingController(
       text: _moneyInputText(widget.order.cashOnDeliveryAmountCents),
     );
+    _remarkController = TextEditingController(text: widget.order.remark ?? '');
+    _travelGroupIdController =
+        TextEditingController(text: widget.order.travelGroupId ?? '');
+    _customerNameController = TextEditingController(
+      text: widget.order.customer?.name ?? widget.order.customerName,
+    );
+    _customerPhoneController = TextEditingController(
+      text: widget.order.customer?.phone ?? widget.order.customerPhone ?? '',
+    );
+    _province = widget.order.customer?.province ?? widget.order.province;
+    _city = widget.order.customer?.city ?? widget.order.city;
+    _district = widget.order.customer?.district ?? widget.order.district;
+    _addressController = TextEditingController(
+      text: widget.order.customer?.address ?? widget.order.address ?? '',
+    );
+    _logisticsNoController =
+        TextEditingController(text: widget.order.logisticsNo ?? '');
+    _logisticsFeeController = TextEditingController(
+      text: _moneyInputText(widget.order.logisticsFeeCents),
+    );
+    _financeRemarkController =
+        TextEditingController(text: widget.order.financeRemark ?? '');
+    _logisticsMethodController =
+        TextEditingController(text: widget.order.logisticsMethod ?? '');
+    _packageCountController =
+        TextEditingController(text: '${widget.order.packageCount}');
+    _warehouseRemarkController =
+        TextEditingController(text: widget.order.warehouseRemark ?? '');
+    _provinceOptions = administrativeProvinceNames();
+    _items = _sortedItems(widget.order.items)
+        .map(_EditableOrderItemDraft.fromRecord)
+        .toList();
+    if (_items.isEmpty) {
+      _items = [_EditableOrderItemDraft.empty()];
+    }
     _invoiceRequired = widget.order.invoiceRequired;
+    _invoiceIssued = widget.order.invoiceIssued;
   }
 
   @override
   void dispose() {
     _salesFormNoController.dispose();
+    _salesUserIdController.dispose();
     _codController.dispose();
+    _remarkController.dispose();
+    _travelGroupIdController.dispose();
+    _customerNameController.dispose();
+    _customerPhoneController.dispose();
+    _addressController.dispose();
+    _logisticsNoController.dispose();
+    _logisticsFeeController.dispose();
+    _financeRemarkController.dispose();
+    _logisticsMethodController.dispose();
+    _packageCountController.dispose();
+    _warehouseRemarkController.dispose();
+    for (final item in _items) {
+      item.dispose();
+    }
     super.dispose();
   }
 
@@ -1222,67 +1537,501 @@ class _OrderBasicEditDialogState extends State<_OrderBasicEditDialog> {
     }
   }
 
+  Future<void> _selectTravelGroup() async {
+    final selected = await showDialog<TravelGroupRecord>(
+      context: context,
+      builder: (context) => TravelGroupPickerDialog(
+        businessApi: widget.businessApi,
+        initialQuery: widget.order.travelGroup?.groupNo ??
+            _travelGroupIdController.text.trim(),
+      ),
+    );
+    if (selected == null) {
+      return;
+    }
+    setState(() {
+      _travelGroupIdController.text = selected.id;
+    });
+  }
+
+  void _addItem() {
+    setState(() => _items.add(_EditableOrderItemDraft.empty()));
+  }
+
+  void _deleteItem(int index) {
+    if (_items.length == 1) {
+      setState(() => _errorMessage = '订单至少保留一条酒品明细。');
+      return;
+    }
+    setState(() {
+      final removed = _items.removeAt(index);
+      removed.dispose();
+      _errorMessage = null;
+    });
+  }
+
+  void _updateItemDeliveryType(int index, DeliveryType deliveryType) {
+    setState(() => _items[index].deliveryType = deliveryType);
+  }
+
   void _submit() {
     final codCents = _moneyCentsOrNull(_codController.text);
     if (codCents == null) {
       setState(() => _errorMessage = '货到付款金额必须为有效的非负金额。');
       return;
     }
-    Navigator.of(context).pop(<String, dynamic>{
+    final orderPayload = <String, dynamic>{
       'salesFormNo': _salesFormNoController.text.trim(),
       'orderDate': formatDate(_orderDate),
       'cashOnDeliveryAmountCents': codCents,
       'invoiceRequired': _invoiceRequired,
+    };
+
+    if (!widget.fullEdit) {
+      Navigator.of(context).pop(_OrderEditResult(orderPayload: orderPayload));
+      return;
+    }
+
+    final customerName = _customerNameController.text.trim();
+    if (customerName.isEmpty) {
+      setState(() => _errorMessage = '客户姓名不能为空。');
+      return;
+    }
+    final itemPayloads = _buildItemPayloads();
+    if (itemPayloads == null) {
+      return;
+    }
+    final logisticsFeeCents = _moneyCentsOrNull(_logisticsFeeController.text);
+    if (logisticsFeeCents == null) {
+      setState(() => _errorMessage = '物流运费必须为有效的非负金额。');
+      return;
+    }
+    final packageCount = _packageCountOrNull(_packageCountController.text);
+    if (packageCount == null) {
+      setState(() => _errorMessage = '打包件数必须是 0 或正整数。');
+      return;
+    }
+    final travelGroupId = _travelGroupIdController.text.trim();
+    if (_orderType == 'travel_group' && travelGroupId.isEmpty) {
+      setState(() => _errorMessage = '旅行团订单必须关联旅行团。');
+      return;
+    }
+
+    orderPayload.addAll({
+      'orderType': _orderType,
+      'salesUserId': _salesUserIdController.text.trim(),
+      'travelGroupId': _orderType == 'travel_group' ? travelGroupId : null,
+      'remark': _remarkController.text.trim(),
+      'customer': {
+        'name': customerName,
+        'phone': _customerPhoneController.text.trim(),
+        'province': _province?.trim() ?? '',
+        'city': _city?.trim() ?? '',
+        'district': _district?.trim() ?? '',
+        'address': _addressController.text.trim(),
+      },
+      'items': itemPayloads,
     });
+    final customerId = widget.order.customerId?.trim();
+    if (customerId != null && customerId.isNotEmpty) {
+      orderPayload['customerId'] = customerId;
+    }
+
+    Navigator.of(context).pop(
+      _OrderEditResult(
+        orderPayload: orderPayload,
+        financePayload: {
+          'logisticsNo': _logisticsNoController.text.trim(),
+          'logisticsFeeCents': logisticsFeeCents,
+          'invoiceIssued': _invoiceIssued,
+          'financeRemark': _financeRemarkController.text.trim(),
+          'status': _status,
+        },
+        packingPayload: {
+          'logisticsMethod': _logisticsMethodController.text.trim(),
+          'packingStatus': _packingStatus,
+          'packageCount': packageCount,
+          'warehouseRemark': _warehouseRemarkController.text.trim(),
+        },
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>>? _buildItemPayloads() {
+    final payloads = <Map<String, dynamic>>[];
+    for (var index = 0; index < _items.length; index += 1) {
+      final item = _items[index];
+      if (item.name.isEmpty) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细请填写酒品名称。');
+        return null;
+      }
+      if (item.quantity <= 0) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细数量必须大于 0。');
+        return null;
+      }
+      final unitPriceCents = item.unitPriceCentsOrNull;
+      if (unitPriceCents == null) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细单价格式不正确。');
+        return null;
+      }
+      payloads.add({
+        'productName': item.name,
+        'quantity': item.quantity,
+        'unitPriceCents': unitPriceCents,
+        'deliveryType': item.deliveryType.value,
+        'notes': item.notes,
+        'sortOrder': index + 1,
+      });
+    }
+    if (payloads.isEmpty) {
+      setState(() => _errorMessage = '订单至少保留一条酒品明细。');
+      return null;
+    }
+    return payloads;
   }
 
   @override
   Widget build(BuildContext context) {
+    final cityOptions = _optionsWithCurrent(
+      administrativeCitiesForProvince(_province),
+      _city,
+    );
+    final districtOptions = _optionsWithCurrent(
+      administrativeDistrictsForCity(_province, _city),
+      _district,
+    );
+    final provinceOptions = _optionsWithCurrent(_provinceOptions, _province);
+    final totalAmountCents = _items.fold<int>(
+      0,
+      (sum, item) => sum + item.subtotalCents,
+    );
+
     return AlertDialog(
-      title: Text('${widget.order.orderNo} 基础字段'),
+      title: Text(
+        widget.fullEdit
+            ? '${widget.order.orderNo} 编辑订单信息'
+            : '${widget.order.orderNo} 基础字段',
+      ),
       content: SizedBox(
-        width: 520,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              key: const ValueKey('order-edit-sales-form-no-field'),
-              controller: _salesFormNoController,
-              decoration: const InputDecoration(labelText: '销售单号'),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              key: const ValueKey('order-edit-date-button'),
-              onPressed: _pickDate,
-              icon: const Icon(Icons.calendar_today_rounded),
-              label: Text('订单日期 ${formatDate(_orderDate)}'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              key: const ValueKey('order-edit-cod-field'),
-              controller: _codController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: '货到付款金额',
-                prefixText: '¥ ',
+        width: widget.fullEdit ? 860 : 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_errorMessage != null) ...[
+                StatusTag(label: _errorMessage!, tone: StatusTone.danger),
+                const SizedBox(height: 12),
+              ],
+              const _SectionTitle('基础信息'),
+              if (widget.fullEdit)
+                ResponsiveFormGrid(
+                  minItemWidth: 220,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('order-edit-type-field'),
+                      initialValue: _orderType,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '订单类型'),
+                      items: [
+                        for (final item in _orderTypeEntries)
+                          DropdownMenuItem(
+                            value: item.key,
+                            child: Text(item.value),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _orderType = value);
+                        }
+                      },
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-sales-form-no-field'),
+                      controller: _salesFormNoController,
+                      decoration: const InputDecoration(labelText: '销售单号'),
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-sales-user-id-field'),
+                      controller: _salesUserIdController,
+                      decoration: const InputDecoration(labelText: '销售人员 ID'),
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-cod-field'),
+                      controller: _codController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: '货到付款金额',
+                        prefixText: '¥ ',
+                      ),
+                    ),
+                  ],
+                )
+              else ...[
+                TextField(
+                  key: const ValueKey('order-edit-sales-form-no-field'),
+                  controller: _salesFormNoController,
+                  decoration: const InputDecoration(labelText: '销售单号'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const ValueKey('order-edit-cod-field'),
+                  controller: _codController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: '货到付款金额',
+                    prefixText: '¥ ',
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('order-edit-date-button'),
+                    onPressed: _pickDate,
+                    icon: const Icon(Icons.calendar_today_rounded),
+                    label: Text('订单日期 ${formatDate(_orderDate)}'),
+                  ),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 260),
+                    child: CheckboxListTile(
+                      key: const ValueKey(
+                          'order-edit-invoice-required-checkbox'),
+                      value: _invoiceRequired,
+                      onChanged: (value) {
+                        setState(() => _invoiceRequired = value ?? false);
+                      },
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('客户需要开票'),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 6),
-            CheckboxListTile(
-              key: const ValueKey('order-edit-invoice-required-checkbox'),
-              value: _invoiceRequired,
-              onChanged: (value) {
-                setState(() => _invoiceRequired = value ?? false);
-              },
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              title: const Text('客户需要开票'),
-            ),
-            if (_errorMessage != null)
-              StatusTag(label: _errorMessage!, tone: StatusTone.danger),
-          ],
+              if (widget.fullEdit) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('order-edit-remark-field'),
+                  controller: _remarkController,
+                  decoration: const InputDecoration(labelText: '订单备注'),
+                ),
+                if (_orderType == 'travel_group') ...[
+                  const Divider(height: 26),
+                  const _SectionTitle('旅行团关联'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey(
+                              'order-edit-travel-group-id-field'),
+                          controller: _travelGroupIdController,
+                          decoration:
+                              const InputDecoration(labelText: '旅行团 ID'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      OutlinedButton.icon(
+                        key: const ValueKey('order-edit-select-travel-group'),
+                        onPressed: _selectTravelGroup,
+                        icon: const Icon(Icons.directions_bus_rounded),
+                        label: const Text('选择旅行团'),
+                      ),
+                    ],
+                  ),
+                ],
+                const Divider(height: 26),
+                const _SectionTitle('客户与收货'),
+                ResponsiveFormGrid(
+                  minItemWidth: 220,
+                  children: [
+                    TextField(
+                      key: const ValueKey('order-edit-customer-name-field'),
+                      controller: _customerNameController,
+                      decoration: const InputDecoration(labelText: '客户姓名'),
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-customer-phone-field'),
+                      controller: _customerPhoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(labelText: '电话'),
+                    ),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('order-edit-province-${_province ?? ''}'),
+                      initialValue: _province,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '省份'),
+                      items: [
+                        for (final province in provinceOptions)
+                          DropdownMenuItem(
+                            value: province,
+                            child: Text(province),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _province = value;
+                          _city = null;
+                          _district = null;
+                        });
+                      },
+                    ),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey(
+                          'order-edit-city-${_province ?? ''}-${_city ?? ''}'),
+                      initialValue: _city,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '市'),
+                      items: [
+                        for (final city in cityOptions)
+                          DropdownMenuItem(value: city, child: Text(city)),
+                      ],
+                      onChanged: cityOptions.isEmpty
+                          ? null
+                          : (value) {
+                              setState(() {
+                                _city = value;
+                                _district = null;
+                              });
+                            },
+                    ),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey(
+                        'order-edit-district-${_province ?? ''}-${_city ?? ''}-${_district ?? ''}',
+                      ),
+                      initialValue: _district,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '区县'),
+                      items: [
+                        for (final district in districtOptions)
+                          DropdownMenuItem(
+                            value: district,
+                            child: Text(district),
+                          ),
+                      ],
+                      onChanged: districtOptions.isEmpty
+                          ? null
+                          : (value) {
+                              setState(() => _district = value);
+                            },
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-address-field'),
+                      controller: _addressController,
+                      decoration: const InputDecoration(labelText: '具体详细地址'),
+                    ),
+                  ],
+                ),
+                const Divider(height: 26),
+                _OrderItemsEditSection(
+                  items: _items,
+                  totalAmountCents: totalAmountCents,
+                  onAdd: _addItem,
+                  onDelete: _deleteItem,
+                  onChanged: () => setState(() {}),
+                  onDeliveryTypeChanged: _updateItemDeliveryType,
+                ),
+                const Divider(height: 26),
+                const _SectionTitle('财务与物流'),
+                ResponsiveFormGrid(
+                  minItemWidth: 220,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('order-edit-status-field'),
+                      initialValue: _status,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '订单状态'),
+                      items: [
+                        for (final status in OrderStatus.values)
+                          DropdownMenuItem(
+                            value: status.value,
+                            child: Text(status.label),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _status = value);
+                        }
+                      },
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-logistics-no-field'),
+                      controller: _logisticsNoController,
+                      decoration: const InputDecoration(labelText: '物流单号'),
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-logistics-fee-field'),
+                      controller: _logisticsFeeController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: '物流运费',
+                        prefixText: '¥ ',
+                      ),
+                    ),
+                    CheckboxListTile(
+                      key: const ValueKey('order-edit-invoice-issued-checkbox'),
+                      value: _invoiceIssued,
+                      onChanged: (value) {
+                        setState(() => _invoiceIssued = value ?? false);
+                      },
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('财务已开票'),
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-logistics-method-field'),
+                      controller: _logisticsMethodController,
+                      decoration: const InputDecoration(labelText: '物流方式'),
+                    ),
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('order-edit-packing-status-field'),
+                      initialValue: _packingStatus,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '打包状态'),
+                      items: [
+                        for (final status in PackingStatus.values)
+                          DropdownMenuItem(
+                            value: status.value,
+                            child: Text(status.label),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _packingStatus = value);
+                        }
+                      },
+                    ),
+                    TextField(
+                      key: const ValueKey('order-edit-package-count-field'),
+                      controller: _packageCountController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: '打包件数'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const ValueKey('order-edit-finance-remark-field'),
+                  controller: _financeRemarkController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(labelText: '财务备注'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const ValueKey('order-edit-warehouse-remark-field'),
+                  controller: _warehouseRemarkController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(labelText: '库管备注'),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
       actions: [
@@ -1300,6 +2049,287 @@ class _OrderBasicEditDialogState extends State<_OrderBasicEditDialog> {
     );
   }
 }
+
+class _OrderItemsEditSection extends StatelessWidget {
+  const _OrderItemsEditSection({
+    required this.items,
+    required this.totalAmountCents,
+    required this.onAdd,
+    required this.onDelete,
+    required this.onChanged,
+    required this.onDeliveryTypeChanged,
+  });
+
+  final List<_EditableOrderItemDraft> items;
+  final int totalAmountCents;
+  final VoidCallback onAdd;
+  final ValueChanged<int> onDelete;
+  final VoidCallback onChanged;
+  final void Function(int index, DeliveryType deliveryType)
+      onDeliveryTypeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Expanded(child: _SectionTitle('酒品明细')),
+            MoneyText(cents: totalAmountCents, prominent: true),
+            const SizedBox(width: 10),
+            TextButton.icon(
+              key: const ValueKey('order-edit-item-add-button'),
+              onPressed: onAdd,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('添加明细'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        for (var index = 0; index < items.length; index += 1) ...[
+          _OrderItemEditRow(
+            index: index,
+            item: items[index],
+            onChanged: onChanged,
+            onDelete: () => onDelete(index),
+            onDeliveryTypeChanged: (deliveryType) =>
+                onDeliveryTypeChanged(index, deliveryType),
+          ),
+          if (index != items.length - 1) const Divider(height: 20),
+        ],
+      ],
+    );
+  }
+}
+
+class _OrderItemEditRow extends StatelessWidget {
+  const _OrderItemEditRow({
+    required this.index,
+    required this.item,
+    required this.onChanged,
+    required this.onDelete,
+    required this.onDeliveryTypeChanged,
+  });
+
+  final int index;
+  final _EditableOrderItemDraft item;
+  final VoidCallback onChanged;
+  final VoidCallback onDelete;
+  final ValueChanged<DeliveryType> onDeliveryTypeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '明细 ${index + 1}',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                MoneyText(cents: item.subtotalCents),
+                IconButton(
+                  key: ValueKey('order-edit-item-delete-$index'),
+                  tooltip: '删除明细',
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ResponsiveFormGrid(
+              minItemWidth: 170,
+              children: [
+                TextField(
+                  key: ValueKey('order-edit-item-product-$index'),
+                  controller: item.nameController,
+                  onChanged: (_) => onChanged(),
+                  decoration: const InputDecoration(labelText: '酒品名称'),
+                ),
+                TextField(
+                  key: ValueKey('order-edit-item-quantity-$index'),
+                  controller: item.quantityController,
+                  onChanged: (_) => onChanged(),
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: '数量'),
+                ),
+                TextField(
+                  key: ValueKey('order-edit-item-unit-price-$index'),
+                  controller: item.unitPriceController,
+                  onChanged: (_) => onChanged(),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: '单价',
+                    prefixText: '¥ ',
+                  ),
+                ),
+                DropdownButtonFormField<DeliveryType>(
+                  key: ValueKey('order-edit-item-delivery-$index'),
+                  initialValue: item.deliveryType,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: '配送方式'),
+                  items: [
+                    for (final type in DeliveryType.values)
+                      DropdownMenuItem(value: type, child: Text(type.label)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      onDeliveryTypeChanged(value);
+                    }
+                  },
+                ),
+                TextField(
+                  key: ValueKey('order-edit-item-notes-$index'),
+                  controller: item.notesController,
+                  onChanged: (_) => onChanged(),
+                  decoration: const InputDecoration(labelText: '明细备注'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EditableOrderItemDraft {
+  _EditableOrderItemDraft({
+    required String name,
+    required int quantity,
+    required int unitPriceCents,
+    required this.deliveryType,
+    String? notes,
+  })  : nameController = TextEditingController(text: name),
+        quantityController = TextEditingController(
+          text: quantity > 0 ? '$quantity' : '',
+        ),
+        unitPriceController = TextEditingController(
+          text: _moneyInputText(unitPriceCents),
+        ),
+        notesController = TextEditingController(text: notes ?? '');
+
+  factory _EditableOrderItemDraft.fromRecord(SalesOrderItemRecord item) {
+    return _EditableOrderItemDraft(
+      name: item.productName,
+      quantity: item.quantity,
+      unitPriceCents: item.unitPriceCents,
+      deliveryType: _deliveryTypeFromValue(item.deliveryType),
+      notes: item.notes,
+    );
+  }
+
+  factory _EditableOrderItemDraft.empty() {
+    return _EditableOrderItemDraft(
+      name: '',
+      quantity: 1,
+      unitPriceCents: 0,
+      deliveryType: DeliveryType.shipping,
+    );
+  }
+
+  final TextEditingController nameController;
+  final TextEditingController quantityController;
+  final TextEditingController unitPriceController;
+  final TextEditingController notesController;
+  DeliveryType deliveryType;
+
+  String get name => nameController.text.trim();
+
+  int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
+
+  int? get unitPriceCentsOrNull => _moneyCentsOrNull(unitPriceController.text);
+
+  int get subtotalCents => quantity * (unitPriceCentsOrNull ?? 0);
+
+  String get notes => notesController.text.trim();
+
+  void dispose() {
+    nameController.dispose();
+    quantityController.dispose();
+    unitPriceController.dispose();
+    notesController.dispose();
+  }
+}
+
+String _knownOrderTypeValue(String value) {
+  for (final item in _orderTypeEntries) {
+    if (item.key == value) {
+      return value;
+    }
+  }
+  return _orderTypeEntries.first.key;
+}
+
+String _knownOrderStatusValue(String value) {
+  for (final status in OrderStatus.values) {
+    if (status.value == value) {
+      return value;
+    }
+  }
+  return OrderStatus.valid.value;
+}
+
+String _knownPackingStatusValue(String value) {
+  for (final status in PackingStatus.values) {
+    if (status.value == value) {
+      return value;
+    }
+  }
+  return PackingStatus.pending.value;
+}
+
+DeliveryType _deliveryTypeFromValue(String value) {
+  for (final type in DeliveryType.values) {
+    if (type.value == value) {
+      return type;
+    }
+  }
+  return DeliveryType.shipping;
+}
+
+List<String> _optionsWithCurrent(List<String> options, String? current) {
+  final text = current?.trim() ?? '';
+  if (text.isEmpty || options.contains(text)) {
+    return options;
+  }
+  return [text, ...options];
+}
+
+int? _packageCountOrNull(String value) {
+  final text = value.trim();
+  if (text.isEmpty) {
+    return 0;
+  }
+  final parsed = int.tryParse(text);
+  if (parsed == null || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+const _orderTypeEntries = <MapEntry<String, String>>[
+  MapEntry('travel_group', '旅行团订单'),
+  MapEntry('buyback', '回购订单'),
+  MapEntry('external', '外销订单'),
+  MapEntry('internal', '内购订单'),
+  MapEntry('after_sales', '售后订单'),
+];
 
 class _NullableDropdown extends StatelessWidget {
   const _NullableDropdown({

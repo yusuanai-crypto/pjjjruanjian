@@ -25,6 +25,20 @@ function readAllMigrationSql() {
     .join('\n');
 }
 
+function extractPrismaBlock(source, header) {
+  const start = source.indexOf(header);
+  assert.notEqual(start, -1, `${header} should exist in Prisma schema`);
+  const end = source.indexOf('\n}', start);
+  assert.notEqual(end, -1, `${header} should have a closing brace`);
+  return source.slice(start, end + 2);
+}
+
+function assertBlockHasFields(block, fields) {
+  for (const field of fields) {
+    assert.match(block, new RegExp(`\\b${field}\\b`));
+  }
+}
+
 test('smoke: Prisma schema exposes phase 2 business models and scope fields', () => {
   const schema = readPrismaFile('schema.prisma');
 
@@ -442,3 +456,443 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
   );
   assert.doesNotMatch(readAllMigrationSql(), /shipped_at|shipped_by_id/i);
 });
+
+test('smoke: Prisma schema exposes stage 7 commission models, enums, and relations', () => {
+  const schema = readPrismaFile('schema.prisma');
+
+  for (const model of [
+    'AgencyDeductionRule',
+    'AgencyRebateRule',
+    'SalesDeductionRule',
+    'CommissionRule',
+    'CommissionRecord',
+    'TravelGroupFinanceSummary',
+  ]) {
+    assert.match(schema, new RegExp(`model ${model} \\{`));
+  }
+
+  const commissionRuleTargetType = extractPrismaBlock(
+    schema,
+    'enum CommissionRuleTargetType {',
+  );
+  for (const enumValue of [
+    'SALES_COMMISSION    @map("sales_commission")',
+    'OUTREACH_COMMISSION @map("outreach_commission")',
+    'LEADER_COMMISSION   @map("leader_commission")',
+    '@@map("commission_rule_target_type")',
+  ]) {
+    assert.match(commissionRuleTargetType, new RegExp(escapeRegExp(enumValue)));
+  }
+
+  const commissionTargetType = extractPrismaBlock(
+    schema,
+    'enum CommissionTargetType {',
+  );
+  for (const enumValue of [
+    'SALES_COMMISSION      @map("sales_commission")',
+    'OUTREACH_COMMISSION   @map("outreach_commission")',
+    'LEADER_COMMISSION     @map("leader_commission")',
+    'TASTER_COMMISSION     @map("taster_commission")',
+    'AGENCY_DAILY_REBATE   @map("agency_daily_rebate")',
+    'AGENCY_MONTHLY_REBATE @map("agency_monthly_rebate")',
+    '@@map("commission_target_type")',
+  ]) {
+    assert.match(commissionTargetType, new RegExp(escapeRegExp(enumValue)));
+  }
+
+  const user = extractPrismaBlock(schema, 'model User {');
+  assertBlockHasFields(user, [
+    'leaderId',
+    'leader',
+    'members',
+    'outreachSalesOrders',
+    'createdAgencyDeductionRules',
+    'updatedAgencyDeductionRules',
+    'createdAgencyRebateRules',
+    'updatedAgencyRebateRules',
+    'createdSalesDeductionRules',
+    'updatedSalesDeductionRules',
+    'createdCommissionRules',
+    'updatedCommissionRules',
+    'targetCommissionRecords',
+    'confirmedCommissionRecords',
+    'createdCommissionRecords',
+    'updatedCommissionRecords',
+    'confirmedTravelGroupSummaries',
+    'updatedTravelGroupSummaries',
+  ]);
+  assert.match(
+    user,
+    /leader\s+User\?\s+@relation\("UserLeader", fields: \[leaderId\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(user, /@@index\(\[leaderId\]\)/);
+
+  const travelAgency = extractPrismaBlock(schema, 'model TravelAgency {');
+  assertBlockHasFields(travelAgency, [
+    'agencyDeductionRules',
+    'agencyRebateRules',
+    'commissionRecords',
+  ]);
+
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+  assertBlockHasFields(travelGroup, [
+    'tasterId',
+    'travelAgency',
+    'financeMark',
+    'points',
+    'returnedPoints',
+    'unreturnedPoints',
+    'liquorCostDeductionCents',
+    'orderAmountCents',
+    'commissionRecords',
+    'financeSummary',
+  ]);
+
+  const salesOrder = extractPrismaBlock(schema, 'model SalesOrder {');
+  assertBlockHasFields(salesOrder, [
+    'salesUserId',
+    'outreachUserId',
+    'travelGroupId',
+    'totalAmountCents',
+    'status',
+    'items',
+    'afterSalesOrders',
+    'commissionRecords',
+  ]);
+  assert.match(
+    salesOrder,
+    /outreachUserId\s+String\?\s+@map\("outreach_user_id"\) @db\.Char\(36\)/,
+  );
+  assert.match(
+    salesOrder,
+    /outreachUser\s+User\?\s+@relation\("SalesOrderOutreachUser", fields: \[outreachUserId\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(salesOrder, /@@index\(\[outreachUserId\]\)/);
+
+  const afterSalesOrder = extractPrismaBlock(schema, 'model AfterSalesOrder {');
+  assertBlockHasFields(afterSalesOrder, [
+    'refundAmountCents',
+    'financeConfirmed',
+    'financeConfirmedById',
+    'financeConfirmedAt',
+    'commissionRecords',
+  ]);
+
+  const agencyDeductionRule = extractPrismaBlock(
+    schema,
+    'model AgencyDeductionRule {',
+  );
+  assertBlockHasFields(agencyDeductionRule, [
+    'agencyId',
+    'agencyName',
+    'productName',
+    'deductionCostCents',
+    'effectiveFrom',
+    'effectiveTo',
+    'isActive',
+    'createdById',
+    'updatedById',
+  ]);
+  assert.match(
+    agencyDeductionRule,
+    /agency\s+TravelAgency\?\s+@relation\(fields: \[agencyId\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(
+    agencyDeductionRule,
+    /@@index\(\[agencyId, productName, isActive, effectiveFrom\]/,
+  );
+  assert.match(
+    agencyDeductionRule,
+    /@@index\(\[agencyName, productName, isActive, effectiveFrom\]/,
+  );
+  assert.match(agencyDeductionRule, /@@map\("agency_deduction_rules"\)/);
+
+  const agencyRebateRule = extractPrismaBlock(
+    schema,
+    'model AgencyRebateRule {',
+  );
+  assertBlockHasFields(agencyRebateRule, [
+    'agencyId',
+    'agencyName',
+    'dailyRebateRate',
+    'monthlyRebateRate',
+    'totalRebateRate',
+    'effectiveFrom',
+    'effectiveTo',
+    'isActive',
+    'createdById',
+    'updatedById',
+    'commissionRecords',
+  ]);
+  assert.match(
+    agencyRebateRule,
+    /dailyRebateRate\s+Decimal\s+@default\(0\) @map\("daily_rebate_rate"\) @db\.Decimal\(10, 4\)/,
+  );
+  assert.match(
+    agencyRebateRule,
+    /monthlyRebateRate\s+Decimal\s+@default\(0\) @map\("monthly_rebate_rate"\) @db\.Decimal\(10, 4\)/,
+  );
+  assert.match(agencyRebateRule, /@@index\(\[agencyId, isActive, effectiveFrom\]\)/);
+  assert.match(agencyRebateRule, /@@index\(\[agencyName, isActive, effectiveFrom\]\)/);
+  assert.match(agencyRebateRule, /@@map\("agency_rebate_rules"\)/);
+
+  const salesDeductionRule = extractPrismaBlock(
+    schema,
+    'model SalesDeductionRule {',
+  );
+  assertBlockHasFields(salesDeductionRule, [
+    'productName',
+    'deductionCostCents',
+    'effectiveFrom',
+    'effectiveTo',
+    'isActive',
+    'createdById',
+    'updatedById',
+  ]);
+  assert.match(salesDeductionRule, /@@index\(\[productName, isActive, effectiveFrom\]\)/);
+  assert.match(salesDeductionRule, /@@map\("sales_deduction_rules"\)/);
+
+  const commissionRule = extractPrismaBlock(schema, 'model CommissionRule {');
+  assertBlockHasFields(commissionRule, [
+    'ruleName',
+    'targetType',
+    'rate',
+    'effectiveFrom',
+    'effectiveTo',
+    'isActive',
+    'createdById',
+    'updatedById',
+    'commissionRecords',
+  ]);
+  assert.match(
+    commissionRule,
+    /targetType\s+CommissionRuleTargetType\s+@map\("target_type"\)/,
+  );
+  assert.match(commissionRule, /@@index\(\[targetType, isActive, effectiveFrom\]\)/);
+  assert.match(commissionRule, /@@map\("commission_rules"\)/);
+
+  const commissionRecord = extractPrismaBlock(schema, 'model CommissionRecord {');
+  assertBlockHasFields(commissionRecord, [
+    'salesOrderId',
+    'travelGroupId',
+    'afterSalesOrderId',
+    'commissionRuleId',
+    'agencyRebateRuleId',
+    'targetType',
+    'targetUserId',
+    'agencyId',
+    'agencyName',
+    'grossAmountCents',
+    'confirmedRefundAmountCents',
+    'baseAmountCents',
+    'deductionAmountCents',
+    'rateSnapshot',
+    'amountCents',
+    'pointsCents',
+    'manualInput',
+    'isConfirmed',
+    'confirmedById',
+    'confirmedAt',
+    'calculationVersion',
+    'calculationNote',
+    'ruleSnapshot',
+    'sourceSnapshot',
+  ]);
+  for (const relation of [
+    'salesOrder',
+    'travelGroup',
+    'afterSalesOrder',
+    'commissionRule',
+    'agencyRebateRule',
+    'targetUser',
+    'agency',
+    'confirmedBy',
+  ]) {
+    assert.match(
+      commissionRecord,
+      new RegExp(`${relation}\\s+\\w+\\??\\s+@relation`),
+    );
+  }
+  assert.match(
+    commissionRecord,
+    /targetType\s+CommissionTargetType\s+@map\("target_type"\)/,
+  );
+  assert.match(
+    commissionRecord,
+    /rateSnapshot\s+Decimal\?\s+@map\("rate_snapshot"\) @db\.Decimal\(10, 4\)/,
+  );
+  assert.match(commissionRecord, /ruleSnapshot\s+Json\?\s+@map\("rule_snapshot"\)/);
+  assert.match(commissionRecord, /sourceSnapshot\s+Json\?\s+@map\("source_snapshot"\)/);
+  assert.match(commissionRecord, /@@index\(\[targetType, targetUserId, createdAt\]\)/);
+  assert.match(commissionRecord, /@@index\(\[travelGroupId, targetType\]\)/);
+  assert.match(commissionRecord, /@@map\("commission_records"\)/);
+
+  const summary = extractPrismaBlock(
+    schema,
+    'model TravelGroupFinanceSummary {',
+  );
+  assertBlockHasFields(summary, [
+    'travelGroupId',
+    'totalSalesAmountCents',
+    'confirmedRefundAmountCents',
+    'effectiveSalesAmountCents',
+    'totalAgencyDeductionCents',
+    'agencyDeductionConfirmed',
+    'agencyDeductionConfirmedById',
+    'agencyDeductionConfirmedAt',
+    'totalAgencyNetAmountCents',
+    'totalDailyRebateCents',
+    'totalMonthlyRebateCents',
+    'paidRebateCents',
+    'unpaidRebateCents',
+    'guideInfoSent',
+    'travelAgencyInfoSent',
+    'calculationVersion',
+    'sourceSnapshot',
+    'updatedById',
+  ]);
+  assert.match(
+    summary,
+    /travelGroup\s+TravelGroup\s+@relation\(fields: \[travelGroupId\], references: \[id\], onDelete: Cascade\)/,
+  );
+  assert.match(summary, /travelGroupId\s+String\s+@unique/);
+  assert.match(summary, /sourceSnapshot\s+Json\?\s+@map\("source_snapshot"\)/);
+  assert.match(summary, /@@index\(\[agencyDeductionConfirmed\]\)/);
+  assert.match(summary, /@@map\("travel_group_finance_summaries"\)/);
+});
+
+test('smoke: phase 7 Prisma migration creates commission tables and traceability columns', () => {
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260703000100_stage7_commission_points_schema',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+
+  const migration = readMigration(
+    '20260703000100_stage7_commission_points_schema',
+  );
+
+  assert.match(
+    migration,
+    /ADD COLUMN `outreach_user_id` CHAR\(36\) NULL/,
+  );
+  assert.match(migration, /sales_orders_outreach_user_id_idx/);
+  assert.match(migration, /sales_orders_outreach_user_id_fkey/);
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`outreach_user_id`\) REFERENCES `users`\(`id`\) ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /ADD COLUMN `outreach_user_id` CHAR\(36\) NOT NULL/,
+  );
+
+  for (const table of [
+    'agency_deduction_rules',
+    'agency_rebate_rules',
+    'sales_deduction_rules',
+    'commission_rules',
+    'commission_records',
+    'travel_group_finance_summaries',
+  ]) {
+    assert.match(migration, new RegExp(`CREATE TABLE \`${table}\``));
+  }
+
+  assert.match(
+    migration,
+    /`target_type` ENUM\('sales_commission', 'outreach_commission', 'leader_commission'\) NOT NULL/,
+  );
+  assert.match(
+    migration,
+    /`target_type` ENUM\('sales_commission', 'outreach_commission', 'leader_commission', 'taster_commission', 'agency_daily_rebate', 'agency_monthly_rebate'\) NOT NULL/,
+  );
+
+  for (const column of [
+    'sales_order_id',
+    'travel_group_id',
+    'after_sales_order_id',
+    'commission_rule_id',
+    'agency_rebate_rule_id',
+    'target_user_id',
+    'agency_id',
+    'agency_name',
+    'gross_amount_cents',
+    'confirmed_refund_amount_cents',
+    'base_amount_cents',
+    'deduction_amount_cents',
+    'rate_snapshot',
+    'amount_cents',
+    'points_cents',
+    'manual_input',
+    'is_confirmed',
+    'confirmed_by_id',
+    'confirmed_at',
+    'calculation_version',
+    'calculation_note',
+    'rule_snapshot',
+    'source_snapshot',
+  ]) {
+    assert.match(migration, new RegExp(`\`${column}\``));
+  }
+
+  assert.match(migration, /`rule_snapshot` JSON NULL/);
+  assert.match(migration, /`source_snapshot` JSON NULL/);
+  assert.match(
+    migration,
+    /`rate_snapshot` DECIMAL\(10, 4\) NULL/,
+  );
+
+  for (const indexName of [
+    'agency_deduction_rules_agency_product_active_from_idx',
+    'agency_deduction_rules_name_product_active_from_idx',
+    'agency_rebate_rules_agency_id_is_active_effective_from_idx',
+    'agency_rebate_rules_agency_name_is_active_effective_from_idx',
+    'sales_deduction_rules_product_name_is_active_effective_from_idx',
+    'commission_rules_target_type_is_active_effective_from_idx',
+    'commission_records_target_type_target_user_id_created_at_idx',
+    'commission_records_travel_group_id_target_type_idx',
+    'travel_group_finance_summaries_travel_group_id_key',
+    'travel_group_finance_summaries_agency_deduction_confirmed_idx',
+  ]) {
+    assert.match(migration, new RegExp(indexName));
+  }
+
+  for (const foreignKey of [
+    'agency_deduction_rules_agency_id_fkey',
+    'agency_rebate_rules_agency_id_fkey',
+    'commission_records_sales_order_id_fkey',
+    'commission_records_travel_group_id_fkey',
+    'commission_records_after_sales_order_id_fkey',
+    'commission_records_commission_rule_id_fkey',
+    'commission_records_agency_rebate_rule_id_fkey',
+    'commission_records_target_user_id_fkey',
+    'commission_records_agency_id_fkey',
+    'commission_records_confirmed_by_id_fkey',
+    'travel_group_finance_summaries_travel_group_id_fkey',
+    'tg_fin_summaries_confirmed_by_id_fkey',
+  ]) {
+    assert.match(migration, new RegExp(foreignKey));
+  }
+
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`travel_group_id`\) REFERENCES `travel_groups`\(`id`\) ON DELETE CASCADE ON UPDATE CASCADE/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`sales_order_id`\) REFERENCES `sales_orders`\(`id`\) ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`after_sales_order_id`\) REFERENCES `after_sales_orders`\(`id`\) ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+});
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

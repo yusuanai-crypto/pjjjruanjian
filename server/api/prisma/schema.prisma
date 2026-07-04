@@ -9,8 +9,10 @@ datasource db {
 
 // 当前 schema 已包含登录权限、系统设置、操作日志，以及当前业务 API 使用的业务基础表。
 // 已落库业务表：travel_agencies、guides、travel_groups、guide_carried_groups、pending_travel_groups、customers、sales_orders、
-// sales_order_items、after_sales_orders、daily_reconciliations、reconciliation_payment_methods、strike_bonus_awards。
-// 提成和 AI 等完整目标表仍按后续阶段追加 migration。
+// sales_order_items、after_sales_orders、agency_deduction_rules、agency_rebate_rules、sales_deduction_rules、
+// commission_rules、commission_records、travel_group_finance_summaries、daily_reconciliations、
+// reconciliation_payment_methods、strike_bonus_awards。
+// AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
   ADMIN       @map("admin")
   BOSS        @map("boss")
@@ -36,23 +38,38 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  leader                           User?                @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  members                          User[]               @relation("UserLeader")
-  updatedSystemSettings            SystemSetting[]      @relation("SystemSettingUpdatedBy")
+  leader                           User?                       @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members                          User[]                      @relation("UserLeader")
+  updatedSystemSettings            SystemSetting[]             @relation("SystemSettingUpdatedBy")
   operationLogs                    OperationLog[]
-  tasterTravelGroups               TravelGroup[]        @relation("TravelGroupTaster")
-  tasterGuideGroups                GuideCarriedGroup[]  @relation("GuideCarriedGroupTaster")
-  tasterPendingGroups              PendingTravelGroup[] @relation("PendingTravelGroupTaster")
-  salesOrders                      SalesOrder[]         @relation("SalesOrderSalesUser")
-  markedTravelGroups               TravelGroup[]        @relation("TravelGroupMarkedBy")
-  markedGuideGroups                GuideCarriedGroup[]  @relation("GuideCarriedGroupMarkedBy")
-  markedPendingGroups              PendingTravelGroup[] @relation("PendingTravelGroupMarkedBy")
-  markedSalesOrders                SalesOrder[]         @relation("SalesOrderMarkedBy")
-  markedCustomers                  Customer[]           @relation("CustomerMarkedBy")
-  financeConfirmedAfterSalesOrders AfterSalesOrder[]    @relation("AfterSalesOrderFinanceConfirmedBy")
-  handledAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderHandledBy")
-  createdAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderCreatedBy")
-  updatedAfterSalesOrders          AfterSalesOrder[]    @relation("AfterSalesOrderUpdatedBy")
+  tasterTravelGroups               TravelGroup[]               @relation("TravelGroupTaster")
+  tasterGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupTaster")
+  tasterPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupTaster")
+  salesOrders                      SalesOrder[]                @relation("SalesOrderSalesUser")
+  markedTravelGroups               TravelGroup[]               @relation("TravelGroupMarkedBy")
+  markedGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupMarkedBy")
+  markedPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupMarkedBy")
+  markedSalesOrders                SalesOrder[]                @relation("SalesOrderMarkedBy")
+  markedCustomers                  Customer[]                  @relation("CustomerMarkedBy")
+  financeConfirmedAfterSalesOrders AfterSalesOrder[]           @relation("AfterSalesOrderFinanceConfirmedBy")
+  handledAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderHandledBy")
+  createdAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderCreatedBy")
+  updatedAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderUpdatedBy")
+  outreachSalesOrders              SalesOrder[]                @relation("SalesOrderOutreachUser")
+  createdAgencyDeductionRules      AgencyDeductionRule[]       @relation("AgencyDeductionRuleCreatedBy")
+  updatedAgencyDeductionRules      AgencyDeductionRule[]       @relation("AgencyDeductionRuleUpdatedBy")
+  createdAgencyRebateRules         AgencyRebateRule[]          @relation("AgencyRebateRuleCreatedBy")
+  updatedAgencyRebateRules         AgencyRebateRule[]          @relation("AgencyRebateRuleUpdatedBy")
+  createdSalesDeductionRules       SalesDeductionRule[]        @relation("SalesDeductionRuleCreatedBy")
+  updatedSalesDeductionRules       SalesDeductionRule[]        @relation("SalesDeductionRuleUpdatedBy")
+  createdCommissionRules           CommissionRule[]            @relation("CommissionRuleCreatedBy")
+  updatedCommissionRules           CommissionRule[]            @relation("CommissionRuleUpdatedBy")
+  targetCommissionRecords          CommissionRecord[]          @relation("CommissionRecordTargetUser")
+  confirmedCommissionRecords       CommissionRecord[]          @relation("CommissionRecordConfirmedBy")
+  createdCommissionRecords         CommissionRecord[]          @relation("CommissionRecordCreatedBy")
+  updatedCommissionRecords         CommissionRecord[]          @relation("CommissionRecordUpdatedBy")
+  confirmedTravelGroupSummaries    TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
+  updatedTravelGroupSummaries      TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryUpdatedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -99,6 +116,10 @@ model TravelAgency {
   notes        String?  @db.Text
   createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  agencyDeductionRules AgencyDeductionRule[]
+  agencyRebateRules    AgencyRebateRule[]
+  commissionRecords    CommissionRecord[]
 
   @@index([contactPhone])
   @@map("travel_agencies")
@@ -198,6 +219,25 @@ enum AfterSalesStatus {
   @@map("after_sales_status")
 }
 
+enum CommissionRuleTargetType {
+  SALES_COMMISSION    @map("sales_commission")
+  OUTREACH_COMMISSION @map("outreach_commission")
+  LEADER_COMMISSION   @map("leader_commission")
+
+  @@map("commission_rule_target_type")
+}
+
+enum CommissionTargetType {
+  SALES_COMMISSION      @map("sales_commission")
+  OUTREACH_COMMISSION   @map("outreach_commission")
+  LEADER_COMMISSION     @map("leader_commission")
+  TASTER_COMMISSION     @map("taster_commission")
+  AGENCY_DAILY_REBATE   @map("agency_daily_rebate")
+  AGENCY_MONTHLY_REBATE @map("agency_monthly_rebate")
+
+  @@map("commission_target_type")
+}
+
 model TravelGroup {
   id                       String            @id @default(uuid()) @db.Char(36)
   groupNo                  String            @unique @map("group_no") @db.VarChar(80)
@@ -239,11 +279,13 @@ model TravelGroup {
   createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrders  SalesOrder[]
-  tastingItems TravelGroupTastingItem[]
-  guide        Guide?                   @relation(fields: [guideId], references: [id], onDelete: SetNull)
-  taster       User?                    @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
-  markedBy     User?                    @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  salesOrders       SalesOrder[]
+  tastingItems      TravelGroupTastingItem[]
+  commissionRecords CommissionRecord[]
+  financeSummary    TravelGroupFinanceSummary?
+  guide             Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
+  taster            User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  markedBy          User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@index([visitDate])
   @@index([travelAgency])
@@ -440,21 +482,25 @@ model SalesOrder {
   markedById                String?                 @map("marked_by") @db.Char(36)
   markedAt                  DateTime?               @map("marked_at") @db.DateTime(0)
   salesUserId               String?                 @map("sales_user_id") @db.Char(36)
+  outreachUserId            String?                 @map("outreach_user_id") @db.Char(36)
   createdById               String?                 @map("created_by_id") @db.Char(36)
   updatedById               String?                 @map("updated_by_id") @db.Char(36)
   createdAt                 DateTime                @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt                 DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
 
-  customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  travelGroup      TravelGroup?      @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
-  salesUser        User?             @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
-  markedBy         User?             @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
-  items            SalesOrderItem[]
-  afterSalesOrders AfterSalesOrder[]
+  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  travelGroup       TravelGroup?       @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
+  salesUser         User?              @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
+  outreachUser      User?              @relation("SalesOrderOutreachUser", fields: [outreachUserId], references: [id], onDelete: SetNull)
+  markedBy          User?              @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  items             SalesOrderItem[]
+  afterSalesOrders  AfterSalesOrder[]
+  commissionRecords CommissionRecord[]
 
   @@index([customerId])
   @@index([travelGroupId])
   @@index([salesUserId])
+  @@index([outreachUserId])
   @@index([financeMark])
   @@index([markedById])
   @@index([orderType])
@@ -510,12 +556,13 @@ model AfterSalesOrder {
   createdAt            DateTime             @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt            DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrder         SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
-  customer           Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  financeConfirmedBy User?      @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
-  handledBy          User?      @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
-  createdBy          User?      @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy          User?      @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  salesOrder         SalesOrder         @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  customer           Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  financeConfirmedBy User?              @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
+  handledBy          User?              @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
+  createdBy          User?              @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy          User?              @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  commissionRecords  CommissionRecord[]
 
   @@index([salesOrderId])
   @@index([customerId])
@@ -531,6 +578,222 @@ model AfterSalesOrder {
   @@index([createdById])
   @@index([updatedById])
   @@map("after_sales_orders")
+}
+
+model AgencyDeductionRule {
+  id                 String    @id @default(uuid()) @db.Char(36)
+  agencyId           String?   @map("agency_id") @db.Char(36)
+  agencyName         String?   @map("agency_name") @db.VarChar(120)
+  productName        String    @map("product_name") @db.VarChar(160)
+  deductionCostCents Int       @default(0) @map("deduction_cost_cents")
+  effectiveFrom      DateTime  @map("effective_from") @db.Date
+  effectiveTo        DateTime? @map("effective_to") @db.Date
+  isActive           Boolean   @default(true) @map("is_active")
+  notes              String?   @db.Text
+  createdById        String?   @map("created_by_id") @db.Char(36)
+  updatedById        String?   @map("updated_by_id") @db.Char(36)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  agency    TravelAgency? @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  createdBy User?         @relation("AgencyDeductionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?         @relation("AgencyDeductionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([agencyId])
+  @@index([agencyName])
+  @@index([productName])
+  @@index([isActive])
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([agencyId, productName, isActive, effectiveFrom], map: "agency_deduction_rules_agency_product_active_from_idx")
+  @@index([agencyName, productName, isActive, effectiveFrom], map: "agency_deduction_rules_name_product_active_from_idx")
+  @@map("agency_deduction_rules")
+}
+
+model AgencyRebateRule {
+  id                String    @id @default(uuid()) @db.Char(36)
+  agencyId          String?   @map("agency_id") @db.Char(36)
+  agencyName        String?   @map("agency_name") @db.VarChar(120)
+  dailyRebateRate   Decimal   @default(0) @map("daily_rebate_rate") @db.Decimal(10, 4)
+  monthlyRebateRate Decimal   @default(0) @map("monthly_rebate_rate") @db.Decimal(10, 4)
+  totalRebateRate   Decimal?  @map("total_rebate_rate") @db.Decimal(10, 4)
+  effectiveFrom     DateTime  @map("effective_from") @db.Date
+  effectiveTo       DateTime? @map("effective_to") @db.Date
+  isActive          Boolean   @default(true) @map("is_active")
+  notes             String?   @db.Text
+  createdById       String?   @map("created_by_id") @db.Char(36)
+  updatedById       String?   @map("updated_by_id") @db.Char(36)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  agency            TravelAgency?      @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  createdBy         User?              @relation("AgencyRebateRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?              @relation("AgencyRebateRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  commissionRecords CommissionRecord[]
+
+  @@index([agencyId])
+  @@index([agencyName])
+  @@index([isActive])
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([agencyId, isActive, effectiveFrom])
+  @@index([agencyName, isActive, effectiveFrom])
+  @@map("agency_rebate_rules")
+}
+
+model SalesDeductionRule {
+  id                 String    @id @default(uuid()) @db.Char(36)
+  productName        String    @map("product_name") @db.VarChar(160)
+  deductionCostCents Int       @default(0) @map("deduction_cost_cents")
+  effectiveFrom      DateTime  @map("effective_from") @db.Date
+  effectiveTo        DateTime? @map("effective_to") @db.Date
+  isActive           Boolean   @default(true) @map("is_active")
+  notes              String?   @db.Text
+  createdById        String?   @map("created_by_id") @db.Char(36)
+  updatedById        String?   @map("updated_by_id") @db.Char(36)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  createdBy User? @relation("SalesDeductionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("SalesDeductionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([productName])
+  @@index([isActive])
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([productName, isActive, effectiveFrom])
+  @@map("sales_deduction_rules")
+}
+
+model CommissionRule {
+  id            String                   @id @default(uuid()) @db.Char(36)
+  ruleName      String                   @map("rule_name") @db.VarChar(120)
+  targetType    CommissionRuleTargetType @map("target_type")
+  rate          Decimal                  @default(0) @db.Decimal(10, 4)
+  effectiveFrom DateTime                 @map("effective_from") @db.Date
+  effectiveTo   DateTime?                @map("effective_to") @db.Date
+  isActive      Boolean                  @default(true) @map("is_active")
+  notes         String?                  @db.Text
+  createdById   String?                  @map("created_by_id") @db.Char(36)
+  updatedById   String?                  @map("updated_by_id") @db.Char(36)
+  createdAt     DateTime                 @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt     DateTime                 @updatedAt @map("updated_at") @db.DateTime(0)
+
+  createdBy         User?              @relation("CommissionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?              @relation("CommissionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  commissionRecords CommissionRecord[]
+
+  @@index([targetType])
+  @@index([isActive])
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([targetType, isActive, effectiveFrom])
+  @@map("commission_rules")
+}
+
+model CommissionRecord {
+  id                         String               @id @default(uuid()) @db.Char(36)
+  salesOrderId               String?              @map("sales_order_id") @db.Char(36)
+  travelGroupId              String?              @map("travel_group_id") @db.Char(36)
+  afterSalesOrderId          String?              @map("after_sales_order_id") @db.Char(36)
+  commissionRuleId           String?              @map("commission_rule_id") @db.Char(36)
+  agencyRebateRuleId         String?              @map("agency_rebate_rule_id") @db.Char(36)
+  targetType                 CommissionTargetType @map("target_type")
+  targetUserId               String?              @map("target_user_id") @db.Char(36)
+  agencyId                   String?              @map("agency_id") @db.Char(36)
+  agencyName                 String?              @map("agency_name") @db.VarChar(120)
+  grossAmountCents           Int                  @default(0) @map("gross_amount_cents")
+  confirmedRefundAmountCents Int                  @default(0) @map("confirmed_refund_amount_cents")
+  baseAmountCents            Int                  @default(0) @map("base_amount_cents")
+  deductionAmountCents       Int                  @default(0) @map("deduction_amount_cents")
+  rateSnapshot               Decimal?             @map("rate_snapshot") @db.Decimal(10, 4)
+  amountCents                Int                  @default(0) @map("amount_cents")
+  pointsCents                Int                  @default(0) @map("points_cents")
+  manualInput                Boolean              @default(false) @map("manual_input")
+  isConfirmed                Boolean              @default(false) @map("is_confirmed")
+  confirmedById              String?              @map("confirmed_by_id") @db.Char(36)
+  confirmedAt                DateTime?            @map("confirmed_at") @db.DateTime(0)
+  calculationVersion         String               @default("stage7_v1") @map("calculation_version") @db.VarChar(40)
+  calculationNote            String?              @map("calculation_note") @db.Text
+  ruleSnapshot               Json?                @map("rule_snapshot")
+  sourceSnapshot             Json?                @map("source_snapshot")
+  createdById                String?              @map("created_by_id") @db.Char(36)
+  updatedById                String?              @map("updated_by_id") @db.Char(36)
+  createdAt                  DateTime             @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                  DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrder       SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  travelGroup      TravelGroup?      @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
+  afterSalesOrder  AfterSalesOrder?  @relation(fields: [afterSalesOrderId], references: [id], onDelete: SetNull)
+  commissionRule   CommissionRule?   @relation(fields: [commissionRuleId], references: [id], onDelete: SetNull)
+  agencyRebateRule AgencyRebateRule? @relation(fields: [agencyRebateRuleId], references: [id], onDelete: SetNull)
+  targetUser       User?             @relation("CommissionRecordTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  agency           TravelAgency?     @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  confirmedBy      User?             @relation("CommissionRecordConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  createdBy        User?             @relation("CommissionRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?             @relation("CommissionRecordUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([salesOrderId])
+  @@index([travelGroupId])
+  @@index([afterSalesOrderId])
+  @@index([commissionRuleId])
+  @@index([agencyRebateRuleId])
+  @@index([targetType])
+  @@index([targetUserId])
+  @@index([agencyId])
+  @@index([agencyName])
+  @@index([manualInput])
+  @@index([isConfirmed])
+  @@index([confirmedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([createdAt])
+  @@index([targetType, targetUserId, createdAt])
+  @@index([travelGroupId, targetType])
+  @@map("commission_records")
+}
+
+model TravelGroupFinanceSummary {
+  id                           String    @id @default(uuid()) @db.Char(36)
+  travelGroupId                String    @unique @map("travel_group_id") @db.Char(36)
+  totalSalesAmountCents        Int       @default(0) @map("total_sales_amount_cents")
+  confirmedRefundAmountCents   Int       @default(0) @map("confirmed_refund_amount_cents")
+  effectiveSalesAmountCents    Int       @default(0) @map("effective_sales_amount_cents")
+  totalAgencyDeductionCents    Int       @default(0) @map("total_agency_deduction_cents")
+  agencyDeductionConfirmed     Boolean   @default(false) @map("agency_deduction_confirmed")
+  agencyDeductionConfirmedById String?   @map("agency_deduction_confirmed_by_id") @db.Char(36)
+  agencyDeductionConfirmedAt   DateTime? @map("agency_deduction_confirmed_at") @db.DateTime(0)
+  totalAgencyNetAmountCents    Int       @default(0) @map("total_agency_net_amount_cents")
+  totalDailyRebateCents        Int       @default(0) @map("total_daily_rebate_cents")
+  totalMonthlyRebateCents      Int       @default(0) @map("total_monthly_rebate_cents")
+  paidRebateCents              Int       @default(0) @map("paid_rebate_cents")
+  unpaidRebateCents            Int       @default(0) @map("unpaid_rebate_cents")
+  notes                        String?   @db.Text
+  guideInfoSent                Boolean   @default(false) @map("guide_info_sent")
+  travelAgencyInfoSent         Boolean   @default(false) @map("travel_agency_info_sent")
+  calculationVersion           String    @default("stage7_v1") @map("calculation_version") @db.VarChar(40)
+  sourceSnapshot               Json?     @map("source_snapshot")
+  updatedById                  String?   @map("updated_by_id") @db.Char(36)
+  createdAt                    DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                    DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  travelGroup                TravelGroup @relation(fields: [travelGroupId], references: [id], onDelete: Cascade)
+  agencyDeductionConfirmedBy User?       @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy", fields: [agencyDeductionConfirmedById], references: [id], onDelete: SetNull, map: "tg_fin_summaries_confirmed_by_id_fkey")
+  updatedBy                  User?       @relation("TravelGroupFinanceSummaryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([agencyDeductionConfirmed])
+  @@index([agencyDeductionConfirmedById], map: "tg_fin_summaries_confirmed_by_id_idx")
+  @@index([updatedById])
+  @@index([updatedAt])
+  @@map("travel_group_finance_summaries")
 }
 
 model DailyReconciliation {

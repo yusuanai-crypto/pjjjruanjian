@@ -71,10 +71,20 @@ const appDestinations = <AppDestination>[
       icon: Icons.rate_review_rounded,
       phase: 3),
   AppDestination(
+      id: 'taster_commissions',
+      label: '我的提成',
+      icon: Icons.payments_rounded,
+      phase: 7),
+  AppDestination(
       id: 'finance_query',
       label: '财务查询',
       icon: Icons.account_balance_wallet_rounded,
       phase: 6),
+  AppDestination(
+      id: 'commission_rules',
+      label: '提成规则',
+      icon: Icons.rule_folder_rounded,
+      phase: 7),
   AppDestination(
       id: 'reconciliation_table',
       label: '对账表',
@@ -126,28 +136,54 @@ List<AppDestination> destinationsForBackendMenus(
 }
 
 void _applyRoleMenuRules(Set<String> ids, UserRole role) {
+  final requestedStage7Workbench =
+      ids.contains('finance_query') || ids.contains('commission_rules');
   switch (role) {
     case UserRole.sales:
       ids
         ..remove('travel_group_form')
         ..remove('travel_group_finance_supplement')
         ..add('travel_group_order_notes');
+      _removeStage7Destinations(ids);
       break;
     case UserRole.finance:
       ids
         ..remove('travel_group_form')
-        ..remove('order_form');
+        ..remove('order_form')
+        ..remove('taster_commissions');
       break;
     case UserRole.warehouse:
       ids.remove('order_form');
+      _removeStage7Destinations(ids);
       break;
     case UserRole.admin:
+      ids.remove('taster_commissions');
+      break;
     case UserRole.boss:
+      if (requestedStage7Workbench) {
+        ids.add('finance_query');
+      }
+      ids
+        ..remove('commission_rules')
+        ..remove('taster_commissions');
+      break;
     case UserRole.frontDesk:
     case UserRole.afterSales:
+      _removeStage7Destinations(ids);
+      break;
     case UserRole.taster:
+      ids
+        ..remove('finance_query')
+        ..remove('commission_rules');
       break;
   }
+}
+
+void _removeStage7Destinations(Set<String> ids) {
+  ids
+    ..remove('finance_query')
+    ..remove('commission_rules')
+    ..remove('taster_commissions');
 }
 
 AppDestination destinationById(String id) {
@@ -176,11 +212,17 @@ String _destinationIdForBackendMenu(String menuId) {
     case 'finance_workspace':
     case 'commissions':
       return 'finance_query';
+    case 'commission_rules':
+    case 'sales_deduction_rules':
+    case 'agency_deduction_rules':
+    case 'agency_rebate_rules':
+      return 'commission_rules';
     case 'warehouse_workspace':
       return 'warehouse_packing';
     case 'own_taster_receptions':
-    case 'own_commissions':
       return 'taster_summary';
+    case 'own_commissions':
+      return 'taster_commissions';
     default:
       return menuId;
   }

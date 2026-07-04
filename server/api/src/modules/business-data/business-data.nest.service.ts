@@ -4,6 +4,8 @@ import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
+import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
 import {
@@ -336,6 +338,7 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
   admin: [
     'orderType',
     'salesUserId',
+    'outreachUserId',
     'salesFormNo',
     'orderDate',
     'customerId',
@@ -357,6 +360,21 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'invoiceRequired',
     'remark',
     'items',
+  ],
+  finance: [
+    'orderType',
+    'salesUserId',
+    'outreachUserId',
+    'salesFormNo',
+    'orderDate',
+    'customerId',
+    'customer',
+    'travelGroupId',
+    'cashOnDeliveryAmountCents',
+    'invoiceRequired',
+    'remark',
+    'items',
+    'status',
   ],
 };
 
@@ -415,6 +433,8 @@ export class BusinessDataNestService {
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
     private readonly settingsService: SettingsNestService,
+    private readonly commissionRecordsService: CommissionRecordsNestService,
+    private readonly travelGroupFinanceSummaryService: TravelGroupFinanceSummaryNestService,
   ) {}
 
   async listGroups(kind: string, actor: any, filters: any = {}) {
@@ -1235,6 +1255,18 @@ export class BusinessDataNestService {
             },
             tx,
           );
+          await this.refreshStage7SalesOrderCommissionAndSummary(
+            tx,
+            createdOrder.id,
+            actor,
+            metadata,
+            {
+              trigger: 'sales_order_create',
+              entityType: 'sales_order',
+              entityId: createdOrder.id,
+              affectedTravelGroupIds: [orderForLog?.travelGroupId],
+            },
+          );
           return orderForLog;
         },
       );
@@ -1249,7 +1281,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'sales']);
+    requireAnyRole(actor, ['admin', 'sales', 'finance']);
     assertSalesOrderPatchAllowedFields(actor, payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -1388,6 +1420,23 @@ export class BusinessDataNestService {
         },
         tx,
       );
+      if (shouldRecalculateStage7ForSalesOrderUpdate(current, orderForLog, payload)) {
+        await this.refreshStage7SalesOrderCommissionAndSummary(
+          tx,
+          orderForLog.id,
+          actor,
+          metadata,
+          {
+            trigger: 'sales_order_update',
+            entityType: 'sales_order',
+            entityId: orderForLog.id,
+            affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
+              current,
+              orderForLog,
+            ),
+          },
+        );
+      }
       return orderForLog;
     });
 
@@ -1480,7 +1529,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'warehouse']);
+    requireAnyRole(actor, ['admin', 'warehouse', 'finance']);
     assertSalesOrderPackingPatchAllowedFields(payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -1608,6 +1657,21 @@ export class BusinessDataNestService {
           ipAddress: metadata.ipAddress || null,
         },
         tx,
+      );
+      await this.refreshStage7SalesOrderCommissionAndSummary(
+        tx,
+        orderForLog.id,
+        actor,
+        metadata,
+        {
+          trigger: 'sales_order_status_update',
+          entityType: 'sales_order',
+          entityId: orderForLog.id,
+          affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
+            current,
+            orderForLog,
+          ),
+        },
       );
       return orderForLog;
     });
@@ -1974,6 +2038,24 @@ export class BusinessDataNestService {
           ipAddress: metadata.ipAddress || null,
         },
         tx,
+      );
+      await this.refreshStage7SalesOrderCommissionAndSummary(
+        tx,
+        updatedOrder.salesOrderId,
+        actor,
+        metadata,
+        {
+          trigger: financeConfirmed
+            ? 'after_sales_finance_confirm'
+            : 'after_sales_finance_unconfirm',
+          entityType: 'after_sales_order',
+          entityId: updatedOrder.id,
+          afterSalesOrderId: updatedOrder.id,
+          affectedTravelGroupIds: [
+            current.salesOrder?.travelGroupId,
+            updatedOrder.salesOrder?.travelGroupId,
+          ],
+        },
       );
       return updatedOrder;
     });
@@ -2412,7 +2494,123 @@ export class BusinessDataNestService {
       },
       tx,
     );
+    await this.refreshStage7SalesOrderCommissionAndSummary(
+      tx,
+      orderForLog.id,
+      actor,
+      metadata,
+      {
+        trigger: 'after_sales_order_status_sync',
+        entityType: 'sales_order',
+        entityId: orderForLog.id,
+        afterSalesOrderId: afterSalesOrder.id,
+        affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
+          currentSalesOrder,
+          orderForLog,
+        ),
+      },
+    );
     return orderForLog;
+  }
+
+  private async refreshStage7SalesOrderCommissionAndSummary(
+    tx: any,
+    salesOrderId: string | null | undefined,
+    actor: any,
+    metadata: any = {},
+    context: any = {},
+  ) {
+    const orderId = normalizeOptionalString(salesOrderId);
+    if (!orderId) {
+      return null;
+    }
+
+    const recalculation =
+      await this.commissionRecordsService.recalculateSalesOrderRecords(
+        orderId,
+        {
+          prisma: tx,
+          actor,
+          ipAddress: metadata.ipAddress || null,
+        },
+      );
+    const latestOrder = await tx.salesOrder.findUnique({
+      where: {
+        id: orderId,
+      },
+      include: getSalesOrderInclude(),
+    });
+    const travelGroupIds = normalizeIdList([
+      ...(context.affectedTravelGroupIds || []),
+      latestOrder?.travelGroupId,
+      ...recalculation.records.map((record: any) => record.travelGroupId),
+    ]);
+    const summaryResults: any[] = [];
+    for (const travelGroupId of travelGroupIds) {
+      summaryResults.push(
+        await this.travelGroupFinanceSummaryService.refreshTravelGroupFinanceSummary(
+          travelGroupId,
+          {
+            prisma: tx,
+            actor,
+            ipAddress: metadata.ipAddress || null,
+            syncCompatibilityFields: false,
+          },
+        ),
+      );
+    }
+    const tasterAdjustment =
+      await this.commissionRecordsService.markTasterManualAdjustmentPending(
+        travelGroupIds,
+        {
+          prisma: tx,
+          actor,
+          ipAddress: metadata.ipAddress || null,
+          trigger: context.trigger || 'sales_order_recalculation',
+          salesOrderId: orderId,
+          afterSalesOrderId: context.afterSalesOrderId || null,
+          orderStatus: latestOrder?.status || null,
+          warnings: recalculation.warnings,
+        },
+      );
+    await this.operationLogsService.appendLog(
+      {
+        userId: actor?.id || null,
+        action: 'commission_records.recalculate.trigger',
+        entityType: context.entityType || 'sales_order',
+        entityId: context.entityId || orderId,
+        beforeData: null,
+        afterData: {
+          trigger: context.trigger || 'sales_order_recalculation',
+          salesOrderId: orderId,
+          afterSalesOrderId: context.afterSalesOrderId || null,
+          travelGroupIds,
+          orderStatus: latestOrder?.status || null,
+          generatedRecordCount: recalculation.generatedRecords.length,
+          updatedRecordCount: recalculation.updatedRecords.length,
+          unchangedRecordCount: recalculation.unchangedRecords.length,
+          warningCodes: recalculation.warnings.map(
+            (warning: any) => warning.code,
+          ),
+          warnings: recalculation.warnings,
+          summaryRefreshes: summaryResults.map((result: any) => ({
+            travelGroupId: result.travelGroupId,
+            amountChanged: result.amountChanged,
+            agencyDeductionConfirmationReset:
+              result.agencyDeductionConfirmationReset,
+          })),
+          tasterManualAdjustmentRecordIds:
+            tasterAdjustment.recordIds || [],
+        },
+        ipAddress: metadata.ipAddress || null,
+      },
+      tx,
+    );
+    return {
+      recalculation,
+      summaryResults,
+      tasterAdjustment,
+    };
   }
 
   private groupDelegate(table: any) {
@@ -3145,7 +3343,7 @@ function assertAfterSalesOrderFinanceConfirmPatchAllowedFields(payload: any) {
 }
 
 function assertCanUpdateSalesOrder(actor: any, order: any) {
-  if (actor?.role === 'admin') {
+  if (actor?.role === 'admin' || actor?.role === 'finance') {
     return;
   }
   if (
@@ -3209,6 +3407,37 @@ function getSalesOrderSummaryAffectedTravelGroupIds(current: any, updated: any) 
         (travelGroupId) =>
           typeof travelGroupId === 'string' && travelGroupId.length > 0,
       ),
+    ),
+  );
+}
+
+function shouldRecalculateStage7ForSalesOrderUpdate(
+  current: any,
+  updated: any,
+  payload: any = {},
+) {
+  return (
+    hasOwn(payload, 'items') ||
+    current.travelGroupId !== updated.travelGroupId ||
+    current.salesUserId !== updated.salesUserId ||
+    current.outreachUserId !== updated.outreachUserId ||
+    current.orderType !== updated.orderType ||
+    current.status !== updated.status ||
+    Number(current.totalAmountCents || 0) !==
+      Number(updated.totalAmountCents || 0)
+  );
+}
+
+function getStage7AffectedTravelGroupIds(current: any, updated: any) {
+  return normalizeIdList([current?.travelGroupId, updated?.travelGroupId]);
+}
+
+function normalizeIdList(values: any[]) {
+  return Array.from(
+    new Set(
+      (values || [])
+        .map((value) => normalizeOptionalString(value))
+        .filter(Boolean),
     ),
   );
 }
@@ -3488,6 +3717,7 @@ function buildSalesOrderData(payload: any, actor: any) {
     financeMark: false,
     markedById: null,
     markedAt: null,
+    outreachUserId: normalizeOptionalString(payload?.outreachUserId),
     salesUserId:
       actor.role === 'sales'
         ? actor.id
@@ -3515,6 +3745,9 @@ function buildSalesOrderUpdateData(payload: any, actor: any) {
   }
   if (hasOwn(payload, 'salesUserId')) {
     data.salesUserId = normalizeOptionalString(payload.salesUserId);
+  }
+  if (hasOwn(payload, 'outreachUserId')) {
+    data.outreachUserId = normalizeOptionalString(payload.outreachUserId);
   }
   if (hasOwn(payload, 'salesFormNo')) {
     data.salesFormNo = normalizeOptionalString(payload.salesFormNo);
@@ -4238,6 +4471,7 @@ function toTravelGroupOrderSummaryDto(order: any) {
     financeMark: Boolean(order.financeMark),
     markedById: order.markedById || null,
     markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
+    outreachUserId: order.outreachUserId || null,
     salesUserId: order.salesUserId || null,
   };
 }
@@ -4572,6 +4806,7 @@ function toSalesOrderDto(order: any) {
     financeMark: Boolean(order.financeMark),
     markedById: order.markedById || null,
     markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
+    outreachUserId: order.outreachUserId || null,
     salesUserId: order.salesUserId || null,
     items: Array.isArray(order.items)
       ? order.items.map(toSalesOrderItemDto)

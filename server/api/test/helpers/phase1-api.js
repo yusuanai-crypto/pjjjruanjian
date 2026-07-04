@@ -122,6 +122,12 @@ function createInMemoryPrisma(options = {}) {
   const salesOrders = [];
   const salesOrderItems = [];
   const afterSalesOrders = [];
+  const commissionRules = [];
+  const salesDeductionRules = [];
+  const agencyDeductionRules = [];
+  const agencyRebateRules = [];
+  const commissionRecords = [];
+  const travelGroupFinanceSummaries = [];
   let failSalesOrderCreateOrderNoOnce = Boolean(
     options.failSalesOrderCreateOrderNoOnce,
   );
@@ -132,6 +138,16 @@ function createInMemoryPrisma(options = {}) {
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
   seedAfterSalesOrders(afterSalesOrders, options.afterSalesOrders || [], now);
+  seedRuleRows(commissionRules, options.commissionRules || [], now);
+  seedRuleRows(salesDeductionRules, options.salesDeductionRules || [], now);
+  seedRuleRows(agencyDeductionRules, options.agencyDeductionRules || [], now);
+  seedRuleRows(agencyRebateRules, options.agencyRebateRules || [], now);
+  seedCommissionRecords(commissionRecords, options.commissionRecords || [], now);
+  seedTravelGroupFinanceSummaries(
+    travelGroupFinanceSummaries,
+    options.travelGroupFinanceSummaries || [],
+    now,
+  );
   const transactionalRows = [
     users,
     systemSettings,
@@ -146,6 +162,12 @@ function createInMemoryPrisma(options = {}) {
     salesOrders,
     salesOrderItems,
     afterSalesOrders,
+    commissionRules,
+    salesDeductionRules,
+    agencyDeductionRules,
+    agencyRebateRules,
+    commissionRecords,
+    travelGroupFinanceSummaries,
     dailyReconciliations,
     reconciliationPaymentMethods,
     strikeBonusAwards,
@@ -250,6 +272,26 @@ function createInMemoryPrisma(options = {}) {
     },
     travelAgency: createTravelAgencyDelegate(travelAgencies),
     guide: createGuideDelegate(guides),
+    commissionRule: createRuleDelegate(commissionRules),
+    salesDeductionRule: createRuleDelegate(salesDeductionRules),
+    agencyDeductionRule: createRuleDelegate(agencyDeductionRules),
+    agencyRebateRule: createRuleDelegate(agencyRebateRules),
+    commissionRecord: createCommissionRecordDelegate(commissionRecords, {
+      travelGroups,
+      users,
+      salesOrders,
+      salesOrderItems,
+      customers,
+      afterSalesOrders,
+      travelAgencies,
+    }),
+    travelGroupFinanceSummary: createTravelGroupFinanceSummaryDelegate(
+      travelGroupFinanceSummaries,
+      {
+        travelGroups,
+        users,
+      },
+    ),
     travelGroup: createTravelGroupDelegate(travelGroups, {
       failUpdateOnce: Boolean(options.failTravelGroupUpdateOnce),
       tastingItems: travelGroupTastingItems,
@@ -270,6 +312,7 @@ function createInMemoryPrisma(options = {}) {
               travelGroups,
               customers,
               users,
+              afterSalesOrders,
             )
           : null;
       },
@@ -289,6 +332,7 @@ function createInMemoryPrisma(options = {}) {
                   travelGroups,
                   customers,
                   users,
+                  afterSalesOrders,
                 ),
                 where,
               ),
@@ -306,6 +350,7 @@ function createInMemoryPrisma(options = {}) {
               travelGroups,
               customers,
               users,
+              afterSalesOrders,
             ),
           );
       },
@@ -345,6 +390,7 @@ function createInMemoryPrisma(options = {}) {
           travelGroups,
           customers,
           users,
+          afterSalesOrders,
         );
       },
       update: async ({ where, data, include } = {}) => {
@@ -381,6 +427,7 @@ function createInMemoryPrisma(options = {}) {
           travelGroups,
           customers,
           users,
+          afterSalesOrders,
         );
       },
     },
@@ -543,6 +590,165 @@ function createTravelAgencyDelegate(rows) {
       };
       rows.push(row);
       return copyRow(row);
+    },
+  };
+}
+
+function createRuleDelegate(rows) {
+  return {
+    findUnique: async ({ where } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findMany: async ({ where, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      return result.slice(0, take || result.length);
+    },
+    create: async ({ data } = {}) => {
+      const row = normalizeRuleRow(data);
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data } = {}) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Rule not found in test Prisma store.');
+      }
+      rows[index] = normalizeRuleRow({
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      });
+      return copyRow(rows[index]);
+    },
+  };
+}
+
+function createCommissionRecordDelegate(rows, relations = {}) {
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? withCommissionRecordIncludes(row, include, relations) : null;
+    },
+    findFirst: async ({ where, include, orderBy } = {}) => {
+      const row = sortRows(
+        rows
+          .map((item) =>
+            withCommissionRecordIncludes(
+              item,
+              getCommissionRecordFilterInclude(),
+              relations,
+            ),
+          )
+          .filter((item) => matchesWhere(item, where)),
+        orderBy,
+      )[0];
+      return row ? withCommissionRecordIncludes(row, include, relations) : null;
+    },
+    findMany: async ({ where, include, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows
+          .map((item) =>
+            withCommissionRecordIncludes(
+              item,
+              getCommissionRecordFilterInclude(),
+              relations,
+            ),
+          )
+          .filter((item) => matchesWhere(item, where)),
+        orderBy,
+      );
+      return result
+        .slice(0, take || result.length)
+        .map((row) => withCommissionRecordIncludes(row, include, relations));
+    },
+    create: async ({ data, include } = {}) => {
+      const row = normalizeCommissionRecordRow(data);
+      rows.push(row);
+      return withCommissionRecordIncludes(row, include, relations);
+    },
+    update: async ({ where, data, include } = {}) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Commission record not found in test Prisma store.');
+      }
+      rows[index] = normalizeCommissionRecordRow({
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      });
+      return withCommissionRecordIncludes(rows[index], include, relations);
+    },
+  };
+}
+
+function createTravelGroupFinanceSummaryDelegate(rows, relations = {}) {
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row
+        ? withTravelGroupFinanceSummaryIncludes(row, include, relations)
+        : null;
+    },
+    findFirst: async ({ where, include, orderBy } = {}) => {
+      const row = sortRows(
+        rows
+          .map((item) =>
+            withTravelGroupFinanceSummaryIncludes(
+              item,
+              getTravelGroupFinanceSummaryFilterInclude(),
+              relations,
+            ),
+          )
+          .filter((item) => matchesWhere(item, where)),
+        orderBy,
+      )[0];
+      return row
+        ? withTravelGroupFinanceSummaryIncludes(row, include, relations)
+        : null;
+    },
+    findMany: async ({ where, include, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows
+          .map((item) =>
+            withTravelGroupFinanceSummaryIncludes(
+              item,
+              getTravelGroupFinanceSummaryFilterInclude(),
+              relations,
+            ),
+          )
+          .filter((item) => matchesWhere(item, where)),
+        orderBy,
+      );
+      return result
+        .slice(0, take || result.length)
+        .map((row) =>
+          withTravelGroupFinanceSummaryIncludes(row, include, relations),
+        );
+    },
+    create: async ({ data, include } = {}) => {
+      const row = normalizeTravelGroupFinanceSummaryRow(data);
+      rows.push(row);
+      return withTravelGroupFinanceSummaryIncludes(row, include, relations);
+    },
+    update: async ({ where, data, include } = {}) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Travel group finance summary not found in test Prisma store.');
+      }
+      rows[index] = normalizeTravelGroupFinanceSummaryRow({
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      });
+      return withTravelGroupFinanceSummaryIncludes(
+        rows[index],
+        include,
+        relations,
+      );
     },
   };
 }
@@ -874,6 +1080,7 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       financeMark: Boolean(seed.financeMark),
       markedById: seed.markedById ?? null,
       markedAt: asDate(seed.markedAt) || null,
+      outreachUserId: seed.outreachUserId ?? null,
       salesUserId: seed.salesUserId ?? null,
       createdById: seed.createdById ?? null,
       updatedById: seed.updatedById ?? null,
@@ -929,6 +1136,126 @@ function seedAfterSalesOrders(rows, seeds, now) {
   }
 }
 
+function seedRuleRows(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push(
+      normalizeRuleRow({
+        ...seed,
+        id: seed.id || crypto.randomUUID(),
+        isActive: seed.isActive === undefined ? true : Boolean(seed.isActive),
+        createdAt: asDate(seed.createdAt) || now,
+        updatedAt: asDate(seed.updatedAt) || now,
+      }),
+    );
+  }
+}
+
+function seedCommissionRecords(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push(
+      normalizeCommissionRecordRow({
+        ...seed,
+        id: seed.id || crypto.randomUUID(),
+        createdAt: asDate(seed.createdAt) || now,
+        updatedAt: asDate(seed.updatedAt) || now,
+      }),
+    );
+  }
+}
+
+function seedTravelGroupFinanceSummaries(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push(
+      normalizeTravelGroupFinanceSummaryRow({
+        ...seed,
+        id: seed.id || crypto.randomUUID(),
+        createdAt: asDate(seed.createdAt) || now,
+        updatedAt: asDate(seed.updatedAt) || now,
+      }),
+    );
+  }
+}
+
+function normalizeRuleRow(data = {}) {
+  return {
+    ...data,
+    id: data.id || crypto.randomUUID(),
+    isActive: data.isActive === undefined ? true : Boolean(data.isActive),
+    effectiveFrom: asDate(data.effectiveFrom) || data.effectiveFrom,
+    effectiveTo:
+      data.effectiveTo === null || data.effectiveTo === undefined
+        ? null
+        : asDate(data.effectiveTo) || data.effectiveTo,
+    createdAt: asDate(data.createdAt) || new Date(),
+    updatedAt: asDate(data.updatedAt) || new Date(),
+  };
+}
+
+function normalizeCommissionRecordRow(data = {}) {
+  return {
+    ...data,
+    id: data.id || crypto.randomUUID(),
+    salesOrderId: data.salesOrderId ?? null,
+    travelGroupId: data.travelGroupId ?? null,
+    afterSalesOrderId: data.afterSalesOrderId ?? null,
+    commissionRuleId: data.commissionRuleId ?? null,
+    agencyRebateRuleId: data.agencyRebateRuleId ?? null,
+    targetType: data.targetType || 'TASTER_COMMISSION',
+    targetUserId: data.targetUserId ?? null,
+    agencyId: data.agencyId ?? null,
+    agencyName: data.agencyName ?? null,
+    grossAmountCents: data.grossAmountCents ?? 0,
+    confirmedRefundAmountCents: data.confirmedRefundAmountCents ?? 0,
+    baseAmountCents: data.baseAmountCents ?? 0,
+    deductionAmountCents: data.deductionAmountCents ?? 0,
+    rateSnapshot: data.rateSnapshot ?? null,
+    amountCents: data.amountCents ?? 0,
+    pointsCents: data.pointsCents ?? 0,
+    manualInput: Boolean(data.manualInput),
+    isConfirmed: Boolean(data.isConfirmed),
+    confirmedById: data.confirmedById ?? null,
+    confirmedAt: asDate(data.confirmedAt) || null,
+    calculationVersion: data.calculationVersion || 'stage7_v1',
+    calculationNote: data.calculationNote ?? null,
+    ruleSnapshot: data.ruleSnapshot ?? null,
+    sourceSnapshot: data.sourceSnapshot ?? null,
+    createdById: data.createdById ?? null,
+    updatedById: data.updatedById ?? null,
+    createdAt: asDate(data.createdAt) || new Date(),
+    updatedAt: asDate(data.updatedAt) || new Date(),
+  };
+}
+
+function normalizeTravelGroupFinanceSummaryRow(data = {}) {
+  return {
+    ...data,
+    id: data.id || crypto.randomUUID(),
+    travelGroupId: data.travelGroupId,
+    totalSalesAmountCents: data.totalSalesAmountCents ?? 0,
+    confirmedRefundAmountCents: data.confirmedRefundAmountCents ?? 0,
+    effectiveSalesAmountCents: data.effectiveSalesAmountCents ?? 0,
+    totalAgencyDeductionCents: data.totalAgencyDeductionCents ?? 0,
+    agencyDeductionConfirmed: Boolean(data.agencyDeductionConfirmed),
+    agencyDeductionConfirmedById: data.agencyDeductionConfirmedById ?? null,
+    agencyDeductionConfirmedAt:
+      asDate(data.agencyDeductionConfirmedAt) || null,
+    totalAgencyNetAmountCents: data.totalAgencyNetAmountCents ?? 0,
+    totalDailyRebateCents: data.totalDailyRebateCents ?? 0,
+    totalMonthlyRebateCents: data.totalMonthlyRebateCents ?? 0,
+    paidRebateCents: data.paidRebateCents ?? 0,
+    unpaidRebateCents: data.unpaidRebateCents ?? 0,
+    notes: data.notes ?? null,
+    guideInfoSent: Boolean(data.guideInfoSent),
+    travelAgencyInfoSent: Boolean(data.travelAgencyInfoSent),
+    calculationVersion: data.calculationVersion || 'stage7_v1',
+    sourceSnapshot: data.sourceSnapshot ?? null,
+    createdById: data.createdById ?? null,
+    updatedById: data.updatedById ?? null,
+    createdAt: asDate(data.createdAt) || new Date(),
+    updatedAt: asDate(data.updatedAt) || new Date(),
+  };
+}
+
 function restoreRows(rowGroups, snapshot) {
   for (let index = 0; index < rowGroups.length; index += 1) {
     rowGroups[index].splice(
@@ -978,6 +1305,12 @@ function matchesWhere(row, where = {}) {
     }
     if (value && typeof value === 'object' && Array.isArray(value.in)) {
       return value.in.includes(row[key]);
+    }
+    if (value && typeof value === 'object' && value.not !== undefined) {
+      return !valuesEqual(row[key], value.not);
+    }
+    if (value && typeof value === 'object' && value.equals !== undefined) {
+      return valuesEqual(row[key], value.equals);
     }
     if (value && typeof value === 'object' && value.contains !== undefined) {
       return String(row[key] || '').includes(String(value.contains));
@@ -1112,12 +1445,17 @@ function withSalesOrderIncludes(
   travelGroups,
   customers = [],
   users = [],
+  afterSalesOrders = [],
 ) {
   const row = copyRow(order);
   if (include?.items) {
-    row.items = salesOrderItems
+    const includeConfig = typeof include.items === 'object' ? include.items : {};
+    row.items = sortRows(
+      salesOrderItems
       .filter((item) => item.salesOrderId === order.id)
-      .map(copyRow);
+        .map(copyRow),
+      includeConfig.orderBy,
+    );
   }
   if (include?.travelGroup) {
     const group = travelGroups.find((item) => item.id === order.travelGroupId);
@@ -1128,8 +1466,30 @@ function withSalesOrderIncludes(
     row.customer = customer ? copyRow(customer) : null;
   }
   if (include?.salesUser) {
+    const includeConfig =
+      typeof include.salesUser === 'object' ? include.salesUser : {};
     const user = users.find((item) => item.id === order.salesUserId);
     row.salesUser = user ? copyRow(user) : null;
+    if (row.salesUser && includeConfig.include?.leader) {
+      const leader = users.find((item) => item.id === row.salesUser.leaderId);
+      row.salesUser.leader = leader ? copyRow(leader) : null;
+    }
+  }
+  if (include?.outreachUser) {
+    const user = users.find((item) => item.id === order.outreachUserId);
+    row.outreachUser = user ? copyRow(user) : null;
+  }
+  if (include?.afterSalesOrders) {
+    const includeConfig =
+      typeof include.afterSalesOrders === 'object'
+        ? include.afterSalesOrders
+        : {};
+    row.afterSalesOrders = sortRows(
+      afterSalesOrders
+        .filter((item) => item.salesOrderId === order.id)
+        .map(copyRow),
+      includeConfig.orderBy,
+    );
   }
   return row;
 }
@@ -1163,6 +1523,7 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
           relations.travelGroups || [],
           relations.customers || [],
           relations.users || [],
+          relations.afterSalesOrders || [],
         )
       : null;
   }
@@ -1171,6 +1532,113 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
       (item) => item.id === order.customerId,
     );
     row.customer = customer ? copyRow(customer) : null;
+  }
+  return row;
+}
+
+function getCommissionRecordFilterInclude() {
+  return {
+    salesOrder: {
+      include: {
+        customer: true,
+        travelGroup: true,
+      },
+    },
+    travelGroup: true,
+    targetUser: true,
+    agency: true,
+    confirmedBy: true,
+  };
+}
+
+function withCommissionRecordIncludes(record, include, relations = {}) {
+  const row = copyRow(record);
+  if (include?.travelGroup) {
+    const travelGroup = (relations.travelGroups || []).find(
+      (item) => item.id === record.travelGroupId,
+    );
+    const includeConfig =
+      typeof include.travelGroup === 'object' ? include.travelGroup.include : {};
+    row.travelGroup = travelGroup
+      ? withTravelGroupIncludes(travelGroup, includeConfig, relations)
+      : null;
+  }
+  if (include?.targetUser) {
+    const user = (relations.users || []).find(
+      (item) => item.id === record.targetUserId,
+    );
+    row.targetUser = user ? copyRow(user) : null;
+  }
+  if (include?.salesOrder) {
+    const salesOrder = (relations.salesOrders || []).find(
+      (item) => item.id === record.salesOrderId,
+    );
+    const includeConfig =
+      typeof include.salesOrder === 'object' ? include.salesOrder.include : {};
+    row.salesOrder = salesOrder
+      ? withSalesOrderIncludes(
+          salesOrder,
+          includeConfig,
+          relations.salesOrderItems || [],
+          relations.travelGroups || [],
+          relations.customers || [],
+          relations.users || [],
+          relations.afterSalesOrders || [],
+        )
+      : null;
+  }
+  if (include?.afterSalesOrder) {
+    const afterSalesOrder = (relations.afterSalesOrders || []).find(
+      (item) => item.id === record.afterSalesOrderId,
+    );
+    row.afterSalesOrder = afterSalesOrder ? copyRow(afterSalesOrder) : null;
+  }
+  if (include?.agency) {
+    const agency = (relations.travelAgencies || []).find(
+      (item) => item.id === record.agencyId,
+    );
+    row.agency = agency ? copyRow(agency) : null;
+  }
+  if (include?.confirmedBy) {
+    const user = (relations.users || []).find(
+      (item) => item.id === record.confirmedById,
+    );
+    row.confirmedBy = user ? copyRow(user) : null;
+  }
+  return row;
+}
+
+function getTravelGroupFinanceSummaryFilterInclude() {
+  return {
+    travelGroup: true,
+    agencyDeductionConfirmedBy: true,
+    updatedBy: true,
+  };
+}
+
+function withTravelGroupFinanceSummaryIncludes(
+  summary,
+  include,
+  relations = {},
+) {
+  const row = copyRow(summary);
+  if (include?.travelGroup) {
+    const travelGroup = (relations.travelGroups || []).find(
+      (item) => item.id === summary.travelGroupId,
+    );
+    row.travelGroup = travelGroup ? copyRow(travelGroup) : null;
+  }
+  if (include?.agencyDeductionConfirmedBy) {
+    const user = (relations.users || []).find(
+      (item) => item.id === summary.agencyDeductionConfirmedById,
+    );
+    row.agencyDeductionConfirmedBy = user ? copyRow(user) : null;
+  }
+  if (include?.updatedBy) {
+    const user = (relations.users || []).find(
+      (item) => item.id === summary.updatedById,
+    );
+    row.updatedBy = user ? copyRow(user) : null;
   }
   return row;
 }

@@ -2080,7 +2080,6 @@ test('contract: sales order patch enforces field permissions, replaces items, up
     assertErrorContract(otherSalesPatch, 404, 'SALES_ORDER_NOT_FOUND');
 
     for (const token of [
-      finance.token,
       warehouse.token,
       boss.token,
       taster.token,
@@ -2099,6 +2098,38 @@ test('contract: sales order patch enforces field permissions, replaces items, up
       );
       assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
     }
+
+    const financePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          customerId: customerB.id,
+          travelGroupId: groupB.id,
+          salesUserId: salesBetaUser.id,
+          cashOnDeliveryAmountCents: 3500,
+          remark: 'finance moved order',
+          items: [
+            {
+              productName: 'Finance Patch Product',
+              quantity: 1,
+              unitPriceCents: 11000,
+              deliveryType: 'shipping',
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(financePatch.response.status, 200);
+    const financePatchedOrder = financePatch.body.data.salesOrder;
+    assert.equal(financePatchedOrder.customerId, customerB.id);
+    assert.equal(financePatchedOrder.travelGroupId, groupB.id);
+    assert.equal(financePatchedOrder.salesUserId, salesBetaUser.id);
+    assert.equal(financePatchedOrder.totalAmountCents, 11000);
+    assert.equal(financePatchedOrder.cashOnDeliveryAmountCents, 3500);
+    assert.equal(financePatchedOrder.remark, 'finance moved order');
 
     const adminPatch = await requestJson(
       baseUrl,
@@ -2201,7 +2232,7 @@ test('contract: sales order patch enforces field permissions, replaces items, up
       },
     );
     assert.equal(orderUpdateLogs.response.status, 200);
-    assert.equal(orderUpdateLogs.body.data.logs.length, 3);
+    assert.equal(orderUpdateLogs.body.data.logs.length, 4);
     assert.ok(
       orderUpdateLogs.body.data.logs.some(
         (log) => log.afterData.status === 'cancelled',
@@ -2644,9 +2675,33 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     assert.equal(adminPatchedOrder.packageCount, 0);
     assert.equal(adminPatchedOrder.warehouseRemark, null);
 
+    const financePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          logisticsMethod: 'Finance logistics test',
+          packingStatus: 'abnormal',
+          packageCount: 4,
+          warehouseRemark: 'finance packing correction',
+        },
+      },
+    );
+    assert.equal(financePatch.response.status, 200);
+    const financePatchedOrder = financePatch.body.data.salesOrder;
+    assertSalesOrderDtoPhase4(financePatchedOrder);
+    assert.equal(financePatchedOrder.logisticsMethod, 'Finance logistics test');
+    assert.equal(financePatchedOrder.packingStatus, 'abnormal');
+    assert.equal(financePatchedOrder.packageCount, 4);
+    assert.equal(
+      financePatchedOrder.warehouseRemark,
+      'finance packing correction',
+    );
+
     for (const token of [
       sales.token,
-      finance.token,
       afterSales.token,
       boss.token,
       taster.token,
@@ -2716,7 +2771,7 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
       },
     );
     assert.equal(logs.response.status, 200);
-    assert.equal(logs.body.data.logs.length, 2);
+    assert.equal(logs.body.data.logs.length, 3);
     assert.ok(
       logs.body.data.logs.some(
         (log) =>
@@ -2731,6 +2786,14 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
           log.beforeData.packingStatus === 'packing' &&
           log.afterData.packingStatus === 'packed' &&
           log.afterData.packageCount === 0,
+      ),
+    );
+    assert.ok(
+      logs.body.data.logs.some(
+        (log) =>
+          log.beforeData.packingStatus === 'packed' &&
+          log.afterData.packingStatus === 'abnormal' &&
+          log.afterData.packageCount === 4,
       ),
     );
     for (const log of logs.body.data.logs) {

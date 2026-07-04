@@ -5,6 +5,7 @@ import '../core/api/api_client.dart';
 import '../features/after_sales/after_sales_form_page.dart';
 import '../features/ai_assistant/ai_assistant_page.dart';
 import '../features/analytics/analytics_page.dart';
+import '../features/commission_rules/commission_rule_config_page.dart';
 import '../features/dashboard/dashboard_page.dart';
 import '../features/finance/finance_query_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
@@ -13,6 +14,7 @@ import '../features/pending_travel_groups/pending_travel_group_table_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_page.dart';
+import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
 import '../features/travel_group_finance/travel_group_finance_supplement_page.dart';
 import '../features/travel_group_order_notes/travel_group_order_notes_page.dart';
@@ -63,8 +65,16 @@ Widget buildPageForDestination({
       return QrSalesSheetPage(apiClient: apiClient, token: token);
     case 'taster_summary':
       return const TasterSummaryPage();
+    case 'taster_commissions':
+      return TasterCommissionPage(apiClient: apiClient, token: token);
     case 'finance_query':
       return FinanceQueryPage(apiClient: apiClient, token: token, role: role);
+    case 'commission_rules':
+      return CommissionRuleConfigPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'reconciliation_table':
       return ReconciliationTablePage(apiClient: apiClient, token: token);
     case 'warehouse_packing':

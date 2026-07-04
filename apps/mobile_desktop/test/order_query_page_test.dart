@@ -87,6 +87,125 @@ void main() {
     expect(find.widgetWithText(FilledButton, '订单标记 已标记'), findsOneWidget);
   });
 
+  testWidgets('finance can edit full order information from management page',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient();
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('客户与收货'), findsOneWidget);
+    expect(find.text('酒品明细'), findsOneWidget);
+    expect(find.text('财务与物流'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-sales-form-no-field')),
+      'XS-FIN-002',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-cod-field')),
+      '120.50',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-remark-field')),
+      '财务复核后调整订单',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-customer-name-field')),
+      '李先生',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-customer-phone-field')),
+      '13900002222',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-address-field')),
+      '复核路 8 号',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-item-product-0')),
+      '酱香典藏',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-item-quantity-0')),
+      '3',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-item-unit-price-0')),
+      '288.80',
+    );
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-edit-logistics-no-field')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-logistics-no-field')),
+      'YT999000111',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-logistics-fee-field')),
+      '25.50',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('order-edit-invoice-issued-checkbox')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-logistics-method-field')),
+      '圆通',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-package-count-field')),
+      '4',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-finance-remark-field')),
+      '运费已复核',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-edit-warehouse-remark-field')),
+      '改为四件打包',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('order-edit-save-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+        apiClient.salesOrderUpdatePaths, contains('/api/sales-orders/order-1'));
+    expect(apiClient.financePatchPaths,
+        contains('/api/sales-orders/order-1/finance'));
+    expect(apiClient.packingPatchPaths,
+        contains('/api/sales-orders/order-1/packing'));
+    expect(apiClient.lastOrderUpdateBody?['salesFormNo'], 'XS-FIN-002');
+    expect(apiClient.lastOrderUpdateBody?['cashOnDeliveryAmountCents'], 12050);
+    expect(apiClient.lastOrderUpdateBody?['remark'], '财务复核后调整订单');
+    expect(apiClient.lastOrderUpdateBody?['customerId'], 'customer-1');
+    expect(
+      (apiClient.lastOrderUpdateBody?['customer'] as Map?)?['name'],
+      '李先生',
+    );
+    expect(
+      (apiClient.lastOrderUpdateBody?['items'] as List).first['productName'],
+      '酱香典藏',
+    );
+    expect(
+      (apiClient.lastOrderUpdateBody?['items'] as List).first['unitPriceCents'],
+      28880,
+    );
+    expect(apiClient.lastOrderFinanceBody?['logisticsNo'], 'YT999000111');
+    expect(apiClient.lastOrderFinanceBody?['logisticsFeeCents'], 2550);
+    expect(apiClient.lastOrderFinanceBody?['invoiceIssued'], isTrue);
+    expect(apiClient.lastOrderPackingBody?['logisticsMethod'], '圆通');
+    expect(apiClient.lastOrderPackingBody?['packageCount'], 4);
+  });
+
   testWidgets('shows sales edit entry but hides finance mark buttons',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -384,14 +503,19 @@ class _FakeApiClient extends ApiClient {
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final List<String> salesOrderListPaths = <String>[];
+  final List<String> salesOrderUpdatePaths = <String>[];
   final List<String> salesOrderDownloadPaths = <String>[];
   final List<String> salesSheetPaths = <String>[];
+  final List<String> financePatchPaths = <String>[];
+  final List<String> packingPatchPaths = <String>[];
   final List<String> qrCodePaths = <String>[];
   final String? salesSheetQrUrl;
   final bool failDownload;
   Map<String, dynamic>? lastCustomerMarkBody;
   Map<String, dynamic>? lastOrderMarkBody;
   Map<String, dynamic>? lastOrderUpdateBody;
+  Map<String, dynamic>? lastOrderFinanceBody;
+  Map<String, dynamic>? lastOrderPackingBody;
   Map<String, dynamic>? lastQrCodeBody;
   String? lastDownloadDefaultFileName;
   Completer<void>? downloadGate;
@@ -411,10 +535,7 @@ class _FakeApiClient extends ApiClient {
     if (path == '/api/sales-orders/order-1') {
       return {
         'data': {
-          'salesOrder': _orderJson(
-            customerMark: customerMark,
-            orderMark: orderMark,
-          ),
+          'salesOrder': _currentOrderJson(),
         },
       };
     }
@@ -423,7 +544,7 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'salesOrders': [
-            _orderJson(customerMark: customerMark, orderMark: orderMark),
+            _currentOrderJson(),
           ],
         },
       };
@@ -503,25 +624,86 @@ class _FakeApiClient extends ApiClient {
       orderMark = body?['financeMark'] == true;
       return {
         'data': {
-          'salesOrder': _orderJson(
-            customerMark: customerMark,
-            orderMark: orderMark,
-          ),
+          'salesOrder': _currentOrderJson(),
         },
       };
     }
     if (path == '/api/sales-orders/order-1') {
+      salesOrderUpdatePaths.add(path);
       lastOrderUpdateBody = Map<String, dynamic>.from(body ?? {});
       return {
         'data': {
-          'salesOrder': {
-            ..._orderJson(customerMark: customerMark, orderMark: orderMark),
-            ...?body,
-          },
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
+    if (path == '/api/sales-orders/order-1/finance') {
+      financePatchPaths.add(path);
+      lastOrderFinanceBody = Map<String, dynamic>.from(body ?? {});
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
+    if (path == '/api/sales-orders/order-1/packing') {
+      packingPatchPaths.add(path);
+      lastOrderPackingBody = Map<String, dynamic>.from(body ?? {});
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
         },
       };
     }
     throw StateError('Unexpected PATCH $path');
+  }
+
+  Map<String, dynamic> _currentOrderJson() {
+    final order = _orderJson(customerMark: customerMark, orderMark: orderMark);
+    final updateBody = lastOrderUpdateBody;
+    if (updateBody != null) {
+      order.addAll(updateBody);
+      final customer = updateBody['customer'];
+      if (customer is Map) {
+        order['customer'] = {
+          ..._customerJson(financeMark: customerMark),
+          ...customer,
+        };
+        order['customerName'] = '${customer['name'] ?? order['customerName']}';
+        order['customerPhone'] = customer['phone'];
+        order['province'] = customer['province'];
+        order['city'] = customer['city'];
+        order['district'] = customer['district'];
+        order['address'] = customer['address'];
+      }
+      final items = updateBody['items'];
+      if (items is List) {
+        order['items'] = items;
+        order['totalAmountCents'] = items.fold<int>(
+          0,
+          (sum, item) {
+            if (item is! Map) {
+              return sum;
+            }
+            final quantity =
+                item['quantity'] is int ? item['quantity'] as int : 0;
+            final unitPriceCents = item['unitPriceCents'] is int
+                ? item['unitPriceCents'] as int
+                : 0;
+            return sum + quantity * unitPriceCents;
+          },
+        );
+      }
+    }
+    final financeBody = lastOrderFinanceBody;
+    if (financeBody != null) {
+      order.addAll(financeBody);
+    }
+    final packingBody = lastOrderPackingBody;
+    if (packingBody != null) {
+      order.addAll(packingBody);
+    }
+    return order;
   }
 }
 
