@@ -25,7 +25,7 @@ export class TravelAgenciesNestService {
   }
 
   async createTravelAgency(actor: any, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'front_desk']);
+    requireAnyRole(actor, ['admin', 'front_desk', 'finance']);
     const data = buildTravelAgencyData(payload);
     const existing = await this.prisma.travelAgency.findUnique({
       where: {
@@ -49,6 +49,62 @@ export class TravelAgenciesNestService {
       action: 'travel_agencies.create',
       entityType: 'travel_agency',
       entityId: created.id,
+      afterData: dto,
+      ipAddress: metadata.ipAddress || null,
+    });
+    return dto;
+  }
+
+  async updateTravelAgency(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const agencyId = normalizeLimitedRequiredString(id, 'id', 36);
+    const current = await this.prisma.travelAgency.findUnique({
+      where: {
+        id: agencyId,
+      },
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'TRAVEL_AGENCY_NOT_FOUND',
+        'Travel agency does not exist.',
+      );
+    }
+
+    const data = buildTravelAgencyUpdateData(payload);
+    if (data.name && data.name !== current.name) {
+      const existing = await this.prisma.travelAgency.findUnique({
+        where: {
+          name: data.name,
+        },
+      });
+      if (existing) {
+        throw createHttpError(
+          409,
+          'TRAVEL_AGENCY_NAME_EXISTS',
+          'Travel agency name already exists.',
+        );
+      }
+    }
+
+    const updated = await this.prisma.travelAgency.update({
+      where: {
+        id: agencyId,
+      },
+      data,
+    });
+    const dto = toTravelAgencyDto(updated);
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'travel_agencies.update',
+      entityType: 'travel_agency',
+      entityId: updated.id,
+      beforeData: toTravelAgencyDto(current),
       afterData: dto,
       ipAddress: metadata.ipAddress || null,
     });
@@ -91,6 +147,55 @@ function buildTravelAgencyData(payload: any) {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function buildTravelAgencyUpdateData(payload: any) {
+  assertAllowedFields(payload, ['name', 'contactName', 'contactPhone', 'notes']);
+  const data: any = {
+    updatedAt: new Date(),
+  };
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'name')) {
+    data.name = normalizeLimitedRequiredString(payload?.name, 'name', 120);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'contactName')) {
+    data.contactName = normalizeLimitedOptionalString(
+      payload?.contactName,
+      'contactName',
+      80,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'contactPhone')) {
+    data.contactPhone = normalizeLimitedOptionalString(
+      payload?.contactPhone,
+      'contactPhone',
+      30,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'notes')) {
+    data.notes = normalizeOptionalString(payload?.notes);
+  }
+
+  if (Object.keys(data).length === 1) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'At least one editable field is required.',
+    );
+  }
+  return data;
+}
+
+function assertAllowedFields(payload: any, allowedFields: string[]) {
+  const keys = Object.keys(payload || {});
+  const allowed = new Set(allowedFields);
+  const unknown = keys.filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `Unsupported field: ${unknown[0]}.`,
+    );
+  }
 }
 
 function normalizeLimitedRequiredString(

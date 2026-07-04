@@ -542,6 +542,9 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                 orders: _orders,
                 selectedId: selectedOrder?.id,
                 loading: _loading,
+                showFinancialMetrics: _canViewOrderFinancialMetrics(
+                  widget.role,
+                ),
                 onSelect: _selectOrder,
               ),
             ],
@@ -583,12 +586,14 @@ class _OrderList extends StatelessWidget {
     required this.orders,
     required this.selectedId,
     required this.loading,
+    required this.showFinancialMetrics,
     required this.onSelect,
   });
 
   final List<SalesOrderRecord> orders;
   final String? selectedId;
   final bool loading;
+  final bool showFinancialMetrics;
   final ValueChanged<SalesOrderRecord> onSelect;
 
   @override
@@ -670,6 +675,13 @@ class _OrderList extends StatelessWidget {
                       ? StatusTone.success
                       : StatusTone.neutral,
                 ),
+                if (showFinancialMetrics) ...[
+                  Text('上单 ${formatMoneyCents(order.entryAmountCents)}'),
+                  Text('品鉴师 ${_display(order.tasterName)}'),
+                  Text(
+                    '品鉴师提成 ${formatMoneyCents(order.tasterCommissionCents)}',
+                  ),
+                ],
               ],
             ),
           ),
@@ -732,7 +744,7 @@ class _OrderDetailPanel extends StatelessWidget {
               StatusTag(label: errorMessage!, tone: StatusTone.danger),
               const SizedBox(height: 12),
             ],
-            _OrderOverviewBlock(order: order),
+            _OrderOverviewBlock(order: order, role: role),
             const SizedBox(height: 14),
             _ActionStrip(
               order: order,
@@ -789,6 +801,14 @@ class _OrderDetailPanel extends StatelessWidget {
             const Divider(height: 24),
             const _SectionTitle('金额与开票'),
             _InfoMoneyRow(label: '订单金额', cents: order.totalAmountCents),
+            if (_canViewOrderFinancialMetrics(role)) ...[
+              _InfoMoneyRow(label: '上单金额', cents: order.entryAmountCents),
+              _InfoMoneyRow(
+                label: '品鉴师提成',
+                cents: order.tasterCommissionCents,
+              ),
+              _InfoRow(label: '品鉴师', value: _display(order.tasterName)),
+            ],
             _InfoMoneyRow(
                 label: '货到付款', cents: order.cashOnDeliveryAmountCents),
             _InfoRow(label: '客户需开票', value: order.invoiceRequired ? '是' : '否'),
@@ -816,9 +836,10 @@ class _OrderDetailPanel extends StatelessWidget {
 }
 
 class _OrderOverviewBlock extends StatelessWidget {
-  const _OrderOverviewBlock({required this.order});
+  const _OrderOverviewBlock({required this.order, required this.role});
 
   final SalesOrderRecord order;
+  final UserRole role;
 
   @override
   Widget build(BuildContext context) {
@@ -869,6 +890,20 @@ class _OrderOverviewBlock extends StatelessWidget {
                   label: '订单金额',
                   value: formatMoneyCents(order.totalAmountCents),
                 ),
+                if (_canViewOrderFinancialMetrics(role)) ...[
+                  _OverviewValue(
+                    label: '上单金额',
+                    value: formatMoneyCents(order.entryAmountCents),
+                  ),
+                  _OverviewValue(
+                    label: '品鉴师提成',
+                    value: formatMoneyCents(order.tasterCommissionCents),
+                  ),
+                  _OverviewValue(
+                    label: '品鉴师',
+                    value: _display(order.tasterName),
+                  ),
+                ],
                 _OverviewValue(
                   label: '旅行团',
                   value: _travelGroupLabel(order),
@@ -2521,6 +2556,10 @@ String _qrExpiresLabel(SalesSheetQrCode? qrCode) {
 
 bool _customerMarked(SalesOrderRecord order) {
   return order.customer?.financeMark ?? false;
+}
+
+bool _canViewOrderFinancialMetrics(UserRole role) {
+  return role == UserRole.admin || role == UserRole.finance;
 }
 
 String _deliverySummaryLabel(SalesOrderRecord order) {

@@ -38,12 +38,14 @@ class MetricData {
     required this.value,
     required this.icon,
     this.accent,
+    this.onTap,
   });
 
   final String label;
   final String value;
   final IconData icon;
   final Color? accent;
+  final VoidCallback? onTap;
 }
 
 class _MetricCard extends StatelessWidget {
@@ -55,37 +57,51 @@ class _MetricCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final accent = metric.accent ?? scheme.primary;
+    final content = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Icon(metric.icon, color: accent),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(metric.label,
+                    style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 4),
+                Text(
+                  metric.value,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (metric.onTap == null) {
+      return Card(child: content);
+    }
+
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.12),
-                borderRadius: const BorderRadius.all(Radius.circular(8)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Icon(metric.icon, color: accent),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(metric.label, style: Theme.of(context).textTheme.bodyMedium),
-                  const SizedBox(height: 4),
-                  Text(
-                    metric.value,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: metric.onTap,
+        child: content,
       ),
     );
   }

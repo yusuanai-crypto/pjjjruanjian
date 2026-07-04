@@ -3,6 +3,9 @@ import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  buildGlobalCustomerMarkScope as buildSharedGlobalCustomerMarkScope,
+} from '../analytics/analytics-scope.helper';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
 
@@ -232,7 +235,9 @@ export class CustomersNestService {
   }
 
   private async buildGlobalCustomerMarkScope() {
-    return (await this.onlyShowMarkedRecords()) ? { financeMark: true } : null;
+    return buildSharedGlobalCustomerMarkScope(
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   private async assertPassesGlobalCustomerMarkScope(customer: any) {

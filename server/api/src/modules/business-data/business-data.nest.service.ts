@@ -4,6 +4,11 @@ import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  buildGlobalCustomerMarkScope as buildSharedGlobalCustomerMarkScope,
+  buildGlobalSalesOrderMarkScope as buildSharedGlobalSalesOrderMarkScope,
+  buildGlobalTravelGroupMarkScope as buildSharedGlobalTravelGroupMarkScope,
+} from '../analytics/analytics-scope.helper';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
 import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
@@ -246,6 +251,7 @@ const AFTER_SALES_ACTION_TYPE_FROM_PRISMA: any = {
 };
 
 const SALES_ORDER_EXPORT_MAX_ROWS = 5000;
+const TASTER_COMMISSION_TARGET_TYPE = 'TASTER_COMMISSION';
 const TRAVEL_GROUP_EXPORT_MAX_ROWS = 5000;
 
 const SALES_ORDER_EXPORT_COLUMNS = [
@@ -954,11 +960,7 @@ export class BusinessDataNestService {
         actor,
         buildSalesOrderWhere(filters),
       ),
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
       orderBy: {
         createdAt: 'desc',
       },
@@ -974,12 +976,7 @@ export class BusinessDataNestService {
         actor,
         buildSalesOrderWhere(filters),
       ),
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-        salesUser: true,
-      },
+      include: getSalesOrderInclude({ includeSalesUser: true }),
       orderBy: {
         createdAt: 'desc',
       },
@@ -1061,12 +1058,7 @@ export class BusinessDataNestService {
           updatedById: actor.id,
           updatedAt: now,
         },
-        include: {
-          items: true,
-          customer: true,
-          travelGroup: true,
-          salesUser: true,
-        },
+        include: getSalesOrderInclude({ includeSalesUser: true }),
       });
 
       await this.operationLogsService.appendLog(
@@ -1106,12 +1098,7 @@ export class BusinessDataNestService {
       where: {
         qrCodeToken: tokenText,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-        salesUser: true,
-      },
+      include: getSalesOrderInclude({ includeSalesUser: true }),
     });
     if (!order) {
       return buildPublicSalesSheetErrorResult(
@@ -1199,11 +1186,7 @@ export class BusinessDataNestService {
               district: customer.district || null,
               address: customer.address || null,
             },
-            include: {
-              items: true,
-              customer: true,
-              travelGroup: true,
-            },
+            include: getSalesOrderInclude(),
           });
 
           let orderForLog = createdOrder;
@@ -1235,11 +1218,7 @@ export class BusinessDataNestService {
             where: {
               id: createdOrder.id,
             },
-            include: {
-              items: true,
-              customer: true,
-              travelGroup: true,
-            },
+            include: getSalesOrderInclude(),
           });
             orderForLog = reloadedOrder || createdOrder;
           }
@@ -1288,11 +1267,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
     if (!current) {
       throw createHttpError(
@@ -1378,11 +1353,7 @@ export class BusinessDataNestService {
           id,
         },
         data,
-        include: {
-          items: true,
-          customer: true,
-          travelGroup: true,
-        },
+        include: getSalesOrderInclude(),
       });
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
@@ -1401,11 +1372,7 @@ export class BusinessDataNestService {
           where: {
             id,
           },
-          include: {
-            items: true,
-            customer: true,
-            travelGroup: true,
-          },
+          include: getSalesOrderInclude(),
         })) || updatedOrder;
 
       await this.operationLogsService.appendLog(
@@ -1456,11 +1423,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
     if (!current) {
       throw createHttpError(
@@ -1475,11 +1438,7 @@ export class BusinessDataNestService {
           id,
         },
         data: buildSalesOrderFinanceUpdateData(payload, actor),
-        include: {
-          items: true,
-          customer: true,
-          travelGroup: true,
-        },
+        include: getSalesOrderInclude(),
       });
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
@@ -1498,11 +1457,7 @@ export class BusinessDataNestService {
           where: {
             id,
           },
-          include: {
-            items: true,
-            customer: true,
-            travelGroup: true,
-          },
+          include: getSalesOrderInclude(),
         })) || updatedOrder;
 
       await this.operationLogsService.appendLog(
@@ -1536,11 +1491,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
     if (!current) {
       throw createHttpError(
@@ -1558,11 +1509,7 @@ export class BusinessDataNestService {
           id,
         },
         data: buildSalesOrderPackingUpdateData(payload, actor),
-        include: {
-          items: true,
-          customer: true,
-          travelGroup: true,
-        },
+        include: getSalesOrderInclude(),
       });
 
       await this.operationLogsService.appendLog(
@@ -1596,11 +1543,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
     if (!current) {
       throw createHttpError(
@@ -1616,11 +1559,7 @@ export class BusinessDataNestService {
           id,
         },
         data: buildSalesOrderStatusUpdateData(payload, actor),
-        include: {
-          items: true,
-          customer: true,
-          travelGroup: true,
-        },
+        include: getSalesOrderInclude(),
       });
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
@@ -1639,11 +1578,7 @@ export class BusinessDataNestService {
           where: {
             id,
           },
-          include: {
-            items: true,
-            customer: true,
-            travelGroup: true,
-          },
+          include: getSalesOrderInclude(),
         })) || updatedOrder;
 
       await this.operationLogsService.appendLog(
@@ -1690,11 +1625,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
     if (!current) {
       throw createHttpError(
@@ -1713,11 +1644,7 @@ export class BusinessDataNestService {
         id,
       },
       data: buildFinanceMarkData(marked, actor),
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     });
 
     await this.operationLogsService.appendLog({
@@ -2039,6 +1966,8 @@ export class BusinessDataNestService {
         },
         tx,
       );
+      const currentSalesOrder = (current as any).salesOrder;
+      const updatedSalesOrder = (updatedOrder as any).salesOrder;
       await this.refreshStage7SalesOrderCommissionAndSummary(
         tx,
         updatedOrder.salesOrderId,
@@ -2052,8 +1981,8 @@ export class BusinessDataNestService {
           entityId: updatedOrder.id,
           afterSalesOrderId: updatedOrder.id,
           affectedTravelGroupIds: [
-            current.salesOrder?.travelGroupId,
-            updatedOrder.salesOrder?.travelGroupId,
+            currentSalesOrder?.travelGroupId,
+            updatedSalesOrder?.travelGroupId,
           ],
         },
       );
@@ -2104,11 +2033,7 @@ export class BusinessDataNestService {
       await Promise.all([
         this.prisma.salesOrder.findMany({
           where: orderWhere,
-          include: {
-            items: true,
-            customer: true,
-            travelGroup: true,
-          },
+          include: getSalesOrderInclude(),
           orderBy: {
             createdAt: 'desc',
           },
@@ -2634,12 +2559,7 @@ export class BusinessDataNestService {
       where: {
         id,
       },
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-        ...(options.includeSalesUser ? { salesUser: true } : {}),
-      },
+      include: getSalesOrderInclude(options),
     });
     if (!order) {
       throw createHttpError(
@@ -2780,34 +2700,21 @@ export class BusinessDataNestService {
   }
 
   private async buildGlobalGroupMarkScope() {
-    return (await this.onlyShowMarkedRecords()) ? { financeMark: true } : null;
+    return buildSharedGlobalTravelGroupMarkScope(
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   private async buildGlobalSalesOrderMarkScope() {
-    if (!(await this.onlyShowMarkedRecords())) {
-      return null;
-    }
-    return {
-      customer: {
-        is: {
-          financeMark: true,
-        },
-      },
-      OR: [
-        { travelGroupId: null },
-        {
-          travelGroup: {
-            is: {
-              financeMark: true,
-            },
-          },
-        },
-      ],
-    };
+    return buildSharedGlobalSalesOrderMarkScope(
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   private async buildGlobalCustomerMarkScope() {
-    return (await this.onlyShowMarkedRecords()) ? { financeMark: true } : null;
+    return buildSharedGlobalCustomerMarkScope(
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   private async assertPassesGlobalGroupMarkScope(group: any) {
@@ -4714,22 +4621,36 @@ function toTravelGroupTastingItemDto(item: any) {
   };
 }
 
-function getSalesOrderInclude() {
+function getSalesOrderInclude(options: any = {}): any {
   return {
     items: true,
     customer: true,
-    travelGroup: true,
+    travelGroup: getSalesOrderTravelGroupInclude(),
+    commissionRecords: getSalesOrderTasterCommissionInclude(),
+    ...(options.includeSalesUser ? { salesUser: true } : {}),
   };
 }
 
-function getAfterSalesOrderInclude() {
+function getSalesOrderTravelGroupInclude(): any {
+  return {
+    include: {
+      commissionRecords: getSalesOrderTasterCommissionInclude(),
+    },
+  };
+}
+
+function getSalesOrderTasterCommissionInclude(): any {
+  return {
+    where: {
+      targetType: TASTER_COMMISSION_TARGET_TYPE,
+    },
+  };
+}
+
+function getAfterSalesOrderInclude(): any {
   return {
     salesOrder: {
-      include: {
-        items: true,
-        customer: true,
-        travelGroup: true,
-      },
+      include: getSalesOrderInclude(),
     },
     customer: true,
   };
@@ -4769,6 +4690,7 @@ function toAfterSalesOrderDto(order: any) {
 }
 
 function toSalesOrderDto(order: any) {
+  const tasterCommissionCents = calculateSalesOrderTasterCommissionCents(order);
   return {
     id: order.id,
     orderNo: order.orderNo,
@@ -4788,6 +4710,12 @@ function toSalesOrderDto(order: any) {
     orderDate: formatDate(order.orderDate),
     salesFormNo: order.salesFormNo || null,
     totalAmountCents: Number(order.totalAmountCents || 0),
+    entryAmountCents: Number(
+      order.entryAmountCents ?? order.totalAmountCents ?? 0,
+    ),
+    tasterCommissionCents,
+    tasterId: order.travelGroup?.tasterId || null,
+    tasterName: order.travelGroup?.tasterName || null,
     cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
     deliverySummary: toSalesOrderDeliverySummary(order.items),
     logisticsMethod: order.logisticsMethod || null,
@@ -4814,6 +4742,38 @@ function toSalesOrderDto(order: any) {
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
   };
+}
+
+function calculateSalesOrderTasterCommissionCents(order: any) {
+  const records = collectSalesOrderTasterCommissionRecords(order);
+  return records.reduce(
+    (sum: number, record: any) => sum + Number(record.amountCents || 0),
+    0,
+  );
+}
+
+function collectSalesOrderTasterCommissionRecords(order: any) {
+  const seen = new Set<string>();
+  const records: any[] = [];
+  for (const record of [
+    ...(Array.isArray(order.commissionRecords) ? order.commissionRecords : []),
+    ...(Array.isArray(order.travelGroup?.commissionRecords)
+      ? order.travelGroup.commissionRecords
+      : []),
+  ]) {
+    if (record?.targetType !== TASTER_COMMISSION_TARGET_TYPE) {
+      continue;
+    }
+    const id =
+      record.id ||
+      `${record.salesOrderId || ''}:${record.travelGroupId || ''}:${records.length}`;
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    records.push(record);
+  }
+  return records;
 }
 
 function toSalesOrderDeliverySummary(items: any[]) {

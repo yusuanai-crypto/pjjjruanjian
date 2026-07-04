@@ -284,6 +284,7 @@ function createInMemoryPrisma(options = {}) {
       customers,
       afterSalesOrders,
       travelAgencies,
+      commissionRecords,
     }),
     travelGroupFinanceSummary: createTravelGroupFinanceSummaryDelegate(
       travelGroupFinanceSummaries,
@@ -313,6 +314,7 @@ function createInMemoryPrisma(options = {}) {
               customers,
               users,
               afterSalesOrders,
+              commissionRecords,
             )
           : null;
       },
@@ -333,6 +335,7 @@ function createInMemoryPrisma(options = {}) {
                   customers,
                   users,
                   afterSalesOrders,
+                  commissionRecords,
                 ),
                 where,
               ),
@@ -351,6 +354,7 @@ function createInMemoryPrisma(options = {}) {
               customers,
               users,
               afterSalesOrders,
+              commissionRecords,
             ),
           );
       },
@@ -391,6 +395,7 @@ function createInMemoryPrisma(options = {}) {
           customers,
           users,
           afterSalesOrders,
+          commissionRecords,
         );
       },
       update: async ({ where, data, include } = {}) => {
@@ -428,6 +433,7 @@ function createInMemoryPrisma(options = {}) {
           customers,
           users,
           afterSalesOrders,
+          commissionRecords,
         );
       },
     },
@@ -437,6 +443,7 @@ function createInMemoryPrisma(options = {}) {
       travelGroups,
       customers,
       users,
+      commissionRecords,
     }),
     dailyReconciliation: {
       findUnique: async ({ where, include } = {}) => {
@@ -590,6 +597,18 @@ function createTravelAgencyDelegate(rows) {
       };
       rows.push(row);
       return copyRow(row);
+    },
+    update: async ({ where, data }) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Travel agency not found in test Prisma store.');
+      }
+      rows[index] = {
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return copyRow(rows[index]);
     },
   };
 }
@@ -1412,6 +1431,7 @@ function withTravelGroupIncludes(group, include, relations) {
   const tastingItems = relations?.tastingItems || [];
   const users = relations?.users || [];
   const salesOrders = relations?.salesOrders || [];
+  const commissionRecords = relations?.commissionRecords || [];
   if (include?.tastingItems) {
     row.tastingItems = tastingItems
       .filter((item) => item.travelGroupId === group.id)
@@ -1435,6 +1455,19 @@ function withTravelGroupIncludes(group, include, relations) {
       includeConfig.orderBy,
     );
   }
+  if (include?.commissionRecords) {
+    const includeConfig =
+      typeof include.commissionRecords === 'object'
+        ? include.commissionRecords
+        : {};
+    row.commissionRecords = sortRows(
+      commissionRecords
+        .filter((record) => record.travelGroupId === group.id)
+        .filter((record) => matchesWhere(record, includeConfig.where))
+        .map(copyRow),
+      includeConfig.orderBy,
+    );
+  }
   return row;
 }
 
@@ -1446,6 +1479,7 @@ function withSalesOrderIncludes(
   customers = [],
   users = [],
   afterSalesOrders = [],
+  commissionRecords = [],
 ) {
   const row = copyRow(order);
   if (include?.items) {
@@ -1458,8 +1492,16 @@ function withSalesOrderIncludes(
     );
   }
   if (include?.travelGroup) {
+    const includeConfig =
+      typeof include.travelGroup === 'object' ? include.travelGroup : {};
     const group = travelGroups.find((item) => item.id === order.travelGroupId);
-    row.travelGroup = group ? copyRow(group) : null;
+    row.travelGroup = group
+      ? withTravelGroupIncludes(group, includeConfig.include, {
+          users,
+          salesOrders: [],
+          commissionRecords,
+        })
+      : null;
   }
   if (include?.customer) {
     const customer = customers.find((item) => item.id === order.customerId);
@@ -1487,6 +1529,19 @@ function withSalesOrderIncludes(
     row.afterSalesOrders = sortRows(
       afterSalesOrders
         .filter((item) => item.salesOrderId === order.id)
+        .map(copyRow),
+      includeConfig.orderBy,
+    );
+  }
+  if (include?.commissionRecords) {
+    const includeConfig =
+      typeof include.commissionRecords === 'object'
+        ? include.commissionRecords
+        : {};
+    row.commissionRecords = sortRows(
+      commissionRecords
+        .filter((record) => record.salesOrderId === order.id)
+        .filter((record) => matchesWhere(record, includeConfig.where))
         .map(copyRow),
       includeConfig.orderBy,
     );
@@ -1524,6 +1579,7 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
           relations.customers || [],
           relations.users || [],
           relations.afterSalesOrders || [],
+          relations.commissionRecords || [],
         )
       : null;
   }
@@ -1584,6 +1640,7 @@ function withCommissionRecordIncludes(record, include, relations = {}) {
           relations.customers || [],
           relations.users || [],
           relations.afterSalesOrders || [],
+          relations.commissionRecords || [],
         )
       : null;
   }

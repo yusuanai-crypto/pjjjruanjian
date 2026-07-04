@@ -171,6 +171,18 @@ class BusinessApi {
     return TravelAgencyRecord.fromJson(_map(_data(payload)['travelAgency']));
   }
 
+  Future<TravelAgencyRecord> updateTravelAgency(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-agencies/$id',
+      body: body,
+      token: _token,
+    );
+    return TravelAgencyRecord.fromJson(_map(_data(payload)['travelAgency']));
+  }
+
   Future<GuideRecord> createGuide(Map<String, dynamic> body) async {
     final payload = await _apiClient.postJson(
       '/api/guides',
@@ -1329,6 +1341,264 @@ class BusinessApi {
     );
   }
 
+  Future<AnalyticsOverview> getAnalyticsOverview({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/overview',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return AnalyticsOverview.fromJson(_data(payload));
+  }
+
+  Future<List<TasterRankingRecord>> listTasterRankings({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+    int? limit,
+    String? groupType,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/taster-rankings',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+          limit: limit,
+          groupType: groupType,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['rankings'])
+        .map((item) => TasterRankingRecord.fromJson(item))
+        .toList();
+  }
+
+  Future<TasterRankingDetail> getTasterRankingDetail(
+    String tasterId, {
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+    int? limit,
+    String? groupType,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/taster-rankings/${Uri.encodeComponent(tasterId)}',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+          limit: limit,
+          groupType: groupType,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return TasterRankingDetail.fromJson(_data(payload));
+  }
+
+  Future<List<AnalyticsTrendPoint>> getAnalyticsTrends({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? granularity,
+    String? metric,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/trends',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          granularity: granularity,
+          metric: metric,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['trends'])
+        .map((item) => AnalyticsTrendPoint.fromJson(item))
+        .toList();
+  }
+
+  Future<List<AnalyticsSourceOrder>> listAnalyticsSourceOrders({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? source,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/source/orders',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          source: source,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['orders'])
+        .map((item) => AnalyticsSourceOrder.fromJson(item))
+        .toList();
+  }
+
+  Future<List<AnalyticsSourceTravelGroup>> listAnalyticsSourceTravelGroups({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    bool? noEffectiveOrder,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/source/travel-groups',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          noEffectiveOrder: noEffectiveOrder,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['travelGroups'])
+        .map((item) => AnalyticsSourceTravelGroup.fromJson(item))
+        .toList();
+  }
+
+  Future<List<AnalyticsSourceAfterSales>> listAnalyticsSourceAfterSales({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? source,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/source/after-sales',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          source: source,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['afterSalesOrders'])
+        .map((item) => AnalyticsSourceAfterSales.fromJson(item))
+        .toList();
+  }
+
+  Future<DownloadedFile> exportAnalyticsOverview({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/analytics/overview/export',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          groupType: groupType,
+          tasterId: tasterId,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'analytics-overview.xlsx',
+    );
+  }
+
+  Future<DownloadedFile> exportTasterRankings({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+    int? limit,
+    String? groupType,
+    String? travelAgency,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/analytics/taster-rankings/export',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+          limit: limit,
+          groupType: groupType,
+          travelAgency: travelAgency,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'analytics-taster-rankings.xlsx',
+    );
+  }
+
   Map<String, String> _stage7RuleQueryParameters({
     int? limit,
     String? targetType,
@@ -1420,6 +1690,46 @@ class BusinessApi {
       queryParameters['agencyDeductionConfirmed'] = '$agencyDeductionConfirmed';
     }
     _putNonEmpty(queryParameters, 'query', query);
+    return queryParameters;
+  }
+
+  Map<String, String> _analyticsQueryParameters({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+    int? limit,
+    String? granularity,
+    String? metric,
+    String? source,
+    bool? noEffectiveOrder,
+    String? groupType,
+    String? tasterId,
+    String? travelAgency,
+  }) {
+    final queryParameters = <String, String>{};
+    _putNonEmpty(queryParameters, 'preset', preset);
+    if (dateFrom != null) {
+      queryParameters['dateFrom'] = formatDate(dateFrom);
+    }
+    if (dateTo != null) {
+      queryParameters['dateTo'] = formatDate(dateTo);
+    }
+    _putNonEmpty(queryParameters, 'sortBy', sortBy);
+    _putNonEmpty(queryParameters, 'sortDirection', sortDirection);
+    if (limit != null) {
+      queryParameters['limit'] = '$limit';
+    }
+    _putNonEmpty(queryParameters, 'granularity', granularity);
+    _putNonEmpty(queryParameters, 'metric', metric);
+    _putNonEmpty(queryParameters, 'source', source);
+    if (noEffectiveOrder != null) {
+      queryParameters['noEffectiveOrder'] = '$noEffectiveOrder';
+    }
+    _putNonEmpty(queryParameters, 'groupType', groupType);
+    _putNonEmpty(queryParameters, 'tasterId', tasterId);
+    _putNonEmpty(queryParameters, 'travelAgency', travelAgency);
     return queryParameters;
   }
 }
@@ -1870,6 +2180,10 @@ class SalesOrderRecord {
     required this.orderDate,
     required this.salesFormNo,
     required this.totalAmountCents,
+    required this.entryAmountCents,
+    required this.tasterCommissionCents,
+    required this.tasterId,
+    required this.tasterName,
     required this.cashOnDeliveryAmountCents,
     required this.status,
     required this.deliverySummary,
@@ -1908,6 +2222,10 @@ class SalesOrderRecord {
   final String orderDate;
   final String? salesFormNo;
   final int totalAmountCents;
+  final int entryAmountCents;
+  final int tasterCommissionCents;
+  final String? tasterId;
+  final String? tasterName;
   final int cashOnDeliveryAmountCents;
   final String status;
   final String? deliverySummary;
@@ -1953,6 +2271,14 @@ class SalesOrderRecord {
       orderDate: '${json['orderDate'] ?? ''}',
       salesFormNo: _stringOrNull(json['salesFormNo']),
       totalAmountCents: _intValue(json['totalAmountCents']),
+      entryAmountCents: _intValue(
+        json['entryAmountCents'] ??
+            json['orderEntryAmountCents'] ??
+            json['totalAmountCents'],
+      ),
+      tasterCommissionCents: _intValue(json['tasterCommissionCents']),
+      tasterId: _stringOrNull(json['tasterId'] ?? travelGroup?.tasterId),
+      tasterName: _stringOrNull(json['tasterName'] ?? travelGroup?.tasterName),
       cashOnDeliveryAmountCents: _intValue(json['cashOnDeliveryAmountCents']),
       status: '${json['status'] ?? 'valid'}',
       deliverySummary: _stringOrNull(json['deliverySummary']),
@@ -2686,6 +3012,533 @@ class TravelGroupFinanceSummaryRefreshResult {
       amountChanged: _boolValue(json['amountChanged']),
       agencyDeductionConfirmationReset:
           _boolValue(json['agencyDeductionConfirmationReset']),
+    );
+  }
+}
+
+class AnalyticsDateRange {
+  const AnalyticsDateRange({
+    required this.preset,
+    required this.dateFrom,
+    required this.dateTo,
+    required this.timezone,
+  });
+
+  final String preset;
+  final String dateFrom;
+  final String dateTo;
+  final String timezone;
+
+  factory AnalyticsDateRange.fromJson(Map<String, dynamic> json) {
+    return AnalyticsDateRange(
+      preset: '${json['preset'] ?? ''}',
+      dateFrom: '${json['dateFrom'] ?? ''}',
+      dateTo: '${json['dateTo'] ?? ''}',
+      timezone: '${json['timezone'] ?? 'Asia/Shanghai'}',
+    );
+  }
+}
+
+class AnalyticsWarning {
+  const AnalyticsWarning({
+    required this.code,
+    required this.message,
+    required this.context,
+  });
+
+  final String code;
+  final String message;
+  final Map<String, dynamic>? context;
+
+  factory AnalyticsWarning.fromJson(Map<String, dynamic> json) {
+    final code = _stringOrNull(json['code']) ?? '';
+    return AnalyticsWarning(
+      code: code,
+      message: _stringOrNull(json['message']) ?? code,
+      context: json['context'] is Map ? _map(json['context']) : null,
+    );
+  }
+}
+
+class AnalyticsMetrics {
+  const AnalyticsMetrics({
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.pendingRefundAmountCents,
+    required this.netSalesAmountCents,
+    required this.totalGroupCount,
+    required this.totalGuestCount,
+    required this.groupScopedNetSalesAmountCents,
+    required this.averageSalesPerGroupCents,
+    required this.averageSalesPerGuestCents,
+    required this.noEffectiveOrderGroupCount,
+    required this.conversionGroupCount,
+    required this.noOrderRate,
+    required this.conversionRate,
+  });
+
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int pendingRefundAmountCents;
+  final int netSalesAmountCents;
+  final int totalGroupCount;
+  final int totalGuestCount;
+  final int groupScopedNetSalesAmountCents;
+  final int averageSalesPerGroupCents;
+  final int averageSalesPerGuestCents;
+  final int noEffectiveOrderGroupCount;
+  final int conversionGroupCount;
+  final double noOrderRate;
+  final double conversionRate;
+
+  factory AnalyticsMetrics.fromJson(Map<String, dynamic> json) {
+    return AnalyticsMetrics(
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      pendingRefundAmountCents: _intValue(json['pendingRefundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      totalGroupCount: _intValue(json['totalGroupCount']),
+      totalGuestCount: _intValue(json['totalGuestCount']),
+      groupScopedNetSalesAmountCents:
+          _intValue(json['groupScopedNetSalesAmountCents']),
+      averageSalesPerGroupCents: _intValue(json['averageSalesPerGroupCents']),
+      averageSalesPerGuestCents: _intValue(json['averageSalesPerGuestCents']),
+      noEffectiveOrderGroupCount: _intValue(json['noEffectiveOrderGroupCount']),
+      conversionGroupCount: _intValue(json['conversionGroupCount']),
+      noOrderRate: _doubleValue(json['noOrderRate']),
+      conversionRate: _doubleValue(json['conversionRate']),
+    );
+  }
+}
+
+class AnalyticsOverview {
+  const AnalyticsOverview({
+    required this.range,
+    required this.metrics,
+    required this.warnings,
+  });
+
+  final AnalyticsDateRange range;
+  final AnalyticsMetrics metrics;
+  final List<AnalyticsWarning> warnings;
+
+  int get grossSalesAmountCents => metrics.grossSalesAmountCents;
+  int get refundAmountCents => metrics.refundAmountCents;
+  int get pendingRefundAmountCents => metrics.pendingRefundAmountCents;
+  int get netSalesAmountCents => metrics.netSalesAmountCents;
+  int get totalGroupCount => metrics.totalGroupCount;
+  int get totalGuestCount => metrics.totalGuestCount;
+  int get groupScopedNetSalesAmountCents =>
+      metrics.groupScopedNetSalesAmountCents;
+  int get averageSalesPerGroupCents => metrics.averageSalesPerGroupCents;
+  int get averageSalesPerGuestCents => metrics.averageSalesPerGuestCents;
+  int get noEffectiveOrderGroupCount => metrics.noEffectiveOrderGroupCount;
+  int get conversionGroupCount => metrics.conversionGroupCount;
+  double get noOrderRate => metrics.noOrderRate;
+  double get conversionRate => metrics.conversionRate;
+
+  factory AnalyticsOverview.fromJson(Map<String, dynamic> json) {
+    final metrics = json['metrics'] is Map ? _map(json['metrics']) : json;
+    return AnalyticsOverview(
+      range: AnalyticsDateRange.fromJson(_map(json['range'])),
+      metrics: AnalyticsMetrics.fromJson(metrics),
+      warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class TasterRankingRecord {
+  const TasterRankingRecord({
+    required this.tasterId,
+    required this.tasterName,
+    required this.rank,
+    required this.totalGroupCount,
+    required this.totalGuestCount,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.netSalesAmountCents,
+    required this.averageSalesPerGroupCents,
+    required this.averageSalesPerGuestCents,
+    required this.noEffectiveOrderGroupCount,
+    required this.conversionGroupCount,
+    required this.noOrderRate,
+    required this.conversionRate,
+    required this.warnings,
+  });
+
+  final String? tasterId;
+  final String tasterName;
+  final int rank;
+  final int totalGroupCount;
+  final int totalGuestCount;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int netSalesAmountCents;
+  final int averageSalesPerGroupCents;
+  final int averageSalesPerGuestCents;
+  final int noEffectiveOrderGroupCount;
+  final int conversionGroupCount;
+  final double noOrderRate;
+  final double conversionRate;
+  final List<AnalyticsWarning> warnings;
+
+  factory TasterRankingRecord.fromJson(Map<String, dynamic> json) {
+    return TasterRankingRecord(
+      tasterId: _stringOrNull(json['tasterId']),
+      tasterName: '${json['tasterName'] ?? ''}',
+      rank: _intValue(json['rank']),
+      totalGroupCount: _intValue(json['totalGroupCount']),
+      totalGuestCount: _intValue(json['totalGuestCount']),
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      averageSalesPerGroupCents: _intValue(json['averageSalesPerGroupCents']),
+      averageSalesPerGuestCents: _intValue(json['averageSalesPerGuestCents']),
+      noEffectiveOrderGroupCount: _intValue(json['noEffectiveOrderGroupCount']),
+      conversionGroupCount: _intValue(json['conversionGroupCount']),
+      noOrderRate: _doubleValue(json['noOrderRate']),
+      conversionRate: _doubleValue(json['conversionRate']),
+      warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class TasterRankingDetail {
+  const TasterRankingDetail({
+    required this.range,
+    required this.tasterId,
+    required this.tasterName,
+    required this.summary,
+    required this.travelGroups,
+    required this.orders,
+    required this.afterSalesOrders,
+    required this.warnings,
+  });
+
+  final AnalyticsDateRange range;
+  final String? tasterId;
+  final String tasterName;
+  final TasterRankingRecord summary;
+  final List<AnalyticsSourceTravelGroup> travelGroups;
+  final List<AnalyticsSourceOrder> orders;
+  final List<AnalyticsSourceAfterSales> afterSalesOrders;
+  final List<AnalyticsWarning> warnings;
+
+  factory TasterRankingDetail.fromJson(Map<String, dynamic> json) {
+    final taster = _map(json['taster']);
+    final summary = TasterRankingRecord.fromJson(_map(json['summary']));
+    final warnings = _analyticsWarnings(json['warnings']);
+    return TasterRankingDetail(
+      range: AnalyticsDateRange.fromJson(_map(json['range'])),
+      tasterId: _stringOrNull(taster['id']) ?? summary.tasterId,
+      tasterName: _stringOrNull(taster['name']) ?? summary.tasterName,
+      summary: summary,
+      travelGroups: _list(json['travelGroups'])
+          .map((item) => AnalyticsSourceTravelGroup.fromJson(item))
+          .toList(),
+      orders: _list(json['orders'])
+          .map((item) => AnalyticsSourceOrder.fromJson(item))
+          .toList(),
+      afterSalesOrders: _list(json['afterSalesOrders'])
+          .map((item) => AnalyticsSourceAfterSales.fromJson(item))
+          .toList(),
+      warnings: warnings.isNotEmpty ? warnings : summary.warnings,
+    );
+  }
+}
+
+class AnalyticsTrendPoint {
+  const AnalyticsTrendPoint({
+    required this.periodStart,
+    required this.periodEnd,
+    required this.metricValue,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.pendingRefundAmountCents,
+    required this.netSalesAmountCents,
+    required this.totalGroupCount,
+    required this.totalGuestCount,
+    required this.groupScopedNetSalesAmountCents,
+    required this.noEffectiveOrderGroupCount,
+    required this.conversionGroupCount,
+    required this.noOrderRate,
+    required this.conversionRate,
+  });
+
+  final String periodStart;
+  final String periodEnd;
+  final double metricValue;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int pendingRefundAmountCents;
+  final int netSalesAmountCents;
+  final int totalGroupCount;
+  final int totalGuestCount;
+  final int groupScopedNetSalesAmountCents;
+  final int noEffectiveOrderGroupCount;
+  final int conversionGroupCount;
+  final double noOrderRate;
+  final double conversionRate;
+
+  factory AnalyticsTrendPoint.fromJson(Map<String, dynamic> json) {
+    return AnalyticsTrendPoint(
+      periodStart: '${json['periodStart'] ?? ''}',
+      periodEnd: '${json['periodEnd'] ?? ''}',
+      metricValue: _doubleValue(json['metricValue']),
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      pendingRefundAmountCents: _intValue(json['pendingRefundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      totalGroupCount: _intValue(json['totalGroupCount']),
+      totalGuestCount: _intValue(json['totalGuestCount']),
+      groupScopedNetSalesAmountCents:
+          _intValue(json['groupScopedNetSalesAmountCents']),
+      noEffectiveOrderGroupCount: _intValue(json['noEffectiveOrderGroupCount']),
+      conversionGroupCount: _intValue(json['conversionGroupCount']),
+      noOrderRate: _doubleValue(json['noOrderRate']),
+      conversionRate: _doubleValue(json['conversionRate']),
+    );
+  }
+}
+
+class AnalyticsSourceOrder {
+  const AnalyticsSourceOrder({
+    required this.id,
+    required this.orderNo,
+    required this.orderDate,
+    required this.status,
+    required this.customerId,
+    required this.customerName,
+    required this.customerPhone,
+    required this.customerFinanceMark,
+    required this.travelGroupId,
+    required this.travelGroupNo,
+    required this.travelGroupVisitDate,
+    required this.travelGroupFinanceMark,
+    required this.tasterId,
+    required this.tasterName,
+    required this.groupType,
+    required this.travelAgency,
+    required this.totalAmountCents,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.pendingRefundAmountCents,
+    required this.netSalesAmountCents,
+    required this.effectiveAmountCents,
+    required this.contributesToGrossSales,
+    required this.contributesToEffectiveOrder,
+    required this.items,
+    required this.afterSalesOrderIds,
+  });
+
+  final String? id;
+  final String? orderNo;
+  final String? orderDate;
+  final String? status;
+  final String? customerId;
+  final String? customerName;
+  final String? customerPhone;
+  final bool? customerFinanceMark;
+  final String? travelGroupId;
+  final String? travelGroupNo;
+  final String? travelGroupVisitDate;
+  final bool? travelGroupFinanceMark;
+  final String? tasterId;
+  final String? tasterName;
+  final String? groupType;
+  final String? travelAgency;
+  final int totalAmountCents;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int pendingRefundAmountCents;
+  final int netSalesAmountCents;
+  final int effectiveAmountCents;
+  final bool contributesToGrossSales;
+  final bool contributesToEffectiveOrder;
+  final List<AnalyticsSourceOrderItem> items;
+  final List<String> afterSalesOrderIds;
+
+  factory AnalyticsSourceOrder.fromJson(Map<String, dynamic> json) {
+    return AnalyticsSourceOrder(
+      id: _stringOrNull(json['id']),
+      orderNo: _stringOrNull(json['orderNo']),
+      orderDate: _stringOrNull(json['orderDate']),
+      status: _stringOrNull(json['status']),
+      customerId: _stringOrNull(json['customerId']),
+      customerName: _stringOrNull(json['customerName']),
+      customerPhone: _stringOrNull(json['customerPhone']),
+      customerFinanceMark: _boolOrNull(json['customerFinanceMark']),
+      travelGroupId: _stringOrNull(json['travelGroupId']),
+      travelGroupNo: _stringOrNull(json['travelGroupNo']),
+      travelGroupVisitDate: _stringOrNull(json['travelGroupVisitDate']),
+      travelGroupFinanceMark: _boolOrNull(json['travelGroupFinanceMark']),
+      tasterId: _stringOrNull(json['tasterId']),
+      tasterName: _stringOrNull(json['tasterName']),
+      groupType: _stringOrNull(json['groupType']),
+      travelAgency: _stringOrNull(json['travelAgency']),
+      totalAmountCents: _intValue(json['totalAmountCents']),
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      pendingRefundAmountCents: _intValue(json['pendingRefundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      effectiveAmountCents: _intValue(json['effectiveAmountCents']),
+      contributesToGrossSales: _boolValue(json['contributesToGrossSales']),
+      contributesToEffectiveOrder:
+          _boolValue(json['contributesToEffectiveOrder']),
+      items: _list(json['items'])
+          .map((item) => AnalyticsSourceOrderItem.fromJson(item))
+          .toList(),
+      afterSalesOrderIds: _stringList(json['afterSalesOrderIds']),
+    );
+  }
+}
+
+class AnalyticsSourceOrderItem {
+  const AnalyticsSourceOrderItem({
+    required this.id,
+    required this.productName,
+    required this.quantity,
+    required this.unitPriceCents,
+    required this.subtotalCents,
+    required this.deliveryType,
+  });
+
+  final String? id;
+  final String? productName;
+  final int quantity;
+  final int unitPriceCents;
+  final int subtotalCents;
+  final String? deliveryType;
+
+  factory AnalyticsSourceOrderItem.fromJson(Map<String, dynamic> json) {
+    return AnalyticsSourceOrderItem(
+      id: _stringOrNull(json['id']),
+      productName: _stringOrNull(json['productName']),
+      quantity: _intValue(json['quantity']),
+      unitPriceCents: _intValue(json['unitPriceCents']),
+      subtotalCents: _intValue(json['subtotalCents']),
+      deliveryType: _stringOrNull(json['deliveryType']),
+    );
+  }
+}
+
+class AnalyticsSourceTravelGroup {
+  const AnalyticsSourceTravelGroup({
+    required this.id,
+    required this.groupNo,
+    required this.visitDate,
+    required this.guestCount,
+    required this.tasterId,
+    required this.tasterName,
+    required this.groupType,
+    required this.travelAgency,
+    required this.financeMark,
+    required this.noEffectiveOrder,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.netSalesAmountCents,
+    required this.salesOrderIds,
+    required this.warnings,
+  });
+
+  final String? id;
+  final String? groupNo;
+  final String? visitDate;
+  final int guestCount;
+  final String? tasterId;
+  final String? tasterName;
+  final String? groupType;
+  final String? travelAgency;
+  final bool? financeMark;
+  final bool noEffectiveOrder;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int netSalesAmountCents;
+  final List<String> salesOrderIds;
+  final List<AnalyticsWarning> warnings;
+
+  factory AnalyticsSourceTravelGroup.fromJson(Map<String, dynamic> json) {
+    return AnalyticsSourceTravelGroup(
+      id: _stringOrNull(json['id']),
+      groupNo: _stringOrNull(json['groupNo']),
+      visitDate: _stringOrNull(json['visitDate']),
+      guestCount: _intValue(json['guestCount']),
+      tasterId: _stringOrNull(json['tasterId']),
+      tasterName: _stringOrNull(json['tasterName']),
+      groupType: _stringOrNull(json['groupType']),
+      travelAgency: _stringOrNull(json['travelAgency']),
+      financeMark: _boolOrNull(json['financeMark']),
+      noEffectiveOrder: _boolValue(json['noEffectiveOrder']),
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      salesOrderIds: _stringList(json['salesOrderIds']),
+      warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class AnalyticsSourceAfterSales {
+  const AnalyticsSourceAfterSales({
+    required this.id,
+    required this.afterSalesNo,
+    required this.salesOrderId,
+    required this.salesOrderNo,
+    required this.createdAt,
+    required this.refundAmountCents,
+    required this.financeConfirmed,
+    required this.financeConfirmedAt,
+    required this.status,
+    required this.issueType,
+    required this.actionType,
+    required this.description,
+    required this.customerId,
+    required this.customerName,
+    required this.travelGroupId,
+    required this.travelGroupNo,
+    required this.tasterId,
+    required this.tasterName,
+  });
+
+  final String? id;
+  final String? afterSalesNo;
+  final String? salesOrderId;
+  final String? salesOrderNo;
+  final String? createdAt;
+  final int refundAmountCents;
+  final bool financeConfirmed;
+  final String? financeConfirmedAt;
+  final String? status;
+  final String? issueType;
+  final String? actionType;
+  final String? description;
+  final String? customerId;
+  final String? customerName;
+  final String? travelGroupId;
+  final String? travelGroupNo;
+  final String? tasterId;
+  final String? tasterName;
+
+  factory AnalyticsSourceAfterSales.fromJson(Map<String, dynamic> json) {
+    return AnalyticsSourceAfterSales(
+      id: _stringOrNull(json['id']),
+      afterSalesNo: _stringOrNull(json['afterSalesNo']),
+      salesOrderId: _stringOrNull(json['salesOrderId']),
+      salesOrderNo: _stringOrNull(json['salesOrderNo']),
+      createdAt: _stringOrNull(json['createdAt']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      financeConfirmed: _boolValue(json['financeConfirmed']),
+      financeConfirmedAt: _stringOrNull(json['financeConfirmedAt']),
+      status: _stringOrNull(json['status']),
+      issueType: _stringOrNull(json['issueType']),
+      actionType: _stringOrNull(json['actionType']),
+      description: _stringOrNull(json['description']),
+      customerId: _stringOrNull(json['customerId']),
+      customerName: _stringOrNull(json['customerName']),
+      travelGroupId: _stringOrNull(json['travelGroupId']),
+      travelGroupNo: _stringOrNull(json['travelGroupNo']),
+      tasterId: _stringOrNull(json['tasterId']),
+      tasterName: _stringOrNull(json['tasterName']),
     );
   }
 }
@@ -3504,6 +4357,26 @@ List<String> _stringList(Object? value) {
   return const <String>[];
 }
 
+List<AnalyticsWarning> _analyticsWarnings(Object? value) {
+  if (value is List) {
+    return value
+        .map((item) {
+          if (item is Map) {
+            return AnalyticsWarning.fromJson(_map(item));
+          }
+          final code = _stringOrNull(item) ?? '';
+          return AnalyticsWarning(
+            code: code,
+            message: code,
+            context: null,
+          );
+        })
+        .where((warning) => warning.code.isNotEmpty)
+        .toList();
+  }
+  return const <AnalyticsWarning>[];
+}
+
 String? _stringOrNull(Object? value) {
   final text = value == null ? '' : '$value'.trim();
   return text.isEmpty ? null : text;
@@ -3517,6 +4390,13 @@ int _intValue(Object? value) {
     return value.toInt();
   }
   return int.tryParse('${value ?? 0}') ?? 0;
+}
+
+double _doubleValue(Object? value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+  return double.tryParse('${value ?? 0}') ?? 0;
 }
 
 bool _boolValue(Object? value) {

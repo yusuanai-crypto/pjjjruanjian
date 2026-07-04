@@ -6,6 +6,7 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
 import 'package:jiangjiu_mobile_desktop/core/config/app_config.dart';
 import 'package:jiangjiu_mobile_desktop/features/after_sales/after_sales_form_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/analytics/analytics_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rule_config_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
@@ -15,6 +16,7 @@ import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_t
 import 'package:jiangjiu_mobile_desktop/features/role_menu/role_menu_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/taster_commissions/taster_commission_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/travel_agency_management/travel_agency_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/travel_group_form_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_page.dart';
@@ -35,9 +37,12 @@ void main() {
         'employee_accounts',
         'travel_groups',
         'pending_travel_groups',
+        'travel_agency_management',
         'sales_orders',
         'order_query',
         'finance_workspace',
+        'commissions',
+        'commission_rules',
         'reconciliation_table',
         'warehouse_workspace',
         'after_sales_orders',
@@ -53,16 +58,40 @@ void main() {
         'role_menu',
         'travel_group_form',
         'pending_travel_groups',
+        'travel_agency_management',
         'order_form',
         'order_query',
         'finance_query',
+        'commission_rules',
         'reconciliation_table',
         'warehouse_packing',
         'after_sales_form',
         'taster_summary',
+        'analytics',
       ]),
     );
     expect(adminIds, isNot(contains('taster_commissions')));
+
+    final financeIds = _destinationIds(
+      [
+        'order_query',
+        'finance_workspace',
+        'commissions',
+        'commission_rules',
+        'travel_agency_management',
+      ],
+      UserRole.finance,
+    );
+    expect(
+      financeIds,
+      containsAll([
+        'order_query',
+        'finance_query',
+        'commission_rules',
+        'travel_agency_management',
+        'analytics',
+      ]),
+    );
 
     final salesIds = _destinationIds(
       [
@@ -104,6 +133,7 @@ void main() {
         'after_sales_form',
         'finance_query',
         'warehouse_packing',
+        'analytics',
       ]),
     );
     expect(bossIds, isNot(contains('commission_rules')));
@@ -115,13 +145,30 @@ void main() {
     );
     expect(financeRuleIds, contains('commission_rules'));
 
+    final financeAgencyIds = _destinationIds(
+      [
+        'travel_agency_management',
+        'agency_rebate_rules',
+        'agency_deduction_rules'
+      ],
+      UserRole.finance,
+    );
+    expect(financeAgencyIds, contains('travel_agency_management'));
+    expect(financeAgencyIds, isNot(contains('commission_rules')));
+
     final tasterStage7Ids = _destinationIds(
-      ['commissions', 'commission_rules', 'own_commissions'],
+      [
+        'commissions',
+        'commission_rules',
+        'own_commissions',
+        'travel_agency_management',
+      ],
       UserRole.taster,
     );
     expect(tasterStage7Ids, contains('taster_commissions'));
     expect(tasterStage7Ids, isNot(contains('finance_query')));
     expect(tasterStage7Ids, isNot(contains('commission_rules')));
+    expect(tasterStage7Ids, isNot(contains('travel_agency_management')));
 
     for (final role in [
       UserRole.sales,
@@ -136,6 +183,7 @@ void main() {
       expect(ids, isNot(contains('finance_query')));
       expect(ids, isNot(contains('commission_rules')));
       expect(ids, isNot(contains('taster_commissions')));
+      expect(ids, isNot(contains('analytics')));
     }
   });
 
@@ -144,12 +192,19 @@ void main() {
     expect(_roleIds(UserRole.afterSales), contains('order_query'));
     expect(_roleIds(UserRole.finance), contains('finance_query'));
     expect(_roleIds(UserRole.finance), contains('commission_rules'));
+    expect(_roleIds(UserRole.finance), contains('travel_agency_management'));
     expect(_roleIds(UserRole.admin), contains('finance_query'));
     expect(_roleIds(UserRole.admin), contains('commission_rules'));
+    expect(_roleIds(UserRole.admin), contains('travel_agency_management'));
+    expect(_roleIds(UserRole.admin), contains('analytics'));
     expect(_roleIds(UserRole.boss), contains('finance_query'));
+    expect(_roleIds(UserRole.boss), contains('analytics'));
     expect(_roleIds(UserRole.boss), isNot(contains('commission_rules')));
+    expect(
+        _roleIds(UserRole.boss), isNot(contains('travel_agency_management')));
     expect(_roleIds(UserRole.boss), isNot(contains('taster_commissions')));
     expect(_roleIds(UserRole.taster), contains('taster_commissions'));
+    expect(_roleIds(UserRole.finance), contains('analytics'));
     expect(_roleIds(UserRole.warehouse), contains('warehouse_packing'));
     expect(
         _roleIds(UserRole.boss),
@@ -161,7 +216,9 @@ void main() {
       expect(_roleIds(role), isNot(contains('after_sales_form')));
       expect(_roleIds(role), isNot(contains('finance_query')));
       expect(_roleIds(role), isNot(contains('commission_rules')));
+      expect(_roleIds(role), isNot(contains('travel_agency_management')));
       expect(_roleIds(role), isNot(contains('warehouse_packing')));
+      expect(_roleIds(role), isNot(contains('analytics')));
     }
     for (final role in [
       UserRole.sales,
@@ -172,6 +229,7 @@ void main() {
       UserRole.boss,
     ]) {
       expect(_roleIds(role), isNot(contains('commission_rules')));
+      expect(_roleIds(role), isNot(contains('travel_agency_management')));
     }
     for (final role in [
       UserRole.sales,
@@ -181,6 +239,55 @@ void main() {
     ]) {
       expect(_roleIds(role), isNot(contains('finance_query')));
       expect(_roleIds(role), isNot(contains('taster_commissions')));
+      expect(_roleIds(role), isNot(contains('analytics')));
+    }
+  });
+
+  testWidgets('analytics menu is visible only to admin boss and finance',
+      (_) async {
+    for (final role in [UserRole.admin, UserRole.boss, UserRole.finance]) {
+      expect(_roleIds(role), contains('analytics'));
+      expect(_destinationIds(['analytics'], role), contains('analytics'));
+    }
+
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('analytics')));
+      expect(
+        _destinationIds(['analytics'], role),
+        isNot(contains('analytics')),
+      );
+    }
+  });
+
+  testWidgets(
+      'travel agency management menu is visible only to admin and finance',
+      (_) async {
+    for (final role in [UserRole.admin, UserRole.finance]) {
+      expect(_roleIds(role), contains('travel_agency_management'));
+      expect(
+        _destinationIds(['travel_agency_management'], role),
+        contains('travel_agency_management'),
+      );
+    }
+
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('travel_agency_management')));
+      expect(
+        _destinationIds(['travel_agency_management'], role),
+        isNot(contains('travel_agency_management')),
+      );
     }
   });
 
@@ -207,10 +314,13 @@ void main() {
     expect(_page('order_query'), isA<OrderQueryPage>());
     expect(_page('finance_query'), isA<FinanceQueryPage>());
     expect(_page('commission_rules'), isA<CommissionRuleConfigPage>());
+    expect(
+        _page('travel_agency_management'), isA<TravelAgencyManagementPage>());
     expect(_page('taster_commissions'), isA<TasterCommissionPage>());
     expect(_page('reconciliation_table'), isA<ReconciliationTablePage>());
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());
+    expect(_page('analytics'), isA<AnalyticsPage>());
   });
 }
 

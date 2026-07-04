@@ -918,6 +918,12 @@ async function main() {
     now,
   });
 
+  await seedStage8AnalyticsAndTasterRanking({
+    admin,
+    demoPassword,
+    now,
+  });
+
   await prisma.dailyReconciliation.upsert({
     where: {
       businessDate: businessDate('2026-06-22'),
@@ -1164,6 +1170,10 @@ type Stage7SeedUsers = {
   salesNoLeader: SeedUser;
 };
 
+type Stage8TasterSeedUser = SeedUser & {
+  name: string;
+};
+
 type SeedCustomer = {
   id: string;
   name: string;
@@ -1191,6 +1201,9 @@ type SeedSalesOrderInput = {
   travelGroupId?: string | null;
   salesUserId?: string | null;
   outreachUserId?: string | null;
+  financeMark?: boolean;
+  markedById?: string | null;
+  markedAt?: Date | null;
   salesFormNo: string;
   totalAmountCents: number;
   cashOnDeliveryAmountCents?: number;
@@ -1228,6 +1241,7 @@ type SeedAfterSalesOrderInput = {
   handledById?: string | null;
   handledAt?: Date | null;
   completedAt?: Date | null;
+  createdAt?: Date;
   notes?: string | null;
 };
 
@@ -1237,6 +1251,15 @@ async function upsertSeedSalesOrder(
   now: Date,
 ) {
   const customer = order.customer;
+  const financeMark = order.financeMark ?? true;
+  const markedById =
+    order.markedById !== undefined
+      ? order.markedById
+      : financeMark
+        ? admin.id
+        : null;
+  const markedAt =
+    order.markedAt !== undefined ? order.markedAt : financeMark ? now : null;
   const orderData = {
     orderType: order.orderType ?? 'EXTERNAL',
     travelGroupId: order.travelGroupId ?? null,
@@ -1262,9 +1285,9 @@ async function upsertSeedSalesOrder(
     financeRemark: order.financeRemark,
     remark: order.remark,
     status: order.status,
-    financeMark: true,
-    markedById: admin.id,
-    markedAt: now,
+    financeMark,
+    markedById,
+    markedAt,
     salesUserId: order.salesUserId ?? 'usr_sales_demo',
     outreachUserId: order.outreachUserId ?? null,
     updatedById: admin.id,
@@ -1328,6 +1351,7 @@ async function upsertSeedAfterSalesOrder(
     handledById: afterSalesOrder.handledById ?? null,
     handledAt: afterSalesOrder.handledAt ?? null,
     completedAt: afterSalesOrder.completedAt ?? null,
+    ...(afterSalesOrder.createdAt ? { createdAt: afterSalesOrder.createdAt } : {}),
     notes: afterSalesOrder.notes ?? null,
     updatedById: admin.id,
     updatedAt: now,
@@ -3040,6 +3064,776 @@ async function upsertStage7TravelGroupFinanceSummary(summary: {
       createdAt: summary.now,
     },
   });
+}
+
+async function seedStage8AnalyticsAndTasterRanking({
+  admin,
+  demoPassword,
+  now,
+}: {
+  admin: SeedUser;
+  demoPassword: string;
+  now: Date;
+}) {
+  const dates = buildStage8AnalyticsDates(now);
+  const tasters = await upsertStage8Tasters(demoPassword, now);
+  const agencyName = 'Stage8 Smoke Analytics Agency';
+
+  await upsertTravelAgencies(
+    [
+      {
+        name: agencyName,
+        contactName: 'stage8 smoke test contact',
+        contactPhone: 's8-smoke-agency',
+        notes: 'stage8 smoke test agency for analytics and taster ranking seed',
+      },
+    ],
+    now,
+  );
+
+  const guideAlpha = await upsertStage8Guide({
+    name: 'Stage8 Smoke Guide Alpha',
+    phone: 's8-smoke-guide-a',
+    travelAgency: agencyName,
+    remarks: 'stage8 smoke test guide alpha for analytics seed',
+    now,
+  });
+  const guideBeta = await upsertStage8Guide({
+    name: 'Stage8 Smoke Guide Beta',
+    phone: 's8-smoke-guide-b',
+    travelAgency: agencyName,
+    remarks: 'stage8 smoke test guide beta for analytics seed',
+    now,
+  });
+
+  const markedAlphaCustomer = await upsertStage8Customer({
+    id: 'cust_stage8_smoke_marked_alpha',
+    name: 'Stage8 Smoke Marked Alpha Customer',
+    phone: 's8-smoke-phone-801',
+    address: 'stage8 smoke synthetic address 801',
+    financeMark: true,
+    notes: 'stage8 smoke test marked customer for partial refund analytics',
+    admin,
+    now,
+  });
+  const markedBetaCustomer = await upsertStage8Customer({
+    id: 'cust_stage8_smoke_marked_beta',
+    name: 'Stage8 Smoke Marked Beta Customer',
+    phone: 's8-smoke-phone-802',
+    address: 'stage8 smoke synthetic address 802',
+    financeMark: true,
+    notes: 'stage8 smoke test marked customer for pending refund and warning analytics',
+    admin,
+    now,
+  });
+  const unmarkedCustomer = await upsertStage8Customer({
+    id: 'cust_stage8_test_unmarked_scope',
+    name: 'Stage8 Test Unmarked Scope Customer',
+    phone: 's8-test-phone-803',
+    address: 'stage8 test synthetic address 803',
+    financeMark: false,
+    notes: 'stage8 test unmarked customer for global mark filtering analytics',
+    admin,
+    now,
+  });
+
+  const alphaTodayGroup = await upsertStage8TravelGroup({
+    groupNo: 'TG-STAGE8-SMOKE-TODAY-ALPHA',
+    visitDate: dates.today,
+    travelAgency: agencyName,
+    guideName: guideAlpha.name,
+    guidePhone: guideAlpha.phone,
+    guideId: guideAlpha.id,
+    guestCount: 10,
+    taster: tasters.alpha,
+    groupType: 'stage8 smoke analytics group',
+    status: 'ORDERED',
+    salesAmountCents: 1000000,
+    orderAmountCents: 900000,
+    financeMark: true,
+    remarks:
+      'stage8 smoke today analytics group: 10 guests, partial refund order gross 1000000, confirmed refund 100000, net 900000',
+    admin,
+    now,
+  });
+  const alphaNoOrderGroup = await upsertStage8TravelGroup({
+    groupNo: 'TG-STAGE8-SMOKE-THISMONTH-NOORDER',
+    visitDate: dates.thisMonth,
+    travelAgency: agencyName,
+    guideName: guideAlpha.name,
+    guidePhone: guideAlpha.phone,
+    guideId: guideAlpha.id,
+    guestCount: 20,
+    taster: tasters.alpha,
+    groupType: 'stage8 smoke analytics group',
+    status: 'PENDING_SUMMARY',
+    salesAmountCents: 0,
+    orderAmountCents: 0,
+    financeMark: true,
+    remarks:
+      'stage8 smoke this_month no effective order group for noOrderRate manual test',
+    tasterSummary:
+      'stage8 smoke test no effective order summary for analytics noOrderRate',
+    admin,
+    now,
+  });
+  const betaLastMonthGroup = await upsertStage8TravelGroup({
+    groupNo: 'TG-STAGE8-SMOKE-LASTMONTH-BETA',
+    visitDate: dates.lastMonth,
+    travelAgency: agencyName,
+    guideName: guideBeta.name,
+    guidePhone: guideBeta.phone,
+    guideId: guideBeta.id,
+    guestCount: 30,
+    taster: tasters.beta,
+    groupType: 'stage8 smoke analytics group',
+    status: 'ORDERED',
+    salesAmountCents: 720000,
+    orderAmountCents: 720000,
+    financeMark: true,
+    remarks:
+      'stage8 smoke last_month analytics group: 30 guests, valid order 600000, pending refund 50000, refunded order without confirmed refund fact 120000',
+    admin,
+    now,
+  });
+  const alphaUnmarkedGroup = await upsertStage8TravelGroup({
+    groupNo: 'TG-STAGE8-TEST-UNMARKED-SCOPE',
+    visitDate: dates.today,
+    travelAgency: agencyName,
+    guideName: guideAlpha.name,
+    guidePhone: guideAlpha.phone,
+    guideId: guideAlpha.id,
+    guestCount: 8,
+    taster: tasters.alpha,
+    groupType: 'stage8 test analytics group',
+    status: 'ORDERED',
+    salesAmountCents: 200000,
+    orderAmountCents: 200000,
+    financeMark: false,
+    remarks:
+      'stage8 test unmarked travel group and unmarked customer for global mark filtering analytics',
+    admin,
+    now,
+  });
+
+  const partialRefundOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE8-SMOKE-PARTIAL-REFUND-001',
+      orderType: 'TRAVEL_GROUP',
+      travelGroupId: alphaTodayGroup.id,
+      customer: markedAlphaCustomer,
+      orderDate: dates.today,
+      salesFormNo: 'SMOKE-FORM-STAGE8-PARTIAL-REFUND-001',
+      totalAmountCents: 1000000,
+      logisticsMethod: 'stage8 smoke test express',
+      packingStatus: 'PACKED',
+      packageCount: 2,
+      warehouseRemark: 'stage8 smoke test packed partial refund order',
+      logisticsNo: 'STAGE8-SMOKE-LOGISTICS-PARTIAL',
+      logisticsFeeCents: 2000,
+      invoiceRequired: true,
+      invoiceIssued: false,
+      financeRemark: 'stage8 smoke test partial refund finance sample',
+      remark:
+        'stage8 smoke partial_refund order for analytics gross/refund/net manual check',
+      status: 'PARTIAL_REFUND',
+      financeMark: true,
+      items: [
+        {
+          productName: 'Stage8 Smoke Analytics Wine A',
+          quantity: 5,
+          unitPriceCents: 140000,
+          subtotalCents: 700000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage8 smoke test partial refund wine item',
+        },
+        {
+          productName: 'Stage8 Smoke Analytics Gift Box B',
+          quantity: 1,
+          unitPriceCents: 300000,
+          subtotalCents: 300000,
+          deliveryType: 'SELF_PICKUP',
+          notes: 'stage8 smoke test partial refund gift item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const pendingRefundOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE8-SMOKE-PENDING-REFUND-001',
+      orderType: 'TRAVEL_GROUP',
+      travelGroupId: betaLastMonthGroup.id,
+      customer: markedBetaCustomer,
+      orderDate: dates.lastMonth,
+      salesFormNo: 'SMOKE-FORM-STAGE8-PENDING-REFUND-001',
+      totalAmountCents: 600000,
+      logisticsMethod: 'stage8 smoke test express',
+      packingStatus: 'PACKED',
+      packageCount: 1,
+      warehouseRemark: 'stage8 smoke test packed pending refund order',
+      logisticsNo: 'STAGE8-SMOKE-LOGISTICS-PENDING',
+      logisticsFeeCents: 1600,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark: 'stage8 smoke test pending refund finance sample',
+      remark:
+        'stage8 smoke valid order with unconfirmed after-sales refund for pendingRefund warning',
+      status: 'VALID',
+      financeMark: true,
+      items: [
+        {
+          productName: 'Stage8 Smoke Analytics Wine C',
+          quantity: 3,
+          unitPriceCents: 200000,
+          subtotalCents: 600000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage8 smoke test pending refund item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const refundedWithoutFactOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE8-TEST-REFUNDED-NO-FACT-001',
+      orderType: 'TRAVEL_GROUP',
+      travelGroupId: betaLastMonthGroup.id,
+      customer: markedBetaCustomer,
+      orderDate: dates.lastMonth,
+      salesFormNo: 'TEST-FORM-STAGE8-REFUNDED-NO-FACT-001',
+      totalAmountCents: 120000,
+      logisticsMethod: 'stage8 test express',
+      packingStatus: 'PACKED',
+      packageCount: 1,
+      warehouseRemark:
+        'stage8 test refunded order without confirmed refund fact warehouse sample',
+      logisticsNo: 'STAGE8-TEST-LOGISTICS-REFUNDED-NO-FACT',
+      logisticsFeeCents: 0,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark:
+        'stage8 test refunded order without confirmed refund fact finance sample',
+      remark:
+        'stage8 test refunded order intentionally has no confirmed after-sales refund fact for warning',
+      status: 'REFUNDED',
+      financeMark: true,
+      items: [
+        {
+          productName: 'Stage8 Test Refunded No Fact Wine',
+          quantity: 1,
+          unitPriceCents: 120000,
+          subtotalCents: 120000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage8 test refunded order item without confirmed refund fact',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const unmarkedScopeOrder = await upsertSeedSalesOrder(
+    {
+      orderNo: 'SO-STAGE8-TEST-UNMARKED-SCOPE-001',
+      orderType: 'TRAVEL_GROUP',
+      travelGroupId: alphaUnmarkedGroup.id,
+      customer: unmarkedCustomer,
+      orderDate: dates.today,
+      salesFormNo: 'TEST-FORM-STAGE8-UNMARKED-SCOPE-001',
+      totalAmountCents: 200000,
+      logisticsMethod: 'stage8 test express',
+      packingStatus: 'PENDING',
+      packageCount: 0,
+      warehouseRemark:
+        'stage8 test unmarked customer and travel group order for scope filtering',
+      logisticsNo: null,
+      logisticsFeeCents: 0,
+      invoiceRequired: false,
+      invoiceIssued: false,
+      financeRemark:
+        'stage8 test unmarked order should be excluded when global mark filtering is enabled',
+      remark:
+        'stage8 test unmarked customer and unmarked travel group analytics scope order',
+      status: 'VALID',
+      financeMark: false,
+      items: [
+        {
+          productName: 'Stage8 Test Unmarked Scope Wine',
+          quantity: 1,
+          unitPriceCents: 200000,
+          subtotalCents: 200000,
+          deliveryType: 'SHIPPING',
+          notes: 'stage8 test unmarked scope item',
+        },
+      ],
+    },
+    admin,
+    now,
+  );
+
+  const confirmedAfterSales = await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS-STAGE8-SMOKE-PARTIAL-CONFIRMED',
+      salesOrder: partialRefundOrder,
+      customer: markedAlphaCustomer,
+      issueType: 'CUSTOMER_RETURN',
+      actionType: 'RETURN_REFUND',
+      description:
+        'stage8 smoke confirmed partial refund after-sales for analytics net sales',
+      resolution:
+        'stage8 smoke finance confirmed refund deducts analytics net sales',
+      refundAmountCents: 100000,
+      status: 'COMPLETED',
+      financeConfirmed: true,
+      financeConfirmedById: 'usr_finance_demo',
+      financeConfirmedAt: dates.today,
+      handledById: 'usr_after_sales_demo',
+      handledAt: dates.today,
+      completedAt: dates.today,
+      createdAt: dates.today,
+      notes:
+        'stage8 smoke confirmed refund fact: gross 1000000 - refund 100000 = net 900000',
+    },
+    admin,
+    now,
+  );
+
+  const pendingAfterSales = await upsertSeedAfterSalesOrder(
+    {
+      afterSalesNo: 'AS-STAGE8-SMOKE-PENDING-REFUND',
+      salesOrder: pendingRefundOrder,
+      customer: markedBetaCustomer,
+      issueType: 'LOGISTICS_DAMAGE',
+      actionType: 'REFUND',
+      description:
+        'stage8 smoke unconfirmed refund after-sales for pendingRefund warning',
+      resolution:
+        'stage8 smoke refund waiting finance confirmation and should not reduce net sales',
+      refundAmountCents: 50000,
+      status: 'WAITING_REFUND',
+      financeConfirmed: false,
+      financeConfirmedById: null,
+      financeConfirmedAt: null,
+      handledById: 'usr_after_sales_demo',
+      handledAt: dates.lastMonth,
+      completedAt: null,
+      createdAt: dates.lastMonth,
+      notes:
+        'stage8 smoke pending refund warning sample; unconfirmed amount 50000 is not deducted',
+    },
+    admin,
+    now,
+  );
+
+  await prisma.operationLog.upsert({
+    where: {
+      id: 'op_seed_stage8_analytics',
+    },
+    update: {
+      userId: admin.id,
+      action: 'seed.stage8_analytics_taster_ranking',
+      entityType: 'system',
+      entityId: 'stage8',
+      afterData: {
+        testData: true,
+        dateSamples: {
+          today: dates.todayYmd,
+          thisMonth: dates.thisMonthYmd,
+          lastMonth: dates.lastMonthYmd,
+        },
+        tasterManualCheck: {
+          [tasters.alpha.id]: {
+            tasterName: tasters.alpha.name,
+            rawGroupCount: 3,
+            rawGuestCount: 38,
+            markedGroupCount: 2,
+            markedGuestCount: 30,
+            markedNetSalesAmountCents: 900000,
+            markedNoEffectiveOrderGroupCount: 1,
+          },
+          [tasters.beta.id]: {
+            tasterName: tasters.beta.name,
+            rawGroupCount: 1,
+            rawGuestCount: 30,
+            markedGroupCount: 1,
+            markedGuestCount: 30,
+            markedGrossSalesAmountCents: 720000,
+            pendingRefundAmountCents: 50000,
+            refundedOrderWithoutConfirmedRefund: true,
+          },
+        },
+        groups: [
+          alphaTodayGroup.groupNo,
+          alphaNoOrderGroup.groupNo,
+          betaLastMonthGroup.groupNo,
+          alphaUnmarkedGroup.groupNo,
+        ],
+        orders: [
+          partialRefundOrder.orderNo,
+          pendingRefundOrder.orderNo,
+          refundedWithoutFactOrder.orderNo,
+          unmarkedScopeOrder.orderNo,
+        ],
+        afterSalesOrders: [
+          confirmedAfterSales.afterSalesNo,
+          pendingAfterSales.afterSalesNo,
+        ],
+      },
+      createdAt: now,
+    },
+    create: {
+      id: 'op_seed_stage8_analytics',
+      userId: admin.id,
+      action: 'seed.stage8_analytics_taster_ranking',
+      entityType: 'system',
+      entityId: 'stage8',
+      afterData: {
+        testData: true,
+        dateSamples: {
+          today: dates.todayYmd,
+          thisMonth: dates.thisMonthYmd,
+          lastMonth: dates.lastMonthYmd,
+        },
+        tasterManualCheck: {
+          [tasters.alpha.id]: {
+            tasterName: tasters.alpha.name,
+            rawGroupCount: 3,
+            rawGuestCount: 38,
+            markedGroupCount: 2,
+            markedGuestCount: 30,
+            markedNetSalesAmountCents: 900000,
+            markedNoEffectiveOrderGroupCount: 1,
+          },
+          [tasters.beta.id]: {
+            tasterName: tasters.beta.name,
+            rawGroupCount: 1,
+            rawGuestCount: 30,
+            markedGroupCount: 1,
+            markedGuestCount: 30,
+            markedGrossSalesAmountCents: 720000,
+            pendingRefundAmountCents: 50000,
+            refundedOrderWithoutConfirmedRefund: true,
+          },
+        },
+        groups: [
+          alphaTodayGroup.groupNo,
+          alphaNoOrderGroup.groupNo,
+          betaLastMonthGroup.groupNo,
+          alphaUnmarkedGroup.groupNo,
+        ],
+        orders: [
+          partialRefundOrder.orderNo,
+          pendingRefundOrder.orderNo,
+          refundedWithoutFactOrder.orderNo,
+          unmarkedScopeOrder.orderNo,
+        ],
+        afterSalesOrders: [
+          confirmedAfterSales.afterSalesNo,
+          pendingAfterSales.afterSalesNo,
+        ],
+      },
+      createdAt: now,
+    },
+  });
+}
+
+async function upsertStage8Tasters(
+  demoPassword: string,
+  now: Date,
+): Promise<{ alpha: Stage8TasterSeedUser; beta: Stage8TasterSeedUser }> {
+  const passwordHash = hashPassword(demoPassword);
+  const alpha = await prisma.user.upsert({
+    where: {
+      username: 'stage8_taster_alpha_smoke',
+    },
+    update: {
+      name: 'Stage8 Smoke Taster Alpha',
+      role: 'TASTER',
+      leaderId: null,
+      isActive: true,
+      updatedAt: now,
+    },
+    create: {
+      id: 'usr_stage8_taster_alpha_smoke',
+      name: 'Stage8 Smoke Taster Alpha',
+      username: 'stage8_taster_alpha_smoke',
+      passwordHash,
+      role: 'TASTER',
+      leaderId: null,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  const beta = await prisma.user.upsert({
+    where: {
+      username: 'stage8_taster_beta_smoke',
+    },
+    update: {
+      name: 'Stage8 Smoke Taster Beta',
+      role: 'TASTER',
+      leaderId: null,
+      isActive: true,
+      updatedAt: now,
+    },
+    create: {
+      id: 'usr_stage8_taster_beta_smoke',
+      name: 'Stage8 Smoke Taster Beta',
+      username: 'stage8_taster_beta_smoke',
+      passwordHash,
+      role: 'TASTER',
+      leaderId: null,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+
+  return {
+    alpha: { id: alpha.id, name: alpha.name },
+    beta: { id: beta.id, name: beta.name },
+  };
+}
+
+async function upsertStage8Guide({
+  name,
+  phone,
+  travelAgency,
+  remarks,
+  now,
+}: {
+  name: string;
+  phone: string;
+  travelAgency: string;
+  remarks: string;
+  now: Date;
+}) {
+  return prisma.guide.upsert({
+    where: {
+      phone,
+    },
+    update: {
+      name,
+      travelAgency,
+      remarks,
+      isActive: true,
+      updatedAt: now,
+    },
+    create: {
+      name,
+      phone,
+      travelAgency,
+      remarks,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+}
+
+async function upsertStage8Customer({
+  id,
+  name,
+  phone,
+  address,
+  financeMark,
+  notes,
+  admin,
+  now,
+}: {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+  financeMark: boolean;
+  notes: string;
+  admin: SeedUser;
+  now: Date;
+}) {
+  const markedById = financeMark ? admin.id : null;
+  const markedAt = financeMark ? now : null;
+  return prisma.customer.upsert({
+    where: {
+      id,
+    },
+    update: {
+      name,
+      phone,
+      province: 'stage8-test-province',
+      city: 'stage8-test-city',
+      district: 'stage8-test-district',
+      address,
+      financeMark,
+      markedById,
+      markedAt,
+      notes,
+      updatedById: admin.id,
+      updatedAt: now,
+    },
+    create: {
+      id,
+      name,
+      phone,
+      province: 'stage8-test-province',
+      city: 'stage8-test-city',
+      district: 'stage8-test-district',
+      address,
+      financeMark,
+      markedById,
+      markedAt,
+      notes,
+      createdById: admin.id,
+      updatedById: admin.id,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+}
+
+async function upsertStage8TravelGroup({
+  groupNo,
+  visitDate,
+  travelAgency,
+  guideName,
+  guidePhone,
+  guideId,
+  guestCount,
+  taster,
+  groupType,
+  status,
+  salesAmountCents,
+  orderAmountCents,
+  financeMark,
+  remarks,
+  tasterSummary,
+  admin,
+  now,
+}: {
+  groupNo: string;
+  visitDate: Date;
+  travelAgency: string;
+  guideName: string;
+  guidePhone: string;
+  guideId: string;
+  guestCount: number;
+  taster: Stage8TasterSeedUser;
+  groupType: string;
+  status: string;
+  salesAmountCents: number;
+  orderAmountCents: number;
+  financeMark: boolean;
+  remarks: string;
+  tasterSummary?: string;
+  admin: SeedUser;
+  now: Date;
+}) {
+  const markedById = financeMark ? admin.id : null;
+  const markedAt = financeMark ? now : null;
+  const data = {
+    visitDate,
+    travelAgency,
+    licensePlate: 'stage8-smoke-test-plate',
+    guideName,
+    guidePhone,
+    guideId,
+    guestCount,
+    tastingRoomNo: 'stage8-smoke-room',
+    tasterName: taster.name,
+    tasterId: taster.id,
+    arrivalTime: '10:00',
+    groupType,
+    wineDetails: 'stage8 smoke/test analytics tasting seed details',
+    departureTime: '12:00',
+    remarks,
+    status,
+    salesAmountCents,
+    paidDepositCents: 0,
+    cashOnDeliveryCents: 0,
+    liquorCostDeductionCents: 0,
+    orderAmountCents,
+    points: Math.floor(orderAmountCents / 1000),
+    returnedPoints: 0,
+    unreturnedPoints: Math.floor(orderAmountCents / 1000),
+    guideInfoSent: true,
+    travelAgencyInfoSent: true,
+    financeMark,
+    markedById,
+    markedAt,
+    tasterSummary: tasterSummary ?? null,
+    tasterSummaryAt: tasterSummary ? now : null,
+    updatedById: admin.id,
+    updatedAt: now,
+  };
+
+  return prisma.travelGroup.upsert({
+    where: {
+      groupNo,
+    },
+    update: data,
+    create: {
+      groupNo,
+      ...data,
+      createdById: admin.id,
+      createdAt: now,
+    },
+  });
+}
+
+function buildStage8AnalyticsDates(now: Date) {
+  const todayParts = getShanghaiDateParts(now);
+  const lastMonth =
+    todayParts.month === 1
+      ? { year: todayParts.year - 1, month: 12 }
+      : { year: todayParts.year, month: todayParts.month - 1 };
+  const todayYmd = formatYmd(
+    todayParts.year,
+    todayParts.month,
+    todayParts.day,
+  );
+  const thisMonthYmd = formatYmd(todayParts.year, todayParts.month, 1);
+  const lastMonthYmd = formatYmd(lastMonth.year, lastMonth.month, 15);
+
+  return {
+    today: businessDate(todayYmd),
+    thisMonth: businessDate(thisMonthYmd),
+    lastMonth: businessDate(lastMonthYmd),
+    todayYmd,
+    thisMonthYmd,
+    lastMonthYmd,
+  };
+}
+
+function getShanghaiDateParts(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value]),
+  );
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+  };
+}
+
+function formatYmd(year: number, month: number, day: number) {
+  return [
+    String(year).padStart(4, '0'),
+    String(month).padStart(2, '0'),
+    String(day).padStart(2, '0'),
+  ].join('-');
 }
 
 function businessDate(value: string) {

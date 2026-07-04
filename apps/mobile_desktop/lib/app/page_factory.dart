@@ -16,6 +16,7 @@ import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_page.dart';
 import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
+import '../features/travel_agency_management/travel_agency_management_page.dart';
 import '../features/travel_group_finance/travel_group_finance_supplement_page.dart';
 import '../features/travel_group_order_notes/travel_group_order_notes_page.dart';
 import '../features/travel_group_query/travel_group_query_page.dart';
@@ -75,6 +76,12 @@ Widget buildPageForDestination({
         token: token,
         role: role,
       );
+    case 'travel_agency_management':
+      return TravelAgencyManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'reconciliation_table':
       return ReconciliationTablePage(apiClient: apiClient, token: token);
     case 'warehouse_packing':
@@ -90,12 +97,14 @@ Widget buildPageForDestination({
         role: role,
       );
     case 'analytics':
-      return const AnalyticsPage();
+      return AnalyticsPage(apiClient: apiClient, token: token, role: role);
     case 'ai_assistant':
       return const AiAssistantPage();
     case 'dashboard':
     default:
       return DashboardPage(
+        apiClient: apiClient,
+        token: token,
         role: role,
         allowedDestinations: allowedDestinations,
         onOpenDestination: onOpenDestination,

@@ -62,6 +62,13 @@ void main() {
     expect(find.text('SF123456789'), findsOneWidget);
     expect(find.text('物流运费'), findsOneWidget);
     expect(find.text('¥18.00'), findsOneWidget);
+    expect(find.text('上单金额'), findsWidgets);
+    expect(find.text('¥760.00'), findsWidgets);
+    expect(find.text('品鉴师提成'), findsWidgets);
+    expect(find.text('¥88.00'), findsWidgets);
+    expect(find.text('测试品鉴师'), findsWidgets);
+    expect(find.text('上单 ¥760.00'), findsOneWidget);
+    expect(find.text('品鉴师提成 ¥88.00'), findsOneWidget);
     expect(find.text('顺丰'), findsOneWidget);
     expect(find.text('明细备注'), findsNothing);
     expect(find.text('订单明细'), findsOneWidget);
@@ -217,6 +224,8 @@ void main() {
         findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '客户标记 未标记'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '订单标记 未标记'), findsNothing);
+    expect(find.text('上单金额'), findsNothing);
+    expect(find.text('品鉴师提成'), findsNothing);
   });
 
   testWidgets('boss sees read-only details without edit or mark actions',
@@ -230,6 +239,8 @@ void main() {
     expect(find.byKey(const ValueKey('order-basic-edit-button')), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '客户标记 未标记'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '订单标记 未标记'), findsNothing);
+    expect(find.text('上单金额'), findsNothing);
+    expect(find.text('品鉴师提成'), findsNothing);
   });
 
   testWidgets('after sales can use the page as an order locator',
@@ -728,6 +739,10 @@ Map<String, dynamic> _orderJson({
     'travelGroup': _travelGroupJson(),
     'salesFormNo': 'XS-001',
     'totalAmountCents': 79800,
+    'entryAmountCents': 76000,
+    'tasterCommissionCents': 8800,
+    'tasterId': 'taster-1',
+    'tasterName': '测试品鉴师',
     'cashOnDeliveryAmountCents': 10000,
     'status': 'valid',
     'deliverySummary': 'shipping',
@@ -786,6 +801,8 @@ Map<String, dynamic> _travelGroupJson() {
     'visitDate': '2026-06-30',
     'travelAgency': '测试旅行社',
     'guideName': '李导',
+    'tasterId': 'taster-1',
+    'tasterName': '测试品鉴师',
     'guestCount': 20,
     'status': 'unmarked',
     'financeMark': true,

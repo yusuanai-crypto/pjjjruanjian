@@ -4,6 +4,9 @@ import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  buildGlobalTravelGroupMarkScope as buildSharedGlobalTravelGroupMarkScope,
+} from '../analytics/analytics-scope.helper';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
 
@@ -447,7 +450,9 @@ export class TravelGroupFinanceSummaryNestService {
   }
 
   private async buildGlobalGroupMarkScope() {
-    return (await this.onlyShowMarkedRecords()) ? { financeMark: true } : null;
+    return buildSharedGlobalTravelGroupMarkScope(
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   private async onlyShowMarkedRecords() {

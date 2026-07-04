@@ -53,6 +53,7 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'travel_group_form', label: '旅行团录入', phase: 3),
   SharedMenuEntry(id: 'travel_group_query', label: '旅行团查询', phase: 3),
   SharedMenuEntry(id: 'pending_travel_groups', label: '待处理旅行团', phase: 3),
+  SharedMenuEntry(id: 'travel_agency_management', label: '旅行社管理', phase: 7),
   SharedMenuEntry(
     id: 'travel_group_finance_supplement',
     label: '积分表',
@@ -80,6 +81,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'travel_group_form',
     'travel_group_query',
     'pending_travel_groups',
+    'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
     'order_form',
@@ -130,10 +132,12 @@ const roleMenuIds = <UserRole, List<String>>{
     'role_menu',
     'travel_group_query',
     'pending_travel_groups',
+    'travel_agency_management',
     'order_query',
     'finance_query',
     'commission_rules',
     'reconciliation_table',
+    'analytics',
   ],
   UserRole.warehouse: [
     'dashboard',

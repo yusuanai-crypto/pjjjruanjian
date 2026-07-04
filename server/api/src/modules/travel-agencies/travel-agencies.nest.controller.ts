@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
@@ -28,6 +37,25 @@ export class TravelAgenciesNestController {
     return {
       travelAgency: await this.travelAgenciesService.createTravelAgency(
         actor,
+        body,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      ),
+    };
+  }
+
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelAgency: await this.travelAgenciesService.updateTravelAgency(
+        actor,
+        id,
         body,
         {
           ipAddress: getRequestIp(request),

@@ -1450,6 +1450,106 @@ test('contract: sales order DTO summarizes mixed delivery items consistently', a
   });
 });
 
+test('contract: sales order DTO exposes entry amount and taster commission summary', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+
+      const detail = await requestJson(
+        baseUrl,
+        '/api/sales-orders/so_metrics_order_dto',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(detail.response.status, 200);
+      const order = detail.body.data.salesOrder;
+      assertSalesOrderDtoPhase4(order);
+      assert.equal(order.entryAmountCents, 123400);
+      assert.equal(order.tasterCommissionCents, 9200);
+      assert.equal(order.tasterId, 'usr_metrics_taster');
+      assert.equal(order.tasterName, 'Metrics Taster');
+
+      const list = await requestJson(baseUrl, '/api/sales-orders', {
+        token: admin.token,
+      });
+      assert.equal(list.response.status, 200);
+      const listedOrder = list.body.data.salesOrders.find(
+        (item) => item.id === 'so_metrics_order_dto',
+      );
+      assert.ok(listedOrder);
+      assert.equal(listedOrder.entryAmountCents, 123400);
+      assert.equal(listedOrder.tasterCommissionCents, 9200);
+      assert.equal(listedOrder.tasterName, 'Metrics Taster');
+      assertSalesOrderDtoStableEqual(listedOrder, order);
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: 'usr_metrics_taster',
+            name: 'Metrics Taster',
+            username: 'metrics-taster',
+            role: 'taster',
+          },
+        ],
+        travelGroups: [
+          {
+            id: 'tg_metrics_order_dto',
+            groupNo: 'TG-METRICS-ORDER-DTO',
+            visitDate: '2026-07-04T00:00:00.000Z',
+            travelAgency: 'Metrics Agency',
+            tasterId: 'usr_metrics_taster',
+            tasterName: 'Metrics Taster',
+          },
+        ],
+        salesOrders: [
+          {
+            id: 'so_metrics_order_dto',
+            orderNo: 'SO-METRICS-ORDER-DTO',
+            orderType: 'TRAVEL_GROUP',
+            travelGroupId: 'tg_metrics_order_dto',
+            orderDate: '2026-07-04T00:00:00.000Z',
+            customerName: 'Metrics Customer',
+            totalAmountCents: 123400,
+            items: [
+              {
+                productName: 'Metrics Product',
+                quantity: 1,
+                unitPriceCents: 123400,
+                deliveryType: 'SHIPPING',
+              },
+            ],
+          },
+        ],
+        commissionRecords: [
+          {
+            id: 'cr_metrics_order_taster',
+            salesOrderId: 'so_metrics_order_dto',
+            travelGroupId: 'tg_metrics_order_dto',
+            targetType: 'TASTER_COMMISSION',
+            amountCents: 8000,
+          },
+          {
+            id: 'cr_metrics_group_taster',
+            travelGroupId: 'tg_metrics_order_dto',
+            targetType: 'TASTER_COMMISSION',
+            amountCents: 1200,
+            manualInput: true,
+          },
+          {
+            id: 'cr_metrics_sales_ignored',
+            salesOrderId: 'so_metrics_order_dto',
+            travelGroupId: 'tg_metrics_order_dto',
+            targetType: 'SALES_COMMISSION',
+            amountCents: 999999,
+          },
+        ],
+      },
+    },
+  );
+});
+
 test('contract: sales order DTO keeps legacy snapshots without customer relation', async () => {
   await withPhase1Server(
     async (baseUrl) => {
@@ -5551,6 +5651,10 @@ function assertSalesOrderDtoPhase4(order) {
     'orderDate',
     'salesFormNo',
     'totalAmountCents',
+    'entryAmountCents',
+    'tasterCommissionCents',
+    'tasterId',
+    'tasterName',
     'cashOnDeliveryAmountCents',
     'deliverySummary',
     'logisticsMethod',
@@ -5616,6 +5720,10 @@ function assertSalesOrderDtoStableEqual(actual, expected) {
     'orderDate',
     'salesFormNo',
     'totalAmountCents',
+    'entryAmountCents',
+    'tasterCommissionCents',
+    'tasterId',
+    'tasterName',
     'cashOnDeliveryAmountCents',
     'deliverySummary',
     'logisticsMethod',

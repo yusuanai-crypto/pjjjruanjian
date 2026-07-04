@@ -113,6 +113,10 @@ void main() {
       'salesFormNo': 'FORM-001',
       'orderDate': '2026-06-24',
       'totalAmountCents': 647800,
+      'entryAmountCents': 620000,
+      'tasterCommissionCents': 36000,
+      'tasterId': 'taster-1',
+      'tasterName': '测试品鉴师',
       'cashOnDeliveryAmountCents': 5000,
       'status': 'valid',
       'deliverySummary': 'shipping',
@@ -161,6 +165,10 @@ void main() {
     expect(order.customer?.financeMark, isTrue);
     expect(order.salesFormNo, 'FORM-001');
     expect(order.totalAmountCents, 647800);
+    expect(order.entryAmountCents, 620000);
+    expect(order.tasterCommissionCents, 36000);
+    expect(order.tasterId, 'taster-1');
+    expect(order.tasterName, '测试品鉴师');
     expect(order.deliverySummary, 'shipping');
     expect(order.packingStatus, 'pending');
     expect(order.logisticsMethod, '顺丰');
@@ -772,6 +780,272 @@ void main() {
     expect(travelUri.queryParameters['guideId'], 'guide-1');
     expect(travelUri.queryParameters['financeMark'], 'false');
     expect(travelUri.queryParameters['pendingStatus'], 'pending_finance');
+  });
+
+  test('parses phase 8 analytics JSON records', () {
+    final range = AnalyticsDateRange.fromJson(_analyticsRangeJson());
+    expect(range.preset, 'custom');
+    expect(range.dateFrom, '2026-07-01');
+    expect(range.dateTo, '2026-07-04');
+    expect(range.timezone, 'Asia/Shanghai');
+
+    final metrics = AnalyticsMetrics.fromJson(_analyticsMetricsJson());
+    expect(metrics.grossSalesAmountCents, 200000);
+    expect(metrics.refundAmountCents, 20000);
+    expect(metrics.netSalesAmountCents, 180000);
+    expect(metrics.conversionRate, 0.75);
+
+    final overview = AnalyticsOverview.fromJson({
+      'range': _analyticsRangeJson(),
+      'metrics': _analyticsMetricsJson(),
+      'warnings': [
+        {
+          'code': 'pending_refund',
+          'message': 'Pending refund needs finance confirmation.',
+          'context': {
+            'afterSalesOrderIds': ['as-analytics-1'],
+          },
+        },
+      ],
+    });
+
+    expect(overview.range.preset, 'custom');
+    expect(overview.range.timezone, 'Asia/Shanghai');
+    expect(overview.grossSalesAmountCents, 200000);
+    expect(overview.pendingRefundAmountCents, 2000);
+    expect(overview.noOrderRate, 0.25);
+    expect(overview.warnings.single.code, 'pending_refund');
+    expect(
+      overview.warnings.single.context?['afterSalesOrderIds'],
+      ['as-analytics-1'],
+    );
+
+    final ranking = TasterRankingRecord.fromJson(_analyticsRankingJson());
+    expect(ranking.tasterId, 'usr_taster_1');
+    expect(ranking.tasterName, 'test taster A');
+    expect(ranking.rank, 1);
+    expect(ranking.averageSalesPerGuestCents, 3000);
+    expect(ranking.warnings.single.code, 'missing_taster');
+
+    final trend = AnalyticsTrendPoint.fromJson(_analyticsTrendPointJson());
+    expect(trend.periodStart, '2026-07-01');
+    expect(trend.metricValue, 180000);
+    expect(trend.conversionRate, 0.75);
+
+    final order = AnalyticsSourceOrder.fromJson(_analyticsSourceOrderJson());
+    expect(order.orderNo, 'SO-ANALYTICS-001');
+    expect(order.customerFinanceMark, isTrue);
+    expect(order.travelGroupFinanceMark, isTrue);
+    expect(order.contributesToEffectiveOrder, isTrue);
+    expect(order.items.single.productName, 'test product');
+    expect(order.afterSalesOrderIds, ['as-analytics-1']);
+
+    final group =
+        AnalyticsSourceTravelGroup.fromJson(_analyticsSourceTravelGroupJson());
+    expect(group.groupNo, 'TG-ANALYTICS-001');
+    expect(group.noEffectiveOrder, isTrue);
+    expect(group.salesOrderIds, ['order-analytics-1']);
+    expect(group.warnings.single.code, 'missing_taster');
+
+    final afterSales =
+        AnalyticsSourceAfterSales.fromJson(_analyticsSourceAfterSalesJson());
+    expect(afterSales.afterSalesNo, 'AS-ANALYTICS-001');
+    expect(afterSales.financeConfirmed, isTrue);
+    expect(afterSales.travelGroupNo, 'TG-ANALYTICS-001');
+
+    final detail = TasterRankingDetail.fromJson({
+      'range': _analyticsRangeJson(),
+      'taster': {
+        'id': 'usr_taster_1',
+        'name': 'test taster A',
+      },
+      'summary': _analyticsRankingJson(),
+      'travelGroups': [_analyticsSourceTravelGroupJson()],
+      'orders': [_analyticsSourceOrderJson()],
+      'afterSalesOrders': [_analyticsSourceAfterSalesJson()],
+      'warnings': [
+        {'code': 'missing_taster', 'message': 'Missing taster.'},
+      ],
+    });
+
+    expect(detail.tasterId, 'usr_taster_1');
+    expect(detail.summary.netSalesAmountCents, 180000);
+    expect(detail.travelGroups.single.groupNo, 'TG-ANALYTICS-001');
+    expect(detail.orders.single.orderNo, 'SO-ANALYTICS-001');
+    expect(detail.afterSalesOrders.single.refundAmountCents, 20000);
+  });
+
+  test('business API calls phase 8 analytics endpoints', () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'metrics': _analyticsMetricsJson(),
+        'warnings': const [],
+      },
+    };
+    final overview = await api.getAnalyticsOverview(
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      dateTo: DateTime(2026, 7, 4),
+      groupType: 'test_group',
+      tasterId: 'usr_taster_1',
+      travelAgency: 'test agency',
+    );
+    var uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'GET');
+    expect(apiClient.lastToken, 'token-1');
+    expect(uri.path, '/api/analytics/overview');
+    expect(uri.queryParameters['preset'], 'custom');
+    expect(uri.queryParameters['dateFrom'], '2026-07-01');
+    expect(uri.queryParameters['dateTo'], '2026-07-04');
+    expect(uri.queryParameters['groupType'], 'test_group');
+    expect(uri.queryParameters['tasterId'], 'usr_taster_1');
+    expect(uri.queryParameters['travelAgency'], 'test agency');
+    expect(overview.netSalesAmountCents, 180000);
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'rankings': [_analyticsRankingJson()],
+      },
+    };
+    final rankings = await api.listTasterRankings(
+      preset: 'this_month',
+      sortBy: 'noOrderRate',
+      sortDirection: 'asc',
+      limit: 10,
+      groupType: 'test_group',
+      travelAgency: 'test agency',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/taster-rankings');
+    expect(uri.queryParameters['sortBy'], 'noOrderRate');
+    expect(uri.queryParameters['sortDirection'], 'asc');
+    expect(uri.queryParameters['limit'], '10');
+    expect(rankings.single.tasterName, 'test taster A');
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'taster': {'id': 'usr_taster_1', 'name': 'test taster A'},
+        'summary': _analyticsRankingJson(),
+        'travelGroups': [_analyticsSourceTravelGroupJson()],
+        'orders': [_analyticsSourceOrderJson()],
+        'afterSalesOrders': [_analyticsSourceAfterSalesJson()],
+        'warnings': const [],
+      },
+    };
+    final detail = await api.getTasterRankingDetail(
+      'usr_taster_1',
+      preset: 'this_month',
+      groupType: 'test_group',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/taster-rankings/usr_taster_1');
+    expect(uri.queryParameters['preset'], 'this_month');
+    expect(detail.orders.single.id, 'order-analytics-1');
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'granularity': 'day',
+        'metric': 'net_sales',
+        'trends': [_analyticsTrendPointJson()],
+      },
+    };
+    final trends = await api.getAnalyticsTrends(
+      preset: 'last_10_days',
+      granularity: 'day',
+      metric: 'net_sales',
+      tasterId: 'usr_taster_1',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/trends');
+    expect(uri.queryParameters['granularity'], 'day');
+    expect(uri.queryParameters['metric'], 'net_sales');
+    expect(uri.queryParameters['tasterId'], 'usr_taster_1');
+    expect(trends.single.netSalesAmountCents, 180000);
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'source': 'refund',
+        'orders': [_analyticsSourceOrderJson()],
+      },
+    };
+    final orders = await api.listAnalyticsSourceOrders(
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      source: 'refund',
+      travelAgency: 'test agency',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/source/orders');
+    expect(uri.queryParameters['source'], 'refund');
+    expect(uri.queryParameters['dateFrom'], '2026-07-01');
+    expect(orders.single.refundAmountCents, 20000);
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'travelGroups': [_analyticsSourceTravelGroupJson()],
+      },
+    };
+    final groups = await api.listAnalyticsSourceTravelGroups(
+      preset: 'custom',
+      noEffectiveOrder: true,
+      groupType: 'test_group',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/source/travel-groups');
+    expect(uri.queryParameters['noEffectiveOrder'], 'true');
+    expect(groups.single.noEffectiveOrder, isTrue);
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'source': 'taster',
+        'afterSalesOrders': [_analyticsSourceAfterSalesJson()],
+      },
+    };
+    final afterSales = await api.listAnalyticsSourceAfterSales(
+      preset: 'custom',
+      source: 'taster',
+      tasterId: 'usr_taster_1',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/source/after-sales');
+    expect(uri.queryParameters['source'], 'taster');
+    expect(afterSales.single.salesOrderNo, 'SO-ANALYTICS-001');
+
+    await api.exportAnalyticsOverview(
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      dateTo: DateTime(2026, 7, 4),
+      travelAgency: 'test agency',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(apiClient.lastDefaultFileName, 'analytics-overview.xlsx');
+    expect(uri.path, '/api/analytics/overview/export');
+    expect(uri.queryParameters['travelAgency'], 'test agency');
+
+    await api.exportTasterRankings(
+      preset: 'this_month',
+      sortBy: 'netSalesAmountCents',
+      sortDirection: 'desc',
+      limit: 20,
+      groupType: 'test_group',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(apiClient.lastDefaultFileName, 'analytics-taster-rankings.xlsx');
+    expect(uri.path, '/api/analytics/taster-rankings/export');
+    expect(uri.queryParameters['sortBy'], 'netSalesAmountCents');
+    expect(uri.queryParameters['limit'], '20');
   });
 
   test('business API calls phase 7 commission endpoints', () async {
@@ -1605,6 +1879,159 @@ void main() {
     expect(apiClient.lastPath, '/api/warehouse/orders/order-1/packing');
     expect(apiClient.lastBody?['packingStatus'], 'packed');
   });
+}
+
+Map<String, dynamic> _analyticsRangeJson() {
+  return {
+    'preset': 'custom',
+    'dateFrom': '2026-07-01',
+    'dateTo': '2026-07-04',
+    'timezone': 'Asia/Shanghai',
+  };
+}
+
+Map<String, dynamic> _analyticsMetricsJson() {
+  return {
+    'grossSalesAmountCents': 200000,
+    'refundAmountCents': 20000,
+    'pendingRefundAmountCents': 2000,
+    'netSalesAmountCents': 180000,
+    'totalGroupCount': 4,
+    'totalGuestCount': 60,
+    'groupScopedNetSalesAmountCents': 180000,
+    'averageSalesPerGroupCents': 45000,
+    'averageSalesPerGuestCents': 3000,
+    'noEffectiveOrderGroupCount': 1,
+    'conversionGroupCount': 3,
+    'noOrderRate': 0.25,
+    'conversionRate': 0.75,
+  };
+}
+
+Map<String, dynamic> _analyticsRankingJson() {
+  return {
+    'tasterId': 'usr_taster_1',
+    'tasterName': 'test taster A',
+    'rank': 1,
+    'totalGroupCount': 4,
+    'totalGuestCount': 60,
+    'grossSalesAmountCents': 200000,
+    'refundAmountCents': 20000,
+    'netSalesAmountCents': 180000,
+    'averageSalesPerGroupCents': 45000,
+    'averageSalesPerGuestCents': 3000,
+    'noEffectiveOrderGroupCount': 1,
+    'conversionGroupCount': 3,
+    'noOrderRate': 0.25,
+    'conversionRate': 0.75,
+    'warnings': [
+      {'code': 'missing_taster', 'message': 'Missing taster.'},
+    ],
+  };
+}
+
+Map<String, dynamic> _analyticsTrendPointJson() {
+  return {
+    'periodStart': '2026-07-01',
+    'periodEnd': '2026-07-01',
+    'metricValue': 180000,
+    'grossSalesAmountCents': 200000,
+    'refundAmountCents': 20000,
+    'pendingRefundAmountCents': 2000,
+    'netSalesAmountCents': 180000,
+    'totalGroupCount': 4,
+    'totalGuestCount': 60,
+    'groupScopedNetSalesAmountCents': 180000,
+    'noEffectiveOrderGroupCount': 1,
+    'conversionGroupCount': 3,
+    'noOrderRate': 0.25,
+    'conversionRate': 0.75,
+  };
+}
+
+Map<String, dynamic> _analyticsSourceOrderJson() {
+  return {
+    'id': 'order-analytics-1',
+    'orderNo': 'SO-ANALYTICS-001',
+    'orderDate': '2026-07-01',
+    'status': 'VALID',
+    'customerId': 'customer-analytics-1',
+    'customerName': 'test customer',
+    'customerPhone': '13900000000',
+    'customerFinanceMark': true,
+    'travelGroupId': 'group-analytics-1',
+    'travelGroupNo': 'TG-ANALYTICS-001',
+    'travelGroupVisitDate': '2026-07-01',
+    'travelGroupFinanceMark': true,
+    'tasterId': 'usr_taster_1',
+    'tasterName': 'test taster A',
+    'groupType': 'test_group',
+    'travelAgency': 'test agency',
+    'totalAmountCents': 200000,
+    'grossSalesAmountCents': 200000,
+    'refundAmountCents': 20000,
+    'pendingRefundAmountCents': 2000,
+    'netSalesAmountCents': 180000,
+    'effectiveAmountCents': 180000,
+    'contributesToGrossSales': true,
+    'contributesToEffectiveOrder': true,
+    'items': [
+      {
+        'id': 'item-analytics-1',
+        'productName': 'test product',
+        'quantity': 2,
+        'unitPriceCents': 100000,
+        'subtotalCents': 200000,
+        'deliveryType': 'shipping',
+      },
+    ],
+    'afterSalesOrderIds': ['as-analytics-1'],
+  };
+}
+
+Map<String, dynamic> _analyticsSourceTravelGroupJson() {
+  return {
+    'id': 'group-analytics-1',
+    'groupNo': 'TG-ANALYTICS-001',
+    'visitDate': '2026-07-01',
+    'guestCount': 20,
+    'tasterId': 'usr_taster_1',
+    'tasterName': 'test taster A',
+    'groupType': 'test_group',
+    'travelAgency': 'test agency',
+    'financeMark': true,
+    'noEffectiveOrder': true,
+    'grossSalesAmountCents': 200000,
+    'refundAmountCents': 20000,
+    'netSalesAmountCents': 180000,
+    'salesOrderIds': ['order-analytics-1'],
+    'warnings': [
+      {'code': 'missing_taster', 'message': 'Missing taster.'},
+    ],
+  };
+}
+
+Map<String, dynamic> _analyticsSourceAfterSalesJson() {
+  return {
+    'id': 'as-analytics-1',
+    'afterSalesNo': 'AS-ANALYTICS-001',
+    'salesOrderId': 'order-analytics-1',
+    'salesOrderNo': 'SO-ANALYTICS-001',
+    'createdAt': '2026-07-01T08:00:00.000Z',
+    'refundAmountCents': 20000,
+    'financeConfirmed': true,
+    'financeConfirmedAt': '2026-07-01T09:00:00.000Z',
+    'status': 'completed',
+    'issueType': 'test_refund',
+    'actionType': 'refund',
+    'description': 'test analytics refund',
+    'customerId': 'customer-analytics-1',
+    'customerName': 'test customer',
+    'travelGroupId': 'group-analytics-1',
+    'travelGroupNo': 'TG-ANALYTICS-001',
+    'tasterId': 'usr_taster_1',
+    'tasterName': 'test taster A',
+  };
 }
 
 class _RecordingApiClient extends ApiClient {

@@ -297,6 +297,9 @@ model TravelGroup {
   @@index([markedById])
   @@index([groupType])
   @@index([status])
+  @@index([visitDate, tasterId])
+  @@index([visitDate, financeMark])
+  @@index([visitDate, groupType])
   @@map("travel_groups")
 }
 
@@ -511,6 +514,8 @@ model SalesOrder {
   @@index([qrCodeExpiresAt])
   @@index([packingStatus])
   @@index([logisticsNo])
+  @@index([orderDate, status])
+  @@index([travelGroupId, status])
   @@map("sales_orders")
 }
 
@@ -577,6 +582,7 @@ model AfterSalesOrder {
   @@index([financeConfirmedById])
   @@index([createdById])
   @@index([updatedById])
+  @@index([salesOrderId, financeConfirmed])
   @@map("after_sales_orders")
 }
 

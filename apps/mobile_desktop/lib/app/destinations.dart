@@ -41,6 +41,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.pending_actions_rounded,
       phase: 3),
   AppDestination(
+      id: 'travel_agency_management',
+      label: '旅行社管理',
+      icon: Icons.apartment_rounded,
+      phase: 7),
+  AppDestination(
       id: 'travel_group_finance_supplement',
       label: '积分表',
       icon: Icons.account_balance_wallet_rounded,
@@ -138,11 +143,15 @@ List<AppDestination> destinationsForBackendMenus(
 void _applyRoleMenuRules(Set<String> ids, UserRole role) {
   final requestedStage7Workbench =
       ids.contains('finance_query') || ids.contains('commission_rules');
+  final requestedAnalytics =
+      ids.contains('analytics') || ids.contains('finance_query');
   switch (role) {
     case UserRole.sales:
       ids
         ..remove('travel_group_form')
         ..remove('travel_group_finance_supplement')
+        ..remove('travel_agency_management')
+        ..remove('analytics')
         ..add('travel_group_order_notes');
       _removeStage7Destinations(ids);
       break;
@@ -151,13 +160,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ..remove('travel_group_form')
         ..remove('order_form')
         ..remove('taster_commissions');
-      break;
-    case UserRole.warehouse:
-      ids.remove('order_form');
-      _removeStage7Destinations(ids);
-      break;
-    case UserRole.admin:
-      ids.remove('taster_commissions');
+      if (requestedAnalytics) {
+        ids.add('analytics');
+      }
       break;
     case UserRole.boss:
       if (requestedStage7Workbench) {
@@ -165,16 +170,38 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       }
       ids
         ..remove('commission_rules')
-        ..remove('taster_commissions');
+        ..remove('taster_commissions')
+        ..remove('travel_agency_management');
+      if (requestedAnalytics) {
+        ids.add('analytics');
+      }
+      break;
+    case UserRole.warehouse:
+      ids
+        ..remove('order_form')
+        ..remove('travel_agency_management')
+        ..remove('analytics');
+      _removeStage7Destinations(ids);
+      break;
+    case UserRole.admin:
+      ids.remove('taster_commissions');
+      if (requestedAnalytics) {
+        ids.add('analytics');
+      }
       break;
     case UserRole.frontDesk:
     case UserRole.afterSales:
+      ids
+        ..remove('travel_agency_management')
+        ..remove('analytics');
       _removeStage7Destinations(ids);
       break;
     case UserRole.taster:
       ids
+        ..remove('travel_agency_management')
         ..remove('finance_query')
-        ..remove('commission_rules');
+        ..remove('commission_rules')
+        ..remove('analytics');
       break;
   }
 }
@@ -205,6 +232,11 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'travel_group_form';
     case 'pending_travel_groups':
       return 'pending_travel_groups';
+    case 'travel_agency_management':
+    case 'travel_agencies':
+    case 'agency_deduction_rules':
+    case 'agency_rebate_rules':
+      return 'travel_agency_management';
     case 'sales_orders':
       return 'order_form';
     case 'after_sales_orders':
@@ -214,8 +246,6 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'finance_query';
     case 'commission_rules':
     case 'sales_deduction_rules':
-    case 'agency_deduction_rules':
-    case 'agency_rebate_rules':
       return 'commission_rules';
     case 'warehouse_workspace':
       return 'warehouse_packing';
