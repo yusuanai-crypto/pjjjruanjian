@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { AiModule } from './modules/ai/ai.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BusinessDataModule } from './modules/business-data/business-data.module';
@@ -27,6 +28,7 @@ const {
     UsersModule,
     AuthModule,
     SettingsModule,
+    AiModule,
     BusinessDataModule,
     AnalyticsModule,
     CommissionRulesModule,

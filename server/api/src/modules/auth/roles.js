@@ -143,9 +143,10 @@ const ROLE_MENU_IDS = {
     'reconciliation_table',
     'commissions',
     'commission_rules',
+    'ai_assistant',
   ],
   warehouse: ['dashboard', 'order_query', 'warehouse_workspace'],
-  after_sales: ['dashboard', 'customers', 'sales_orders', 'order_query', 'after_sales_orders'],
+  after_sales: ['dashboard', 'customers', 'sales_orders', 'order_query', 'after_sales_orders', 'ai_assistant'],
   taster: ['dashboard', 'own_taster_receptions', 'own_commissions'],
 };
 

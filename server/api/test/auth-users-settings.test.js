@@ -295,16 +295,21 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.finance.includes('commissions'), true);
     assert.equal(roleMenus.finance.includes('commission_rules'), true);
     assert.equal(roleMenus.finance.includes('travel_agency_management'), true);
+    assert.equal(roleMenus.finance.includes('ai_assistant'), true);
     assert.equal(roleMenus.warehouse.includes('warehouse_workspace'), true);
     assert.equal(roleMenus.boss.includes('after_sales_orders'), true);
     assert.equal(roleMenus.boss.includes('finance_workspace'), true);
     assert.equal(roleMenus.boss.includes('warehouse_workspace'), true);
+    assert.equal(roleMenus.after_sales.includes('ai_assistant'), true);
     assert.equal(roleMenus.boss.includes('commission_rules'), false);
     assert.equal(roleMenus.boss.includes('travel_agency_management'), false);
     assert.equal(roleMenus.sales.includes('after_sales_orders'), true);
     for (const role of ['sales', 'warehouse', 'after_sales', 'front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('commission_rules'), false);
       assert.equal(roleMenus[role].includes('travel_agency_management'), false);
+    }
+    for (const role of ['sales', 'warehouse', 'front_desk', 'taster']) {
+      assert.equal(roleMenus[role].includes('ai_assistant'), false);
     }
     for (const role of ['front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('after_sales_orders'), false);

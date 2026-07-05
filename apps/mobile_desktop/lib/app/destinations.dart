@@ -204,6 +204,10 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ..remove('analytics');
       break;
   }
+
+  if (!_canUseAiAssistant(role)) {
+    ids.remove('ai_assistant');
+  }
 }
 
 void _removeStage7Destinations(Set<String> ids) {
@@ -211,6 +215,13 @@ void _removeStage7Destinations(Set<String> ids) {
     ..remove('finance_query')
     ..remove('commission_rules')
     ..remove('taster_commissions');
+}
+
+bool _canUseAiAssistant(UserRole role) {
+  return role == UserRole.admin ||
+      role == UserRole.boss ||
+      role == UserRole.finance ||
+      role == UserRole.afterSales;
 }
 
 AppDestination destinationById(String id) {

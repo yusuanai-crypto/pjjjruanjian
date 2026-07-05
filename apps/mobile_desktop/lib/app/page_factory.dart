@@ -99,7 +99,7 @@ Widget buildPageForDestination({
     case 'analytics':
       return AnalyticsPage(apiClient: apiClient, token: token, role: role);
     case 'ai_assistant':
-      return const AiAssistantPage();
+      return AiAssistantPage(apiClient: apiClient, token: token, role: role);
     case 'dashboard':
     default:
       return DashboardPage(

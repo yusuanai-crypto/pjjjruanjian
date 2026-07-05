@@ -138,6 +138,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'commission_rules',
     'reconciliation_table',
     'analytics',
+    'ai_assistant',
   ],
   UserRole.warehouse: [
     'dashboard',
@@ -151,6 +152,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'order_form',
     'order_query',
     'after_sales_form',
+    'ai_assistant',
   ],
   UserRole.taster: [
     'dashboard',

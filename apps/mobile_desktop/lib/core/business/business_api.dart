@@ -14,6 +14,61 @@ class BusinessApi {
   final ApiClient _apiClient;
   final String _token;
 
+  Future<AiChatResponse> sendAiChatMessage(AiChatRequest request) async {
+    final payload = await _apiClient.postJson(
+      '/api/ai/chat',
+      body: request.toJson(),
+      token: _token,
+    );
+    return AiChatResponse.fromJson(_data(payload));
+  }
+
+  Future<List<AiChatTemplate>> getAiChatTemplates() async {
+    final payload = await _apiClient.getJson(
+      '/api/ai/chat/templates',
+      token: _token,
+    );
+    return _list(payload['data'])
+        .map((item) => AiChatTemplate.fromJson(item))
+        .toList();
+  }
+
+  Future<AiChatHistoryPage> getAiChatHistory({
+    int page = 1,
+    int pageSize = 20,
+    String? conversationId,
+    String? intent,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) async {
+    final query = <String, String>{
+      'page': '$page',
+      'pageSize': '$pageSize',
+    };
+    _putNonEmpty(query, 'conversationId', conversationId);
+    _putNonEmpty(query, 'intent', intent);
+    if (dateFrom != null) {
+      query['dateFrom'] = formatDate(dateFrom);
+    }
+    if (dateTo != null) {
+      query['dateTo'] = formatDate(dateTo);
+    }
+
+    final payload = await _apiClient.getJson(
+      _path('/api/ai/chat/history', query),
+      token: _token,
+    );
+    return AiChatHistoryPage.fromJson(_data(payload));
+  }
+
+  Future<AiCapabilities> getAiCapabilities() async {
+    final payload = await _apiClient.getJson(
+      '/api/ai/capabilities',
+      token: _token,
+    );
+    return AiCapabilities.fromJson(_data(payload));
+  }
+
   Future<List<TravelGroupRecord>> listTravelGroups({
     int limit = 20,
     DateTime? start,
@@ -4317,6 +4372,423 @@ class PaymentMethodRecord {
   }
 }
 
+class AiChatRequest {
+  const AiChatRequest({
+    required this.question,
+    this.conversationId,
+  });
+
+  final String question;
+  final String? conversationId;
+
+  Map<String, dynamic> toJson() {
+    final trimmedConversationId = conversationId?.trim();
+    return {
+      'question': question,
+      if (trimmedConversationId != null && trimmedConversationId.isNotEmpty)
+        'conversationId': trimmedConversationId,
+    };
+  }
+}
+
+class AiChatResponse {
+  const AiChatResponse({
+    required this.answer,
+    required this.intent,
+    required this.range,
+    required this.sourceSummary,
+    required this.warnings,
+  });
+
+  final String answer;
+  final String intent;
+  final AiDateRange? range;
+  final List<SourceSummary> sourceSummary;
+  final List<AiWarning> warnings;
+
+  factory AiChatResponse.fromJson(Map<String, dynamic> json) {
+    return AiChatResponse(
+      answer: '${json['answer'] ?? ''}',
+      intent: '${json['intent'] ?? ''}',
+      range: json['range'] is Map
+          ? AiDateRange.fromJson(_map(json['range']))
+          : null,
+      sourceSummary: _list(json['sourceSummary'])
+          .map((item) => SourceSummary.fromJson(item))
+          .toList(),
+      warnings: _aiWarnings(json['warnings']),
+    );
+  }
+}
+
+class AiDateRange {
+  const AiDateRange({
+    this.preset,
+    this.dateFrom,
+    this.dateTo,
+    this.timezone,
+  });
+
+  final String? preset;
+  final String? dateFrom;
+  final String? dateTo;
+  final String? timezone;
+
+  factory AiDateRange.fromJson(Map<String, dynamic> json) {
+    return AiDateRange(
+      preset: _stringOrNull(json['preset']),
+      dateFrom: _stringOrNull(json['dateFrom']),
+      dateTo: _stringOrNull(json['dateTo']),
+      timezone: _stringOrNull(json['timezone']),
+    );
+  }
+}
+
+class AiChatTemplate {
+  const AiChatTemplate({
+    required this.id,
+    required this.title,
+    required this.question,
+    required this.intent,
+    required this.roleScopes,
+  });
+
+  final String id;
+  final String title;
+  final String question;
+  final String intent;
+  final List<String> roleScopes;
+
+  factory AiChatTemplate.fromJson(Map<String, dynamic> json) {
+    return AiChatTemplate(
+      id: '${json['id'] ?? ''}',
+      title: '${json['title'] ?? ''}',
+      question: '${json['question'] ?? ''}',
+      intent: '${json['intent'] ?? ''}',
+      roleScopes: _stringList(json['roleScopes']),
+    );
+  }
+}
+
+class AiChatHistoryPage {
+  const AiChatHistoryPage({
+    required this.items,
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final List<AiChatHistoryItem> items;
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory AiChatHistoryPage.fromJson(Map<String, dynamic> json) {
+    return AiChatHistoryPage(
+      items: _list(json['items'])
+          .map((item) => AiChatHistoryItem.fromJson(item))
+          .toList(),
+      page: _intValue(json['page']),
+      pageSize: _intValue(json['pageSize']),
+      total: _intValue(json['total']),
+      totalPages: _intValue(json['totalPages']),
+    );
+  }
+}
+
+class AiChatHistoryItem {
+  const AiChatHistoryItem({
+    required this.id,
+    required this.conversationId,
+    required this.question,
+    required this.answer,
+    required this.intent,
+    required this.dataScope,
+    required this.toolCalls,
+    required this.sourceSummary,
+    required this.warnings,
+    required this.modelProvider,
+    required this.modelName,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.latencyMs,
+    required this.errorCode,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String conversationId;
+  final String question;
+  final String answer;
+  final String intent;
+  final Map<String, dynamic>? dataScope;
+  final List<AiToolCallSummary> toolCalls;
+  final List<SourceSummary> sourceSummary;
+  final List<AiWarning> warnings;
+  final String? modelProvider;
+  final String? modelName;
+  final int? promptTokens;
+  final int? completionTokens;
+  final int? latencyMs;
+  final String? errorCode;
+  final String createdAt;
+
+  factory AiChatHistoryItem.fromJson(Map<String, dynamic> json) {
+    return AiChatHistoryItem(
+      id: '${json['id'] ?? ''}',
+      conversationId: '${json['conversationId'] ?? ''}',
+      question: '${json['question'] ?? ''}',
+      answer: '${json['answer'] ?? ''}',
+      intent: '${json['intent'] ?? ''}',
+      dataScope: json['dataScope'] is Map ? _map(json['dataScope']) : null,
+      toolCalls: _list(json['toolCalls'])
+          .map((item) => AiToolCallSummary.fromJson(item))
+          .toList(),
+      sourceSummary: _list(json['sourceSummary'])
+          .map((item) => SourceSummary.fromJson(item))
+          .toList(),
+      warnings: _aiWarnings(json['warnings']),
+      modelProvider: _stringOrNull(json['modelProvider']),
+      modelName: _stringOrNull(json['modelName']),
+      promptTokens:
+          json['promptTokens'] == null ? null : _intValue(json['promptTokens']),
+      completionTokens: json['completionTokens'] == null
+          ? null
+          : _intValue(json['completionTokens']),
+      latencyMs:
+          json['latencyMs'] == null ? null : _intValue(json['latencyMs']),
+      errorCode: _stringOrNull(json['errorCode']),
+      createdAt: '${json['createdAt'] ?? ''}',
+    );
+  }
+}
+
+class AiToolCallSummary {
+  const AiToolCallSummary({
+    required this.toolName,
+    required this.rowCount,
+    required this.globalMarkedFilterEnabled,
+    required this.warnings,
+  });
+
+  final String toolName;
+  final int rowCount;
+  final bool globalMarkedFilterEnabled;
+  final List<AiWarning> warnings;
+
+  factory AiToolCallSummary.fromJson(Map<String, dynamic> json) {
+    return AiToolCallSummary(
+      toolName: '${json['toolName'] ?? ''}',
+      rowCount: _intValue(json['rowCount']),
+      globalMarkedFilterEnabled: _boolValue(json['globalMarkedFilterEnabled']),
+      warnings: _aiWarnings(json['warnings']),
+    );
+  }
+}
+
+class SourceSummary {
+  const SourceSummary({
+    required this.toolName,
+    required this.rowCount,
+    required this.globalMarkedFilterEnabled,
+    required this.scopeDescription,
+    this.dateFrom,
+    this.dateTo,
+  });
+
+  final String toolName;
+  final int rowCount;
+  final String? dateFrom;
+  final String? dateTo;
+  final bool globalMarkedFilterEnabled;
+  final String scopeDescription;
+
+  factory SourceSummary.fromJson(Map<String, dynamic> json) {
+    return SourceSummary(
+      toolName: '${json['toolName'] ?? ''}',
+      rowCount: _intValue(json['rowCount']),
+      dateFrom: _stringOrNull(json['dateFrom']),
+      dateTo: _stringOrNull(json['dateTo']),
+      globalMarkedFilterEnabled: _boolValue(json['globalMarkedFilterEnabled']),
+      scopeDescription: '${json['scopeDescription'] ?? ''}',
+    );
+  }
+}
+
+class AiWarning {
+  const AiWarning({
+    required this.message,
+    this.code,
+    this.context,
+  });
+
+  final String message;
+  final String? code;
+  final Map<String, dynamic>? context;
+
+  factory AiWarning.fromJson(Object? value) {
+    if (value is Map) {
+      final json = _map(value);
+      final message =
+          _stringOrNull(json['message']) ?? _stringOrNull(json['code']) ?? '';
+      return AiWarning(
+        message: message,
+        code: _stringOrNull(json['code']),
+        context: json['context'] is Map ? _map(json['context']) : null,
+      );
+    }
+
+    final message = _stringOrNull(value) ?? '';
+    return AiWarning(message: message, code: message.isEmpty ? null : message);
+  }
+}
+
+class AiCapabilities {
+  const AiCapabilities({
+    required this.enabled,
+    required this.role,
+    required this.roleAllowed,
+    required this.canUseAi,
+    required this.scopeDescription,
+    required this.allowedIntents,
+    required this.tools,
+    required this.limits,
+    required this.model,
+    required this.constraints,
+  });
+
+  final bool enabled;
+  final String role;
+  final bool roleAllowed;
+  final bool canUseAi;
+  final String scopeDescription;
+  final List<String> allowedIntents;
+  final List<AiToolCapability> tools;
+  final AiCapabilityLimits limits;
+  final AiModelCapability model;
+  final AiCapabilityConstraints constraints;
+
+  factory AiCapabilities.fromJson(Map<String, dynamic> json) {
+    return AiCapabilities(
+      enabled: _boolValue(json['enabled']),
+      role: '${json['role'] ?? ''}',
+      roleAllowed: _boolValue(json['roleAllowed']),
+      canUseAi: _boolValue(json['canUseAi']),
+      scopeDescription: '${json['scopeDescription'] ?? ''}',
+      allowedIntents: _stringList(json['allowedIntents']),
+      tools: _list(json['tools'])
+          .map((item) => AiToolCapability.fromJson(item))
+          .toList(),
+      limits: AiCapabilityLimits.fromJson(_map(json['limits'])),
+      model: AiModelCapability.fromJson(_map(json['model'])),
+      constraints: AiCapabilityConstraints.fromJson(_map(json['constraints'])),
+    );
+  }
+}
+
+class AiToolCapability {
+  const AiToolCapability({
+    required this.toolName,
+    required this.intent,
+    required this.readOnly,
+    required this.description,
+  });
+
+  final String toolName;
+  final String intent;
+  final bool readOnly;
+  final String description;
+
+  factory AiToolCapability.fromJson(Map<String, dynamic> json) {
+    return AiToolCapability(
+      toolName: '${json['toolName'] ?? ''}',
+      intent: '${json['intent'] ?? ''}',
+      readOnly: _boolValue(json['readOnly']),
+      description: '${json['description'] ?? ''}',
+    );
+  }
+}
+
+class AiCapabilityLimits {
+  const AiCapabilityLimits({
+    required this.maxQuestionLength,
+    required this.dailyLimitPerUser,
+    required this.historyRetentionDays,
+    required this.timeoutMs,
+    required this.historyPageSizeDefault,
+    required this.historyPageSizeMax,
+  });
+
+  final int maxQuestionLength;
+  final int dailyLimitPerUser;
+  final int historyRetentionDays;
+  final int timeoutMs;
+  final int historyPageSizeDefault;
+  final int historyPageSizeMax;
+
+  factory AiCapabilityLimits.fromJson(Map<String, dynamic> json) {
+    return AiCapabilityLimits(
+      maxQuestionLength: _intValue(json['maxQuestionLength']),
+      dailyLimitPerUser: _intValue(json['dailyLimitPerUser']),
+      historyRetentionDays: _intValue(json['historyRetentionDays']),
+      timeoutMs: _intValue(json['timeoutMs']),
+      historyPageSizeDefault: _intValue(json['historyPageSizeDefault']),
+      historyPageSizeMax: _intValue(json['historyPageSizeMax']),
+    );
+  }
+}
+
+class AiModelCapability {
+  const AiModelCapability({
+    required this.mockMode,
+    required this.hasApiKey,
+    this.provider,
+    this.modelName,
+  });
+
+  final bool mockMode;
+  final String? provider;
+  final String? modelName;
+  final bool hasApiKey;
+
+  factory AiModelCapability.fromJson(Map<String, dynamic> json) {
+    return AiModelCapability(
+      mockMode: _boolValue(json['mockMode']),
+      provider: _stringOrNull(json['provider']),
+      modelName: _stringOrNull(json['modelName']),
+      hasApiKey: _boolValue(json['hasApiKey']),
+    );
+  }
+}
+
+class AiCapabilityConstraints {
+  const AiCapabilityConstraints({
+    required this.readOnly,
+    required this.historyScope,
+    required this.canGenerateSql,
+    required this.canExecuteSql,
+    required this.canWriteBusinessData,
+  });
+
+  final bool readOnly;
+  final String historyScope;
+  final bool canGenerateSql;
+  final bool canExecuteSql;
+  final bool canWriteBusinessData;
+
+  factory AiCapabilityConstraints.fromJson(Map<String, dynamic> json) {
+    return AiCapabilityConstraints(
+      readOnly: _boolValue(json['readOnly']),
+      historyScope: '${json['historyScope'] ?? ''}',
+      canGenerateSql: _boolValue(json['canGenerateSql']),
+      canExecuteSql: _boolValue(json['canExecuteSql']),
+      canWriteBusinessData: _boolValue(json['canWriteBusinessData']),
+    );
+  }
+}
+
 String _path(String path, Map<String, String> query) {
   final uri = Uri(path: path, queryParameters: query);
   return uri.toString();
@@ -4375,6 +4847,16 @@ List<AnalyticsWarning> _analyticsWarnings(Object? value) {
         .toList();
   }
   return const <AnalyticsWarning>[];
+}
+
+List<AiWarning> _aiWarnings(Object? value) {
+  if (value is List) {
+    return value
+        .map(AiWarning.fromJson)
+        .where((warning) => warning.message.isNotEmpty)
+        .toList();
+  }
+  return const <AiWarning>[];
 }
 
 String? _stringOrNull(Object? value) {

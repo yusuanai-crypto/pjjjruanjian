@@ -1,11 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
+import '../../core/api/api_client.dart';
+import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 
 class AiAssistantPage extends StatefulWidget {
-  const AiAssistantPage({super.key});
+  const AiAssistantPage({
+    super.key,
+    required this.apiClient,
+    required this.token,
+    required this.role,
+  });
+
+  final ApiClient apiClient;
+  final String token;
+  final UserRole role;
 
   @override
   State<AiAssistantPage> createState() => _AiAssistantPageState();
@@ -13,16 +25,49 @@ class AiAssistantPage extends StatefulWidget {
 
 class _AiAssistantPageState extends State<AiAssistantPage> {
   final _questionController = TextEditingController();
-  final List<_ChatMessage> _messages = [
-    const _ChatMessage(
-      fromUser: true,
-      text: '今天销售额是多少？',
-    ),
-    const _ChatMessage(
-      fromUser: false,
-      text: '今日出单销售额为 ¥8,650.00，退单金额为 ¥0.00，当前只展示原型假数据。',
-    ),
-  ];
+  final List<_ChatMessage> _messages = [];
+
+  late BusinessApi _businessApi;
+  late String _conversationId;
+
+  AiCapabilities? _capabilities;
+  List<AiChatTemplate> _templates = const <AiChatTemplate>[];
+  List<AiChatHistoryItem> _history = const <AiChatHistoryItem>[];
+  bool _loadingInitial = true;
+  bool _loadingHistory = false;
+  bool _sending = false;
+  String? _initialError;
+  String? _historyError;
+  String? _sendError;
+  String? _lastFailedQuestion;
+
+  @override
+  void initState() {
+    super.initState();
+    _configureApi();
+    _loadInitial();
+  }
+
+  @override
+  void didUpdateWidget(covariant AiAssistantPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiClient != widget.apiClient ||
+        oldWidget.token != widget.token ||
+        oldWidget.role != widget.role) {
+      _configureApi();
+      setState(() {
+        _capabilities = null;
+        _templates = const <AiChatTemplate>[];
+        _history = const <AiChatHistoryItem>[];
+        _messages.clear();
+        _initialError = null;
+        _historyError = null;
+        _sendError = null;
+        _lastFailedQuestion = null;
+      });
+      _loadInitial();
+    }
+  }
 
   @override
   void dispose() {
@@ -30,81 +75,557 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     super.dispose();
   }
 
+  void _configureApi() {
+    _businessApi =
+        BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _conversationId = 'flutter-${DateTime.now().microsecondsSinceEpoch}';
+  }
+
+  Future<void> _loadInitial() async {
+    setState(() {
+      _loadingInitial = true;
+      _initialError = null;
+    });
+
+    try {
+      final capabilities = await _businessApi.getAiCapabilities();
+      final templates = capabilities.canUseAi
+          ? await _businessApi.getAiChatTemplates()
+          : const <AiChatTemplate>[];
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _capabilities = capabilities;
+        _templates = templates;
+        _loadingInitial = false;
+      });
+      if (capabilities.canUseAi) {
+        await _loadHistory(silent: true);
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _initialError = _friendlyAiError(error);
+        _loadingInitial = false;
+      });
+    }
+  }
+
+  Future<void> _loadHistory({bool silent = false}) async {
+    final capabilities = _capabilities;
+    if (capabilities == null || !capabilities.canUseAi) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _loadingHistory = !silent || _history.isEmpty;
+      _historyError = null;
+    });
+
+    try {
+      final page = await _businessApi.getAiChatHistory(page: 1, pageSize: 5);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _history = page.items;
+        _loadingHistory = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _historyError = _friendlyAiError(error);
+        _loadingHistory = false;
+      });
+    }
+  }
+
+  bool get _hasQuestion => _questionController.text.trim().isNotEmpty;
+
+  bool get _canSend {
+    final capabilities = _capabilities;
+    return capabilities != null &&
+        !_loadingInitial &&
+        !_sending &&
+        capabilities.enabled &&
+        capabilities.canUseAi &&
+        !_modelUnavailable(capabilities);
+  }
+
+  Future<void> _sendCurrentQuestion() {
+    return _sendQuestion(_questionController.text, clearInput: true);
+  }
+
+  Future<void> _sendTemplate(AiChatTemplate template) {
+    _questionController.text = template.question;
+    return _sendQuestion(template.question, clearInput: true);
+  }
+
+  Future<void> _retryLastQuestion() async {
+    final question = _lastFailedQuestion;
+    if (question == null || question.trim().isEmpty) {
+      return;
+    }
+    await _sendQuestion(question, appendUserMessage: false, clearInput: false);
+  }
+
+  Future<void> _sendQuestion(
+    String rawQuestion, {
+    bool appendUserMessage = true,
+    bool clearInput = false,
+  }) async {
+    final question = rawQuestion.trim();
+    if (question.isEmpty) {
+      return;
+    }
+
+    final unavailableMessage = _availabilityMessage(_capabilities);
+    if (!_canSend) {
+      setState(() {
+        _sendError = unavailableMessage ?? 'AI 助手暂不可用，请稍后重试。';
+        _lastFailedQuestion = question;
+      });
+      return;
+    }
+
+    setState(() {
+      if (appendUserMessage) {
+        _messages.add(_ChatMessage(fromUser: true, text: question));
+      }
+      _sending = true;
+      _sendError = null;
+      _lastFailedQuestion = question;
+      if (clearInput) {
+        _questionController.clear();
+      }
+    });
+
+    try {
+      final response = await _businessApi.sendAiChatMessage(
+        AiChatRequest(
+          question: question,
+          conversationId: _conversationId,
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _messages.add(
+          _ChatMessage(
+            fromUser: false,
+            text: response.answer,
+            intent: response.intent,
+            range: response.range,
+            sourceSummary: response.sourceSummary,
+            warnings: response.warnings,
+          ),
+        );
+        _sending = false;
+        _lastFailedQuestion = null;
+      });
+      await _loadHistory(silent: true);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sendError = _friendlyAiError(error);
+        _sending = false;
+      });
+    }
+  }
+
+  void _openHistoryDetail(AiChatHistoryItem item) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _HistoryDetailDialog(
+        item: item,
+        onRestore: () {
+          Navigator.of(context).pop();
+          _restoreHistory(item);
+        },
+      ),
+    );
+  }
+
+  void _restoreHistory(AiChatHistoryItem item) {
+    final conversationId = item.conversationId.trim();
+    setState(() {
+      if (conversationId.isNotEmpty) {
+        _conversationId = conversationId;
+      }
+      _sendError = null;
+      _lastFailedQuestion = null;
+      _messages
+        ..clear()
+        ..add(_ChatMessage(fromUser: true, text: item.question))
+        ..add(
+          _ChatMessage(
+            fromUser: false,
+            text: item.answer,
+            intent: item.intent,
+            range: _historyRange(item),
+            sourceSummary: item.sourceSummary,
+            warnings: item.warnings,
+          ),
+        );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return ResponsivePage(
       children: [
         ResponsiveTwoColumn(
-          primary: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'AI 助手',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                      const StatusTag(label: '权限内查询', tone: StatusTone.info),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  for (final message in _messages) _MessageBubble(message: message),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _questionController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: InputDecoration(
-                      hintText: '输入问题',
-                      suffixIcon: IconButton(
-                        tooltip: '发送',
-                        onPressed: () {
-                          if (_questionController.text.trim().isEmpty) {
-                            return;
-                          }
-                          setState(() {
-                            _messages.add(_ChatMessage(fromUser: true, text: _questionController.text.trim()));
-                            _messages.add(
-                              const _ChatMessage(
-                                fromUser: false,
-                                text: '这里会接后端 AI 查询接口，当前阶段只保留对话路径。',
-                              ),
-                            );
-                            _questionController.clear();
-                          });
-                        },
-                        icon: const Icon(Icons.send_rounded),
-                      ),
+          primary: _ChatPanel(
+            messages: _messages,
+            loadingInitial: _loadingInitial,
+            sending: _sending,
+            sendError: _sendError,
+            availabilityMessage: _availabilityMessage(_capabilities),
+            statusLabel: _statusLabel(),
+            statusTone: _statusTone(),
+            questionController: _questionController,
+            canSend: _canSend,
+            hasQuestion: _hasQuestion,
+            onQuestionChanged: () => setState(() {}),
+            onSend: _sendCurrentQuestion,
+            onRetry: _retryLastQuestion,
+          ),
+          secondary: _AiSidePanel(
+            role: widget.role,
+            capabilities: _capabilities,
+            templates: _templates,
+            history: _history,
+            loading: _loadingInitial,
+            loadingHistory: _loadingHistory,
+            error: _initialError,
+            historyError: _historyError,
+            availabilityMessage: _availabilityMessage(_capabilities),
+            onRetryLoad: _loadInitial,
+            onRetryHistory: _loadHistory,
+            onSendTemplate: _canSend ? _sendTemplate : null,
+            onOpenHistory: _openHistoryDetail,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _statusLabel() {
+    final capabilities = _capabilities;
+    if (_loadingInitial) {
+      return '加载中';
+    }
+    if (_initialError != null || capabilities == null) {
+      return '不可用';
+    }
+    if (!capabilities.enabled) {
+      return '未启用';
+    }
+    if (!capabilities.canUseAi) {
+      return '无权限';
+    }
+    if (_modelUnavailable(capabilities)) {
+      return '模型不可用';
+    }
+    if (_sending) {
+      return '生成中';
+    }
+    return '已启用';
+  }
+
+  StatusTone _statusTone() {
+    final label = _statusLabel();
+    if (label == '已启用') {
+      return StatusTone.success;
+    }
+    if (label == '加载中' || label == '生成中' || label == '未启用') {
+      return StatusTone.warning;
+    }
+    return StatusTone.danger;
+  }
+}
+
+class _ChatPanel extends StatelessWidget {
+  const _ChatPanel({
+    required this.messages,
+    required this.loadingInitial,
+    required this.sending,
+    required this.sendError,
+    required this.availabilityMessage,
+    required this.statusLabel,
+    required this.statusTone,
+    required this.questionController,
+    required this.canSend,
+    required this.hasQuestion,
+    required this.onQuestionChanged,
+    required this.onSend,
+    required this.onRetry,
+  });
+
+  final List<_ChatMessage> messages;
+  final bool loadingInitial;
+  final bool sending;
+  final String? sendError;
+  final String? availabilityMessage;
+  final String statusLabel;
+  final StatusTone statusTone;
+  final TextEditingController questionController;
+  final bool canSend;
+  final bool hasQuestion;
+  final VoidCallback onQuestionChanged;
+  final VoidCallback onSend;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final inputEnabled = canSend && !loadingInitial;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'AI 助手',
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-                ],
+                ),
+                StatusTag(label: statusLabel, tone: statusTone),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (availabilityMessage != null)
+              _NoticeBox(
+                icon: Icons.info_outline_rounded,
+                text: availabilityMessage!,
+                tone: StatusTone.warning,
+              ),
+            if (loadingInitial && messages.isEmpty)
+              const _LoadingLine(
+                key: ValueKey('ai-initial-loading'),
+                text: '正在加载 AI 能力和常见问题...',
+              )
+            else if (messages.isEmpty)
+              const _EmptyChat(),
+            for (final message in messages) _MessageBubble(message: message),
+            if (sending)
+              const _ThinkingBubble(key: ValueKey('ai-response-loading')),
+            if (sendError != null)
+              _RetryBox(
+                message: sendError!,
+                onRetry: onRetry,
+              ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-question-input'),
+              controller: questionController,
+              enabled: inputEnabled,
+              minLines: 2,
+              maxLines: 4,
+              onChanged: (_) => onQuestionChanged(),
+              decoration: InputDecoration(
+                hintText: inputEnabled ? '输入问题' : 'AI 助手当前不可用',
+                suffixIcon: IconButton(
+                  key: const ValueKey('ai-send-button'),
+                  tooltip: '发送',
+                  onPressed: inputEnabled && hasQuestion ? onSend : null,
+                  icon: sending
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded),
+                ),
               ),
             ),
-          ),
-          secondary: FormSection(
-            title: '常用问题',
-            children: [
-              for (final prompt in const [
-                '本月哪个品鉴师排名第一？',
-                '近 10 天打蛋率最高的是谁？',
-                '电话 138 开头客户买过什么酒？',
-                '本月退单金额是多少？',
-              ])
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AiSidePanel extends StatelessWidget {
+  const _AiSidePanel({
+    required this.role,
+    required this.capabilities,
+    required this.templates,
+    required this.history,
+    required this.loading,
+    required this.loadingHistory,
+    required this.error,
+    required this.historyError,
+    required this.availabilityMessage,
+    required this.onRetryLoad,
+    required this.onRetryHistory,
+    required this.onSendTemplate,
+    required this.onOpenHistory,
+  });
+
+  final UserRole role;
+  final AiCapabilities? capabilities;
+  final List<AiChatTemplate> templates;
+  final List<AiChatHistoryItem> history;
+  final bool loading;
+  final bool loadingHistory;
+  final String? error;
+  final String? historyError;
+  final String? availabilityMessage;
+  final VoidCallback onRetryLoad;
+  final VoidCallback onRetryHistory;
+  final ValueChanged<AiChatTemplate>? onSendTemplate;
+  final ValueChanged<AiChatHistoryItem> onOpenHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    final caps = capabilities;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FormSection(
+          title: 'AI 能力',
+          children: [
+            if (loading)
+              const _LoadingLine(text: '正在读取当前角色可用能力...')
+            else if (error != null)
+              _RetryBox(message: error!, onRetry: onRetryLoad)
+            else if (caps == null)
+              _NoticeBox(
+                icon: Icons.info_outline_rounded,
+                text: '尚未读取到 AI 能力，请重试。',
+                tone: StatusTone.warning,
+                action: OutlinedButton.icon(
+                  key: const ValueKey('ai-retry-load'),
+                  onPressed: onRetryLoad,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('重试'),
+                ),
+              )
+            else ...[
+              _InfoLine(label: '当前角色', value: role.value),
+              _InfoLine(
+                label: '可用状态',
+                value: caps.canUseAi ? '可使用' : '不可使用',
+              ),
+              _InfoLine(
+                label: '可见范围',
+                value: caps.scopeDescription.isEmpty
+                    ? '以后端策略为准'
+                    : caps.scopeDescription,
+              ),
+              _InfoLine(
+                label: '问题长度',
+                value: caps.limits.maxQuestionLength > 0
+                    ? '${caps.limits.maxQuestionLength} 字以内'
+                    : '以后端配置为准',
+              ),
+              _InfoLine(
+                label: '模型模式',
+                value: caps.model.mockMode ? '本地 mock' : '外部模型',
+              ),
+              if (availabilityMessage != null)
+                _NoticeBox(
+                  icon: Icons.warning_amber_rounded,
+                  text: availabilityMessage!,
+                  tone: StatusTone.warning,
+                ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 16),
+        FormSection(
+          title: '常用问题',
+          children: [
+            if (loading)
+              const _LoadingLine(text: '正在加载常用问题...')
+            else if (templates.isEmpty)
+              const Text('暂无可用模板。')
+            else
+              for (final template in templates)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: OutlinedButton.icon(
-                    onPressed: () => setState(() => _questionController.text = prompt),
+                    key: ValueKey('ai-template-${template.id}'),
+                    onPressed: onSendTemplate == null
+                        ? null
+                        : () => onSendTemplate!(template),
                     icon: const Icon(Icons.help_outline_rounded),
-                    label: Align(alignment: Alignment.centerLeft, child: Text(prompt)),
+                    label: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            template.title,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(template.question),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-            ],
-          ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        FormSection(
+          title: '最近问答',
+          children: [
+            if (loading)
+              const _LoadingLine(text: '正在读取最近问答...')
+            else if (caps?.canUseAi != true)
+              const Text('当前角色不可查看 AI 历史。')
+            else if (loadingHistory)
+              const _LoadingLine(text: '正在读取最近问答...')
+            else if (historyError != null)
+              _RetryBox(message: historyError!, onRetry: onRetryHistory)
+            else if (history.isEmpty)
+              const Text('暂无最近问答。')
+            else
+              for (final item in history)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: OutlinedButton.icon(
+                    key: ValueKey('ai-history-${item.id}'),
+                    onPressed: () => onOpenHistory(item),
+                    icon: const Icon(Icons.history_rounded),
+                    label: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.question,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(_historySubtitle(item)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+          ],
         ),
       ],
     );
@@ -115,10 +636,79 @@ class _ChatMessage {
   const _ChatMessage({
     required this.fromUser,
     required this.text,
+    this.intent,
+    this.range,
+    this.sourceSummary = const <SourceSummary>[],
+    this.warnings = const <AiWarning>[],
   });
 
   final bool fromUser;
   final String text;
+  final String? intent;
+  final AiDateRange? range;
+  final List<SourceSummary> sourceSummary;
+  final List<AiWarning> warnings;
+}
+
+class _HistoryDetailDialog extends StatelessWidget {
+  const _HistoryDetailDialog({
+    required this.item,
+    required this.onRestore,
+  });
+
+  final AiChatHistoryItem item;
+  final VoidCallback onRestore;
+
+  @override
+  Widget build(BuildContext context) {
+    final rangeLabel = _rangeLabel(_historyRange(item));
+    return AlertDialog(
+      title: const Text('历史详情'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _InfoLine(label: '提问时间', value: item.createdAt),
+              if (item.intent.isNotEmpty)
+                _InfoLine(label: '识别意图', value: item.intent),
+              if (rangeLabel != null)
+                _InfoLine(label: '查询范围', value: rangeLabel),
+              const SizedBox(height: 8),
+              Text(
+                item.question,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              Text(item.answer),
+              if (item.sourceSummary.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _SourceSummaryList(sources: item.sourceSummary),
+              ],
+              if (item.warnings.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _WarningList(warnings: item.warnings),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('ai-history-restore'),
+          onPressed: onRestore,
+          icon: const Icon(Icons.restore_rounded),
+          label: const Text('回填到对话'),
+        ),
+      ],
+    );
+  }
 }
 
 class _MessageBubble extends StatelessWidget {
@@ -129,21 +719,468 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isUser = message.fromUser;
+    final background = isUser
+        ? scheme.primary
+        : scheme.surfaceContainerHighest.withValues(alpha: 0.55);
+    final foreground = isUser ? scheme.onPrimary : scheme.onSurface;
     return Align(
-      alignment: message.fromUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 620),
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: message.fromUser ? scheme.primary : scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          color: background,
           borderRadius: const BorderRadius.all(Radius.circular(8)),
         ),
-        child: Text(
-          message.text,
-          style: TextStyle(color: message.fromUser ? scheme.onPrimary : scheme.onSurface),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: foreground),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(message.text),
+              if (!isUser && _rangeLabel(message.range) != null) ...[
+                const SizedBox(height: 10),
+                _MetaLine(
+                  icon: Icons.date_range_rounded,
+                  text: '查询范围：${_rangeLabel(message.range)}',
+                ),
+              ],
+              if (!isUser &&
+                  message.intent != null &&
+                  message.intent!.isNotEmpty)
+                _MetaLine(
+                  icon: Icons.route_rounded,
+                  text: '意图：${message.intent}',
+                ),
+              if (!isUser && message.sourceSummary.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _SourceSummaryList(sources: message.sourceSummary),
+              ],
+              if (!isUser && message.warnings.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _WarningList(warnings: message.warnings),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _SourceSummaryList extends StatelessWidget {
+  const _SourceSummaryList({required this.sources});
+
+  final List<SourceSummary> sources;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _MetaLine(
+          icon: Icons.dataset_rounded,
+          text: '来源摘要',
+          strong: true,
+        ),
+        const SizedBox(height: 6),
+        for (final source in sources)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              [
+                source.toolName,
+                '${source.rowCount} 行',
+                if (source.dateFrom != null && source.dateTo != null)
+                  '${source.dateFrom} 至 ${source.dateTo}',
+                source.globalMarkedFilterEnabled
+                    ? '全局标记过滤：已开启，仅已标记数据'
+                    : '全局标记过滤：未开启，按角色可见范围',
+                if (source.scopeDescription.isNotEmpty) source.scopeDescription,
+              ].join(' · '),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _WarningList extends StatelessWidget {
+  const _WarningList({required this.warnings});
+
+  final List<AiWarning> warnings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _MetaLine(
+          icon: Icons.warning_amber_rounded,
+          text: '风险提示',
+          strong: true,
+        ),
+        const SizedBox(height: 6),
+        for (final warning in warnings)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(warning.message),
+          ),
+      ],
+    );
+  }
+}
+
+class _MetaLine extends StatelessWidget {
+  const _MetaLine({
+    required this.icon,
+    required this.text,
+    this.strong = false,
+  });
+
+  final IconData icon;
+  final String text;
+  final bool strong;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: strong ? const TextStyle(fontWeight: FontWeight.w700) : null,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ThinkingBubble extends StatelessWidget {
+  const _ThinkingBubble({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 360),
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          borderRadius: const BorderRadius.all(Radius.circular(8)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Text('AI 正在生成回答...'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyChat extends StatelessWidget {
+  const _EmptyChat();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: const Text('可以从右侧选择常用问题，也可以直接输入问题。'),
+    );
+  }
+}
+
+class _LoadingLine extends StatelessWidget {
+  const _LoadingLine({super.key, required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
+  }
+}
+
+class _RetryBox extends StatelessWidget {
+  const _RetryBox({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return _NoticeBox(
+      icon: Icons.error_outline_rounded,
+      text: message,
+      tone: StatusTone.danger,
+      action: OutlinedButton.icon(
+        key: const ValueKey('ai-retry-send'),
+        onPressed: onRetry,
+        icon: const Icon(Icons.refresh_rounded),
+        label: const Text('重试'),
+      ),
+    );
+  }
+}
+
+class _NoticeBox extends StatelessWidget {
+  const _NoticeBox({
+    required this.icon,
+    required this.text,
+    required this.tone,
+    this.action,
+  });
+
+  final IconData icon;
+  final String text;
+  final StatusTone tone;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _noticeColors(context, tone);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.background,
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 18, color: colors.foreground),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(color: colors.foreground),
+                ),
+              ),
+            ],
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 10),
+            Align(alignment: Alignment.centerLeft, child: action!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text(label, style: textTheme.bodySmall),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _historySubtitle(AiChatHistoryItem item) {
+  final parts = <String>[
+    if (item.createdAt.isNotEmpty) item.createdAt,
+    if (item.intent.isNotEmpty) item.intent,
+    if (_rangeLabel(_historyRange(item)) != null)
+      _rangeLabel(_historyRange(item))!,
+  ];
+  return parts.join(' | ');
+}
+
+AiDateRange? _historyRange(AiChatHistoryItem item) {
+  final rangeValue = item.dataScope?['range'];
+  if (rangeValue is Map) {
+    return AiDateRange.fromJson(_dynamicMap(rangeValue));
+  }
+
+  for (final source in item.sourceSummary) {
+    if (source.dateFrom != null || source.dateTo != null) {
+      return AiDateRange(
+        dateFrom: source.dateFrom,
+        dateTo: source.dateTo,
+        timezone: 'Asia/Shanghai',
+      );
+    }
+  }
+  return null;
+}
+
+Map<String, dynamic> _dynamicMap(Map<dynamic, dynamic> value) {
+  return value.map((key, item) => MapEntry('$key', item));
+}
+
+_NoticeColors _noticeColors(BuildContext context, StatusTone tone) {
+  switch (tone) {
+    case StatusTone.danger:
+      return const _NoticeColors(
+        foreground: Color(0xFF9C1C28),
+        background: Color(0xFFFBE4E8),
+        border: Color(0xFFE6A8B2),
+      );
+    case StatusTone.warning:
+      return const _NoticeColors(
+        foreground: Color(0xFF7A5200),
+        background: Color(0xFFFFF3D6),
+        border: Color(0xFFE8C56A),
+      );
+    case StatusTone.success:
+      return const _NoticeColors(
+        foreground: Color(0xFF176349),
+        background: Color(0xFFE6F4EE),
+        border: Color(0xFFB9DFD1),
+      );
+    case StatusTone.info:
+    case StatusTone.neutral:
+      final scheme = Theme.of(context).colorScheme;
+      return _NoticeColors(
+        foreground: scheme.onSurfaceVariant,
+        background: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        border: scheme.outlineVariant,
+      );
+  }
+}
+
+class _NoticeColors {
+  const _NoticeColors({
+    required this.foreground,
+    required this.background,
+    required this.border,
+  });
+
+  final Color foreground;
+  final Color background;
+  final Color border;
+}
+
+String? _availabilityMessage(AiCapabilities? capabilities) {
+  if (capabilities == null) {
+    return null;
+  }
+  if (!capabilities.enabled) {
+    return 'AI 助手未启用，请联系管理员开启第 9 阶段 AI 配置。';
+  }
+  if (!capabilities.canUseAi || !capabilities.roleAllowed) {
+    return '当前角色暂无 AI 助手权限，或可用能力被后端策略关闭。';
+  }
+  if (_modelUnavailable(capabilities)) {
+    return 'AI 模型未配置或暂不可用，请联系管理员确认 mock 模式或模型 API Key。';
+  }
+  return null;
+}
+
+bool _modelUnavailable(AiCapabilities capabilities) {
+  return capabilities.enabled &&
+      capabilities.canUseAi &&
+      !capabilities.model.mockMode &&
+      !capabilities.model.hasApiKey;
+}
+
+String _friendlyAiError(Object error) {
+  if (error is ApiException) {
+    final code = error.code.toUpperCase();
+    if (error.statusCode == 401) {
+      return '登录已失效，请重新登录后再使用 AI 助手。';
+    }
+    if (error.statusCode == 403 || code == 'FORBIDDEN') {
+      return '当前角色没有使用 AI 助手的权限，或问题超出可访问范围。';
+    }
+    if (error.statusCode == 429) {
+      return 'AI 请求过于频繁，请稍后再试。';
+    }
+    if (code.contains('AI_DISABLED')) {
+      return 'AI 助手未启用，请联系管理员开启后再试。';
+    }
+    if (code.contains('API_KEY') ||
+        code.contains('PROVIDER') ||
+        code.contains('MODEL') ||
+        code.contains('TIMEOUT')) {
+      return 'AI 模型暂时不可用，系统没有暴露任何业务数据，请稍后重试或联系管理员。';
+    }
+    if (error.statusCode >= 500) {
+      return 'AI 服务暂时不可用，请稍后重试。';
+    }
+    final message = error.message.trim();
+    return message.isEmpty ? 'AI 请求失败，请稍后重试。' : message;
+  }
+  return 'AI 助手请求失败，请稍后重试。';
+}
+
+String? _rangeLabel(AiDateRange? range) {
+  if (range == null) {
+    return null;
+  }
+  final timezone = range.timezone == null ? '' : '（${range.timezone}）';
+  if (range.dateFrom != null && range.dateTo != null) {
+    return '${range.dateFrom} 至 ${range.dateTo}$timezone';
+  }
+  if (range.preset != null && range.preset!.isNotEmpty) {
+    return '${range.preset}$timezone';
+  }
+  return null;
 }

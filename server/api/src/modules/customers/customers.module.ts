@@ -10,5 +10,6 @@ import { CustomersNestService } from './customers.nest.service';
   imports: [AuthModule, OperationLogsModule, SettingsModule],
   controllers: [CustomersNestController],
   providers: [CustomersNestService],
+  exports: [CustomersNestService],
 })
 export class CustomersModule {}

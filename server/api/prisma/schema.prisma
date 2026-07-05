@@ -70,6 +70,7 @@ model User {
   updatedCommissionRecords         CommissionRecord[]          @relation("CommissionRecordUpdatedBy")
   confirmedTravelGroupSummaries    TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
   updatedTravelGroupSummaries      TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryUpdatedBy")
+  aiChatMessages                   AiChatMessage[]             @relation("AiChatMessageUser")
 
   @@index([role])
   @@index([leaderId])
@@ -106,6 +107,34 @@ model OperationLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("operation_logs")
+}
+
+model AiChatMessage {
+  id               String   @id @default(uuid()) @db.Char(36)
+  conversationId   String?  @map("conversation_id") @db.VarChar(64)
+  userId           String   @map("user_id") @db.Char(36)
+  userRole         String   @map("user_role") @db.VarChar(32)
+  question         String   @db.Text
+  answer           String   @db.Text
+  intent           String?  @db.VarChar(64)
+  dataScope        Json?    @map("data_scope")
+  toolCalls        Json?    @map("tool_calls")
+  sourceSummary    Json?    @map("source_summary")
+  warnings         Json?
+  modelProvider    String?  @map("model_provider") @db.VarChar(64)
+  modelName        String?  @map("model_name") @db.VarChar(128)
+  promptTokens     Int?     @map("prompt_tokens")
+  completionTokens Int?     @map("completion_tokens")
+  latencyMs        Int?     @map("latency_ms")
+  errorCode        String?  @map("error_code") @db.VarChar(64)
+  createdAt        DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  user User @relation("AiChatMessageUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([intent, createdAt])
+  @@map("ai_chat_messages")
 }
 
 model TravelAgency {

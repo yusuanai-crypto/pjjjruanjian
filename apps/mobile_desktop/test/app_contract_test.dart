@@ -6,6 +6,7 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
 import 'package:jiangjiu_mobile_desktop/core/config/app_config.dart';
 import 'package:jiangjiu_mobile_desktop/features/after_sales/after_sales_form_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/ai_assistant/ai_assistant_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/analytics/analytics_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rule_config_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
@@ -265,6 +266,35 @@ void main() {
     }
   });
 
+  testWidgets('ai assistant menu is visible only to stage 9 allowed roles',
+      (_) async {
+    for (final role in [
+      UserRole.admin,
+      UserRole.boss,
+      UserRole.finance,
+      UserRole.afterSales,
+    ]) {
+      expect(_roleIds(role), contains('ai_assistant'));
+      expect(
+        _destinationIds(['ai_assistant'], role),
+        contains('ai_assistant'),
+      );
+    }
+
+    for (final role in [
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.frontDesk,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('ai_assistant')));
+      expect(
+        _destinationIds(['ai_assistant'], role),
+        isNot(contains('ai_assistant')),
+      );
+    }
+  });
+
   testWidgets(
       'travel agency management menu is visible only to admin and finance',
       (_) async {
@@ -321,6 +351,7 @@ void main() {
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());
     expect(_page('analytics'), isA<AnalyticsPage>());
+    expect(_page('ai_assistant'), isA<AiAssistantPage>());
   });
 }
 

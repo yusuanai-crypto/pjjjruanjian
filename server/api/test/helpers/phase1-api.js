@@ -50,6 +50,16 @@ async function withNestApiServer(run, options = {}) {
     PHASE1_OPERATION_LOG_STORE: process.env.PHASE1_OPERATION_LOG_STORE,
     AUTH_TOKEN_SECRET: process.env.AUTH_TOKEN_SECRET,
     PRISMA_CONNECT_ON_BOOT: process.env.PRISMA_CONNECT_ON_BOOT,
+    AI_ENABLED: process.env.AI_ENABLED,
+    AI_MOCK_MODE: process.env.AI_MOCK_MODE,
+    AI_PROVIDER: process.env.AI_PROVIDER,
+    AI_API_KEY: process.env.AI_API_KEY,
+    AI_BASE_URL: process.env.AI_BASE_URL,
+    AI_MODEL: process.env.AI_MODEL,
+    AI_TIMEOUT_MS: process.env.AI_TIMEOUT_MS,
+    AI_MAX_QUESTION_LENGTH: process.env.AI_MAX_QUESTION_LENGTH,
+    AI_DAILY_LIMIT_PER_USER: process.env.AI_DAILY_LIMIT_PER_USER,
+    AI_HISTORY_RETENTION_DAYS: process.env.AI_HISTORY_RETENTION_DAYS,
   };
 
   process.env.PHASE0_CONFIRMATION_STORE = stores.phase0StorePath;
@@ -58,12 +68,20 @@ async function withNestApiServer(run, options = {}) {
   process.env.PHASE1_OPERATION_LOG_STORE = stores.operationLogStorePath;
   process.env.AUTH_TOKEN_SECRET = stores.tokenSecret;
   process.env.PRISMA_CONNECT_ON_BOOT = 'false';
+  for (const [key, value] of Object.entries(options.env || {})) {
+    if (value === undefined || value === null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = String(value);
+    }
+  }
 
+  const prisma = createInMemoryPrisma(options.prisma || {});
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],
   })
     .overrideProvider(PrismaService)
-    .useValue(createInMemoryPrisma(options.prisma || {}))
+    .useValue(prisma)
     .compile();
 
   const app = moduleFixture.createNestApplication({ logger: false });
@@ -77,7 +95,7 @@ async function withNestApiServer(run, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    await run(baseUrl);
+    await run(baseUrl, { prisma, stores });
   } finally {
     await app.close();
     restoreEnv(previousEnv);
@@ -112,6 +130,7 @@ function createInMemoryPrisma(options = {}) {
     ),
   ];
   const operationLogs = [];
+  const aiChatMessages = [];
   const travelAgencies = [];
   const guides = [];
   const travelGroups = [];
@@ -134,6 +153,7 @@ function createInMemoryPrisma(options = {}) {
   const dailyReconciliations = [];
   const reconciliationPaymentMethods = [];
   const strikeBonusAwards = [];
+  seedAiChatMessages(aiChatMessages, options.aiChatMessages || [], now);
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
@@ -152,6 +172,7 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    aiChatMessages,
     travelAgencies,
     guides,
     travelGroups,
@@ -268,6 +289,31 @@ function createInMemoryPrisma(options = {}) {
           operationLogs.filter((log) => matchesWhere(log, where)).map(copyRow),
           orderBy,
         );
+      },
+    },
+    aiChatMessage: {
+      create: async ({ data }) => {
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          createdAt: asDate(data.createdAt) || new Date(),
+        };
+        aiChatMessages.push(row);
+        return copyRow(row);
+      },
+      findMany: async ({ where, orderBy, skip, take } = {}) => {
+        const rows = sortRows(
+          aiChatMessages
+            .filter((message) => matchesWhere(message, where))
+            .map(copyRow),
+          orderBy,
+        );
+        const start = skip || 0;
+        return rows.slice(start, take ? start + take : rows.length);
+      },
+      count: async ({ where } = {}) => {
+        return aiChatMessages.filter((message) => matchesWhere(message, where))
+          .length;
       },
     },
     travelAgency: createTravelAgencyDelegate(travelAgencies),
@@ -533,6 +579,20 @@ function createInMemoryPrisma(options = {}) {
         return copyRow(row);
       },
     },
+  };
+  prisma.__store = {
+    users,
+    systemSettings,
+    operationLogs,
+    aiChatMessages,
+    travelAgencies,
+    guides,
+    travelGroups,
+    customers,
+    salesOrders,
+    afterSalesOrders,
+    commissionRecords,
+    travelGroupFinanceSummaries,
   };
   return prisma;
 }
@@ -973,6 +1033,31 @@ function seedUsers(rows, seeds, now) {
       isActive: seed.isActive === undefined ? true : Boolean(seed.isActive),
       createdAt: asDate(seed.createdAt) || now,
       updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function seedAiChatMessages(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      conversationId: seed.conversationId || crypto.randomUUID(),
+      userId: seed.userId,
+      userRole: seed.userRole || 'unknown',
+      question: seed.question || '',
+      answer: seed.answer || '',
+      intent: seed.intent || 'unknown',
+      dataScope: seed.dataScope ?? null,
+      toolCalls: seed.toolCalls ?? [],
+      sourceSummary: seed.sourceSummary ?? [],
+      warnings: seed.warnings ?? [],
+      modelProvider: seed.modelProvider ?? null,
+      modelName: seed.modelName ?? null,
+      promptTokens: seed.promptTokens ?? null,
+      completionTokens: seed.completionTokens ?? null,
+      latencyMs: seed.latencyMs ?? null,
+      errorCode: seed.errorCode ?? null,
+      createdAt: asDate(seed.createdAt) || now,
     });
   }
 }

@@ -35,5 +35,6 @@ import {
     StrikeBonusAwardsNestController,
   ],
   providers: [BusinessDataNestService],
+  exports: [BusinessDataNestService],
 })
 export class BusinessDataModule {}
