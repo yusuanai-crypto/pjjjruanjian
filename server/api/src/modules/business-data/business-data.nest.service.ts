@@ -12,6 +12,10 @@ import {
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
 import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
+import {
+  calculateOrderProductProfit,
+  calculateProductProfitSummary,
+} from '../products/product-profit.helper';
 import { SettingsNestService } from '../settings/settings.nest.service';
 import {
   calculateQrCodeExpiresAt,
@@ -24,8 +28,32 @@ import {
   renderPublicSalesSheetHtml,
 } from './public-sales-sheet-html.helper';
 import { withGeneratedAfterSalesNo } from './after-sales-order-no.helper';
+import {
+  buildShanghaiNaturalDayRange,
+  calculateReconciliation,
+  formatDatabaseDate,
+  formatShanghaiBusinessDate,
+  listReconciliationBusinessDates,
+  normalizeReconciliationBusinessDate,
+  RECONCILIATION_INCLUDED_ORDER_STATUSES,
+  RECONCILIATION_TIMEZONE,
+} from './reconciliation-calculation.helper';
 import { withGeneratedSalesOrderNo } from './sales-order-no.helper';
 import { buildSalesSheetDto } from './sales-sheet.dto.helper';
+import {
+  createAttachmentStorageKey,
+  finalizeStagedTravelGroupAttachmentDeletion,
+  isSafeAttachmentStorageKey,
+  normalizeTravelGroupAttachmentCategory,
+  readTravelGroupAttachmentFile,
+  removeTravelGroupAttachmentFile,
+  restoreStagedTravelGroupAttachmentDeletion,
+  sanitizeAttachmentOriginalName,
+  stageTravelGroupAttachmentDeletion,
+  TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST,
+  validateTravelGroupAttachmentFile,
+  writeTravelGroupAttachmentFile,
+} from './travel-group-attachment-storage.helper';
 import { withGeneratedTravelGroupNo } from './travel-group-no.helper';
 
 const GROUP_TABLES: any = {
@@ -76,6 +104,29 @@ const TRAVEL_GROUP_FINANCE_PATCH_FIELDS = [
   'remarks',
 ];
 
+const TRAVEL_GROUP_INTAKE_PATCH_FIELDS = [
+  'sourceRegion',
+  'ageInfo',
+  'mentionedFeitian',
+  'previousStopOrderStatus',
+  'keyCustomerInfo',
+];
+
+const TRAVEL_GROUP_TASTER_PATCH_FIELDS = [
+  'licensePlate',
+  'guestCount',
+  'remarks',
+  'wineDetails',
+  'tasterSummary',
+  ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
+];
+
+const TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS = [
+  'visitDate',
+  'guideId',
+  'expectedArrivalTime',
+];
+
 const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
   admin: [
     'groupNo',
@@ -96,6 +147,9 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'remarks',
     'tasterSummary',
     'tastingItems',
+    ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
+    'liaisonTasterId',
+    'expectedArrivalTime',
     ...TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
   ],
   front_desk: [
@@ -110,9 +164,11 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'groupType',
     'remarks',
     'tastingItems',
+    ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
+    'liaisonTasterId',
   ],
   sales: ['guestCount', 'departureTime', 'remarks', 'tastingItems'],
-  taster: ['guestCount', 'tasterSummary', 'wineDetails'],
+  taster: TRAVEL_GROUP_TASTER_PATCH_FIELDS,
   finance: TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
 };
 
@@ -319,15 +375,24 @@ const TRAVEL_GROUP_EXPORT_COLUMNS = [
   { header: '团号', key: 'groupNo', width: 18 },
   { header: '日期', key: 'visitDate', width: 14 },
   { header: '旅行社', key: 'travelAgency', width: 24 },
+  { header: '客源地', key: 'sourceRegion', width: 18 },
+  { header: '年龄描述', key: 'ageInfo', width: 18 },
   { header: '车牌号', key: 'licensePlate', width: 14 },
   { header: '导游', key: 'guideName', width: 16 },
   { header: '导游电话', key: 'guidePhone', width: 16 },
   { header: '人数', key: 'guestCount', width: 10 },
   { header: '品鉴馆馆号', key: 'tastingRoomNo', width: 14 },
   { header: '品鉴师', key: 'tasterName', width: 16 },
+  { header: '对接品鉴师', key: 'liaisonTasterName', width: 16 },
+  { header: '预计进店时间', key: 'expectedArrivalTime', width: 14 },
   { header: '进店时间', key: 'arrivalTime', width: 12 },
   { header: '离店时间', key: 'departureTime', width: 12 },
   { header: '团型', key: 'groupType', width: 14 },
+  { header: '是否提及飞天', key: 'mentionedFeitian', width: 14 },
+  { header: '前站出单情况', key: 'previousStopOrderStatus', width: 22 },
+  { header: '重点客户信息', key: 'keyCustomerInfo', width: 36 },
+  { header: '重点客户照片数', key: 'keyCustomerPhotoCount', width: 16 },
+  { header: '客人信息附件数', key: 'guestInfoAttachmentCount', width: 16 },
   { header: '品酒种类和瓶数', key: 'tastingSummary', width: 32 },
   { header: '是否出单', key: 'hasEffectiveOrder', width: 12 },
   { header: '订单总额', key: 'orderAmountYuan', width: 14 },
@@ -433,6 +498,13 @@ const AFTER_SALES_ORDER_REFUND_LINK_STATUSES = [
   'COMPLETED',
 ];
 
+const RECONCILIATION_MANUAL_PATCH_FIELDS = new Set([
+  'businessDate',
+  'backOfficeSalesCents',
+  'paymentMethods',
+  'notes',
+]);
+
 @Injectable()
 export class BusinessDataNestService {
   constructor(
@@ -513,6 +585,264 @@ export class BusinessDataNestService {
     return {
       fileName: buildTravelGroupsExportFileName(),
       buffer: Buffer.from(xlsxData as any),
+    };
+  }
+
+  async uploadTravelGroupAttachments(
+    actor: any,
+    id: string,
+    categoryValue: unknown,
+    files: any[],
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'front_desk', 'taster']);
+    const category = normalizeTravelGroupAttachmentCategory(categoryValue);
+    const current = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, current);
+    assertTasterCanEditTravelGroup(actor, current);
+
+    if (!Array.isArray(files) || files.length === 0) {
+      throw createHttpError(
+        400,
+        'ATTACHMENT_FILE_REQUIRED',
+        'At least one attachment file is required.',
+      );
+    }
+    if (files.length > TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST) {
+      throw createHttpError(
+        400,
+        'TOO_MANY_ATTACHMENT_FILES',
+        `A maximum of ${TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST} files can be uploaded at once.`,
+      );
+    }
+
+    const uploadedAt = new Date().toISOString();
+    const storedAttachments: any[] = [];
+    try {
+      for (const file of files) {
+        const validated = validateTravelGroupAttachmentFile(file);
+        const storageKey = createAttachmentStorageKey();
+        await writeTravelGroupAttachmentFile(storageKey, validated.buffer);
+        storedAttachments.push({
+          id: crypto.randomUUID(),
+          category,
+          originalName: validated.originalName,
+          contentType: validated.contentType,
+          size: validated.size,
+          storageKey,
+          uploadedById: actor.id,
+          uploadedAt,
+        });
+      }
+    } catch (error) {
+      await cleanupStoredTravelGroupAttachments(storedAttachments);
+      throw normalizeAttachmentStorageError(error, 'write');
+    }
+
+    const fieldName = getTravelGroupAttachmentFieldName(category);
+    const beforeAttachments = getTravelGroupAttachmentMetadata(
+      current,
+      category,
+    );
+    const nextAttachments = [...beforeAttachments, ...storedAttachments];
+    let updated: any;
+    try {
+      updated = await this.prisma.$transaction(async (tx: any) => {
+        const updatedGroup = await tx.travelGroup.update({
+          where: { id },
+          data: {
+            [fieldName]: nextAttachments,
+            updatedById: actor.id,
+            updatedAt: new Date(),
+          },
+          include: getGroupInclude('travel', 'detail'),
+        });
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'travel_groups.attachments.upload',
+            entityType: 'travel_group',
+            entityId: id,
+            beforeData: {
+              category,
+              attachments: beforeAttachments.map((attachment: any) =>
+                toTravelGroupAttachmentDto(attachment, category),
+              ),
+            },
+            afterData: {
+              category,
+              attachments: nextAttachments.map((attachment: any) =>
+                toTravelGroupAttachmentDto(attachment, category),
+              ),
+              uploaded: storedAttachments.map((attachment: any) =>
+                toTravelGroupAttachmentDto(attachment, category),
+              ),
+            },
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+        return updatedGroup;
+      });
+    } catch (error) {
+      await cleanupStoredTravelGroupAttachments(storedAttachments);
+      throw error;
+    }
+
+    return {
+      attachments: storedAttachments.map((attachment: any) =>
+        toTravelGroupAttachmentDto(attachment, category),
+      ),
+      travelGroup: toGroupDto(updated, 'travel'),
+    };
+  }
+
+  async downloadTravelGroupAttachment(
+    actor: any,
+    id: string,
+    attachmentId: string,
+  ) {
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+    ]);
+    const current = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, current);
+    await this.assertPassesGlobalGroupMarkScope(current);
+    const located = findTravelGroupAttachment(current, attachmentId);
+    if (!located || !isSafeAttachmentStorageKey(located.attachment.storageKey)) {
+      throw attachmentNotFoundError();
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await readTravelGroupAttachmentFile(
+        located.attachment.storageKey,
+      );
+    } catch (error) {
+      if ((error as any)?.statusCode === 404 || (error as any)?.code === 'ENOENT') {
+        throw attachmentNotFoundError();
+      }
+      throw createHttpError(
+        500,
+        'ATTACHMENT_READ_FAILED',
+        'Attachment could not be read.',
+      );
+    }
+
+    return {
+      attachment: toTravelGroupAttachmentDto(
+        located.attachment,
+        located.category,
+      ),
+      originalName: located.attachment.originalName,
+      contentType: located.attachment.contentType,
+      buffer,
+    };
+  }
+
+  async deleteTravelGroupAttachment(
+    actor: any,
+    id: string,
+    attachmentId: string,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'front_desk', 'taster']);
+    const current = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, current);
+    assertTasterCanEditTravelGroup(actor, current);
+    const located = findTravelGroupAttachment(current, attachmentId);
+    if (!located || !isSafeAttachmentStorageKey(located.attachment.storageKey)) {
+      throw attachmentNotFoundError();
+    }
+
+    let staged: any;
+    try {
+      staged = await stageTravelGroupAttachmentDeletion(
+        located.attachment.storageKey,
+      );
+    } catch (error) {
+      throw normalizeAttachmentStorageError(error, 'delete');
+    }
+
+    const beforeAttachments = getTravelGroupAttachmentMetadata(
+      current,
+      located.category,
+    );
+    const nextAttachments = beforeAttachments.filter(
+      (attachment: any) => attachment?.id !== attachmentId,
+    );
+    const fieldName = getTravelGroupAttachmentFieldName(located.category);
+    let updated: any;
+    try {
+      updated = await this.prisma.$transaction(async (tx: any) => {
+        const updatedGroup = await tx.travelGroup.update({
+          where: { id },
+          data: {
+            [fieldName]: nextAttachments,
+            updatedById: actor.id,
+            updatedAt: new Date(),
+          },
+          include: getGroupInclude('travel', 'detail'),
+        });
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'travel_groups.attachments.delete',
+            entityType: 'travel_group',
+            entityId: id,
+            beforeData: {
+              category: located.category,
+              attachment: toTravelGroupAttachmentDto(
+                located.attachment,
+                located.category,
+              ),
+            },
+            afterData: {
+              category: located.category,
+              attachments: nextAttachments.map((attachment: any) =>
+                toTravelGroupAttachmentDto(attachment, located.category),
+              ),
+            },
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+        return updatedGroup;
+      });
+    } catch (error) {
+      try {
+        await restoreStagedTravelGroupAttachmentDeletion(staged);
+      } catch {
+        throw createHttpError(
+          500,
+          'ATTACHMENT_DELETE_ROLLBACK_FAILED',
+          'Attachment metadata update failed and the file could not be restored.',
+        );
+      }
+      throw error;
+    }
+
+    try {
+      await finalizeStagedTravelGroupAttachmentDeletion(staged);
+    } catch {
+      throw createHttpError(
+        500,
+        'ATTACHMENT_DELETE_CLEANUP_FAILED',
+        'Attachment metadata was deleted but file cleanup failed.',
+      );
+    }
+
+    return {
+      attachment: toTravelGroupAttachmentDto(
+        located.attachment,
+        located.category,
+      ),
+      travelGroup: toGroupDto(updated, 'travel'),
     };
   }
 
@@ -608,8 +938,11 @@ export class BusinessDataNestService {
     metadata: any = {},
   ) {
     requireAnyRole(actor, ['admin', 'front_desk']);
+    assertTravelGroupCreateAllowedFields(actor, payload);
     const data = buildTravelGroupCreateData(payload, actor);
-    const tastingItems = buildTravelGroupTastingItems(payload?.tastingItems);
+    const tastingItemInputs = buildTravelGroupTastingItems(
+      payload?.tastingItems,
+    );
 
     const created = await this.prisma.$transaction(async (tx: any) => {
       const guide = await tx.guide.findUnique({
@@ -624,25 +957,21 @@ export class BusinessDataNestService {
         throw createHttpError(400, 'GUIDE_DISABLED', 'Guide is disabled.');
       }
 
-      const taster = await tx.user.findUnique({
-        where: {
-          id: data.tasterId,
-        },
-      });
-      if (!taster) {
-        throw createHttpError(
-          404,
-          'TASTER_NOT_FOUND',
-          'Taster does not exist.',
-        );
-      }
-      if (!isActiveTasterUser(taster)) {
-        throw createHttpError(
-          400,
-          'INVALID_TASTER',
-          'tasterId must reference an active taster user.',
-        );
-      }
+      const taster = data.tasterId
+        ? await findActiveTasterUser(tx, data.tasterId, 'tasterId')
+        : null;
+      const liaisonTaster = data.liaisonTasterId
+        ? await findActiveTasterUser(
+            tx,
+            data.liaisonTasterId,
+            'liaisonTasterId',
+          )
+        : null;
+
+      const tastingItems = await resolveTravelGroupTastingItems(
+        tx,
+        tastingItemInputs,
+      );
 
       return withGeneratedTravelGroupNo(
         tx.travelGroup,
@@ -654,7 +983,8 @@ export class BusinessDataNestService {
               groupNo,
               guideName: guide.name,
               guidePhone: guide.phone,
-              tasterName: taster.name,
+              tasterName: taster?.name || null,
+              liaisonTasterName: liaisonTaster?.name || null,
               ...(tastingItems.length > 0
                 ? {
                     tastingItems: {
@@ -750,10 +1080,10 @@ export class BusinessDataNestService {
       'taster',
       'finance',
     ]);
-    assertTravelGroupPatchAllowedFields(actor, payload);
-
     const current = await this.findGroupOrThrow('travel', id, true);
     await this.assertCanReadGroup('travel', actor, current);
+    assertTasterCanEditTravelGroup(actor, current);
+    assertTravelGroupPatchAllowedFields(actor, payload, current);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = buildTravelGroupUpdateData(payload, actor);
@@ -794,32 +1124,31 @@ export class BusinessDataNestService {
       }
 
       if (data.tasterId !== undefined) {
-        const taster = await tx.user.findUnique({
-          where: {
-            id: data.tasterId,
-          },
-        });
-        if (!taster) {
-          throw createHttpError(
-            404,
-            'TASTER_NOT_FOUND',
-            'Taster does not exist.',
-          );
-        }
-        if (!isActiveTasterUser(taster)) {
-          throw createHttpError(
-            400,
-            'INVALID_TASTER',
-            'tasterId must reference an active taster user.',
-          );
-        }
-        data.tasterName = taster.name;
+        const taster = data.tasterId
+          ? await findActiveTasterUser(tx, data.tasterId, 'tasterId')
+          : null;
+        data.tasterName = taster?.name || null;
+      }
+
+      if (data.liaisonTasterId !== undefined) {
+        const liaisonTaster = data.liaisonTasterId
+          ? await findActiveTasterUser(
+              tx,
+              data.liaisonTasterId,
+              'liaisonTasterId',
+            )
+          : null;
+        data.liaisonTasterName = liaisonTaster?.name || null;
       }
 
       if (payload?.tastingItems !== undefined) {
+        const tastingItems = await resolveTravelGroupTastingItems(
+          tx,
+          buildTravelGroupTastingItems(payload.tastingItems),
+        );
         data.tastingItems = {
           deleteMany: {},
-          create: buildTravelGroupTastingItems(payload.tastingItems),
+          create: tastingItems,
         };
       }
 
@@ -902,13 +1231,7 @@ export class BusinessDataNestService {
   ) {
     requireAnyRole(actor, ['admin', 'taster']);
     const current = await this.findGroupOrThrow('travel', id, true);
-    if (actor.role === 'taster' && current.tasterId !== actor.id) {
-      throw createHttpError(
-        404,
-        'TRAVEL_GROUP_NOT_FOUND',
-        'Travel group does not exist.',
-      );
-    }
+    assertTasterCanEditTravelGroup(actor, current);
 
     const now = new Date();
     const summary = normalizeRequiredString(
@@ -1124,7 +1447,8 @@ export class BusinessDataNestService {
 
   async createSalesOrder(actor: any, payload: any, metadata: any = {}) {
     requireAnyRole(actor, ['admin', 'sales', 'finance', 'after_sales']);
-    const data = buildSalesOrderData(payload, actor);
+    const itemInputs = buildSalesOrderItems(payload?.items);
+    const data = buildSalesOrderData(payload, actor, itemInputs);
     const order = await this.prisma.$transaction(async (tx: any) => {
       const customerResult = await resolveSalesOrderCustomer(
         tx,
@@ -1169,6 +1493,14 @@ export class BusinessDataNestService {
           );
         }
       }
+
+      const orderItems = await resolveSalesOrderItemSnapshots(
+        tx,
+        itemInputs,
+        data.orderDate,
+      );
+      data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
+      data.items = { create: orderItems };
 
       return withGeneratedSalesOrderNo(
         tx.salesOrder,
@@ -1277,6 +1609,9 @@ export class BusinessDataNestService {
       );
     }
     assertCanUpdateSalesOrder(actor, current);
+    const submittedItemInputs = hasOwn(payload, 'items')
+      ? buildSalesOrderItems(payload.items)
+      : null;
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = buildSalesOrderUpdateData(payload, actor);
@@ -1346,6 +1681,42 @@ export class BusinessDataNestService {
             'Related travel group does not exist.',
           );
         }
+      }
+
+
+      const finalOrderDate = data.orderDate || current.orderDate;
+      const orderDateChanged =
+        data.orderDate !== undefined &&
+        formatDate(data.orderDate) !== formatDate(current.orderDate);
+      if (submittedItemInputs) {
+        const orderItems = await resolveSalesOrderItemSnapshots(
+          tx,
+          submittedItemInputs,
+          finalOrderDate,
+          current.items || [],
+          orderDateChanged,
+        );
+        data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
+        data.items = {
+          deleteMany: {},
+          create: orderItems,
+        };
+      } else if (orderDateChanged) {
+        const existingItemInputs = (current.items || []).map(
+          salesOrderItemToSnapshotInput,
+        );
+        const orderItems = await resolveSalesOrderItemSnapshots(
+          tx,
+          existingItemInputs,
+          finalOrderDate,
+          current.items || [],
+          true,
+        );
+        data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
+        data.items = {
+          deleteMany: {},
+          create: orderItems,
+        };
       }
 
       const updatedOrder = await tx.salesOrder.update({
@@ -2111,6 +2482,38 @@ export class BusinessDataNestService {
     };
   }
 
+  async getFinanceProfitOverview(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const orders = await this.prisma.salesOrder.findMany({
+      where: await this.buildScopedSalesOrderWhere(
+        actor,
+        buildSalesOrderWhere(filters),
+      ),
+      include: getSalesOrderProfitInclude(),
+      orderBy: { orderDate: 'desc' },
+    });
+    return calculateProductProfitSummary(orders);
+  }
+
+  async getFinanceOrderProfit(actor: any, id: string) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const orders = await this.prisma.salesOrder.findMany({
+      where: await this.buildScopedSalesOrderWhere(actor, {
+        id: normalizeRequiredString(id, 'id'),
+      }),
+      include: getSalesOrderProfitInclude(),
+      take: 1,
+    });
+    if (!orders[0]) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    return calculateOrderProductProfit(orders[0]);
+  }
+
   async getFinanceWorkbench(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin', 'boss', 'finance']);
     const limit = normalizeTake(filters.limit, 20);
@@ -2208,33 +2611,77 @@ export class BusinessDataNestService {
     return this.updateSalesOrderPacking(actor, id, payload, metadata);
   }
 
+  async listReconciliations(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin', 'boss', 'finance']);
+    const dateFrom = requireReconciliationBusinessDate(
+      filters.dateFrom || filters.start,
+      'dateFrom',
+    );
+    const dateTo = requireReconciliationBusinessDate(
+      filters.dateTo || filters.end,
+      'dateTo',
+    );
+    const businessDates = listReconciliationBusinessDates(dateFrom, dateTo);
+    if (!businessDates || businessDates.length === 0) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'dateFrom cannot be later than dateTo.',
+      );
+    }
+    if (businessDates.length > 366) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'Reconciliation date range cannot exceed 366 days.',
+      );
+    }
+
+    const facts = await this.loadReconciliationFacts(dateFrom, dateTo);
+    return businessDates.map((businessDate) =>
+      buildAggregatedReconciliationDto(
+        businessDate,
+        facts.ordersByDate.get(businessDate) || [],
+        facts.refundsByDate.get(businessDate) || [],
+        facts.manualByDate.get(businessDate) || null,
+      ),
+    );
+  }
+
   async getReconciliation(actor: any, businessDateValue: string) {
     requireAnyRole(actor, ['admin', 'boss', 'finance']);
-    const businessDate = parseDate(businessDateValue, 'businessDate', true);
-    const reconciliation = await this.prisma.dailyReconciliation.findUnique({
-      where: {
-        businessDate,
-      },
-      include: {
-        paymentMethods: true,
-      },
-    });
-    if (!reconciliation) {
-      return emptyReconciliationDto(businessDate);
-    }
-    return toReconciliationDto(reconciliation);
+    const businessDate = requireReconciliationBusinessDate(
+      businessDateValue,
+      'businessDate',
+    );
+    const facts = await this.loadReconciliationFacts(
+      businessDate,
+      businessDate,
+    );
+    return buildAggregatedReconciliationDto(
+      businessDate,
+      facts.ordersByDate.get(businessDate) || [],
+      facts.refundsByDate.get(businessDate) || [],
+      facts.manualByDate.get(businessDate) || null,
+    );
   }
 
   async upsertReconciliation(actor: any, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss', 'finance']);
-    const businessDate = parseDate(payload?.businessDate, 'businessDate', true);
-    const data = buildReconciliationData(payload, actor);
+    requireAnyRole(actor, ['finance']);
+    assertReconciliationManualPatchAllowedFields(payload);
+    const businessDateText = requireReconciliationBusinessDate(
+      payload?.businessDate,
+      'businessDate',
+    );
+    const businessDate = parseDate(businessDateText, 'businessDate', true);
+    const data = buildReconciliationManualData(payload, actor);
     const current = await this.prisma.dailyReconciliation.findUnique({
       where: {
         businessDate,
       },
       include: {
         paymentMethods: true,
+        reviewedBy: true,
       },
     });
 
@@ -2260,6 +2707,7 @@ export class BusinessDataNestService {
       },
       include: {
         paymentMethods: true,
+        reviewedBy: true,
       },
     });
 
@@ -2268,11 +2716,120 @@ export class BusinessDataNestService {
       action: current ? 'reconciliations.update' : 'reconciliations.create',
       entityType: 'daily_reconciliation',
       entityId: saved.id,
-      beforeData: current ? toReconciliationDto(current) : null,
-      afterData: toReconciliationDto(saved),
+      beforeData: current ? toReconciliationManualAuditDto(current) : null,
+      afterData: toReconciliationManualAuditDto(saved),
       ipAddress: metadata.ipAddress || null,
     });
-    return toReconciliationDto(saved);
+    return this.getReconciliation(actor, businessDateText);
+  }
+
+  async reviewReconciliation(
+    actor: any,
+    businessDateValue: string,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin']);
+    const businessDateText = requireReconciliationBusinessDate(
+      businessDateValue,
+      'businessDate',
+    );
+    const businessDate = parseDate(
+      businessDateText,
+      'businessDate',
+      true,
+    );
+    const facts = await this.loadReconciliationFacts(
+      businessDateText,
+      businessDateText,
+    );
+    const manual = facts.manualByDate.get(businessDateText) || null;
+    if (!manual) {
+      throw createHttpError(
+        409,
+        'RECONCILIATION_NOT_SUBMITTED',
+        'Finance must submit the daily reconciliation before it can be reviewed.',
+      );
+    }
+    const calculation = calculateReconciliation({
+      businessDate: businessDateText,
+      orders: facts.ordersByDate.get(businessDateText) || [],
+      refunds: facts.refundsByDate.get(businessDateText) || [],
+      manual,
+    });
+    const now = new Date();
+    const saved = await this.prisma.dailyReconciliation.update({
+      where: { businessDate },
+      data: {
+        reviewStatus: 'REVIEWED',
+        reviewedById: actor.id,
+        reviewedAt: now,
+        reviewSourceHash: calculation.sourceHash,
+        updatedById: actor.id,
+        updatedAt: now,
+      },
+      include: {
+        paymentMethods: true,
+        reviewedBy: true,
+      },
+    });
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'reconciliations.review',
+      entityType: 'daily_reconciliation',
+      entityId: saved.id,
+      beforeData: toReconciliationManualAuditDto(manual),
+      afterData: toReconciliationManualAuditDto(saved),
+      ipAddress: metadata.ipAddress || null,
+    });
+    return this.getReconciliation(actor, businessDateText);
+  }
+
+  private async loadReconciliationFacts(dateFrom: string, dateTo: string) {
+    const refundStart = buildShanghaiNaturalDayRange(dateFrom);
+    const refundEnd = buildShanghaiNaturalDayRange(dateTo);
+    const orderDateFrom = parseDate(dateFrom, 'dateFrom', true);
+    const orderDateTo = parseDate(dateTo, 'dateTo', true);
+    const [orders, refunds, manualRows] = await Promise.all([
+      this.prisma.salesOrder.findMany({
+        where: {
+          orderDate: { gte: orderDateFrom, lte: orderDateTo },
+          status: { in: [...RECONCILIATION_INCLUDED_ORDER_STATUSES] },
+        },
+      }),
+      this.prisma.afterSalesOrder.findMany({
+        where: {
+          financeConfirmed: true,
+          createdAt: {
+            gte: refundStart!.start,
+            lte: refundEnd!.end,
+          },
+        },
+      }),
+      this.prisma.dailyReconciliation.findMany({
+        where: {
+          businessDate: { gte: orderDateFrom, lte: orderDateTo },
+        },
+        include: {
+          paymentMethods: true,
+          reviewedBy: true,
+        },
+      }),
+    ]);
+    const ordersByDate = groupFactsByBusinessDate(orders, (order) =>
+      formatDatabaseDate(order?.orderDate),
+    );
+    const refundsByDate = groupFactsByBusinessDate(refunds, (refund) =>
+      formatShanghaiBusinessDate(refund?.createdAt),
+    );
+    const manualByDate = new Map<string, any>();
+    for (const row of manualRows) {
+      const businessDate = formatDatabaseDate(row?.businessDate);
+      if (businessDate) {
+        manualByDate.set(businessDate, row);
+      }
+    }
+    return { ordersByDate, refundsByDate, manualByDate };
   }
 
   async listStrikeBonusAwards(actor: any, filters: any = {}) {
@@ -2613,7 +3170,7 @@ export class BusinessDataNestService {
 
   private async buildGroupDataScope(kind: string, actor: any) {
     if (actor?.role === 'taster') {
-      return { tasterId: actor.id };
+      return kind === 'travel' ? null : { tasterId: actor.id };
     }
 
     if (actor?.role === 'front_desk' && kind === 'travel') {
@@ -2652,7 +3209,7 @@ export class BusinessDataNestService {
 
   private async assertCanReadGroup(kind: string, actor: any, group: any) {
     if (actor?.role === 'taster') {
-      if (group.tasterId === actor.id) {
+      if (kind === 'travel' || group.tasterId === actor.id) {
         return;
       }
       throw createHttpError(
@@ -2793,6 +3350,7 @@ function getGroupInclude(kind: string, mode = 'list') {
         },
       },
       taster: true,
+      liaisonTaster: true,
       salesOrders: {
         orderBy: {
           createdAt: 'desc',
@@ -2825,6 +3383,13 @@ function buildGroupWhere(filters: any = {}, kind = '') {
       { travelAgency: { contains: query } },
       { guideName: { contains: query } },
       { tasterName: { contains: query } },
+      ...(kind === 'travel'
+        ? [
+            { sourceRegion: { contains: query } },
+            { previousStopOrderStatus: { contains: query } },
+            { keyCustomerInfo: { contains: query } },
+          ]
+        : []),
     ];
   }
   const groupNo = normalizeOptionalString(filters.groupNo);
@@ -3249,6 +3814,20 @@ function assertAfterSalesOrderFinanceConfirmPatchAllowedFields(payload: any) {
   }
 }
 
+function assertReconciliationManualPatchAllowedFields(payload: any) {
+  const body = normalizeOptionalObjectPayload(payload);
+  const deniedFields = Object.keys(body).filter(
+    (field) => !RECONCILIATION_MANUAL_PATCH_FIELDS.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Reconciliation fields are read-only: ${deniedFields.join(', ')}.`,
+    );
+  }
+}
+
 function assertCanUpdateSalesOrder(actor: any, order: any) {
   if (actor?.role === 'admin' || actor?.role === 'finance') {
     return;
@@ -3433,18 +4012,8 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
       payload?.travelAgency,
       'travelAgency',
     ),
-    licensePlate: normalizeRequiredString(
-      payload?.licensePlate,
-      'licensePlate',
-    ),
     guideId: normalizeRequiredString(payload?.guideId, 'guideId'),
-    guestCount: normalizeInt(payload?.guestCount, 'guestCount'),
-    tastingRoomNo: normalizeRequiredString(
-      payload?.tastingRoomNo,
-      'tastingRoomNo',
-    ),
-    tasterId: normalizeRequiredString(payload?.tasterId, 'tasterId'),
-    groupType: normalizeRequiredString(payload?.groupType, 'groupType'),
+    guestCount: normalizeInt(payload?.guestCount, 'guestCount', 0),
     createdById: actor.id,
     updatedById: actor.id,
     financeMark: false,
@@ -3453,6 +4022,25 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
     status: 'UNMARKED',
   };
 
+  assignNullableString(data, 'licensePlate', payload?.licensePlate);
+  assignNullableString(data, 'tastingRoomNo', payload?.tastingRoomNo);
+  assignNullableString(data, 'tasterId', payload?.tasterId);
+  assignNullableString(data, 'liaisonTasterId', payload?.liaisonTasterId);
+  assignNullableString(data, 'groupType', payload?.groupType);
+  assignNullableString(data, 'sourceRegion', payload?.sourceRegion);
+  assignNullableString(data, 'ageInfo', payload?.ageInfo);
+  assignNullableBoolean(data, 'mentionedFeitian', payload?.mentionedFeitian);
+  assignNullableString(
+    data,
+    'previousStopOrderStatus',
+    payload?.previousStopOrderStatus,
+  );
+  assignNullableString(data, 'keyCustomerInfo', payload?.keyCustomerInfo);
+  assignOptionalClockTime(
+    data,
+    'expectedArrivalTime',
+    payload?.expectedArrivalTime,
+  );
   assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
   assignNullableString(data, 'wineDetails', payload?.wineDetails);
   assignNullableString(data, 'departureTime', payload?.departureTime);
@@ -3498,9 +4086,26 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
   assignInt(data, 'guestCount', payload?.guestCount);
   assignNullableString(data, 'tastingRoomNo', payload?.tastingRoomNo);
   if (payload?.tasterId !== undefined) {
-    data.tasterId = normalizeRequiredString(payload.tasterId, 'tasterId');
+    data.tasterId = normalizeOptionalString(payload.tasterId);
+  }
+  if (payload?.liaisonTasterId !== undefined) {
+    data.liaisonTasterId = normalizeOptionalString(payload.liaisonTasterId);
   }
   assignNullableString(data, 'tasterName', payload?.tasterName);
+  assignNullableString(data, 'sourceRegion', payload?.sourceRegion);
+  assignNullableString(data, 'ageInfo', payload?.ageInfo);
+  assignNullableBoolean(data, 'mentionedFeitian', payload?.mentionedFeitian);
+  assignNullableString(
+    data,
+    'previousStopOrderStatus',
+    payload?.previousStopOrderStatus,
+  );
+  assignNullableString(data, 'keyCustomerInfo', payload?.keyCustomerInfo);
+  assignOptionalClockTime(
+    data,
+    'expectedArrivalTime',
+    payload?.expectedArrivalTime,
+  );
   assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
   assignNullableString(data, 'groupType', payload?.groupType);
   assignNullableString(data, 'wineDetails', payload?.wineDetails);
@@ -3560,12 +4165,11 @@ function buildTravelGroupTastingItems(items: any[]) {
     }
     return {
       id: crypto.randomUUID(),
-      productName: normalizeRequiredString(
-        item?.productName,
-        `tastingItems[${index}].productName`,
+      productId: normalizeRequiredString(
+        item?.productId,
+        `tastingItems[${index}].productId`,
       ),
       quantity,
-      unit: normalizeRequiredString(item?.unit, `tastingItems[${index}].unit`),
       note: normalizeOptionalString(item?.note),
       sortOrder: normalizeInt(
         item?.sortOrder,
@@ -3578,7 +4182,26 @@ function buildTravelGroupTastingItems(items: any[]) {
   });
 }
 
-function buildSalesOrderData(payload: any, actor: any) {
+async function resolveTravelGroupTastingItems(prisma: any, items: any[]) {
+  const resolved = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const product = await findActiveProductOrThrow(
+      prisma,
+      item.productId,
+      `tastingItems[${index}].productId`,
+    );
+    resolved.push({
+      ...item,
+      productId: product.id,
+      productName: product.name,
+      unit: product.unit,
+    });
+  }
+  return resolved;
+}
+
+function buildSalesOrderData(payload: any, actor: any, items: any[]) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw createHttpError(
       400,
@@ -3587,7 +4210,6 @@ function buildSalesOrderData(payload: any, actor: any) {
     );
   }
   const now = new Date();
-  const items = buildSalesOrderItems(payload?.items);
   const totalAmountCents = items.reduce(
     (sum: number, item: any) => sum + item.subtotalCents,
     0,
@@ -3633,9 +4255,6 @@ function buildSalesOrderData(payload: any, actor: any) {
     updatedById: actor.id,
     createdAt: now,
     updatedAt: now,
-    items: {
-      create: items,
-    },
   };
   return data;
 }
@@ -3683,18 +4302,6 @@ function buildSalesOrderUpdateData(payload: any, actor: any) {
   if (hasOwn(payload, 'status')) {
     data.status = toPrismaOrderStatus(payload.status);
   }
-  if (hasOwn(payload, 'items')) {
-    const items = buildSalesOrderItems(payload.items);
-    data.totalAmountCents = items.reduce(
-      (sum: number, item: any) => sum + Number(item.subtotalCents || 0),
-      0,
-    );
-    data.items = {
-      deleteMany: {},
-      create: items,
-    };
-  }
-
   return data;
 }
 
@@ -4144,10 +4751,10 @@ function buildSalesOrderItems(items: any[]) {
       `items[${index}].unitPriceCents`,
     );
     return {
-      id: crypto.randomUUID(),
-      productName: normalizeRequiredString(
-        item?.productName,
-        `items[${index}].productName`,
+      id: normalizeOptionalString(item?.id) || crypto.randomUUID(),
+      productId: normalizeRequiredString(
+        item?.productId,
+        `items[${index}].productId`,
       ),
       quantity,
       unitPriceCents,
@@ -4164,47 +4771,177 @@ function buildSalesOrderItems(items: any[]) {
   });
 }
 
-function buildReconciliationData(payload: any, actor: any) {
+async function resolveSalesOrderItemSnapshots(
+  prisma: any,
+  items: any[],
+  orderDate: Date,
+  currentItems: any[] = [],
+  forceCostRefresh = false,
+) {
+  const resolved = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const product = await findActiveProductOrThrow(
+      prisma,
+      item.productId,
+      `items[${index}].productId`,
+    );
+    const current =
+      currentItems.find((candidate: any) => candidate.id === item.id) ||
+      currentItems[index] ||
+      null;
+    const sameProduct = current
+      ? normalizeOptionalString(current.productId)
+        ? normalizeOptionalString(current.productId) === product.id
+        : normalizeProductSnapshotName(current.productName) ===
+          normalizeProductSnapshotName(product.name)
+      : false;
+    const requiresCostRefresh =
+      forceCostRefresh ||
+      !current ||
+      !sameProduct ||
+      Number(current.quantity || 0) !== Number(item.quantity || 0);
+    const subtotalCents =
+      Number(item.quantity || 0) * Number(item.unitPriceCents || 0);
+    let actualUnitCostCents: number | null;
+    let actualCostSubtotalCents: number | null;
+
+    if (requiresCostRefresh) {
+      const actualCost = await findEffectiveProductActualCostOrThrow(
+        prisma,
+        product,
+        orderDate,
+      );
+      actualUnitCostCents = Number(actualCost.costCents);
+      actualCostSubtotalCents =
+        actualUnitCostCents * Number(item.quantity || 0);
+    } else {
+      actualUnitCostCents = nullableInteger(current.actualUnitCostCents);
+      actualCostSubtotalCents = nullableInteger(
+        current.actualCostSubtotalCents,
+      );
+    }
+
+    resolved.push({
+      ...item,
+      id: current?.id || item.id,
+      productId: product.id,
+      productName: product.name,
+      unit: product.unit,
+      subtotalCents,
+      actualUnitCostCents,
+      actualCostSubtotalCents,
+      grossProfitCents:
+        actualCostSubtotalCents === null
+          ? null
+          : subtotalCents - actualCostSubtotalCents,
+      createdAt: current?.createdAt || item.createdAt || new Date(),
+    });
+  }
+  return resolved;
+}
+
+async function findActiveProductOrThrow(
+  prisma: any,
+  productId: unknown,
+  fieldName: string,
+) {
+  const id = normalizeRequiredString(productId, fieldName);
+  const product = await prisma.product.findUnique({ where: { id } });
+  if (!product) {
+    throw createHttpError(404, 'PRODUCT_NOT_FOUND', 'Product does not exist.');
+  }
+  if (!product.isActive) {
+    throw createHttpError(
+      400,
+      'PRODUCT_INACTIVE',
+      'Inactive products cannot be used for new or edited items.',
+    );
+  }
+  return product;
+}
+
+async function findEffectiveProductActualCostOrThrow(
+  prisma: any,
+  product: any,
+  orderDate: Date,
+) {
+  const actualCost = await prisma.productActualCost.findFirst({
+    where: {
+      productId: product.id,
+      isActive: true,
+      effectiveFrom: { lte: orderDate },
+      OR: [
+        { effectiveTo: null },
+        { effectiveTo: { gte: orderDate } },
+      ],
+    },
+    orderBy: { effectiveFrom: 'desc' },
+  });
+  if (!actualCost) {
+    throw createHttpError(
+      400,
+      'PRODUCT_ACTUAL_COST_NOT_EFFECTIVE',
+      `该商品在订单日期没有有效实际成本：${product.name}`,
+    );
+  }
+  return actualCost;
+}
+
+function salesOrderItemToSnapshotInput(item: any) {
+  return {
+    id: item.id,
+    productId: item.productId,
+    quantity: Number(item.quantity || 0),
+    unitPriceCents: Number(item.unitPriceCents || 0),
+    subtotalCents: Number(item.subtotalCents || 0),
+    deliveryType: item.deliveryType,
+    notes: item.notes || null,
+    sortOrder: Number(item.sortOrder || 0),
+    createdAt: item.createdAt,
+  };
+}
+
+function sumSalesOrderItemSubtotals(items: any[]) {
+  return items.reduce(
+    (sum: number, item: any) => sum + Number(item.subtotalCents || 0),
+    0,
+  );
+}
+
+function nullableInteger(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : null;
+}
+
+function normalizeProductSnapshotName(value: unknown) {
+  return String(normalizeOptionalString(value) || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+function buildReconciliationManualData(payload: any, actor: any) {
   return {
     businessDate: parseDate(payload?.businessDate, 'businessDate', true),
-    travelGroupSalesCents: normalizeInt(
-      payload?.travelGroupSalesCents,
-      'travelGroupSalesCents',
-      0,
-    ),
-    backOfficeSalesCents: normalizeInt(
+    travelGroupSalesCents: 0,
+    backOfficeSalesCents: normalizeNonNegativeInt(
       payload?.backOfficeSalesCents,
       'backOfficeSalesCents',
       0,
     ),
-    buybackCents: normalizeInt(payload?.buybackCents, 'buybackCents', 0),
-    externalSalesCents: normalizeInt(
-      payload?.externalSalesCents,
-      'externalSalesCents',
-      0,
-    ),
-    internalPurchaseCents: normalizeInt(
-      payload?.internalPurchaseCents,
-      'internalPurchaseCents',
-      0,
-    ),
-    afterSalesCents: normalizeInt(
-      payload?.afterSalesCents,
-      'afterSalesCents',
-      0,
-    ),
-    // refundsCents is stored as a positive deduction; totals subtract it when rendering reconciliation.
-    refundsCents: normalizeNonNegativeInt(
-      payload?.refundsCents,
-      'refundsCents',
-      0,
-    ),
-    otherReceivableCents: normalizeInt(
-      payload?.otherReceivableCents,
-      'otherReceivableCents',
-      0,
-    ),
+    buybackCents: 0,
+    externalSalesCents: 0,
+    internalPurchaseCents: 0,
+    afterSalesCents: 0,
+    refundsCents: 0,
+    otherReceivableCents: 0,
     notes: normalizeOptionalString(payload?.notes),
+    reviewStatus: 'PENDING_REVIEW' as const,
+    reviewSourceHash: null,
     updatedById: actor.id,
     updatedAt: new Date(),
   };
@@ -4220,7 +4957,7 @@ function buildPaymentMethods(methods: any[]) {
       method?.name,
       `paymentMethods[${index}].name`,
     ),
-    amountCents: normalizeInt(
+    amountCents: normalizeNonNegativeInt(
       method?.amountCents,
       `paymentMethods[${index}].amountCents`,
       0,
@@ -4284,6 +5021,26 @@ function toGroupDto(group: any, kind: string) {
     guestCount: Number(group.guestCount || 0),
     tastingRoomNo: group.tastingRoomNo || null,
     tasterName: group.tasterName || null,
+    sourceRegion: group.sourceRegion || null,
+    ageInfo: group.ageInfo || null,
+    mentionedFeitian:
+      typeof group.mentionedFeitian === 'boolean'
+        ? group.mentionedFeitian
+        : null,
+    previousStopOrderStatus: group.previousStopOrderStatus || null,
+    keyCustomerInfo: group.keyCustomerInfo || null,
+    keyCustomerPhotos: toTravelGroupAttachmentDtos(
+      group.keyCustomerPhotos,
+      'key_customer_photo',
+    ),
+    guestInfoAttachments: toTravelGroupAttachmentDtos(
+      group.guestInfoAttachments,
+      'guest_info',
+    ),
+    liaisonTasterId: group.liaisonTasterId || null,
+    liaisonTasterName: group.liaisonTasterName || null,
+    liaisonTaster: buildLiaisonTasterSnapshotDto(group),
+    expectedArrivalTime: group.expectedArrivalTime || null,
     arrivalTime: group.arrivalTime || null,
     groupType: group.groupType || null,
     wineDetails: group.wineDetails || null,
@@ -4362,6 +5119,127 @@ function buildTasterSnapshotDto(group: any) {
     name: group.tasterName || null,
     username: null,
   };
+}
+
+function buildLiaisonTasterSnapshotDto(group: any) {
+  if (group.liaisonTaster) {
+    return {
+      id: group.liaisonTaster.id,
+      name: group.liaisonTaster.name,
+      username: group.liaisonTaster.username,
+    };
+  }
+  if (!group.liaisonTasterId && !group.liaisonTasterName) {
+    return null;
+  }
+  return {
+    id: group.liaisonTasterId || null,
+    name: group.liaisonTasterName || null,
+    username: null,
+  };
+}
+
+function getTravelGroupAttachmentFieldName(category: string) {
+  return category === 'key_customer_photo'
+    ? 'keyCustomerPhotos'
+    : 'guestInfoAttachments';
+}
+
+function getTravelGroupAttachmentMetadata(group: any, category: string) {
+  const value = group?.[getTravelGroupAttachmentFieldName(category)];
+  return Array.isArray(value)
+    ? value.filter(
+        (attachment: any) =>
+          attachment && typeof attachment === 'object' && !Array.isArray(attachment),
+      )
+    : [];
+}
+
+function findTravelGroupAttachment(group: any, attachmentId: string) {
+  if (!isSafeAttachmentStorageKey(attachmentId)) {
+    return null;
+  }
+  for (const category of ['key_customer_photo', 'guest_info']) {
+    const attachment = getTravelGroupAttachmentMetadata(group, category).find(
+      (candidate: any) =>
+        candidate?.id === attachmentId && candidate?.category === category,
+    );
+    if (attachment) {
+      return { attachment, category };
+    }
+  }
+  return null;
+}
+
+function toTravelGroupAttachmentDtos(value: any, category: string) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.map((attachment: any) =>
+    toTravelGroupAttachmentDto(attachment, category),
+  );
+}
+
+function toTravelGroupAttachmentDto(attachment: any, category: string) {
+  const size = Number(attachment?.size || 0);
+  return {
+    id:
+      typeof attachment?.id === 'string' && attachment.id.length > 0
+        ? attachment.id
+        : null,
+    category:
+      attachment?.category === 'key_customer_photo' ||
+      attachment?.category === 'guest_info'
+        ? attachment.category
+        : category,
+    originalName: sanitizeAttachmentOriginalName(
+      attachment?.originalName || attachment?.name,
+    ),
+    contentType:
+      typeof attachment?.contentType === 'string'
+        ? attachment.contentType
+        : null,
+    size: Number.isFinite(size) && size >= 0 ? size : 0,
+    uploadedById:
+      typeof attachment?.uploadedById === 'string'
+        ? attachment.uploadedById
+        : null,
+    uploadedAt:
+      typeof attachment?.uploadedAt === 'string'
+        ? attachment.uploadedAt
+        : null,
+  };
+}
+
+async function cleanupStoredTravelGroupAttachments(attachments: any[]) {
+  await Promise.allSettled(
+    attachments
+      .filter((attachment: any) =>
+        isSafeAttachmentStorageKey(attachment?.storageKey),
+      )
+      .map((attachment: any) =>
+        removeTravelGroupAttachmentFile(attachment.storageKey),
+      ),
+  );
+}
+
+function normalizeAttachmentStorageError(error: any, operation: string) {
+  if (Number.isInteger(error?.statusCode)) {
+    return error;
+  }
+  return createHttpError(
+    500,
+    'ATTACHMENT_STORAGE_FAILED',
+    `Attachment ${operation} failed.`,
+  );
+}
+
+function attachmentNotFoundError() {
+  return createHttpError(
+    404,
+    'ATTACHMENT_NOT_FOUND',
+    'Attachment does not exist.',
+  );
 }
 
 function toTravelGroupOrderSummaryDto(order: any) {
@@ -4498,9 +5376,6 @@ function calculateGroupPendingState(group: any, kind: string) {
     findings.push({ status, reason });
   };
 
-  if (!hasText(group.tasterId) && !hasText(group.tasterName)) {
-    addFinding('pending_front_desk', 'missing_taster');
-  }
   if (!hasText(group.guideName)) {
     addFinding('pending_front_desk', 'missing_guide_name');
   }
@@ -4512,11 +5387,8 @@ function calculateGroupPendingState(group: any, kind: string) {
   }
 
   const guestCount = Number(group.guestCount || 0);
-  if (!Number.isFinite(guestCount) || guestCount <= 0) {
+  if (!Number.isFinite(guestCount) || guestCount < 0) {
     addFinding('pending_front_desk', 'missing_guest_count');
-  }
-  if (guestCount === 0) {
-    addFinding('abnormal', 'invalid_guest_count_zero');
   }
 
   const salesOrders = getEffectiveSalesOrders(group.salesOrders);
@@ -4613,6 +5485,7 @@ function toTravelGroupTastingItemDto(item: any) {
   return {
     id: item.id,
     travelGroupId: item.travelGroupId || null,
+    productId: item.productId || null,
     productName: item.productName,
     quantity: Number(item.quantity || 0),
     unit: item.unit,
@@ -4628,6 +5501,14 @@ function getSalesOrderInclude(options: any = {}): any {
     travelGroup: getSalesOrderTravelGroupInclude(),
     commissionRecords: getSalesOrderTasterCommissionInclude(),
     ...(options.includeSalesUser ? { salesUser: true } : {}),
+  };
+}
+
+function getSalesOrderProfitInclude(): any {
+  return {
+    items: true,
+    afterSalesOrders: true,
+    commissionRecords: true,
   };
 }
 
@@ -4823,7 +5704,9 @@ function toSalesOrderCustomerDto(customer: any) {
 function toSalesOrderItemDto(item: any) {
   return {
     id: item.id,
+    productId: item.productId || null,
     productName: item.productName,
+    unit: item.unit || null,
     quantity: Number(item.quantity || 0),
     unitPriceCents: Number(item.unitPriceCents || 0),
     subtotalCents: Number(item.subtotalCents || 0),
@@ -4903,15 +5786,28 @@ function toTravelGroupExportRow(group: any) {
     groupNo: group.groupNo || '',
     visitDate: group.visitDate || '',
     travelAgency: group.travelAgency || '',
+    sourceRegion: group.sourceRegion || '',
+    ageInfo: group.ageInfo || '',
     licensePlate: group.licensePlate || '',
     guideName: group.guideName || '',
     guidePhone: group.guidePhone || '',
     guestCount: Number(group.guestCount || 0),
     tastingRoomNo: group.tastingRoomNo || '',
     tasterName: group.tasterName || '',
+    liaisonTasterName: group.liaisonTasterName || '',
+    expectedArrivalTime: group.expectedArrivalTime || '',
     arrivalTime: group.arrivalTime || '',
     departureTime: group.departureTime || '',
     groupType: group.groupType || '',
+    mentionedFeitian: nullableBooleanLabel(group.mentionedFeitian),
+    previousStopOrderStatus: group.previousStopOrderStatus || '',
+    keyCustomerInfo: group.keyCustomerInfo || '',
+    keyCustomerPhotoCount: Array.isArray(group.keyCustomerPhotos)
+      ? group.keyCustomerPhotos.length
+      : 0,
+    guestInfoAttachmentCount: Array.isArray(group.guestInfoAttachments)
+      ? group.guestInfoAttachments.length
+      : 0,
     tastingSummary: buildTravelGroupTastingSummary(group),
     hasEffectiveOrder: booleanLabel(effectiveOrderCount > 0),
     orderAmountYuan: centsToYuanNumber(orderSummary.totalAmountCents),
@@ -5023,6 +5919,13 @@ function booleanLabel(value: unknown) {
   return value ? '是' : '否';
 }
 
+function nullableBooleanLabel(value: unknown) {
+  if (typeof value !== 'boolean') {
+    return '';
+  }
+  return booleanLabel(value);
+}
+
 function buildSalesOrdersExportFileName(date = new Date()) {
   return `sales-orders-${formatFileNameTimestamp(date)}.xlsx`;
 }
@@ -5101,74 +6004,130 @@ function buildQrCodeTokenFingerprint(token: unknown) {
     .slice(0, 16);
 }
 
-function emptyReconciliationDto(businessDate: Date) {
-  return toReconciliationDto({
-    id: null,
+function buildAggregatedReconciliationDto(
+  businessDate: string,
+  orders: any[],
+  refunds: any[],
+  manual: any,
+) {
+  const calculation = calculateReconciliation({
     businessDate,
-    travelGroupSalesCents: 0,
-    backOfficeSalesCents: 0,
-    buybackCents: 0,
-    externalSalesCents: 0,
-    internalPurchaseCents: 0,
-    afterSalesCents: 0,
-    refundsCents: 0,
-    otherReceivableCents: 0,
-    notes: null,
-    paymentMethods: [],
-    createdAt: null,
-    updatedAt: null,
+    orders,
+    refunds,
+    manual,
   });
-}
-
-function toReconciliationDto(row: any) {
-  const refundsCents = Math.abs(Number(row.refundsCents || 0));
-  const paymentMethods = Array.isArray(row.paymentMethods)
-    ? row.paymentMethods
-        .slice()
-        .sort(
-          (left: any, right: any) =>
-            Number(left.sortOrder || 0) - Number(right.sortOrder || 0),
-        )
-        .map((method: any) => ({
-          id: method.id,
-          name: method.name,
-          amountCents: Number(method.amountCents || 0),
-          sortOrder: Number(method.sortOrder || 0),
-        }))
-    : [];
-  const receivableTotalCents =
-    Number(row.travelGroupSalesCents || 0) +
-    Number(row.backOfficeSalesCents || 0) +
-    Number(row.buybackCents || 0) +
-    Number(row.externalSalesCents || 0) +
-    Number(row.internalPurchaseCents || 0) +
-    Number(row.afterSalesCents || 0) -
-    refundsCents +
-    Number(row.otherReceivableCents || 0);
-  const actualTotalCents = paymentMethods.reduce(
-    (sum: number, method: any) => sum + method.amountCents,
-    0,
+  const storedReviewStatus =
+    String(manual?.reviewStatus || '').toUpperCase() === 'REVIEWED'
+      ? 'REVIEWED'
+      : 'PENDING_REVIEW';
+  const reviewIsStale =
+    storedReviewStatus === 'REVIEWED' &&
+    String(manual?.reviewSourceHash || '') !== calculation.sourceHash;
+  const reviewStatus = reviewIsStale
+    ? 'pending_review'
+    : storedReviewStatus === 'REVIEWED'
+      ? 'reviewed'
+      : 'pending_review';
+  const status =
+    reviewStatus === 'pending_review'
+      ? 'pending_review'
+      : calculation.differenceCents === 0
+        ? 'balanced'
+        : 'difference';
+  const paymentMethods = normalizedReconciliationPaymentMethods(
+    manual?.paymentMethods,
   );
 
   return {
-    id: row.id,
-    businessDate: formatDate(row.businessDate),
-    travelGroupSalesCents: Number(row.travelGroupSalesCents || 0),
-    backOfficeSalesCents: Number(row.backOfficeSalesCents || 0),
-    buybackCents: Number(row.buybackCents || 0),
-    externalSalesCents: Number(row.externalSalesCents || 0),
-    internalPurchaseCents: Number(row.internalPurchaseCents || 0),
-    afterSalesCents: Number(row.afterSalesCents || 0),
-    refundsCents,
-    otherReceivableCents: Number(row.otherReceivableCents || 0),
-    receivableTotalCents,
-    actualTotalCents,
-    differenceCents: actualTotalCents - receivableTotalCents,
-    notes: row.notes,
+    id: manual?.id || null,
+    businessDate,
+    timezone: RECONCILIATION_TIMEZONE,
+    travelGroupSalesCents: calculation.travelGroupSalesCents,
+    backOfficeSalesCents: calculation.backOfficeSalesCents,
+    buybackCents: calculation.buybackCents,
+    externalSalesCents: calculation.externalSalesCents,
+    internalPurchaseCents: calculation.internalPurchaseCents,
+    afterSalesCents: calculation.afterSalesCents,
+    refundsCents: calculation.refundsCents,
+    receivableTotalCents: calculation.receivableTotalCents,
+    actualTotalCents: calculation.actualTotalCents,
+    differenceCents: calculation.differenceCents,
+    reviewStatus,
+    status,
+    reviewIsStale,
+    reviewedById: manual?.reviewedById || null,
+    reviewedByName: manual?.reviewedBy?.name || null,
+    reviewedAt: manual?.reviewedAt
+      ? toIsoString(manual.reviewedAt)
+      : null,
+    notes: manual?.notes || null,
     paymentMethods,
-    createdAt: row.createdAt ? toIsoString(row.createdAt) : null,
-    updatedAt: row.updatedAt ? toIsoString(row.updatedAt) : null,
+    createdAt: manual?.createdAt ? toIsoString(manual.createdAt) : null,
+    updatedAt: manual?.updatedAt ? toIsoString(manual.updatedAt) : null,
   };
+}
+
+function toReconciliationManualAuditDto(row: any) {
+  return {
+    id: row?.id || null,
+    businessDate: formatDatabaseDate(row?.businessDate),
+    backOfficeSalesCents: Number(row?.backOfficeSalesCents || 0),
+    notes: row?.notes || null,
+    paymentMethods: normalizedReconciliationPaymentMethods(
+      row?.paymentMethods,
+    ),
+    reviewStatus:
+      String(row?.reviewStatus || '').toUpperCase() === 'REVIEWED'
+        ? 'reviewed'
+        : 'pending_review',
+    reviewedById: row?.reviewedById || null,
+    reviewedByName: row?.reviewedBy?.name || null,
+    reviewedAt: row?.reviewedAt ? toIsoString(row.reviewedAt) : null,
+  };
+}
+
+function normalizedReconciliationPaymentMethods(methods: unknown) {
+  return (Array.isArray(methods) ? methods : [])
+    .slice()
+    .sort(
+      (left: any, right: any) =>
+        Number(left?.sortOrder || 0) - Number(right?.sortOrder || 0),
+    )
+    .map((method: any) => ({
+      id: method?.id || null,
+      name: String(method?.name || ''),
+      amountCents: Number(method?.amountCents || 0),
+      sortOrder: Number(method?.sortOrder || 0),
+    }));
+}
+
+function groupFactsByBusinessDate(
+  facts: any[],
+  dateForFact: (fact: any) => string | null,
+) {
+  const grouped = new Map<string, any[]>();
+  for (const fact of Array.isArray(facts) ? facts : []) {
+    const businessDate = dateForFact(fact);
+    if (!businessDate) {
+      continue;
+    }
+    const rows = grouped.get(businessDate) || [];
+    rows.push(fact);
+    grouped.set(businessDate, rows);
+  }
+  return grouped;
+}
+
+function requireReconciliationBusinessDate(value: unknown, fieldName: string) {
+  const businessDate = normalizeReconciliationBusinessDate(value);
+  if (!businessDate) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a valid YYYY-MM-DD date.`,
+    );
+  }
+  return businessDate;
 }
 
 function toStrikeBonusAwardDto(row: any) {
@@ -5198,7 +6157,57 @@ function requireAnyRole(actor: any, roles: string[]) {
   }
 }
 
-function assertTravelGroupPatchAllowedFields(actor: any, payload: any) {
+function assertTasterCanEditTravelGroup(actor: any, current: any) {
+  if (actor?.role !== 'taster') {
+    return;
+  }
+  if (
+    current?.tasterId === actor.id ||
+    current?.liaisonTasterId === actor.id
+  ) {
+    return;
+  }
+  throw createHttpError(
+    403,
+    'PERMISSION_DENIED',
+    'Taster is not assigned to this travel group.',
+  );
+}
+
+function assertTravelGroupCreateAllowedFields(actor: any, payload: any) {
+  const serverManagedAttachmentFields = [
+    'keyCustomerPhotos',
+    'guestInfoAttachments',
+  ].filter((field) =>
+    Object.prototype.hasOwnProperty.call(payload || {}, field),
+  );
+  if (serverManagedAttachmentFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Attachment fields must use the attachment API: ${serverManagedAttachmentFields.join(', ')}.`,
+    );
+  }
+  if (
+    actor?.role === 'front_desk' &&
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    Object.prototype.hasOwnProperty.call(payload, 'expectedArrivalTime')
+  ) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      'expectedArrivalTime is not allowed for front_desk.',
+    );
+  }
+}
+
+function assertTravelGroupPatchAllowedFields(
+  actor: any,
+  payload: any,
+  current: any,
+) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw createHttpError(
       400,
@@ -5209,6 +6218,14 @@ function assertTravelGroupPatchAllowedFields(actor: any, payload: any) {
   const allowedFields = new Set(
     TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || [],
   );
+  if (
+    actor?.role === 'taster' &&
+    current?.liaisonTasterId === actor.id
+  ) {
+    for (const field of TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS) {
+      allowedFields.add(field);
+    }
+  }
   const deniedFields = Object.keys(payload).filter(
     (field) => !allowedFields.has(field),
   );
@@ -5284,6 +6301,33 @@ function assignNullableString(data: any, key: string, value: unknown) {
   if (value !== undefined) {
     data[key] = normalizeOptionalString(value);
   }
+}
+
+function assignNullableBoolean(data: any, key: string, value: unknown) {
+  if (value === undefined) {
+    return;
+  }
+  data[key] =
+    value === null || value === '' ? null : normalizeBoolean(value, key);
+}
+
+function assignOptionalClockTime(data: any, key: string, value: unknown) {
+  if (value === undefined) {
+    return;
+  }
+  const normalized = normalizeOptionalString(value);
+  if (normalized === null) {
+    data[key] = null;
+    return;
+  }
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${key} must use HH:mm format.`,
+    );
+  }
+  data[key] = normalized;
 }
 
 function assignInt(data: any, key: string, value: unknown) {
@@ -5508,6 +6552,34 @@ function toPrismaAfterSalesActionType(value: unknown) {
     );
   }
   return actionType;
+}
+
+async function findActiveTasterUser(
+  prisma: any,
+  id: string,
+  fieldName: 'tasterId' | 'liaisonTasterId',
+) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id,
+    },
+  });
+  const isLiaison = fieldName === 'liaisonTasterId';
+  if (!user) {
+    throw createHttpError(
+      404,
+      isLiaison ? 'LIAISON_TASTER_NOT_FOUND' : 'TASTER_NOT_FOUND',
+      `${fieldName} does not reference an existing user.`,
+    );
+  }
+  if (!isActiveTasterUser(user)) {
+    throw createHttpError(
+      400,
+      isLiaison ? 'INVALID_LIAISON_TASTER' : 'INVALID_TASTER',
+      `${fieldName} must reference an active taster user.`,
+    );
+  }
+  return user;
 }
 
 function isActiveTasterUser(user: any) {

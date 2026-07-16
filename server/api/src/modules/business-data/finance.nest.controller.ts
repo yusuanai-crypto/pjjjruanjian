@@ -38,6 +38,26 @@ export class FinanceNestController {
       ),
     };
   }
+
+  @Get('profit-overview')
+  async profitOverview(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      profitOverview:
+        await this.businessDataService.getFinanceProfitOverview(actor, query),
+    };
+  }
+
+  @Get('orders/:id/profit')
+  async orderProfit(@Param('id') id: string, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      orderProfit: await this.businessDataService.getFinanceOrderProfit(
+        actor,
+        id,
+      ),
+    };
+  }
 }
 
 @Controller('reconciliations')
@@ -46,6 +66,15 @@ export class ReconciliationsNestController {
     private readonly authService: AuthNestService,
     private readonly businessDataService: BusinessDataNestService,
   ) {}
+
+  @Get()
+  async list(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      reconciliations:
+        await this.businessDataService.listReconciliations(actor, query),
+    };
+  }
 
   @Get(':businessDate')
   async get(@Param('businessDate') businessDate: string, @Req() request: any) {
@@ -68,6 +97,21 @@ export class ReconciliationsNestController {
         {
           ipAddress: getRequestIp(request),
         },
+      ),
+    };
+  }
+
+  @Post(':businessDate/review')
+  async review(
+    @Param('businessDate') businessDate: string,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      reconciliation: await this.businessDataService.reviewReconciliation(
+        actor,
+        businessDate,
+        { ipAddress: getRequestIp(request) },
       ),
     };
   }

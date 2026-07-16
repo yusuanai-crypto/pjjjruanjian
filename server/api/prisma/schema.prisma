@@ -43,6 +43,7 @@ model User {
   updatedSystemSettings            SystemSetting[]             @relation("SystemSettingUpdatedBy")
   operationLogs                    OperationLog[]
   tasterTravelGroups               TravelGroup[]               @relation("TravelGroupTaster")
+  liaisonTasterTravelGroups        TravelGroup[]               @relation("TravelGroupLiaisonTaster")
   tasterGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupTaster")
   tasterPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupTaster")
   salesOrders                      SalesOrder[]                @relation("SalesOrderSalesUser")
@@ -70,7 +71,12 @@ model User {
   updatedCommissionRecords         CommissionRecord[]          @relation("CommissionRecordUpdatedBy")
   confirmedTravelGroupSummaries    TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
   updatedTravelGroupSummaries      TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryUpdatedBy")
+  reviewedDailyReconciliations     DailyReconciliation[]       @relation("DailyReconciliationReviewedBy")
   aiChatMessages                   AiChatMessage[]             @relation("AiChatMessageUser")
+  createdProducts                  Product[]                   @relation("ProductCreatedBy")
+  updatedProducts                  Product[]                   @relation("ProductUpdatedBy")
+  createdProductActualCosts        ProductActualCost[]         @relation("ProductActualCostCreatedBy")
+  updatedProductActualCosts        ProductActualCost[]         @relation("ProductActualCostUpdatedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -135,6 +141,57 @@ model AiChatMessage {
   @@index([conversationId, createdAt])
   @@index([intent, createdAt])
   @@map("ai_chat_messages")
+}
+
+model Product {
+  id             String   @id @default(uuid()) @db.Char(36)
+  name           String   @unique @db.VarChar(160)
+  normalizedName String   @unique @map("normalized_name") @db.VarChar(160)
+  unit           String   @db.VarChar(20)
+  isActive       Boolean  @default(true) @map("is_active")
+  notes          String?  @db.Text
+  createdById    String?  @map("created_by_id") @db.Char(36)
+  updatedById    String?  @map("updated_by_id") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  actualCosts          ProductActualCost[]
+  salesOrderItems      SalesOrderItem[]
+  tastingItems         TravelGroupTastingItem[]
+  salesDeductionRules  SalesDeductionRule[]
+  agencyDeductionRules AgencyDeductionRule[]
+  createdBy            User?                    @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy            User?                    @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+  @@index([unit])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("products")
+}
+
+model ProductActualCost {
+  id            String    @id @default(uuid()) @db.Char(36)
+  productId     String    @map("product_id") @db.Char(36)
+  costCents     Int       @map("cost_cents")
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  isActive      Boolean   @default(true) @map("is_active")
+  notes         String?   @db.Text
+  createdById   String?   @map("created_by_id") @db.Char(36)
+  updatedById   String?   @map("updated_by_id") @db.Char(36)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy User?   @relation("ProductActualCostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?   @relation("ProductActualCostUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([productId, isActive, effectiveFrom])
+  @@index([productId, isActive, effectiveTo])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("product_actual_costs")
 }
 
 model TravelAgency {
@@ -248,6 +305,13 @@ enum AfterSalesStatus {
   @@map("after_sales_status")
 }
 
+enum ReconciliationReviewStatus {
+  PENDING_REVIEW @map("pending_review")
+  REVIEWED       @map("reviewed")
+
+  @@map("reconciliation_review_status")
+}
+
 enum CommissionRuleTargetType {
   SALES_COMMISSION    @map("sales_commission")
   OUTREACH_COMMISSION @map("outreach_commission")
@@ -278,6 +342,18 @@ model TravelGroup {
   guestCount               Int               @default(0) @map("guest_count")
   tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
   tasterName               String?           @map("taster_name") @db.VarChar(80)
+  sourceRegion             String?           @map("source_region") @db.VarChar(120)
+  ageInfo                  String?           @map("age_info") @db.VarChar(120)
+  mentionedFeitian         Boolean?          @map("mentioned_feitian")
+  previousStopOrderStatus  String?           @map("previous_stop_order_status") @db.VarChar(255)
+  keyCustomerInfo          String?           @map("key_customer_info") @db.Text
+  /// Attachment metadata array only; file binaries are stored outside the database.
+  keyCustomerPhotos        Json?             @map("key_customer_photos")
+  /// Attachment metadata array only; file binaries are stored outside the database.
+  guestInfoAttachments     Json?             @map("guest_info_attachments")
+  liaisonTasterId          String?           @map("liaison_taster_id") @db.Char(36)
+  liaisonTasterName        String?           @map("liaison_taster_name") @db.VarChar(80)
+  expectedArrivalTime      String?           @map("expected_arrival_time") @db.VarChar(30)
   arrivalTime              String?           @map("arrival_time") @db.VarChar(30)
   groupType                String?           @map("group_type") @db.VarChar(60)
   wineDetails              String?           @map("wine_details") @db.Text
@@ -314,6 +390,7 @@ model TravelGroup {
   financeSummary    TravelGroupFinanceSummary?
   guide             Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
   taster            User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  liaisonTaster     User?                      @relation("TravelGroupLiaisonTaster", fields: [liaisonTasterId], references: [id], onDelete: SetNull)
   markedBy          User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@index([visitDate])
@@ -322,6 +399,7 @@ model TravelGroup {
   @@index([guideId])
   @@index([tasterName])
   @@index([tasterId])
+  @@index([liaisonTasterId])
   @@index([financeMark])
   @@index([markedById])
   @@index([groupType])
@@ -335,6 +413,7 @@ model TravelGroup {
 model TravelGroupTastingItem {
   id            String   @id @default(uuid()) @db.Char(36)
   travelGroupId String   @map("travel_group_id") @db.Char(36)
+  productId     String?  @map("product_id") @db.Char(36)
   productName   String   @map("product_name") @db.VarChar(160)
   quantity      Int
   unit          String   @default("瓶") @db.VarChar(20)
@@ -344,8 +423,10 @@ model TravelGroupTastingItem {
   updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
   travelGroup TravelGroup @relation(fields: [travelGroupId], references: [id], onDelete: Cascade)
+  product     Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([travelGroupId])
+  @@index([productId])
   @@index([travelGroupId, sortOrder])
   @@map("travel_group_tasting_items")
 }
@@ -549,20 +630,27 @@ model SalesOrder {
 }
 
 model SalesOrderItem {
-  id             String                 @id @default(uuid()) @db.Char(36)
-  salesOrderId   String                 @map("sales_order_id") @db.Char(36)
-  productName    String                 @map("product_name") @db.VarChar(160)
-  quantity       Int                    @default(1)
-  unitPriceCents Int                    @default(0) @map("unit_price_cents")
-  subtotalCents  Int                    @default(0) @map("subtotal_cents")
-  deliveryType   SalesOrderDeliveryType @default(SHIPPING) @map("delivery_type")
-  notes          String?                @db.Text
-  sortOrder      Int                    @default(0) @map("sort_order")
-  createdAt      DateTime               @default(now()) @map("created_at") @db.DateTime(0)
+  id                      String                 @id @default(uuid()) @db.Char(36)
+  salesOrderId            String                 @map("sales_order_id") @db.Char(36)
+  productId               String?                @map("product_id") @db.Char(36)
+  productName             String                 @map("product_name") @db.VarChar(160)
+  unit                    String?                @db.VarChar(20)
+  quantity                Int                    @default(1)
+  unitPriceCents          Int                    @default(0) @map("unit_price_cents")
+  subtotalCents           Int                    @default(0) @map("subtotal_cents")
+  actualUnitCostCents     Int?                   @map("actual_unit_cost_cents")
+  actualCostSubtotalCents Int?                   @map("actual_cost_subtotal_cents")
+  grossProfitCents        Int?                   @map("gross_profit_cents")
+  deliveryType            SalesOrderDeliveryType @default(SHIPPING) @map("delivery_type")
+  notes                   String?                @db.Text
+  sortOrder               Int                    @default(0) @map("sort_order")
+  createdAt               DateTime               @default(now()) @map("created_at") @db.DateTime(0)
 
   salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product    Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([salesOrderId])
+  @@index([productId])
   @@index([salesOrderId, sortOrder])
   @@map("sales_order_items")
 }
@@ -619,6 +707,7 @@ model AgencyDeductionRule {
   id                 String    @id @default(uuid()) @db.Char(36)
   agencyId           String?   @map("agency_id") @db.Char(36)
   agencyName         String?   @map("agency_name") @db.VarChar(120)
+  productId          String?   @map("product_id") @db.Char(36)
   productName        String    @map("product_name") @db.VarChar(160)
   deductionCostCents Int       @default(0) @map("deduction_cost_cents")
   effectiveFrom      DateTime  @map("effective_from") @db.Date
@@ -631,10 +720,12 @@ model AgencyDeductionRule {
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
   agency    TravelAgency? @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  product   Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
   createdBy User?         @relation("AgencyDeductionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy User?         @relation("AgencyDeductionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([agencyId])
+  @@index([productId])
   @@index([agencyName])
   @@index([productName])
   @@index([isActive])
@@ -643,6 +734,7 @@ model AgencyDeductionRule {
   @@index([createdById])
   @@index([updatedById])
   @@index([agencyId, productName, isActive, effectiveFrom], map: "agency_deduction_rules_agency_product_active_from_idx")
+  @@index([agencyId, productId, isActive, effectiveFrom], map: "agency_deduction_rules_agency_product_id_active_from_idx")
   @@index([agencyName, productName, isActive, effectiveFrom], map: "agency_deduction_rules_name_product_active_from_idx")
   @@map("agency_deduction_rules")
 }
@@ -682,6 +774,7 @@ model AgencyRebateRule {
 
 model SalesDeductionRule {
   id                 String    @id @default(uuid()) @db.Char(36)
+  productId          String?   @map("product_id") @db.Char(36)
   productName        String    @map("product_name") @db.VarChar(160)
   deductionCostCents Int       @default(0) @map("deduction_cost_cents")
   effectiveFrom      DateTime  @map("effective_from") @db.Date
@@ -693,9 +786,11 @@ model SalesDeductionRule {
   createdAt          DateTime  @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
-  createdBy User? @relation("SalesDeductionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy User? @relation("SalesDeductionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("SalesDeductionRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?    @relation("SalesDeductionRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
+  @@index([productId])
   @@index([productName])
   @@index([isActive])
   @@index([effectiveFrom])
@@ -703,6 +798,7 @@ model SalesDeductionRule {
   @@index([createdById])
   @@index([updatedById])
   @@index([productName, isActive, effectiveFrom])
+  @@index([productId, isActive, effectiveFrom])
   @@map("sales_deduction_rules")
 }
 
@@ -832,25 +928,32 @@ model TravelGroupFinanceSummary {
 }
 
 model DailyReconciliation {
-  id                    String   @id @default(uuid()) @db.Char(36)
-  businessDate          DateTime @unique @map("business_date") @db.Date
-  travelGroupSalesCents Int      @default(0) @map("travel_group_sales_cents")
-  backOfficeSalesCents  Int      @default(0) @map("back_office_sales_cents")
-  buybackCents          Int      @default(0) @map("buyback_cents")
-  externalSalesCents    Int      @default(0) @map("external_sales_cents")
-  internalPurchaseCents Int      @default(0) @map("internal_purchase_cents")
-  afterSalesCents       Int      @default(0) @map("after_sales_cents")
+  id                    String                     @id @default(uuid()) @db.Char(36)
+  businessDate          DateTime                   @unique @map("business_date") @db.Date
+  travelGroupSalesCents Int                        @default(0) @map("travel_group_sales_cents")
+  backOfficeSalesCents  Int                        @default(0) @map("back_office_sales_cents")
+  buybackCents          Int                        @default(0) @map("buyback_cents")
+  externalSalesCents    Int                        @default(0) @map("external_sales_cents")
+  internalPurchaseCents Int                        @default(0) @map("internal_purchase_cents")
+  afterSalesCents       Int                        @default(0) @map("after_sales_cents")
   /// Positive refund deduction amount; receivable totals subtract this value.
-  refundsCents          Int      @default(0) @map("refunds_cents")
-  otherReceivableCents  Int      @default(0) @map("other_receivable_cents")
-  notes                 String?  @db.Text
-  createdById           String?  @map("created_by_id") @db.Char(36)
-  updatedById           String?  @map("updated_by_id") @db.Char(36)
-  createdAt             DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt             DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+  refundsCents          Int                        @default(0) @map("refunds_cents")
+  otherReceivableCents  Int                        @default(0) @map("other_receivable_cents")
+  notes                 String?                    @db.Text
+  reviewStatus          ReconciliationReviewStatus @default(PENDING_REVIEW) @map("review_status")
+  reviewedById          String?                    @map("reviewed_by_id") @db.Char(36)
+  reviewedAt            DateTime?                  @map("reviewed_at") @db.DateTime(0)
+  reviewSourceHash      String?                    @map("review_source_hash") @db.VarChar(64)
+  createdById           String?                    @map("created_by_id") @db.Char(36)
+  updatedById           String?                    @map("updated_by_id") @db.Char(36)
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.DateTime(0)
 
   paymentMethods ReconciliationPaymentMethod[]
+  reviewedBy     User?                         @relation("DailyReconciliationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
 
+  @@index([reviewStatus, businessDate])
+  @@index([reviewedById])
   @@map("daily_reconciliations")
 }
 

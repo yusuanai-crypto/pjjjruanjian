@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -8,11 +9,19 @@ import {
   Query,
   Req,
   Res,
+  UploadedFiles,
+  UseInterceptors,
 } from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
 import { BusinessDataNestService } from './business-data.nest.service';
+import {
+  buildAttachmentContentDisposition,
+  TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST,
+  TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
+} from './travel-group-attachment-storage.helper';
 
 @Controller('travel-groups')
 export class TravelGroupsNestController {
@@ -56,6 +65,75 @@ export class TravelGroupsNestController {
     );
     response.setHeader('Content-Length', exportResult.buffer.length);
     response.send(exportResult.buffer);
+  }
+
+  @Post(':id/attachments/:category')
+  @UseInterceptors(
+    AnyFilesInterceptor({
+      limits: {
+        fileSize: TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
+        files: TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST,
+      },
+    }),
+  )
+  async uploadAttachments(
+    @Param('id') id: string,
+    @Param('category') category: string,
+    @UploadedFiles() files: any[],
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.businessDataService.uploadTravelGroupAttachments(
+      actor,
+      id,
+      category,
+      files,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
+  @Get(':id/attachments/:attachmentId/download')
+  async downloadAttachment(
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const download =
+      await this.businessDataService.downloadTravelGroupAttachment(
+        actor,
+        id,
+        attachmentId,
+      );
+    response.status(200);
+    response.type(download.contentType || 'application/octet-stream');
+    response.setHeader(
+      'Content-Disposition',
+      buildAttachmentContentDisposition(download.originalName),
+    );
+    response.setHeader('Content-Length', download.buffer.length);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.send(download.buffer);
+  }
+
+  @Delete(':id/attachments/:attachmentId')
+  async deleteAttachment(
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.businessDataService.deleteTravelGroupAttachment(
+      actor,
+      id,
+      attachmentId,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Get(':id')
