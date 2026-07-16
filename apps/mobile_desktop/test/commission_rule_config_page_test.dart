@@ -179,10 +179,7 @@ void main() {
     await _tapRuleTab(tester, 'salesDeduction');
     await tester.tap(find.byKey(const ValueKey('stage7-rule-add-button')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('stage7-rule-product-name-field')),
-      'test payload liquor',
-    );
+    await _selectProduct(tester, 'product-1');
     await tester.enterText(
       find.byKey(const ValueKey('stage7-rule-cost-field')),
       '12.34',
@@ -199,7 +196,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(apiClient.postPaths.last, '/api/sales-deduction-rules');
-    expect(apiClient.lastPostBody?['productName'], 'test payload liquor');
+    expect(apiClient.lastPostBody?['productId'], 'product-1');
+    expect(apiClient.lastPostBody?.containsKey('productName'), isFalse);
     expect(apiClient.lastPostBody?['deductionCostCents'], 1234);
     expect(apiClient.lastPostBody?['effectiveFrom'], '2026-07-02');
     expect(
@@ -208,18 +206,12 @@ void main() {
     await _tapRuleTab(tester, 'agencyDeduction');
     await tester.tap(find.byKey(const ValueKey('stage7-rule-add-button')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('stage7-rule-agency-id-field')),
-      'agency-payload-1',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('stage7-rule-agency-name-field')),
+    await _selectDropdownValue(
+      tester,
+      const ValueKey('stage7-rule-agency-field'),
       'test payload agency',
     );
-    await tester.enterText(
-      find.byKey(const ValueKey('stage7-rule-product-name-field')),
-      'test agency payload liquor',
-    );
+    await _selectProduct(tester, 'product-2');
     await tester.enterText(
       find.byKey(const ValueKey('stage7-rule-cost-field')),
       '8.88',
@@ -233,9 +225,9 @@ void main() {
 
     expect(apiClient.postPaths.last, '/api/agency-deduction-rules');
     expect(apiClient.lastPostBody?['agencyId'], 'agency-payload-1');
-    expect(apiClient.lastPostBody?['agencyName'], 'test payload agency');
-    expect(
-        apiClient.lastPostBody?['productName'], 'test agency payload liquor');
+    expect(apiClient.lastPostBody?.containsKey('agencyName'), isFalse);
+    expect(apiClient.lastPostBody?['productId'], 'product-2');
+    expect(apiClient.lastPostBody?.containsKey('productName'), isFalse);
     expect(apiClient.lastPostBody?['deductionCostCents'], 888);
 
     await _tapRuleTab(tester, 'agencyRebate');
@@ -345,6 +337,28 @@ Future<void> _tapRuleTab(WidgetTester tester, String kindName) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _selectProduct(WidgetTester tester, String productId) async {
+  final field = find.byKey(const ValueKey('stage7-rule-product-field'));
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey('product-option-$productId')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectDropdownValue(
+  WidgetTester tester,
+  Key key,
+  String label,
+) async {
+  final field = find.byKey(key);
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
 class _FakeRuleApiClient extends ApiClient {
   _FakeRuleApiClient({
     this.emptyResponses = false,
@@ -397,6 +411,34 @@ class _FakeRuleApiClient extends ApiClient {
           'data': {
             'agencyRebateRules':
                 emptyResponses ? const [] : [_agencyRebateRule],
+          },
+        };
+      case '/api/products/options':
+        return {
+          'data': {
+            'products': const [
+              {
+                'id': 'product-1',
+                'name': 'test payload liquor',
+                'unit': 'bottle'
+              },
+              {
+                'id': 'product-2',
+                'name': 'test agency payload liquor',
+                'unit': 'box'
+              },
+            ],
+          },
+        };
+      case '/api/travel-agencies':
+        return {
+          'data': {
+            'travelAgencies': const [
+              {
+                'id': 'agency-payload-1',
+                'name': 'test payload agency',
+              },
+            ],
           },
         };
       default:
@@ -504,6 +546,7 @@ const _commissionRule = {
 
 const _salesDeductionRule = {
   'id': 'rule-sales-deduction-1',
+  'productId': 'product-1',
   'productName': 'test liquor',
   'deductionCostCents': 1200,
   'effectiveFrom': '2026-07-01',
@@ -516,6 +559,7 @@ const _agencyDeductionRule = {
   'id': 'rule-agency-deduction-1',
   'agencyId': 'agency-1',
   'agencyName': 'test agency',
+  'productId': 'product-1',
   'productName': 'test liquor',
   'deductionCostCents': 800,
   'effectiveFrom': '2026-07-01',

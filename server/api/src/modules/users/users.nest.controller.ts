@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 
@@ -21,10 +22,10 @@ export class UsersNestController {
   ) {}
 
   @Get()
-  async list(@Req() request: any) {
+  async list(@Query() query: Record<string, string>, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
-      users: await this.usersService.listUsers(actor),
+      users: await this.usersService.listUsers(actor, query),
     };
   }
 
@@ -41,6 +42,14 @@ export class UsersNestController {
     const actor = await this.authService.authenticateRequest(request);
     return {
       tasters: await this.usersService.listTasters(actor),
+    };
+  }
+
+  @Get('assignable')
+  async listAssignable(@Query() query: Record<string, string>, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      users: await this.usersService.listAssignableUsers(actor, query.role),
     };
   }
 
@@ -64,10 +73,11 @@ export class UsersNestController {
 
   @Post(':id/disable')
   @HttpCode(200)
-  async disable(@Param('id') id: string, @Req() request: any) {
+  async disable(@Param('id') id: string, @Body() body: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
       user: await this.usersService.setUserActive(actor, id, false, {
+        reason: body?.reason,
         ipAddress: getRequestIp(request),
       }),
     };
@@ -75,10 +85,22 @@ export class UsersNestController {
 
   @Post(':id/enable')
   @HttpCode(200)
-  async enable(@Param('id') id: string, @Req() request: any) {
+  async enable(@Param('id') id: string, @Body() body: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
     return {
       user: await this.usersService.setUserActive(actor, id, true, {
+        reason: body?.reason,
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
+
+  @Post(':id/reset-password-code')
+  @HttpCode(200)
+  async sendResetPasswordCode(@Param('id') id: string, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      verification: await this.usersService.sendResetPasswordCode(actor, id, {
         ipAddress: getRequestIp(request),
       }),
     };

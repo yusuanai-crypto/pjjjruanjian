@@ -4,6 +4,7 @@ import * as ExcelJS from 'exceljs';
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
+import { calculateProductProfitSummary } from '../products/product-profit.helper';
 import { SettingsNestService } from '../settings/settings.nest.service';
 import {
   calculateAnalyticsMetrics,
@@ -144,6 +145,27 @@ export class AnalyticsNestService {
       range,
       metrics: calculated.metrics,
       warnings: calculated.warnings,
+    };
+  }
+
+  async getProfitOverview(actor: any, query: any = {}) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const context = await this.buildAnalyticsReadContext(query);
+    const salesOrderGroupFilter = context.groupFilter
+      ? { travelGroup: { is: context.groupFilter } }
+      : null;
+    const orders = await this.prisma.salesOrder.findMany({
+      where: buildAnalyticsSalesOrderWhere({
+        onlyShowMarkedRecords: context.onlyShowMarkedRecords,
+        dateRange: context.dateRange,
+        baseWhere: salesOrderGroupFilter,
+      }),
+      include: getSalesOrderProfitAnalyticsInclude(),
+      orderBy: { orderDate: 'asc' },
+    });
+    return {
+      range: context.range,
+      summary: calculateProductProfitSummary(orders),
     };
   }
 
@@ -765,6 +787,14 @@ function getSalesOrderAnalyticsInclude() {
     travelGroup: true,
     items: true,
     afterSalesOrders: true,
+  };
+}
+
+function getSalesOrderProfitAnalyticsInclude() {
+  return {
+    items: true,
+    afterSalesOrders: true,
+    commissionRecords: true,
   };
 }
 
@@ -1975,7 +2005,11 @@ function normalizeOptionalString(value: unknown) {
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (
+    !actor ||
+    (!roles.includes(actor.role) &&
+      !(actor.role === 'super_admin' && roles.includes('admin')))
+  ) {
     throw createHttpError(
       403,
       'PERMISSION_DENIED',

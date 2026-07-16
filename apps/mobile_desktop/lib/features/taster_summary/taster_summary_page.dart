@@ -64,7 +64,8 @@ class _TasterSummaryPageState extends State<TasterSummaryPage> {
             children: [
               const TextField(
                 readOnly: true,
-                decoration: InputDecoration(labelText: '当前旅行团', hintText: 'GZ-0622-018 · 黔程旅行社'),
+                decoration: InputDecoration(
+                    labelText: '当前旅行团', hintText: 'GZ-0622-018 · 黔程旅行社'),
               ),
               const SizedBox(height: 12),
               const TextField(

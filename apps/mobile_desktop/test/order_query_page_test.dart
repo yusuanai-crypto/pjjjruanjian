@@ -138,10 +138,12 @@ void main() {
       find.byKey(const ValueKey('order-edit-address-field')),
       '复核路 8 号',
     );
-    await tester.enterText(
+    await tester.tap(
       find.byKey(const ValueKey('order-edit-item-product-0')),
-      '酱香典藏',
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('product-option-product-2')));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('order-edit-item-quantity-0')),
       '3',
@@ -199,8 +201,14 @@ void main() {
       '李先生',
     );
     expect(
-      (apiClient.lastOrderUpdateBody?['items'] as List).first['productName'],
-      '酱香典藏',
+      (apiClient.lastOrderUpdateBody?['items'] as List).first['productId'],
+      'product-2',
+    );
+    expect(
+      (apiClient.lastOrderUpdateBody?['items'] as List)
+          .first
+          .containsKey('productName'),
+      isFalse,
     );
     expect(
       (apiClient.lastOrderUpdateBody?['items'] as List).first['unitPriceCents'],
@@ -535,6 +543,16 @@ class _FakeApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path == '/api/products/options') {
+      return {
+        'data': {
+          'products': const [
+            {'id': 'product-1', 'name': '酱香珍藏', 'unit': '瓶'},
+            {'id': 'product-2', 'name': '酱香典藏', 'unit': '瓶'},
+          ],
+        },
+      };
+    }
     if (path == '/api/sales-orders/order-1/sales-sheet') {
       salesSheetPaths.add(path);
       return {
@@ -761,7 +779,9 @@ Map<String, dynamic> _orderJson({
       {
         'id': 'item-1',
         'salesOrderId': 'order-1',
+        'productId': 'product-1',
         'productName': '酱香珍藏',
+        'unit': '瓶',
         'quantity': 2,
         'unitPriceCents': 39900,
         'subtotalCents': 79800,

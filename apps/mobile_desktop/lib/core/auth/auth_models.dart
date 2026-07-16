@@ -7,10 +7,14 @@ class AuthUser {
     required this.username,
     required this.role,
     required this.isActive,
+    required this.mustChangePassword,
     required this.createdAt,
     required this.updatedAt,
     this.phone,
     this.leaderId,
+    this.statusReason,
+    this.statusChangedAt,
+    this.statusChangedBy,
   });
 
   final String id;
@@ -18,10 +22,14 @@ class AuthUser {
   final String username;
   final UserRole role;
   final bool isActive;
+  final bool mustChangePassword;
   final String createdAt;
   final String updatedAt;
   final String? phone;
   final String? leaderId;
+  final String? statusReason;
+  final String? statusChangedAt;
+  final String? statusChangedBy;
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
     return AuthUser(
@@ -30,8 +38,12 @@ class AuthUser {
       username: '${json['username'] ?? ''}',
       role: userRoleFromValue('${json['role'] ?? ''}'),
       isActive: json['isActive'] == true,
+      mustChangePassword: json['mustChangePassword'] == true,
       phone: _nullableString(json['phone']),
       leaderId: _nullableString(json['leaderId']),
+      statusReason: _nullableString(json['statusReason']),
+      statusChangedAt: _nullableString(json['statusChangedAt']),
+      statusChangedBy: _nullableString(json['statusChangedBy']),
       createdAt: '${json['createdAt'] ?? ''}',
       updatedAt: '${json['updatedAt'] ?? ''}',
     );
@@ -55,7 +67,9 @@ class AuthMenu {
     return AuthMenu(
       id: '${json['id'] ?? ''}',
       title: '${json['title'] ?? json['label'] ?? ''}',
-      phase: json['phase'] is int ? json['phase'] as int : int.tryParse('${json['phase'] ?? 1}') ?? 1,
+      phase: json['phase'] is int
+          ? json['phase'] as int
+          : int.tryParse('${json['phase'] ?? 1}') ?? 1,
       dataScope: _nullableString(json['dataScope']),
     );
   }
@@ -87,7 +101,9 @@ class AuthSession {
       token: _nullableString(json['token']),
       expiresAt: _nullableString(json['expiresAt']),
       user: AuthUser.fromJson(user),
-      permissions: permissions is List ? permissions.map((item) => '$item').toList() : const <String>[],
+      permissions: permissions is List
+          ? permissions.map((item) => '$item').toList()
+          : const <String>[],
       menus: menus is List
           ? menus
               .whereType<Map>()

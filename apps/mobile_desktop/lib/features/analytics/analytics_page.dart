@@ -95,6 +95,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   bool _exportingRankings = false;
 
   bool get _canViewAnalytics =>
+      widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.boss ||
       widget.role == UserRole.finance;

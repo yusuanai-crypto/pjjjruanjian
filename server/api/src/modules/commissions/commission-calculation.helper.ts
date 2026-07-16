@@ -254,7 +254,7 @@ function calculateSalesDeduction(
   const itemResults = items.map((item: any) => {
     const rule = matchSalesDeductionRule(
       rules,
-      item.productName,
+      item,
       calculationDate,
     );
     if (!rule) {
@@ -264,6 +264,7 @@ function calculateSalesDeduction(
         'Missing sales deduction rule.',
         {
           productName: item.productName,
+          productId: item.productId,
           date: toDateOnly(calculationDate),
         },
       );
@@ -271,6 +272,7 @@ function calculateSalesDeduction(
     const deductionCostCents = rule ? toCents(rule.deductionCostCents) : 0;
     return {
       itemId: item.id,
+      productId: item.productId,
       productName: item.productName,
       quantity: item.quantity,
       ruleId: rule?.id || null,
@@ -289,6 +291,7 @@ function calculateSalesDeduction(
       .filter((item: any) => item.matched)
       .map((item: any) => ({
         ruleId: item.ruleId,
+        productId: item.productId,
         productName: item.productName,
         quantity: item.quantity,
         deductionCostCents: item.deductionCostCents,
@@ -308,7 +311,7 @@ function calculateAgencyDeduction(
     const matched = matchAgencyRule(
       rules,
       agencyMatch,
-      item.productName,
+      item,
       calculationDate,
     );
     if (!matched.rule) {
@@ -320,6 +323,7 @@ function calculateAgencyDeduction(
           agencyId: agencyMatch.agencyId,
           agencyName: agencyMatch.agencyName,
           productName: item.productName,
+          productId: item.productId,
           date: toDateOnly(calculationDate),
         },
       );
@@ -329,6 +333,7 @@ function calculateAgencyDeduction(
       : 0;
     return {
       itemId: item.id,
+      productId: item.productId,
       productName: item.productName,
       quantity: item.quantity,
       ruleId: matched.rule?.id || null,
@@ -351,6 +356,7 @@ function calculateAgencyDeduction(
         matchMode: item.matchMode,
         agencyId: agencyMatch.agencyId,
         agencyName: agencyMatch.agencyName,
+        productId: item.productId,
         productName: item.productName,
         quantity: item.quantity,
         deductionCostCents: item.deductionCostCents,
@@ -575,14 +581,8 @@ function resolveTravelAgencyMatch(
   };
 }
 
-function matchSalesDeductionRule(rules: any[], productName: any, date: Date) {
-  return findMostRecentEffectiveRule(
-    rules.filter(
-      (rule: any) =>
-        normalizeComparable(rule.productName) === normalizeComparable(productName),
-    ),
-    date,
-  );
+function matchSalesDeductionRule(rules: any[], item: any, date: Date) {
+  return matchEffectiveProductRule(rules, item, date);
 }
 
 function matchCommissionRule(rules: any[], targetType: string, date: Date) {
@@ -595,22 +595,18 @@ function matchCommissionRule(rules: any[], targetType: string, date: Date) {
 function matchAgencyRule(
   rules: any[],
   agencyMatch: any,
-  productName: any,
+  item: any,
   date: Date,
 ) {
-  const productComparable = normalizeComparable(productName);
-  const withProduct = (rule: any) =>
-    productName === null ||
-    productName === undefined ||
-    normalizeComparable(rule.productName) === productComparable;
-
   if (agencyMatch.agencyId) {
-    const rule = findMostRecentEffectiveRule(
+    const agencyRules =
       rules.filter(
         (candidate: any) =>
-          normalizeOptionalString(candidate.agencyId) === agencyMatch.agencyId &&
-          withProduct(candidate),
-      ),
+          normalizeOptionalString(candidate.agencyId) === agencyMatch.agencyId,
+      );
+    const rule = matchEffectiveProductRule(
+      agencyRules,
+      item,
       date,
     );
     return {
@@ -620,19 +616,50 @@ function matchAgencyRule(
   }
 
   const normalizedName = normalizeComparable(agencyMatch.agencyName);
-  const rule = findMostRecentEffectiveRule(
+  const agencyRules =
     rules.filter(
       (candidate: any) =>
         normalizedName &&
-        normalizeComparable(candidate.agencyName) === normalizedName &&
-        withProduct(candidate),
-    ),
+        normalizeComparable(candidate.agencyName) === normalizedName,
+    );
+  const rule = matchEffectiveProductRule(
+    agencyRules,
+    item,
     date,
   );
   return {
     rule,
     matchMode: 'agency_name',
   };
+}
+
+function matchEffectiveProductRule(rules: any[], item: any, date: Date) {
+  if (item === null || item === undefined) {
+    return findMostRecentEffectiveRule(rules, date);
+  }
+  const itemProductId = normalizeOptionalString(item?.productId);
+  if (itemProductId) {
+    const idMatch = findMostRecentEffectiveRule(
+      rules.filter(
+        (rule: any) =>
+          normalizeOptionalString(rule?.productId) === itemProductId,
+      ),
+      date,
+    );
+    if (idMatch) {
+      return idMatch;
+    }
+  }
+  const itemProductName = normalizeProductComparable(item?.productName);
+  return findMostRecentEffectiveRule(
+    rules.filter(
+      (rule: any) =>
+        (!itemProductId || !normalizeOptionalString(rule?.productId)) &&
+        itemProductName &&
+        itemProductName === normalizeProductComparable(rule?.productName),
+    ),
+    date,
+  );
 }
 
 function findMostRecentEffectiveRule(rules: any[], date: Date) {
@@ -696,6 +723,7 @@ function normalizeOrderItems(items: any[]) {
     const unitPriceCents = toCents(item?.unitPriceCents);
     return {
       id: normalizeOptionalString(item?.id),
+      productId: normalizeOptionalString(item?.productId),
       productName: normalizeOptionalString(item?.productName),
       quantity,
       unitPriceCents,
@@ -892,6 +920,13 @@ function normalizeOptionalString(value: unknown) {
 
 function normalizeComparable(value: unknown) {
   return String(normalizeOptionalString(value) || '').toLowerCase();
+}
+
+function normalizeProductComparable(value: unknown) {
+  return String(normalizeOptionalString(value) || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
 }
 
 function toCents(value: unknown) {

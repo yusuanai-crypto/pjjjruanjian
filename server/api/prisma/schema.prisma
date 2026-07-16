@@ -14,6 +14,7 @@ datasource db {
 // reconciliation_payment_methods、strike_bonus_awards。
 // AI 等完整目标表仍按后续阶段追加 migration。
 enum UserRole {
+  SUPER_ADMIN @map("super_admin")
   ADMIN       @map("admin")
   BOSS        @map("boss")
   FRONT_DESK  @map("front_desk")
@@ -27,16 +28,20 @@ enum UserRole {
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Char(36)
-  name         String   @db.VarChar(100)
-  username     String   @unique @db.VarChar(100)
-  passwordHash String   @map("password_hash") @db.VarChar(255)
-  role         UserRole
-  phone        String?  @db.VarChar(30)
-  leaderId     String?  @map("leader_id") @db.Char(36)
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+  id                 String    @id @default(uuid()) @db.Char(36)
+  name               String    @db.VarChar(100)
+  username           String    @unique @db.VarChar(100)
+  passwordHash       String    @map("password_hash") @db.VarChar(255)
+  role               UserRole
+  phone              String?   @unique @db.VarChar(30)
+  leaderId           String?   @map("leader_id") @db.Char(36)
+  isActive           Boolean   @default(true) @map("is_active")
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
+  statusReason       String?   @map("status_reason") @db.VarChar(255)
+  statusChangedAt    DateTime? @map("status_changed_at") @db.DateTime(0)
+  statusChangedBy    String?   @map("status_changed_by") @db.Char(36)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
   leader                           User?                       @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
   members                          User[]                      @relation("UserLeader")
@@ -80,7 +85,35 @@ model User {
 
   @@index([role])
   @@index([leaderId])
+  @@index([statusChangedBy])
   @@map("users")
+}
+
+enum SmsVerificationPurpose {
+  RESET_PASSWORD @map("reset_password")
+
+  @@map("sms_verification_purpose")
+}
+
+model SmsVerificationCode {
+  id           String                 @id @default(uuid()) @db.Char(36)
+  phone        String                 @db.VarChar(30)
+  userId       String?                @map("user_id") @db.Char(36)
+  purpose      SmsVerificationPurpose
+  codeHash     String                 @map("code_hash") @db.VarChar(255)
+  expiresAt    DateTime               @map("expires_at") @db.DateTime(0)
+  consumedAt   DateTime?              @map("consumed_at") @db.DateTime(0)
+  attemptCount Int                    @default(0) @map("attempt_count")
+  createdById  String?                @map("created_by_id") @db.Char(36)
+  provider     String?                @db.VarChar(32)
+  providerRef  String?                @map("provider_ref") @db.VarChar(128)
+  createdAt    DateTime               @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt    DateTime               @updatedAt @map("updated_at") @db.DateTime(0)
+
+  @@index([phone, purpose, createdAt])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sms_verification_codes")
 }
 
 model SystemSetting {

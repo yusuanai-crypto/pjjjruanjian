@@ -4,13 +4,14 @@ version: 0.2.0+1
 publish_to: "none"
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.4.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  file_picker: ^11.0.2
   jiangjiu_shared:
     path: ../../packages/shared
   path_provider: ^2.1.5

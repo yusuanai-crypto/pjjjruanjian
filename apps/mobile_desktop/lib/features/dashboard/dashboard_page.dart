@@ -36,7 +36,8 @@ class _DashboardPageState extends State<DashboardPage> {
   int _overviewRequestId = 0;
 
   bool get _canViewAnalytics {
-    return widget.role == UserRole.admin ||
+    return widget.role == UserRole.superAdmin ||
+        widget.role == UserRole.admin ||
         widget.role == UserRole.boss ||
         widget.role == UserRole.finance;
   }

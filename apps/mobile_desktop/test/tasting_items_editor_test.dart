@@ -1,34 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/tasting_items_editor.dart';
 
 void main() {
-  testWidgets('adds a tasting item and emits normalized items', (tester) async {
+  testWidgets('ordinary business form selects an active product without costs',
+      (tester) async {
+    final client = _FakeProductOptionsApiClient();
     var emitted = const <Map<String, dynamic>>[];
 
     await _pumpEditor(
       tester,
       TastingItemsEditor(
+        businessApi: BusinessApi(apiClient: client, token: 'sales-token'),
         onChanged: (items) => emitted = items,
       ),
     );
-
-    expect(find.text('暂无品酒明细'), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('tasting_items_add')));
     await tester.pumpAndSettle();
 
+    expect(client.paths, ['/api/products/options']);
+    expect(find.textContaining('成本'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('tasting_items_add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tasting_product_0')));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('tasting_product_0')),
-      '酱香珍藏',
+      find.byKey(const ValueKey('product-option-search-field')),
+      '珍藏',
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('product-option-product-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('酱香珍藏 · 瓶'), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('tasting_quantity_0')),
       '3',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('tasting_unit_0')),
-      '瓶',
     );
     await tester.enterText(
       find.byKey(const ValueKey('tasting_note_0')),
@@ -36,107 +43,127 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(emitted, hasLength(1));
     expect(emitted.single, {
-      'productName': '酱香珍藏',
+      'productId': 'product-1',
       'quantity': 3,
-      'unit': '瓶',
       'note': '醒酒后品鉴',
       'sortOrder': 1,
     });
+    expect(emitted.single.containsKey('productName'), isFalse);
+    expect(emitted.single.containsKey('unit'), isFalse);
+    expect(emitted.single.keys.any((key) => key.toLowerCase().contains('cost')),
+        isFalse);
   });
 
-  testWidgets('deletes a tasting item and emits remaining rows',
+  testWidgets('inactive and unlinked historical snapshots have clear states',
       (tester) async {
-    var emitted = const <Map<String, dynamic>>[];
-
+    final client = _FakeProductOptionsApiClient();
     await _pumpEditor(
       tester,
       TastingItemsEditor(
+        businessApi: BusinessApi(apiClient: client, token: 'front-token'),
         initialItems: const [
-          TastingItemDraft(productName: '酒品 A', quantity: 1, unit: '瓶'),
-          TastingItemDraft(productName: '酒品 B', quantity: 2, unit: '杯'),
+          TastingItemDraft(
+            productId: 'inactive-product',
+            productName: '历史停用酒',
+            quantity: 1,
+            unit: '瓶',
+          ),
+          TastingItemDraft(
+            productName: '旧系统酒品',
+            quantity: 2,
+            unit: '杯',
+          ),
         ],
-        onChanged: (items) => emitted = items,
-      ),
-    );
-
-    expect(find.text('酒品 A'), findsOneWidget);
-    expect(find.text('酒品 B'), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('tasting_delete_0')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('酒品 A'), findsNothing);
-    expect(find.text('酒品 B'), findsOneWidget);
-    expect(emitted, [
-      {
-        'productName': '酒品 B',
-        'quantity': 2,
-        'unit': '杯',
-        'note': null,
-        'sortOrder': 1,
-      },
-    ]);
-  });
-
-  testWidgets('validates product name quantity and unit', (tester) async {
-    final editorKey = GlobalKey<TastingItemsEditorState>();
-
-    await _pumpEditor(
-      tester,
-      TastingItemsEditor(
-        key: editorKey,
         onChanged: (_) {},
       ),
     );
-
-    await tester.tap(find.byKey(const ValueKey('tasting_items_add')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('tasting_quantity_0')),
-      '0',
-    );
     await tester.pumpAndSettle();
 
-    expect(editorKey.currentState!.validate(), isFalse);
-    await tester.pumpAndSettle();
+    expect(find.text('历史停用酒 · 瓶'), findsOneWidget);
+    expect(find.textContaining('原商品已停用'), findsOneWidget);
+    expect(find.text('旧系统酒品 · 杯'), findsOneWidget);
+    expect(find.textContaining('历史记录缺少 productId'), findsOneWidget);
+  });
 
-    expect(find.text('酒品不能为空'), findsOneWidget);
-    expect(find.text('数量必须大于 0'), findsOneWidget);
-    expect(find.text('单位不能为空'), findsOneWidget);
-
-    await tester.enterText(
-      find.byKey(const ValueKey('tasting_product_0')),
-      '酱香珍藏',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('tasting_quantity_0')),
-      '2',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('tasting_unit_0')),
-      '瓶',
+  testWidgets('options loading error and empty list are explicit',
+      (tester) async {
+    final errorClient = _FakeProductOptionsApiClient(fail: true);
+    await _pumpEditor(
+      tester,
+      TastingItemsEditor(
+        businessApi: BusinessApi(apiClient: errorClient, token: 'token'),
+        initialItems: const [TastingItemDraft()],
+        onChanged: (_) {},
+      ),
     );
     await tester.pumpAndSettle();
+    expect(find.textContaining('商品选项加载失败'), findsOneWidget);
 
-    expect(editorKey.currentState!.validate(), isTrue);
-    expect(editorKey.currentState!.tastingItems.single['quantity'], 2);
+    await tester.pumpWidget(const SizedBox.shrink());
+    final emptyClient = _FakeProductOptionsApiClient(empty: true);
+    await _pumpEditor(
+      tester,
+      TastingItemsEditor(
+        businessApi: BusinessApi(apiClient: emptyClient, token: 'token'),
+        initialItems: const [TastingItemDraft()],
+        onChanged: (_) {},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('暂无启用商品'), findsOneWidget);
   });
 }
 
-Future<void> _pumpEditor(
-  WidgetTester tester,
-  Widget child,
-) {
+Future<void> _pumpEditor(WidgetTester tester, Widget child) {
   return tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: Padding(
+        body: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: child,
         ),
       ),
     ),
   );
+}
+
+class _FakeProductOptionsApiClient extends ApiClient {
+  _FakeProductOptionsApiClient({this.fail = false, this.empty = false})
+      : super(baseUrl: 'http://127.0.0.1:3000');
+
+  final bool fail;
+  final bool empty;
+  final paths = <String>[];
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    paths.add(path);
+    if (path != '/api/products/options') {
+      throw StateError('Unexpected GET $path');
+    }
+    if (fail) {
+      throw const ApiException(
+        statusCode: 503,
+        code: 'PRODUCT_OPTIONS_UNAVAILABLE',
+        message: '商品服务暂不可用',
+      );
+    }
+    return {
+      'data': {
+        'products': empty
+            ? const []
+            : const [
+                {
+                  'id': 'product-1',
+                  'name': '酱香珍藏',
+                  'unit': '瓶',
+                  'actualUnitCostCents': 99999,
+                  'actualCosts': [99999],
+                },
+                {'id': 'product-2', 'name': '旅行试饮', 'unit': '杯'},
+              ],
+      },
+    };
+  }
 }

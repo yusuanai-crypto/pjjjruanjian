@@ -22,8 +22,11 @@ class AppRecordList extends StatelessWidget {
           final item = items[index];
           return ListTile(
             dense: compact,
-            leading: item.icon == null ? null : CircleAvatar(child: Icon(item.icon, size: 20)),
-            title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            leading: item.icon == null
+                ? null
+                : CircleAvatar(child: Icon(item.icon, size: 20)),
+            title:
+                Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: item.subtitle == null
                 ? null
                 : Padding(
@@ -69,4 +72,3 @@ class AppRecordItem {
   final Widget? trailing;
   final VoidCallback? onTap;
 }
-

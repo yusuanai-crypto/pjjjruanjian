@@ -77,6 +77,8 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? liaisonTasterId,
+    String? travelAgency,
     String? groupType,
     bool? financeMark,
     String? pendingStatus,
@@ -89,6 +91,8 @@ class BusinessApi {
       groupNo: groupNo,
       guideId: guideId,
       tasterId: tasterId,
+      liaisonTasterId: liaisonTasterId,
+      travelAgency: travelAgency,
       groupType: groupType,
       financeMark: financeMark,
       pendingStatus: pendingStatus,
@@ -112,6 +116,8 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? liaisonTasterId,
+    String? travelAgency,
     String? groupType,
     bool? financeMark,
     String? pendingStatus,
@@ -124,6 +130,8 @@ class BusinessApi {
       groupNo: groupNo,
       guideId: guideId,
       tasterId: tasterId,
+      liaisonTasterId: liaisonTasterId,
+      travelAgency: travelAgency,
       groupType: groupType,
       financeMark: financeMark,
       pendingStatus: pendingStatus,
@@ -143,6 +151,8 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? liaisonTasterId,
+    String? travelAgency,
     String? groupType,
     bool? financeMark,
     String? pendingStatus,
@@ -161,6 +171,8 @@ class BusinessApi {
     _putNonEmpty(query, 'groupNo', groupNo);
     _putNonEmpty(query, 'guideId', guideId);
     _putNonEmpty(query, 'tasterId', tasterId);
+    _putNonEmpty(query, 'liaisonTasterId', liaisonTasterId);
+    _putNonEmpty(query, 'travelAgency', travelAgency);
     _putNonEmpty(query, 'groupType', groupType);
     if (financeMark != null) {
       query['financeMark'] = '$financeMark';
@@ -213,6 +225,127 @@ class BusinessApi {
     return _list(data['travelAgencies'])
         .map((item) => TravelAgencyRecord.fromJson(item))
         .toList();
+  }
+
+  Future<ProductPage> listProducts({
+    int page = 1,
+    int pageSize = 100,
+    String? keyword,
+    bool? isActive,
+  }) async {
+    final query = <String, String>{
+      'page': '$page',
+      'pageSize': '$pageSize',
+    };
+    _putNonEmpty(query, 'keyword', keyword);
+    if (isActive != null) {
+      query['isActive'] = '$isActive';
+    }
+    final payload = await _apiClient.getJson(
+      _path('/api/products', query),
+      token: _token,
+    );
+    return ProductPage.fromJson(_data(payload));
+  }
+
+  Future<List<ProductOptionRecord>> listProductOptions() async {
+    final payload = await _apiClient.getJson(
+      '/api/products/options',
+      token: _token,
+    );
+    return _list(_data(payload)['products'])
+        .map(ProductOptionRecord.fromJson)
+        .toList();
+  }
+
+  Future<ProductRecord> getProduct(String id) async {
+    final payload =
+        await _apiClient.getJson('/api/products/$id', token: _token);
+    return ProductRecord.fromJson(_map(_data(payload)['product']));
+  }
+
+  Future<ProductRecord> createProduct(Map<String, dynamic> body) async {
+    final payload = await _apiClient.postJson(
+      '/api/products',
+      body: body,
+      token: _token,
+    );
+    return ProductRecord.fromJson(_map(_data(payload)['product']));
+  }
+
+  Future<ProductRecord> updateProduct(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/products/$id',
+      body: body,
+      token: _token,
+    );
+    return ProductRecord.fromJson(_map(_data(payload)['product']));
+  }
+
+  Future<ProductRecord> setProductActive(String id, bool isActive) async {
+    final payload = await _apiClient.patchJson(
+      '/api/products/$id/status',
+      body: {'isActive': isActive},
+      token: _token,
+    );
+    return ProductRecord.fromJson(_map(_data(payload)['product']));
+  }
+
+  Future<List<ProductActualCostRecord>> listProductActualCosts(
+    String productId,
+  ) async {
+    final payload = await _apiClient.getJson(
+      '/api/products/$productId/actual-costs',
+      token: _token,
+    );
+    return _list(_data(payload)['actualCosts'])
+        .map(ProductActualCostRecord.fromJson)
+        .toList();
+  }
+
+  Future<ProductActualCostRecord> createProductActualCost(
+    String productId,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/products/$productId/actual-costs',
+      body: body,
+      token: _token,
+    );
+    return ProductActualCostRecord.fromJson(
+      _map(_data(payload)['actualCost']),
+    );
+  }
+
+  Future<ProductActualCostRecord> updateProductActualCost(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/product-actual-costs/$id',
+      body: body,
+      token: _token,
+    );
+    return ProductActualCostRecord.fromJson(
+      _map(_data(payload)['actualCost']),
+    );
+  }
+
+  Future<ProductActualCostRecord> setProductActualCostActive(
+    String id,
+    bool isActive,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/product-actual-costs/$id/status',
+      body: {'isActive': isActive},
+      token: _token,
+    );
+    return ProductActualCostRecord.fromJson(
+      _map(_data(payload)['actualCost']),
+    );
   }
 
   Future<TravelAgencyRecord> createTravelAgency(
@@ -332,6 +465,45 @@ class BusinessApi {
       token: _token,
     );
     return TravelGroupRecord.fromJson(_map(_data(payload)['travelGroup']));
+  }
+
+  Future<TravelGroupAttachmentUploadResult> uploadTravelGroupAttachments(
+    String travelGroupId, {
+    required TravelGroupAttachmentCategory category,
+    required List<ApiMultipartFile> files,
+  }) async {
+    final payload = await _apiClient.postMultipartFiles(
+      '/api/travel-groups/${Uri.encodeComponent(travelGroupId)}/attachments/'
+      '${category.apiValue}',
+      files: files,
+      maxFileSizeBytes: 20 * 1024 * 1024,
+      token: _token,
+    );
+    return TravelGroupAttachmentUploadResult.fromJson(_data(payload));
+  }
+
+  Future<DownloadedFile> downloadTravelGroupAttachment(
+    String travelGroupId,
+    TravelGroupAttachmentRecord attachment,
+  ) {
+    return _apiClient.getBytes(
+      '/api/travel-groups/${Uri.encodeComponent(travelGroupId)}/attachments/'
+      '${Uri.encodeComponent(attachment.id)}/download',
+      token: _token,
+      defaultFileName: attachment.originalName,
+    );
+  }
+
+  Future<TravelGroupAttachmentDeleteResult> deleteTravelGroupAttachment(
+    String travelGroupId,
+    String attachmentId,
+  ) async {
+    final payload = await _apiClient.deleteJson(
+      '/api/travel-groups/${Uri.encodeComponent(travelGroupId)}/attachments/'
+      '${Uri.encodeComponent(attachmentId)}',
+      token: _token,
+    );
+    return TravelGroupAttachmentDeleteResult.fromJson(_data(payload));
   }
 
   Future<TravelGroupRecord> setTravelGroupFinanceMark(
@@ -880,6 +1052,22 @@ class BusinessApi {
         _map(_data(payload)['reconciliation']));
   }
 
+  Future<List<ReconciliationRecord>> listReconciliations({
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path('/api/reconciliations', {
+        'dateFrom': formatDate(dateFrom),
+        'dateTo': formatDate(dateTo),
+      }),
+      token: _token,
+    );
+    return _list(_data(payload)['reconciliations'])
+        .map(ReconciliationRecord.fromJson)
+        .toList();
+  }
+
   Future<ReconciliationRecord> saveReconciliation(
     DateTime businessDate,
     Map<String, dynamic> body,
@@ -887,6 +1075,18 @@ class BusinessApi {
     final payload = await _apiClient.putJson(
       '/api/reconciliations/${formatDate(businessDate)}',
       body: body,
+      token: _token,
+    );
+    return ReconciliationRecord.fromJson(
+        _map(_data(payload)['reconciliation']));
+  }
+
+  Future<ReconciliationRecord> reviewReconciliation(
+    DateTime businessDate,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/reconciliations/${formatDate(businessDate)}/review',
+      body: const <String, dynamic>{},
       token: _token,
     );
     return ReconciliationRecord.fromJson(
@@ -947,6 +1147,7 @@ class BusinessApi {
 
   Future<List<SalesDeductionRuleRecord>> listSalesDeductionRules({
     int limit = 100,
+    String? productId,
     String? productName,
     String? keyword,
     String? query,
@@ -957,6 +1158,7 @@ class BusinessApi {
         '/api/sales-deduction-rules',
         _stage7RuleQueryParameters(
           limit: limit,
+          productId: productId,
           productName: productName,
           keyword: keyword,
           query: query,
@@ -1011,6 +1213,7 @@ class BusinessApi {
 
   Future<List<AgencyDeductionRuleRecord>> listAgencyDeductionRules({
     int limit = 100,
+    String? productId,
     String? agencyId,
     String? agencyName,
     String? productName,
@@ -1023,6 +1226,7 @@ class BusinessApi {
         '/api/agency-deduction-rules',
         _stage7RuleQueryParameters(
           limit: limit,
+          productId: productId,
           agencyId: agencyId,
           agencyName: agencyName,
           productName: productName,
@@ -1660,6 +1864,7 @@ class BusinessApi {
     String? agencyId,
     String? agencyName,
     String? productName,
+    String? productId,
     String? keyword,
     String? query,
     bool? isActive,
@@ -1672,6 +1877,7 @@ class BusinessApi {
     _putNonEmpty(queryParameters, 'agencyId', agencyId);
     _putNonEmpty(queryParameters, 'agencyName', agencyName);
     _putNonEmpty(queryParameters, 'productName', productName);
+    _putNonEmpty(queryParameters, 'productId', productId);
     _putNonEmpty(queryParameters, 'keyword', keyword);
     _putNonEmpty(queryParameters, 'query', query);
     if (isActive != null) {
@@ -1910,6 +2116,110 @@ class GuideLibraryState {
   bool get isEmpty => !loading && !hasError && guides.isEmpty;
 }
 
+enum TravelGroupAttachmentCategory {
+  keyCustomerPhoto('key_customer_photo'),
+  guestInfo('guest_info');
+
+  const TravelGroupAttachmentCategory(this.apiValue);
+
+  final String apiValue;
+}
+
+class TravelGroupAttachmentRecord {
+  const TravelGroupAttachmentRecord({
+    required this.id,
+    required this.category,
+    required this.originalName,
+    required this.contentType,
+    required this.size,
+    required this.uploadedById,
+    required this.uploadedAt,
+  });
+
+  final String id;
+  final String category;
+  final String originalName;
+  final String? contentType;
+  final int size;
+  final String? uploadedById;
+  final String? uploadedAt;
+
+  factory TravelGroupAttachmentRecord.fromJson(Map<String, dynamic> json) {
+    return TravelGroupAttachmentRecord(
+      id: '${json['id'] ?? ''}',
+      category: '${json['category'] ?? ''}',
+      originalName: '${json['originalName'] ?? ''}',
+      contentType: _stringOrNull(json['contentType']),
+      size: _intValue(json['size']),
+      uploadedById: _stringOrNull(json['uploadedById']),
+      uploadedAt: _stringOrNull(json['uploadedAt']),
+    );
+  }
+}
+
+class TravelGroupLiaisonTasterRecord {
+  const TravelGroupLiaisonTasterRecord({
+    required this.id,
+    required this.name,
+    required this.username,
+  });
+
+  final String? id;
+  final String? name;
+  final String? username;
+
+  factory TravelGroupLiaisonTasterRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupLiaisonTasterRecord(
+      id: _stringOrNull(json['id']),
+      name: _stringOrNull(json['name']),
+      username: _stringOrNull(json['username']),
+    );
+  }
+}
+
+class TravelGroupAttachmentUploadResult {
+  const TravelGroupAttachmentUploadResult({
+    required this.attachments,
+    required this.travelGroup,
+  });
+
+  final List<TravelGroupAttachmentRecord> attachments;
+  final TravelGroupRecord travelGroup;
+
+  factory TravelGroupAttachmentUploadResult.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupAttachmentUploadResult(
+      attachments: _list(json['attachments'])
+          .map(TravelGroupAttachmentRecord.fromJson)
+          .toList(),
+      travelGroup: TravelGroupRecord.fromJson(_map(json['travelGroup'])),
+    );
+  }
+}
+
+class TravelGroupAttachmentDeleteResult {
+  const TravelGroupAttachmentDeleteResult({
+    required this.attachment,
+    required this.travelGroup,
+  });
+
+  final TravelGroupAttachmentRecord attachment;
+  final TravelGroupRecord travelGroup;
+
+  factory TravelGroupAttachmentDeleteResult.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupAttachmentDeleteResult(
+      attachment:
+          TravelGroupAttachmentRecord.fromJson(_map(json['attachment'])),
+      travelGroup: TravelGroupRecord.fromJson(_map(json['travelGroup'])),
+    );
+  }
+}
+
 class TravelGroupRecord {
   const TravelGroupRecord({
     required this.id,
@@ -1925,6 +2235,17 @@ class TravelGroupRecord {
     required this.tastingRoomNo,
     required this.tasterId,
     required this.tasterName,
+    required this.sourceRegion,
+    required this.ageInfo,
+    required this.mentionedFeitian,
+    required this.previousStopOrderStatus,
+    required this.keyCustomerInfo,
+    required this.keyCustomerPhotos,
+    required this.guestInfoAttachments,
+    required this.liaisonTasterId,
+    required this.liaisonTasterName,
+    required this.liaisonTaster,
+    required this.expectedArrivalTime,
     required this.arrivalTime,
     required this.groupType,
     required this.wineDetails,
@@ -1968,6 +2289,17 @@ class TravelGroupRecord {
   final String? tastingRoomNo;
   final String? tasterId;
   final String? tasterName;
+  final String? sourceRegion;
+  final String? ageInfo;
+  final bool? mentionedFeitian;
+  final String? previousStopOrderStatus;
+  final String? keyCustomerInfo;
+  final List<TravelGroupAttachmentRecord> keyCustomerPhotos;
+  final List<TravelGroupAttachmentRecord> guestInfoAttachments;
+  final String? liaisonTasterId;
+  final String? liaisonTasterName;
+  final TravelGroupLiaisonTasterRecord? liaisonTaster;
+  final String? expectedArrivalTime;
   final String? arrivalTime;
   final String? groupType;
   final String? wineDetails;
@@ -1999,6 +2331,18 @@ class TravelGroupRecord {
 
   factory TravelGroupRecord.fromJson(Map<String, dynamic> json) {
     final orderSummary = _map(json['orderSummary']);
+    final liaisonTasterId = _stringOrNull(json['liaisonTasterId']);
+    final liaisonTasterName = _stringOrNull(json['liaisonTasterName']);
+    final liaisonTasterJson = _map(json['liaisonTaster']);
+    final liaisonTaster = liaisonTasterJson.isNotEmpty
+        ? TravelGroupLiaisonTasterRecord.fromJson(liaisonTasterJson)
+        : liaisonTasterId != null || liaisonTasterName != null
+            ? TravelGroupLiaisonTasterRecord(
+                id: liaisonTasterId,
+                name: liaisonTasterName,
+                username: null,
+              )
+            : null;
     return TravelGroupRecord(
       id: '${json['id'] ?? ''}',
       kind: '${json['kind'] ?? 'travel'}',
@@ -2013,6 +2357,21 @@ class TravelGroupRecord {
       tastingRoomNo: _stringOrNull(json['tastingRoomNo']),
       tasterId: _stringOrNull(json['tasterId']),
       tasterName: _stringOrNull(json['tasterName']),
+      sourceRegion: _stringOrNull(json['sourceRegion']),
+      ageInfo: _stringOrNull(json['ageInfo']),
+      mentionedFeitian: _boolOrNull(json['mentionedFeitian']),
+      previousStopOrderStatus: _stringOrNull(json['previousStopOrderStatus']),
+      keyCustomerInfo: _stringOrNull(json['keyCustomerInfo']),
+      keyCustomerPhotos: _list(json['keyCustomerPhotos'])
+          .map(TravelGroupAttachmentRecord.fromJson)
+          .toList(),
+      guestInfoAttachments: _list(json['guestInfoAttachments'])
+          .map(TravelGroupAttachmentRecord.fromJson)
+          .toList(),
+      liaisonTasterId: liaisonTasterId,
+      liaisonTasterName: liaisonTasterName,
+      liaisonTaster: liaisonTaster,
+      expectedArrivalTime: _stringOrNull(json['expectedArrivalTime']),
       arrivalTime: _stringOrNull(json['arrivalTime']),
       groupType: _stringOrNull(json['groupType']),
       wineDetails: _stringOrNull(json['wineDetails']),
@@ -2053,6 +2412,7 @@ class TravelGroupTastingItemRecord {
   const TravelGroupTastingItemRecord({
     required this.id,
     required this.travelGroupId,
+    required this.productId,
     required this.productName,
     required this.quantity,
     required this.unit,
@@ -2062,6 +2422,7 @@ class TravelGroupTastingItemRecord {
 
   final String id;
   final String? travelGroupId;
+  final String? productId;
   final String productName;
   final int quantity;
   final String unit;
@@ -2072,6 +2433,7 @@ class TravelGroupTastingItemRecord {
     return TravelGroupTastingItemRecord(
       id: '${json['id'] ?? ''}',
       travelGroupId: _stringOrNull(json['travelGroupId']),
+      productId: _stringOrNull(json['productId']),
       productName: '${json['productName'] ?? ''}',
       quantity: _intValue(json['quantity']),
       unit: '${json['unit'] ?? ''}',
@@ -2367,7 +2729,9 @@ class SalesOrderItemRecord {
   const SalesOrderItemRecord({
     required this.id,
     required this.salesOrderId,
+    required this.productId,
     required this.productName,
+    required this.unit,
     required this.quantity,
     required this.unitPriceCents,
     required this.subtotalCents,
@@ -2378,7 +2742,9 @@ class SalesOrderItemRecord {
 
   final String? id;
   final String? salesOrderId;
+  final String? productId;
   final String productName;
+  final String? unit;
   final int quantity;
   final int unitPriceCents;
   final int subtotalCents;
@@ -2392,7 +2758,9 @@ class SalesOrderItemRecord {
     return SalesOrderItemRecord(
       id: _stringOrNull(json['id']),
       salesOrderId: _stringOrNull(json['salesOrderId']),
+      productId: _stringOrNull(json['productId']),
       productName: '${json['productName'] ?? ''}',
+      unit: _stringOrNull(json['unit']),
       quantity: quantity,
       unitPriceCents: unitPriceCents,
       subtotalCents: json.containsKey('subtotalCents')
@@ -2536,9 +2904,141 @@ class CommissionRuleRecord {
   }
 }
 
+class ProductPage {
+  const ProductPage({
+    required this.products,
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final List<ProductRecord> products;
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory ProductPage.fromJson(Map<String, dynamic> json) {
+    final pagination = _map(json['pagination']);
+    return ProductPage(
+      products: _list(json['products']).map(ProductRecord.fromJson).toList(),
+      page: _intValue(pagination['page']),
+      pageSize: _intValue(pagination['pageSize']),
+      total: _intValue(pagination['total']),
+      totalPages: _intValue(pagination['totalPages']),
+    );
+  }
+}
+
+class ProductRecord {
+  const ProductRecord({
+    required this.id,
+    required this.name,
+    required this.unit,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String name;
+  final String unit;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory ProductRecord.fromJson(Map<String, dynamic> json) {
+    return ProductRecord(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      unit: '${json['unit'] ?? ''}',
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class ProductOptionRecord {
+  const ProductOptionRecord({
+    required this.id,
+    required this.name,
+    required this.unit,
+  });
+
+  final String id;
+  final String name;
+  final String unit;
+
+  String get label => '$name · $unit';
+
+  factory ProductOptionRecord.fromJson(Map<String, dynamic> json) {
+    return ProductOptionRecord(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      unit: '${json['unit'] ?? ''}',
+    );
+  }
+}
+
+class ProductActualCostRecord {
+  const ProductActualCostRecord({
+    required this.id,
+    required this.productId,
+    required this.costCents,
+    required this.effectiveFrom,
+    required this.effectiveTo,
+    required this.isActive,
+    required this.notes,
+    required this.createdById,
+    required this.updatedById,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String productId;
+  final int costCents;
+  final String effectiveFrom;
+  final String? effectiveTo;
+  final bool isActive;
+  final String? notes;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory ProductActualCostRecord.fromJson(Map<String, dynamic> json) {
+    return ProductActualCostRecord(
+      id: '${json['id'] ?? ''}',
+      productId: '${json['productId'] ?? ''}',
+      costCents: _intValue(json['costCents']),
+      effectiveFrom: '${json['effectiveFrom'] ?? ''}',
+      effectiveTo: _stringOrNull(json['effectiveTo']),
+      isActive: _boolValue(json['isActive']),
+      notes: _stringOrNull(json['notes']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
 class SalesDeductionRuleRecord {
   const SalesDeductionRuleRecord({
     required this.id,
+    required this.productId,
     required this.productName,
     required this.deductionCostCents,
     required this.effectiveFrom,
@@ -2552,6 +3052,7 @@ class SalesDeductionRuleRecord {
   });
 
   final String id;
+  final String? productId;
   final String productName;
   final int deductionCostCents;
   final String effectiveFrom;
@@ -2566,6 +3067,7 @@ class SalesDeductionRuleRecord {
   factory SalesDeductionRuleRecord.fromJson(Map<String, dynamic> json) {
     return SalesDeductionRuleRecord(
       id: '${json['id'] ?? ''}',
+      productId: _stringOrNull(json['productId']),
       productName: '${json['productName'] ?? ''}',
       deductionCostCents: _intValue(json['deductionCostCents']),
       effectiveFrom: '${json['effectiveFrom'] ?? ''}',
@@ -2585,6 +3087,7 @@ class AgencyDeductionRuleRecord {
     required this.id,
     required this.agencyId,
     required this.agencyName,
+    required this.productId,
     required this.productName,
     required this.deductionCostCents,
     required this.effectiveFrom,
@@ -2600,6 +3103,7 @@ class AgencyDeductionRuleRecord {
   final String id;
   final String? agencyId;
   final String? agencyName;
+  final String? productId;
   final String productName;
   final int deductionCostCents;
   final String effectiveFrom;
@@ -2616,6 +3120,7 @@ class AgencyDeductionRuleRecord {
       id: '${json['id'] ?? ''}',
       agencyId: _stringOrNull(json['agencyId']),
       agencyName: _stringOrNull(json['agencyName']),
+      productId: _stringOrNull(json['productId']),
       productName: '${json['productName'] ?? ''}',
       deductionCostCents: _intValue(json['deductionCostCents']),
       effectiveFrom: '${json['effectiveFrom'] ?? ''}',
@@ -4299,6 +4804,7 @@ class FinancePendingLogisticsRecord {
 
 class ReconciliationRecord {
   const ReconciliationRecord({
+    required this.id,
     required this.businessDate,
     required this.travelGroupSalesCents,
     required this.backOfficeSalesCents,
@@ -4307,14 +4813,21 @@ class ReconciliationRecord {
     required this.internalPurchaseCents,
     required this.afterSalesCents,
     required this.refundsCents,
-    required this.otherReceivableCents,
     required this.receivableTotalCents,
     required this.actualTotalCents,
     required this.differenceCents,
+    required this.reviewStatus,
+    required this.status,
+    required this.reviewIsStale,
+    required this.reviewedById,
+    required this.reviewedByName,
+    required this.reviewedAt,
+    required this.timezone,
     required this.paymentMethods,
     required this.notes,
   });
 
+  final String? id;
   final String businessDate;
   final int travelGroupSalesCents;
   final int backOfficeSalesCents;
@@ -4323,15 +4836,22 @@ class ReconciliationRecord {
   final int internalPurchaseCents;
   final int afterSalesCents;
   final int refundsCents;
-  final int otherReceivableCents;
   final int receivableTotalCents;
   final int actualTotalCents;
   final int differenceCents;
+  final String reviewStatus;
+  final String status;
+  final bool reviewIsStale;
+  final String? reviewedById;
+  final String? reviewedByName;
+  final String? reviewedAt;
+  final String timezone;
   final List<PaymentMethodRecord> paymentMethods;
   final String? notes;
 
   factory ReconciliationRecord.fromJson(Map<String, dynamic> json) {
     return ReconciliationRecord(
+      id: _stringOrNull(json['id']),
       businessDate: '${json['businessDate'] ?? ''}',
       travelGroupSalesCents: _intValue(json['travelGroupSalesCents']),
       backOfficeSalesCents: _intValue(json['backOfficeSalesCents']),
@@ -4340,10 +4860,16 @@ class ReconciliationRecord {
       internalPurchaseCents: _intValue(json['internalPurchaseCents']),
       afterSalesCents: _intValue(json['afterSalesCents']),
       refundsCents: _intValue(json['refundsCents']),
-      otherReceivableCents: _intValue(json['otherReceivableCents']),
       receivableTotalCents: _intValue(json['receivableTotalCents']),
       actualTotalCents: _intValue(json['actualTotalCents']),
       differenceCents: _intValue(json['differenceCents']),
+      reviewStatus: '${json['reviewStatus'] ?? 'pending_review'}',
+      status: '${json['status'] ?? 'pending_review'}',
+      reviewIsStale: _boolValue(json['reviewIsStale']),
+      reviewedById: _stringOrNull(json['reviewedById']),
+      reviewedByName: _stringOrNull(json['reviewedByName']),
+      reviewedAt: _stringOrNull(json['reviewedAt']),
+      timezone: '${json['timezone'] ?? 'Asia/Shanghai'}',
       paymentMethods: _list(json['paymentMethods'])
           .map((item) => PaymentMethodRecord.fromJson(item))
           .toList(),

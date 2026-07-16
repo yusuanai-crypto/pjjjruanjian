@@ -25,7 +25,8 @@ class AuthController {
   String get token => session?.token ?? '';
 
   Future<void> restore() async {
-    apiBaseUrl = AppConfig.normalizeApiBaseUrl(_storage.readApiBaseUrl() ?? AppConfig.defaultApiBaseUrl);
+    apiBaseUrl = AppConfig.normalizeApiBaseUrl(
+        _storage.readApiBaseUrl() ?? AppConfig.defaultApiBaseUrl);
     _apiClient.baseUrl = apiBaseUrl;
 
     final token = _storage.readToken();
@@ -50,7 +51,8 @@ class AuthController {
     _apiClient.baseUrl = apiBaseUrl;
 
     try {
-      final nextSession = await _authService.login(username: username, password: password);
+      final nextSession =
+          await _authService.login(username: username, password: password);
       final token = nextSession.token;
       if (token == null || token.isEmpty) {
         throw const AuthFailure('服务器未返回登录令牌。');
@@ -59,6 +61,43 @@ class AuthController {
       await _storage.saveApiBaseUrl(apiBaseUrl);
       await _storage.saveToken(token);
       session = nextSession;
+      restoreMessage = null;
+    } on AuthFailure {
+      rethrow;
+    } catch (error) {
+      throw AuthFailure(messageForAuthError(error));
+    }
+  }
+
+  Future<void> refreshSession() async {
+    final currentToken = token;
+    if (currentToken.isEmpty) {
+      return;
+    }
+    try {
+      session = await _authService.currentUser(currentToken);
+      restoreMessage = null;
+    } catch (error) {
+      await logout();
+      restoreMessage = messageForAuthError(error);
+      rethrow;
+    }
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final currentToken = token;
+    if (currentToken.isEmpty) {
+      throw const AuthFailure('登录已过期，请重新登录。');
+    }
+    try {
+      session = await _authService.changePassword(
+        token: currentToken,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
       restoreMessage = null;
     } on AuthFailure {
       rethrow;
@@ -95,6 +134,14 @@ String messageForAuthError(Object error) {
         return '账号或密码不正确。';
       case 'ACCOUNT_DISABLED':
         return '账号已停用，请联系管理员。';
+      case 'PASSWORD_CHANGE_REQUIRED':
+        return '请先修改初始密码。';
+      case 'TEMPORARY_PASSWORD_NOT_ALLOWED':
+        return '新密码不能继续使用初始密码 123456。';
+      case 'CURRENT_PASSWORD_INCORRECT':
+        return '当前密码不正确。';
+      case 'WEAK_PASSWORD':
+        return '新密码至少需要 8 位。';
       case 'NETWORK_ERROR':
       case 'INVALID_SERVER_URL':
       case 'INVALID_RESPONSE':

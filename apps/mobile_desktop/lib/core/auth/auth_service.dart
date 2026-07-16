@@ -25,6 +25,22 @@ class AuthService {
     return AuthSession.fromJson(_data(payload)).withToken(token);
   }
 
+  Future<AuthSession> changePassword({
+    required String token,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final payload = await _apiClient.postJson(
+      '/api/auth/change-password',
+      token: token,
+      body: {
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      },
+    );
+    return AuthSession.fromJson(_data(payload)).withToken(token);
+  }
+
   Map<String, dynamic> _data(Map<String, dynamic> payload) {
     final data = payload['data'];
     if (data is Map) {

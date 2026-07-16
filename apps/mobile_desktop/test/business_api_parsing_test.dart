@@ -766,6 +766,7 @@ void main() {
       start: DateTime(2026, 7, 1),
       keyword: '测试旅行社',
       groupNo: 'TG-001',
+      travelAgency: '测试旅行社',
       guideId: 'guide-1',
       financeMark: false,
       pendingStatus: 'pending_finance',
@@ -777,9 +778,150 @@ void main() {
     expect(travelUri.queryParameters['dateFrom'], '2026-07-01');
     expect(travelUri.queryParameters['keyword'], '测试旅行社');
     expect(travelUri.queryParameters['groupNo'], 'TG-001');
+    expect(travelUri.queryParameters['travelAgency'], '测试旅行社');
     expect(travelUri.queryParameters['guideId'], 'guide-1');
     expect(travelUri.queryParameters['financeMark'], 'false');
     expect(travelUri.queryParameters['pendingStatus'], 'pending_finance');
+  });
+
+  test('travel group API sends liaison filter and new create/update fields',
+      () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+
+    apiClient.nextJson = {
+      'data': {'travelGroups': <Map<String, dynamic>>[]},
+    };
+    await api.listTravelGroups(
+      liaisonTasterId: 'liaison-1',
+      travelAgency: 'Agency One',
+    );
+    final listUri = Uri.parse(apiClient.lastPath!);
+    expect(listUri.path, '/api/travel-groups');
+    expect(listUri.queryParameters['liaisonTasterId'], 'liaison-1');
+    expect(listUri.queryParameters['travelAgency'], 'Agency One');
+
+    apiClient.nextJson = {
+      'data': {
+        'travelGroup': {
+          'id': 'group-new-fields',
+          'sourceRegion': 'North China',
+          'mentionedFeitian': null,
+          'expectedArrivalTime': '10:20',
+        },
+      },
+    };
+    final createBody = <String, dynamic>{
+      'visitDate': '2026-07-15',
+      'travelAgency': 'Agency One',
+      'guideId': 'guide-1',
+      'sourceRegion': 'North China',
+      'ageInfo': '40-60',
+      'mentionedFeitian': null,
+      'previousStopOrderStatus': 'custom status',
+      'keyCustomerInfo': 'VIP notes',
+      'liaisonTasterId': 'liaison-1',
+      'expectedArrivalTime': '10:20',
+    };
+    final created = await api.createTravelGroup(createBody);
+    expect(apiClient.lastMethod, 'POST');
+    expect(apiClient.lastPath, '/api/travel-groups');
+    expect(apiClient.lastBody, createBody);
+    expect(created.mentionedFeitian, isNull);
+    expect(created.expectedArrivalTime, '10:20');
+
+    final updateBody = <String, dynamic>{
+      'sourceRegion': 'South China',
+      'ageInfo': '30-50',
+      'mentionedFeitian': false,
+      'previousStopOrderStatus': '熊猫',
+      'keyCustomerInfo': 'Updated VIP notes',
+      'expectedArrivalTime': null,
+    };
+    await api.updateTravelGroup('group-new-fields', updateBody);
+    expect(apiClient.lastMethod, 'PATCH');
+    expect(apiClient.lastPath, '/api/travel-groups/group-new-fields');
+    expect(apiClient.lastBody, updateBody);
+  });
+
+  test('travel group API uploads, downloads, and deletes safe attachments',
+      () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+    final files = <ApiMultipartFile>[
+      ApiMultipartFile.fromBytes(
+        fileName: 'vip.jpg',
+        bytes: Uint8List.fromList(<int>[1, 2, 3]),
+        contentType: 'image/jpeg',
+      ),
+      ApiMultipartFile.fromBytes(
+        fileName: 'profile.pdf',
+        bytes: Uint8List.fromList(<int>[4, 5, 6]),
+        contentType: 'application/pdf',
+      ),
+    ];
+    final attachmentJson = <String, dynamic>{
+      'id': 'attachment-1',
+      'category': 'key_customer_photo',
+      'originalName': 'vip.jpg',
+      'contentType': 'image/jpeg',
+      'size': 3,
+      'uploadedById': 'usr-front',
+      'uploadedAt': '2026-07-15T08:00:00.000Z',
+    };
+    apiClient.nextJson = {
+      'data': {
+        'attachments': [attachmentJson],
+        'travelGroup': {
+          'id': 'group-1',
+          'keyCustomerPhotos': [attachmentJson],
+        },
+      },
+    };
+
+    final uploaded = await api.uploadTravelGroupAttachments(
+      'group-1',
+      category: TravelGroupAttachmentCategory.keyCustomerPhoto,
+      files: files,
+    );
+    expect(apiClient.lastMethod, 'MULTIPART');
+    expect(
+      apiClient.lastPath,
+      '/api/travel-groups/group-1/attachments/key_customer_photo',
+    );
+    expect(apiClient.lastToken, 'token-1');
+    expect(apiClient.lastFiles, same(files));
+    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+    expect(uploaded.attachments.single.originalName, 'vip.jpg');
+    expect(uploaded.travelGroup.keyCustomerPhotos.single.id, 'attachment-1');
+
+    final downloaded = await api.downloadTravelGroupAttachment(
+      'group-1',
+      uploaded.attachments.single,
+    );
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(
+      apiClient.lastPath,
+      '/api/travel-groups/group-1/attachments/attachment-1/download',
+    );
+    expect(apiClient.lastDefaultFileName, 'vip.jpg');
+    expect(downloaded.fileName, 'export.xlsx');
+
+    apiClient.nextJson = {
+      'data': {
+        'attachment': attachmentJson,
+        'travelGroup': {'id': 'group-1', 'keyCustomerPhotos': []},
+      },
+    };
+    final deleted =
+        await api.deleteTravelGroupAttachment('group-1', 'attachment-1');
+    expect(apiClient.lastMethod, 'DELETE');
+    expect(
+      apiClient.lastPath,
+      '/api/travel-groups/group-1/attachments/attachment-1',
+    );
+    expect(deleted.attachment.id, 'attachment-1');
+    expect(deleted.travelGroup.keyCustomerPhotos, isEmpty);
   });
 
   test('parses phase 8 analytics JSON records', () {
@@ -1505,10 +1647,16 @@ void main() {
       'internalPurchaseCents': 0,
       'afterSalesCents': 0,
       'refundsCents': 800,
-      'otherReceivableCents': 0,
       'receivableTotalCents': 49000,
       'actualTotalCents': 48500,
       'differenceCents': -500,
+      'reviewStatus': 'reviewed',
+      'status': 'difference',
+      'reviewIsStale': false,
+      'reviewedById': 'admin-1',
+      'reviewedByName': '测试管理员',
+      'reviewedAt': '2026-06-23T12:00:00.000Z',
+      'timezone': 'Asia/Shanghai',
       'paymentMethods': [
         {'name': '现金', 'amountCents': 20000, 'sortOrder': 1},
         {'name': '微信', 'amountCents': 28500, 'sortOrder': 2},
@@ -1519,6 +1667,8 @@ void main() {
     expect(reconciliation.receivableTotalCents, 49000);
     expect(reconciliation.actualTotalCents, 48500);
     expect(reconciliation.differenceCents, -500);
+    expect(reconciliation.reviewStatus, 'reviewed');
+    expect(reconciliation.reviewedByName, '测试管理员');
     expect(reconciliation.paymentMethods, hasLength(2));
   });
 
@@ -1538,6 +1688,43 @@ void main() {
       'tastingRoomNo': 'A-101',
       'tasterId': 'taster-1',
       'tasterName': '测试品鉴师',
+      'sourceRegion': 'East China',
+      'ageInfo': '35-55',
+      'mentionedFeitian': false,
+      'previousStopOrderStatus': 'custom previous stop status',
+      'keyCustomerInfo': 'VIP customer details',
+      'keyCustomerPhotos': [
+        {
+          'id': 'attachment-photo-1',
+          'category': 'key_customer_photo',
+          'originalName': 'vip.jpg',
+          'contentType': 'image/jpeg',
+          'size': 1234,
+          'uploadedById': 'usr_front',
+          'uploadedAt': '2026-06-24T07:30:00.000Z',
+          'storageKey': 'must-not-be-modeled',
+        },
+      ],
+      'guestInfoAttachments': [
+        {
+          'id': 'attachment-guest-1',
+          'category': 'guest_info',
+          'originalName': 'guests.xlsx',
+          'contentType':
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'size': 4321,
+          'uploadedById': 'usr_taster',
+          'uploadedAt': '2026-06-24T07:40:00.000Z',
+        },
+      ],
+      'liaisonTasterId': 'taster-liaison-1',
+      'liaisonTasterName': 'Liaison Taster',
+      'liaisonTaster': {
+        'id': 'taster-liaison-1',
+        'name': 'Liaison Taster',
+        'username': 'liaison.taster',
+      },
+      'expectedArrivalTime': '09:10',
       'arrivalTime': '09:30',
       'groupType': 'KB团',
       'wineDetails': '偏好酱香',
@@ -1588,6 +1775,18 @@ void main() {
     expect(group.kind, 'travel');
     expect(group.guideId, 'guide-1');
     expect(group.tasterId, 'taster-1');
+    expect(group.sourceRegion, 'East China');
+    expect(group.ageInfo, '35-55');
+    expect(group.mentionedFeitian, isFalse);
+    expect(group.previousStopOrderStatus, 'custom previous stop status');
+    expect(group.keyCustomerInfo, 'VIP customer details');
+    expect(group.keyCustomerPhotos.single.id, 'attachment-photo-1');
+    expect(group.keyCustomerPhotos.single.originalName, 'vip.jpg');
+    expect(group.guestInfoAttachments.single.category, 'guest_info');
+    expect(group.liaisonTasterId, 'taster-liaison-1');
+    expect(group.liaisonTasterName, 'Liaison Taster');
+    expect(group.liaisonTaster?.username, 'liaison.taster');
+    expect(group.expectedArrivalTime, '09:10');
     expect(group.guestCount, 18);
     expect(group.salesAmountCents, 647800);
     expect(group.guideInfoSent, isTrue);
@@ -1603,6 +1802,7 @@ void main() {
     expect(group.orderSummary.cashOnDeliveryAmountCents, 5000);
     expect(group.pendingStatus, 'pending_finance');
     expect(group.pendingReasons, ['finance_unmarked_after_day_end']);
+    expect(TravelGroupRecord.fromJson({}).mentionedFeitian, isNull);
 
     final overview = FinanceOverview.fromJson({
       'metrics': {
@@ -2052,6 +2252,8 @@ class _RecordingApiClient extends ApiClient {
   String? lastToken;
   String? lastDefaultFileName;
   Map<String, dynamic>? lastBody;
+  List<ApiMultipartFile>? lastFiles;
+  int? lastMaxFileSizeBytes;
 
   @override
   Future<Map<String, dynamic>> getJson(
@@ -2087,6 +2289,36 @@ class _RecordingApiClient extends ApiClient {
     lastPath = path;
     lastToken = token;
     lastBody = Map<String, dynamic>.from(body ?? <String, dynamic>{});
+    return nextJson;
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    lastMethod = 'DELETE';
+    lastPath = path;
+    lastToken = token;
+    lastBody = body == null ? null : Map<String, dynamic>.from(body);
+    return nextJson;
+  }
+
+  @override
+  Future<Map<String, dynamic>> postMultipartFiles(
+    String path, {
+    required List<ApiMultipartFile> files,
+    String fieldName = 'files',
+    Map<String, String> fields = const <String, String>{},
+    int? maxFileSizeBytes,
+    String? token,
+  }) async {
+    lastMethod = 'MULTIPART';
+    lastPath = path;
+    lastToken = token;
+    lastFiles = files;
+    lastMaxFileSizeBytes = maxFileSizeBytes;
     return nextJson;
   }
 

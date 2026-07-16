@@ -68,15 +68,23 @@ function createSettingsService(options = {}) {
 }
 
 function requireAdmin(actor) {
-  if (!actor || actor.role !== 'admin') {
+  if (!actor || !isAdminRole(actor.role)) {
     throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
   }
 }
 
 function requireAnyRole(actor, roles) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (!actor || !isRoleAllowed(actor.role, roles)) {
     throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
   }
+}
+
+function isAdminRole(role) {
+  return role === 'super_admin' || role === 'admin';
+}
+
+function isRoleAllowed(role, roles) {
+  return roles.includes(role) || (role === 'super_admin' && roles.includes('admin'));
 }
 
 module.exports = {

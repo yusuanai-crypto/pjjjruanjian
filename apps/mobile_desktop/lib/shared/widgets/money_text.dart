@@ -16,11 +16,12 @@ class MoneyText extends StatelessWidget {
     final theme = Theme.of(context);
     return Text(
       formatMoneyCents(cents),
-      style: (prominent ? theme.textTheme.titleLarge : theme.textTheme.titleMedium)?.copyWith(
+      style:
+          (prominent ? theme.textTheme.titleLarge : theme.textTheme.titleMedium)
+              ?.copyWith(
         color: cents < 0 ? theme.colorScheme.error : theme.colorScheme.primary,
         fontWeight: FontWeight.w800,
       ),
     );
   }
 }
-

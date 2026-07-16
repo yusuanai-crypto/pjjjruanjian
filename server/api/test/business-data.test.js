@@ -6,7 +6,7 @@ const {
   assertOperationLogContract,
   createUser,
   login,
-  requestJson,
+  requestJsonWithStage10ProductFixtures: requestJson,
   withPhase1Server,
 } = require('./helpers/phase1-api');
 
@@ -22,6 +22,17 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
       password: 'Password123',
       role: 'taster',
     });
+    const financeUser = await createUser(baseUrl, admin.token, {
+      name: 'Business Reconciliation Finance',
+      username: 'business-reconciliation-finance',
+      password: 'Password123',
+      role: 'finance',
+    });
+    const finance = await login(
+      baseUrl,
+      financeUser.username,
+      'Password123',
+    );
     const guide = await createGuideFixture(baseUrl, admin.token, {
       name: 'Business Guide',
       phone: '13910000001',
@@ -208,16 +219,9 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
       '/api/reconciliations/2026-06-23',
       {
         method: 'PUT',
-        token: admin.token,
+        token: finance.token,
         body: {
-          travelGroupSalesCents: 39800,
           backOfficeSalesCents: 10000,
-          buybackCents: 0,
-          externalSalesCents: 0,
-          internalPurchaseCents: 0,
-          afterSalesCents: 0,
-          refundsCents: 800,
-          otherReceivableCents: 0,
           paymentMethods: [
             { name: '现金', amountCents: 20000 },
             { name: '微信', amountCents: 28500 },
@@ -228,11 +232,11 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     assert.equal(savedReconciliation.response.status, 200);
     assert.equal(
       savedReconciliation.body.data.reconciliation.refundsCents,
-      800,
+      0,
     );
     assert.equal(
       savedReconciliation.body.data.reconciliation.receivableTotalCents,
-      49000,
+      49800,
     );
     assert.equal(
       savedReconciliation.body.data.reconciliation.actualTotalCents,
@@ -240,25 +244,25 @@ test('contract: business data APIs persist travel groups, orders, reconciliation
     );
     assert.equal(
       savedReconciliation.body.data.reconciliation.differenceCents,
-      -500,
+      -1300,
     );
 
-    const negativeRefundsReconciliation = await requestJson(
+    const automaticFieldReconciliation = await requestJson(
       baseUrl,
       '/api/reconciliations/2026-06-23',
       {
         method: 'PUT',
-        token: admin.token,
+        token: finance.token,
         body: {
           businessDate: '2026-06-23',
-          refundsCents: -800,
+          refundsCents: 800,
         },
       },
     );
     assertErrorContract(
-      negativeRefundsReconciliation,
-      400,
-      'VALIDATION_FAILED',
+      automaticFieldReconciliation,
+      403,
+      'FIELD_PERMISSION_DENIED',
     );
 
     const createdBonus = await requestJson(
@@ -3393,6 +3397,12 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
       password: 'Password123',
       role: 'taster',
     });
+    const liaisonTaster = await createUser(baseUrl, admin.token, {
+      name: 'Travel Create Liaison Taster',
+      username: 'travel-create-liaison-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
     const guide = await createGuideFixture(baseUrl, admin.token, {
       name: 'Snapshot Guide',
       phone: '13910000002',
@@ -3414,7 +3424,14 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
       guestCount: 16,
       tastingRoomNo: 'Room 8',
       tasterId: taster.id,
+      liaisonTasterId: liaisonTaster.id,
       groupType: 'standard',
+      sourceRegion: '华东地区',
+      ageInfo: '35-55岁',
+      mentionedFeitian: false,
+      previousStopOrderStatus: '自定义前站文本',
+      keyCustomerInfo: '重点客户王女士',
+      expectedArrivalTime: '08:05',
       tastingItems: [
         {
           productName: 'Tasting Product A',
@@ -3435,7 +3452,7 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
 
     const created = await requestJson(baseUrl, '/api/travel-groups', {
       method: 'POST',
-      token: frontDesk.token,
+      token: admin.token,
       body: validBody(),
     });
     assert.equal(created.response.status, 201);
@@ -3453,6 +3470,28 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
     );
     assert.equal(created.body.data.travelGroup.tasterId, taster.id);
     assert.equal(created.body.data.travelGroup.tasterName, taster.name);
+    assert.equal(
+      created.body.data.travelGroup.liaisonTasterId,
+      liaisonTaster.id,
+    );
+    assert.equal(
+      created.body.data.travelGroup.liaisonTasterName,
+      liaisonTaster.name,
+    );
+    assert.equal(created.body.data.travelGroup.sourceRegion, '华东地区');
+    assert.equal(created.body.data.travelGroup.ageInfo, '35-55岁');
+    assert.equal(created.body.data.travelGroup.mentionedFeitian, false);
+    assert.equal(
+      created.body.data.travelGroup.previousStopOrderStatus,
+      '自定义前站文本',
+    );
+    assert.equal(
+      created.body.data.travelGroup.keyCustomerInfo,
+      '重点客户王女士',
+    );
+    assert.equal(created.body.data.travelGroup.keyCustomerPhotos, null);
+    assert.equal(created.body.data.travelGroup.guestInfoAttachments, null);
+    assert.equal(created.body.data.travelGroup.expectedArrivalTime, '08:05');
     assertTravelGroupDtoCore(created.body.data.travelGroup);
     assert.equal(created.body.data.travelGroup.pendingStatus, 'pending_taster');
     assert.ok(
@@ -3471,18 +3510,71 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
 
     const second = await requestJson(baseUrl, '/api/travel-groups', {
       method: 'POST',
-      token: admin.token,
-      body: validBody(),
+      token: frontDesk.token,
+      body: validBody({ expectedArrivalTime: undefined }),
     });
     assert.equal(second.response.status, 201);
     assert.equal(second.body.data.travelGroup.groupNo, 'TG20260625002');
 
+    const frontDeskExpectedArrivalTimeDenied = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        method: 'POST',
+        token: frontDesk.token,
+        body: validBody({ expectedArrivalTime: '08:30' }),
+      },
+    );
+    assertErrorContract(
+      frontDeskExpectedArrivalTimeDenied,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
+
+    const minimal = await requestJson(baseUrl, '/api/travel-groups', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        visitDate: '2026-06-26',
+        travelAgency: 'Minimal Agency',
+        guideId: guide.id,
+      },
+    });
+    assert.equal(minimal.response.status, 201);
+    assert.equal(minimal.body.data.travelGroup.groupNo, 'TG20260626001');
+    assert.equal(minimal.body.data.travelGroup.guestCount, 0);
+    for (const field of [
+      'licensePlate',
+      'tastingRoomNo',
+      'tasterId',
+      'liaisonTasterId',
+      'arrivalTime',
+      'groupType',
+      'sourceRegion',
+      'ageInfo',
+      'mentionedFeitian',
+      'previousStopOrderStatus',
+      'keyCustomerInfo',
+      'keyCustomerPhotos',
+      'guestInfoAttachments',
+      'expectedArrivalTime',
+    ]) {
+      assert.equal(minimal.body.data.travelGroup[field], null);
+    }
+
     const missingRequired = await requestJson(baseUrl, '/api/travel-groups', {
       method: 'POST',
       token: admin.token,
-      body: validBody({ tastingRoomNo: '' }),
+      body: validBody({ travelAgency: '' }),
     });
     assertErrorContract(missingRequired, 400, 'VALIDATION_FAILED');
+
+    const missingVisitDate = await requestJson(baseUrl, '/api/travel-groups', {
+      method: 'POST',
+      token: admin.token,
+      body: validBody({ visitDate: '' }),
+    });
+    assertErrorContract(missingVisitDate, 400, 'VALIDATION_FAILED');
 
     const missingGuide = await requestJson(baseUrl, '/api/travel-groups', {
       method: 'POST',
@@ -3497,6 +3589,51 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
       body: validBody({ tasterId: salesUser.id }),
     });
     assertErrorContract(invalidTaster, 400, 'INVALID_TASTER');
+
+    const invalidLiaisonTaster = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: validBody({ liaisonTasterId: salesUser.id }),
+      },
+    );
+    assertErrorContract(
+      invalidLiaisonTaster,
+      400,
+      'INVALID_LIAISON_TASTER',
+    );
+
+    const invalidExpectedArrivalTime = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: validBody({ expectedArrivalTime: '8:05' }),
+      },
+    );
+    assertErrorContract(
+      invalidExpectedArrivalTime,
+      400,
+      'VALIDATION_FAILED',
+    );
+
+    const directAttachmentMetadata = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: validBody({ keyCustomerPhotos: [{ id: 'forged' }] }),
+      },
+    );
+    assertErrorContract(
+      directAttachmentMetadata,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
 
     const salesCreate = await requestJson(baseUrl, '/api/travel-groups', {
       method: 'POST',
@@ -3514,6 +3651,10 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
     );
     assert.equal(detail.response.status, 200);
     assertTravelGroupDtoCore(detail.body.data.travelGroup);
+    assert.equal(
+      detail.body.data.travelGroup.liaisonTaster.username,
+      liaisonTaster.username,
+    );
     assert.deepEqual(
       detail.body.data.travelGroup.tastingItems.map((item) => [
         item.productName,
@@ -3534,11 +3675,13 @@ test('contract: travel group creation uses generated numbers, snapshots, tasting
       },
     );
     assert.equal(logs.response.status, 200);
-    assert.equal(logs.body.data.logs.length, 2);
+    assert.equal(logs.body.data.logs.length, 3);
+    const createdLog = logs.body.data.logs.find(
+      (log) => log.entityId === created.body.data.travelGroup.id,
+    );
+    assert.ok(createdLog);
     assert.deepEqual(
-      logs.body.data.logs[0].afterData.tastingItems.map(
-        (item) => item.productName,
-      ),
+      createdLog.afterData.tastingItems.map((item) => item.productName),
       ['Tasting Product B', 'Tasting Product A'],
     );
   });
@@ -3681,7 +3824,14 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         body: {
           guideId: adminGuide.id,
           tasterId: tasterTwoUser.id,
+          liaisonTasterId: tasterOneUser.id,
           guestCount: 21,
+          sourceRegion: '更新客源地',
+          ageInfo: '40岁左右',
+          mentionedFeitian: true,
+          previousStopOrderStatus: '任意自定义文本',
+          keyCustomerInfo: '更新后的重点客户',
+          expectedArrivalTime: '10:15',
           salesAmountCents: 12000,
           tasterSummary: 'admin summary',
           tastingItems: [
@@ -3707,6 +3857,31 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
       adminPatch.body.data.travelGroup.tasterName,
       tasterTwoUser.name,
     );
+    assert.equal(
+      adminPatch.body.data.travelGroup.liaisonTasterId,
+      tasterOneUser.id,
+    );
+    assert.equal(
+      adminPatch.body.data.travelGroup.liaisonTasterName,
+      tasterOneUser.name,
+    );
+    assert.equal(adminPatch.body.data.travelGroup.sourceRegion, '更新客源地');
+    assert.equal(adminPatch.body.data.travelGroup.ageInfo, '40岁左右');
+    assert.equal(adminPatch.body.data.travelGroup.mentionedFeitian, true);
+    assert.equal(
+      adminPatch.body.data.travelGroup.previousStopOrderStatus,
+      '任意自定义文本',
+    );
+    assert.equal(
+      adminPatch.body.data.travelGroup.keyCustomerInfo,
+      '更新后的重点客户',
+    );
+    assert.equal(adminPatch.body.data.travelGroup.keyCustomerPhotos, null);
+    assert.equal(adminPatch.body.data.travelGroup.guestInfoAttachments, null);
+    assert.equal(
+      adminPatch.body.data.travelGroup.expectedArrivalTime,
+      '10:15',
+    );
     assert.deepEqual(
       adminPatch.body.data.travelGroup.tastingItems.map(
         (item) => item.productName,
@@ -3726,8 +3901,12 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         method: 'PATCH',
         token: frontDesk.token,
         body: {
+          visitDate: '2026-06-26',
           guideId: frontDeskGuide.id,
           travelAgency: 'Client Agency Should Win',
+          liaisonTasterId: null,
+          mentionedFeitian: false,
+          previousStopOrderStatus: '熊猫',
           arrivalTime: '09:45',
           tastingItems: [
             {
@@ -3749,12 +3928,41 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
       frontDeskPatch.body.data.travelGroup.travelAgency,
       'Client Agency Should Win',
     );
+    assert.equal(frontDeskPatch.body.data.travelGroup.visitDate, '2026-06-26');
+    assert.equal(frontDeskPatch.body.data.travelGroup.groupNo, group.groupNo);
+    assert.equal(frontDeskPatch.body.data.travelGroup.liaisonTasterId, null);
+    assert.equal(frontDeskPatch.body.data.travelGroup.liaisonTasterName, null);
+    assert.equal(frontDeskPatch.body.data.travelGroup.mentionedFeitian, false);
+    assert.equal(
+      frontDeskPatch.body.data.travelGroup.previousStopOrderStatus,
+      '熊猫',
+    );
+    assert.equal(frontDeskPatch.body.data.travelGroup.keyCustomerPhotos, null);
+    assert.equal(frontDeskPatch.body.data.travelGroup.guestInfoAttachments, null);
+    assert.equal(frontDeskPatch.body.data.travelGroup.expectedArrivalTime, '10:15');
     assert.equal(frontDeskPatch.body.data.travelGroup.arrivalTime, '09:45');
     assert.deepEqual(
       frontDeskPatch.body.data.travelGroup.tastingItems.map(
         (item) => item.productName,
       ),
       ['Patch Front Desk Item'],
+    );
+
+    const frontDeskExpectedArrivalTimeDenied = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${group.id}`,
+      {
+        method: 'PATCH',
+        token: frontDesk.token,
+        body: {
+          expectedArrivalTime: '10:30',
+        },
+      },
+    );
+    assertErrorContract(
+      frontDeskExpectedArrivalTimeDenied,
+      403,
+      'FIELD_PERMISSION_DENIED',
     );
 
     const frontDeskDenied = await requestJson(
@@ -3856,7 +4064,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         method: 'PATCH',
         token: tasterTwo.token,
         body: {
-          remarks: 'taster should not edit generic remarks',
+          tastingRoomNo: 'taster should not edit tasting room',
         },
       },
     );
@@ -3873,7 +4081,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         },
       },
     );
-    assertErrorContract(tasterWrongGroup, 404, 'TRAVEL_GROUP_NOT_FOUND');
+    assertErrorContract(tasterWrongGroup, 403, 'PERMISSION_DENIED');
 
     const financePatch = await requestJson(
       baseUrl,
@@ -3963,6 +4171,268 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
     assert.equal(postMarkLog.afterData.financeMark, true);
     assert.equal(postMarkLog.beforeData.points, 10);
     assert.equal(postMarkLog.afterData.points, 66);
+  });
+});
+
+test('contract: tasters read all travel groups and edit only database-associated groups', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const primaryUser = await createUser(baseUrl, admin.token, {
+      name: '同名品鉴师',
+      username: 'relation-primary-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const liaisonUser = await createUser(baseUrl, admin.token, {
+      name: '对接品鉴师',
+      username: 'relation-liaison-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const unrelatedUser = await createUser(baseUrl, admin.token, {
+      name: '同名品鉴师',
+      username: 'relation-unrelated-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const primary = await login(
+      baseUrl,
+      primaryUser.username,
+      'Password123',
+    );
+    const liaison = await login(
+      baseUrl,
+      liaisonUser.username,
+      'Password123',
+    );
+    const unrelated = await login(
+      baseUrl,
+      unrelatedUser.username,
+      'Password123',
+    );
+
+    const associatedGroup = await createScopedTravelGroup(
+      baseUrl,
+      admin.token,
+      {
+        visitDate: '2026-07-01',
+        travelAgency: 'Relationship Agency',
+        tasterId: primaryUser.id,
+        liaisonTasterId: liaisonUser.id,
+      },
+    );
+    const otherGroup = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-07-02',
+      tasterId: unrelatedUser.id,
+    });
+    const unassignedGuide = await createGuideFixture(baseUrl, admin.token, {
+      name: 'Unassigned Group Guide',
+      phone: '13930000001',
+      travelAgency: 'Unassigned Guide Agency',
+    });
+    const unassignedResult = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          visitDate: '2026-07-03',
+          travelAgency: 'Unassigned Agency',
+          guideId: unassignedGuide.id,
+        },
+      },
+    );
+    assert.equal(unassignedResult.response.status, 201);
+    const unassignedGroup = unassignedResult.body.data.travelGroup;
+
+    for (const session of [primary, liaison, unrelated]) {
+      const list = await requestJson(baseUrl, '/api/travel-groups', {
+        token: session.token,
+      });
+      assert.equal(list.response.status, 200);
+      assert.deepEqual(
+        groupNos(list.body.data.travelGroups),
+        groupNos([associatedGroup, otherGroup, unassignedGroup]),
+      );
+    }
+
+    const unrelatedDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${associatedGroup.id}`,
+      {
+        token: unrelated.token,
+      },
+    );
+    assert.equal(unrelatedDetail.response.status, 200);
+
+    const primaryPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${associatedGroup.id}`,
+      {
+        method: 'PATCH',
+        token: primary.token,
+        body: {
+          licensePlate: '贵A56789',
+          guestCount: 0,
+          remarks: '接团品鉴师备注',
+          wineDetails: '接团品鉴师酒品记录',
+          tasterSummary: '接团品鉴师总结',
+          sourceRegion: '华北',
+          ageInfo: '40-60岁',
+          mentionedFeitian: true,
+          previousStopOrderStatus: '均单',
+          keyCustomerInfo: '重点客户信息',
+        },
+      },
+    );
+    assert.equal(primaryPatch.response.status, 200);
+    assert.equal(primaryPatch.body.data.travelGroup.licensePlate, '贵A56789');
+    assert.equal(primaryPatch.body.data.travelGroup.guestCount, 0);
+    assert.equal(
+      primaryPatch.body.data.travelGroup.tasterSummary,
+      '接团品鉴师总结',
+    );
+    assert.equal(primaryPatch.body.data.travelGroup.sourceRegion, '华北');
+    assert.equal(primaryPatch.body.data.travelGroup.mentionedFeitian, true);
+    assert.equal(primaryPatch.body.data.travelGroup.keyCustomerPhotos, null);
+
+    const replacementGuide = await createGuideFixture(baseUrl, admin.token, {
+      name: 'Liaison Replacement Guide',
+      phone: '13930000002',
+      travelAgency: 'Must Not Replace Group Agency',
+    });
+    const liaisonPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${associatedGroup.id}`,
+      {
+        method: 'PATCH',
+        token: liaison.token,
+        body: {
+          visitDate: '2026-07-04',
+          guideId: replacementGuide.id,
+          expectedArrivalTime: '10:20',
+          remarks: '对接品鉴师备注',
+        },
+      },
+    );
+    assert.equal(liaisonPatch.response.status, 200);
+    assert.equal(liaisonPatch.body.data.travelGroup.visitDate, '2026-07-04');
+    assert.equal(liaisonPatch.body.data.travelGroup.groupNo, associatedGroup.groupNo);
+    assert.equal(liaisonPatch.body.data.travelGroup.guideId, replacementGuide.id);
+    assert.equal(
+      liaisonPatch.body.data.travelGroup.guideName,
+      replacementGuide.name,
+    );
+    assert.equal(
+      liaisonPatch.body.data.travelGroup.guidePhone,
+      replacementGuide.phone,
+    );
+    assert.equal(
+      liaisonPatch.body.data.travelGroup.travelAgency,
+      associatedGroup.travelAgency,
+    );
+    assert.equal(
+      liaisonPatch.body.data.travelGroup.expectedArrivalTime,
+      '10:20',
+    );
+
+    for (const body of [
+      { visitDate: '2026-07-05' },
+      { guideId: replacementGuide.id },
+      { expectedArrivalTime: '11:00' },
+    ]) {
+      const primaryExtraDenied = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${associatedGroup.id}`,
+        {
+          method: 'PATCH',
+          token: primary.token,
+          body,
+        },
+      );
+      assertErrorContract(
+        primaryExtraDenied,
+        403,
+        'FIELD_PERMISSION_DENIED',
+      );
+    }
+
+    for (const session of [primary, liaison]) {
+      for (const body of [
+        { tastingRoomNo: 'FORBIDDEN' },
+        { arrivalTime: '11:30' },
+        { groupType: 'FORBIDDEN' },
+      ]) {
+        const forbiddenOperationalField = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${associatedGroup.id}`,
+          {
+            method: 'PATCH',
+            token: session.token,
+            body,
+          },
+        );
+        assertErrorContract(
+          forbiddenOperationalField,
+          403,
+          'FIELD_PERMISSION_DENIED',
+        );
+      }
+    }
+
+    for (const body of [
+      { groupNo: 'FORGED-GROUP-NO' },
+      { travelAgency: 'FORGED-AGENCY' },
+      { tasterId: unrelatedUser.id },
+      { liaisonTasterId: unrelatedUser.id },
+      { tasterName: unrelatedUser.name },
+      { liaisonTasterName: unrelatedUser.name },
+      { financeMark: true },
+      { salesAmountCents: 100 },
+      { points: 1 },
+    ]) {
+      const forbiddenField = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${associatedGroup.id}`,
+        {
+          method: 'PATCH',
+          token: primary.token,
+          body,
+        },
+      );
+      assertErrorContract(forbiddenField, 403, 'FIELD_PERMISSION_DENIED');
+    }
+
+    const unrelatedDenied = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${associatedGroup.id}`,
+      {
+        method: 'PATCH',
+        token: unrelated.token,
+        body: {
+          remarks: '同名但无关联，不能修改',
+        },
+      },
+    );
+    assertErrorContract(unrelatedDenied, 403, 'PERMISSION_DENIED');
+
+    const forgedAssociationDenied = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${associatedGroup.id}`,
+      {
+        method: 'PATCH',
+        token: unrelated.token,
+        body: {
+          tasterId: unrelatedUser.id,
+          liaisonTasterId: unrelatedUser.id,
+          tasterName: unrelatedUser.name,
+          liaisonTasterName: unrelatedUser.name,
+          remarks: '伪造关联不能修改',
+        },
+      },
+    );
+    assertErrorContract(forgedAssociationDenied, 403, 'PERMISSION_DENIED');
   });
 });
 
@@ -4273,7 +4743,7 @@ test('contract: travel group taster summary endpoint scopes taster writes and pr
         },
       },
     );
-    assertErrorContract(tasterDenied, 404, 'TRAVEL_GROUP_NOT_FOUND');
+    assertErrorContract(tasterDenied, 403, 'PERMISSION_DENIED');
 
     const adminSubmit = await requestJson(
       baseUrl,
@@ -4344,9 +4814,7 @@ test('contract: pending travel groups are computed from travel group rules and p
         admin.token,
         'PEND-MISSING-TASTER',
       );
-      assert.equal(missingTaster.length, 1);
-      assert.equal(missingTaster[0].pendingStatus, 'pending_front_desk');
-      assert.deepEqual(missingTaster[0].pendingReasons, ['missing_taster']);
+      assert.deepEqual(missingTaster, []);
 
       const frontDeskAbnormal = await fetchPendingByGroupNo(
         baseUrl,
@@ -4354,19 +4822,34 @@ test('contract: pending travel groups are computed from travel group rules and p
         'PEND-FRONT-ABNORMAL',
       );
       assert.equal(frontDeskAbnormal.length, 1);
-      assert.equal(frontDeskAbnormal[0].pendingStatus, 'abnormal');
+      assert.equal(frontDeskAbnormal[0].pendingStatus, 'pending_front_desk');
       for (const reason of [
         'missing_guide_name',
         'missing_guide_phone',
         'missing_travel_agency',
-        'missing_guest_count',
-        'invalid_guest_count_zero',
       ]) {
         assert.ok(
           frontDeskAbnormal[0].pendingReasons.includes(reason),
           `expected ${reason}`,
         );
       }
+      assert.equal(
+        frontDeskAbnormal[0].pendingReasons.includes('missing_guest_count'),
+        false,
+      );
+      assert.equal(
+        frontDeskAbnormal[0].pendingReasons.includes(
+          'invalid_guest_count_zero',
+        ),
+        false,
+      );
+
+      const zeroGuestCount = await fetchPendingByGroupNo(
+        baseUrl,
+        admin.token,
+        'PEND-ZERO-GUEST-OK',
+      );
+      assert.deepEqual(zeroGuestCount, []);
 
       const noOrderNoSummary = await fetchPendingByGroupNo(
         baseUrl,
@@ -4509,6 +4992,15 @@ test('contract: pending travel groups are computed from travel group rules and p
         [frontDeskGroup.groupNo],
       );
 
+      const adminPending = await requestJson(
+        baseUrl,
+        '/api/pending-travel-groups',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(adminPending.response.status, 200);
+
       const tasterPending = await requestJson(
         baseUrl,
         '/api/pending-travel-groups',
@@ -4519,13 +5011,13 @@ test('contract: pending travel groups are computed from travel group rules and p
       assert.equal(tasterPending.response.status, 200);
       assert.deepEqual(
         groupNos(tasterPending.body.data.pendingTravelGroups),
-        groupNos([frontDeskGroup, adminTasterGroup]),
+        groupNos(adminPending.body.data.pendingTravelGroups),
       );
       assert.equal(
         tasterPending.body.data.pendingTravelGroups.some(
           (group) => group.groupNo === otherTasterGroup.groupNo,
         ),
-        false,
+        true,
       );
 
       const salesPending = await requestJson(
@@ -4571,6 +5063,17 @@ test('contract: pending travel groups are computed from travel group rules and p
             groupNo: 'PEND-NO-ORDER-SUMMARY',
             visitDate: '2099-01-01',
             tasterId: 'seed-taster',
+            financeMark: true,
+          },
+          {
+            id: 'seed-zero-guest-ok',
+            groupNo: 'PEND-ZERO-GUEST-OK',
+            visitDate: '2099-01-01',
+            guestCount: 0,
+            tasterId: null,
+            liaisonTasterId: null,
+            tasterSummary: 'summary exists',
+            tasterSummaryAt: '2099-01-01T08:00:00.000Z',
             financeMark: true,
           },
           {
@@ -4664,20 +5167,26 @@ test('contract: travel group list supports filters and computed pending status p
     const groupAlpha = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-26',
       tasterId: tasterAlpha.id,
+      travelAgency: 'Filter Agency Alpha',
       groupType: 'filter-alpha',
       guestCount: 8,
+      sourceRegion: '华东唯一客源地',
     });
     const groupBeta = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-27',
       tasterId: tasterBeta.id,
+      travelAgency: 'Filter Agency Beta',
       groupType: 'filter-beta',
       guestCount: 18,
+      previousStopOrderStatus: '熊猫',
     });
     const groupGamma = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-27',
       tasterId: tasterAlpha.id,
+      travelAgency: 'Filter Agency Alpha',
       groupType: 'filter-alpha',
       guestCount: 28,
+      keyCustomerInfo: '董事长重点接待',
     });
     await setTravelGroupFinanceMark(baseUrl, admin.token, groupBeta.id, true);
 
@@ -4705,6 +5214,24 @@ test('contract: travel group list supports filters and computed pending status p
     assert.deepEqual(groupNos(keywordFiltered.body.data.travelGroups), [
       groupAlpha.groupNo,
     ]);
+
+    for (const [keyword, expectedGroup] of [
+      ['华东唯一客源地', groupAlpha],
+      ['熊猫', groupBeta],
+      ['董事长重点接待', groupGamma],
+    ]) {
+      const newFieldSearch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent(keyword)}`,
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(newFieldSearch.response.status, 200);
+      assert.deepEqual(groupNos(newFieldSearch.body.data.travelGroups), [
+        expectedGroup.groupNo,
+      ]);
+    }
 
     const groupNoFiltered = await requestJson(
       baseUrl,
@@ -4740,6 +5267,19 @@ test('contract: travel group list supports filters and computed pending status p
     assert.equal(tasterFiltered.response.status, 200);
     assert.deepEqual(
       groupNos(tasterFiltered.body.data.travelGroups),
+      groupNos([groupAlpha, groupGamma]),
+    );
+
+    const agencyFiltered = await requestJson(
+      baseUrl,
+      '/api/travel-groups?travelAgency=Filter%20Agency%20Alpha',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(agencyFiltered.response.status, 200);
+    assert.deepEqual(
+      groupNos(agencyFiltered.body.data.travelGroups),
       groupNos([groupAlpha, groupGamma]),
     );
 
@@ -4801,7 +5341,7 @@ test('contract: travel group list supports filters and computed pending status p
   });
 });
 
-test('contract: business data role scopes hide other users travel groups and sales orders', async () => {
+test('contract: business data role scopes expose all travel groups to tasters and keep sales scopes', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const bossUser = await createUser(baseUrl, admin.token, {
@@ -4914,26 +5454,32 @@ test('contract: business data role scopes hide other users travel groups and sal
       token: tasterAlpha.token,
     });
     assert.equal(alphaTasterGroups.response.status, 200);
-    assert.deepEqual(groupNos(alphaTasterGroups.body.data.travelGroups), [
-      groupAlpha.groupNo,
-    ]);
+    assert.deepEqual(
+      groupNos(alphaTasterGroups.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta]),
+    );
 
     const betaTasterGroups = await requestJson(baseUrl, '/api/travel-groups', {
       token: tasterBeta.token,
     });
     assert.equal(betaTasterGroups.response.status, 200);
-    assert.deepEqual(groupNos(betaTasterGroups.body.data.travelGroups), [
-      groupBeta.groupNo,
-    ]);
+    assert.deepEqual(
+      groupNos(betaTasterGroups.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta]),
+    );
 
-    const tasterBlockedDetail = await requestJson(
+    const otherTasterDetail = await requestJson(
       baseUrl,
       `/api/travel-groups/${groupBeta.id}`,
       {
         token: tasterAlpha.token,
       },
     );
-    assertErrorContract(tasterBlockedDetail, 404, 'TRAVEL_GROUP_NOT_FOUND');
+    assert.equal(otherTasterDetail.response.status, 200);
+    assert.equal(
+      otherTasterDetail.body.data.travelGroup.groupNo,
+      groupBeta.groupNo,
+    );
 
     const alphaSalesGroups = await requestJson(baseUrl, '/api/travel-groups', {
       token: salesAlpha.token,
@@ -5499,6 +6045,13 @@ async function createScopedTravelGroup(baseUrl, token, overrides = {}) {
       tastingRoomNo: overrides.tastingRoomNo || 'Scope Room',
       tasterId: taster.id,
       groupType: overrides.groupType || 'scope',
+      sourceRegion: overrides.sourceRegion,
+      ageInfo: overrides.ageInfo,
+      mentionedFeitian: overrides.mentionedFeitian,
+      previousStopOrderStatus: overrides.previousStopOrderStatus,
+      keyCustomerInfo: overrides.keyCustomerInfo,
+      liaisonTasterId: overrides.liaisonTasterId,
+      expectedArrivalTime: overrides.expectedArrivalTime,
       tastingItems: overrides.tastingItems,
     },
   });
@@ -5772,6 +6325,17 @@ function assertTravelGroupDtoCore(group) {
     'guestCount',
     'tastingRoomNo',
     'tasterName',
+    'sourceRegion',
+    'ageInfo',
+    'mentionedFeitian',
+    'previousStopOrderStatus',
+    'keyCustomerInfo',
+    'keyCustomerPhotos',
+    'guestInfoAttachments',
+    'liaisonTasterId',
+    'liaisonTasterName',
+    'liaisonTaster',
+    'expectedArrivalTime',
     'arrivalTime',
     'groupType',
     'departureTime',

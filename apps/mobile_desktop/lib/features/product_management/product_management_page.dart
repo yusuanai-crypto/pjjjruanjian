@@ -43,7 +43,9 @@ class _ProductManagementPageState extends State<ProductManagementPage> {
   List<AgencyDeductionRuleRecord> _agencyDeductionRules = const [];
 
   bool get _canManage =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   @override
   void initState() {

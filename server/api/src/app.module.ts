@@ -11,6 +11,7 @@ import { GuidesModule } from './modules/guides/guides.module';
 import { OperationLogNestController } from './modules/operation-logs/operation-log.nest.controller';
 import { OperationLogsModule } from './modules/operation-logs/operation-logs.module';
 import { PreparationConfirmationNestController } from './modules/preparation-confirmation/preparation-confirmation.nest.controller';
+import { ProductsModule } from './modules/products/products.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { TravelAgenciesModule } from './modules/travel-agencies/travel-agencies.module';
 import { UsersModule } from './modules/users/users.module';
@@ -35,6 +36,7 @@ const {
     CommissionsModule,
     CustomersModule,
     GuidesModule,
+    ProductsModule,
     TravelAgenciesModule,
   ],
   controllers: [

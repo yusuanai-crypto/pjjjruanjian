@@ -57,7 +57,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:finance_mark',
     'finance:overview',
     'reconciliations:read',
-    'reconciliations:upsert',
+    'reconciliations:review',
     'strike_bonus_awards:list',
     'strike_bonus_awards:create',
   ],
@@ -86,7 +86,6 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:create',
     'finance:overview',
     'reconciliations:read',
-    'reconciliations:upsert',
     'strike_bonus_awards:list',
     'strike_bonus_awards:create',
   ],
@@ -226,9 +225,18 @@ test('contract: POST /api/auth/login returns session shape and stable login erro
     assert.equal(loginResult.body.data.user.role, 'admin');
     assert.equal(loginResult.body.data.permissions.includes('users:create'), true);
     assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'employee_accounts'), true);
-    assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'pending_travel_groups'), true);
+    assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'pending_travel_groups'), false);
+    assert.equal(
+      loginResult.body.data.menus.find((menu) => menu.id === 'travel_groups')?.title,
+      '旅行团录入',
+    );
+    assert.equal(
+      loginResult.body.data.menus.find((menu) => menu.id === 'travel_group_query')?.title,
+      '旅行团管理',
+    );
     assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'commission_rules'), true);
     assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'travel_agency_management'), true);
+    assert.equal(loginResult.body.data.menus.some((menu) => menu.id === 'product_management'), true);
     assert.deepEqual(loginResult.body.data.dataScope, { default: 'all' });
 
     const missingFields = await requestJson(baseUrl, '/api/auth/login', {
@@ -288,6 +296,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.admin.includes('finance_workspace'), true);
     assert.equal(roleMenus.admin.includes('commission_rules'), true);
     assert.equal(roleMenus.admin.includes('travel_agency_management'), true);
+    assert.equal(roleMenus.admin.includes('product_management'), true);
     assert.equal(roleMenus.after_sales.includes('after_sales_orders'), true);
     assert.equal(roleMenus.after_sales.includes('order_query'), true);
     assert.equal(roleMenus.finance.includes('order_query'), true);
@@ -295,6 +304,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.finance.includes('commissions'), true);
     assert.equal(roleMenus.finance.includes('commission_rules'), true);
     assert.equal(roleMenus.finance.includes('travel_agency_management'), true);
+    assert.equal(roleMenus.finance.includes('product_management'), true);
     assert.equal(roleMenus.finance.includes('ai_assistant'), true);
     assert.equal(roleMenus.warehouse.includes('warehouse_workspace'), true);
     assert.equal(roleMenus.boss.includes('after_sales_orders'), true);
@@ -303,10 +313,15 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.after_sales.includes('ai_assistant'), true);
     assert.equal(roleMenus.boss.includes('commission_rules'), false);
     assert.equal(roleMenus.boss.includes('travel_agency_management'), false);
+    assert.equal(roleMenus.boss.includes('product_management'), false);
     assert.equal(roleMenus.sales.includes('after_sales_orders'), true);
+    for (const role of Object.keys(roleMenus)) {
+      assert.equal(roleMenus[role].includes('pending_travel_groups'), false);
+    }
     for (const role of ['sales', 'warehouse', 'after_sales', 'front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('commission_rules'), false);
       assert.equal(roleMenus[role].includes('travel_agency_management'), false);
+      assert.equal(roleMenus[role].includes('product_management'), false);
     }
     for (const role of ['sales', 'warehouse', 'front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('ai_assistant'), false);
@@ -319,13 +334,19 @@ test('contract: protected auth endpoints require bearer token and return current
 
     const tasterRole = roles.body.data.roles.find((role) => role.role === 'taster');
     assert.equal(tasterRole.title, '品鉴师');
+    assert.equal(
+      tasterRole.description,
+      '查看全部旅行团，按本人接团或对接关系维护信息，并查看自己的接待和提成。',
+    );
     assert.equal(Array.isArray(tasterRole.permissions), true);
     assert.deepEqual(
       tasterRole.menus.map((menu) => menu.id),
-      ['dashboard', 'own_taster_receptions', 'own_commissions'],
+      ['dashboard', 'travel_group_query', 'own_taster_receptions', 'own_commissions'],
     );
     assert.deepEqual(tasterRole.dataScope, {
-      travelGroups: 'own_taster_id',
+      travelGroups: 'all',
+      travelGroupUpdates: 'assigned_taster_or_liaison',
+      receptions: 'own_user_id',
       commissions: 'own_user_id',
     });
   });
@@ -496,7 +517,7 @@ test('contract: admin user management paths preserve request and response struct
   });
 });
 
-test('contract: non-admin users cannot manage users and taster menu is scoped to own work', async () => {
+test('contract: non-admin users cannot manage users and taster data scopes expose all travel groups', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     await createUser(baseUrl, admin.token, {
@@ -509,11 +530,13 @@ test('contract: non-admin users cannot manage users and taster menu is scoped to
     const taster = await login(baseUrl, 'taster01', 'Password123');
     assert.deepEqual(
       taster.menus.map((menu) => menu.id),
-      ['dashboard', 'own_taster_receptions', 'own_commissions'],
+      ['dashboard', 'travel_group_query', 'own_taster_receptions', 'own_commissions'],
     );
     assert.equal(taster.menus.some((menu) => menu.id === 'employee_accounts'), false);
     assert.deepEqual(taster.dataScope, {
-      travelGroups: 'own_taster_id',
+      travelGroups: 'all',
+      travelGroupUpdates: 'assigned_taster_or_liaison',
+      receptions: 'own_user_id',
       commissions: 'own_user_id',
     });
 

@@ -3,7 +3,7 @@ const test = require('node:test');
 
 const {
   login,
-  requestJson,
+  requestJsonWithStage10ProductFixtures: requestJson,
   withPhase1Server,
 } = require('./helpers/phase1-api');
 

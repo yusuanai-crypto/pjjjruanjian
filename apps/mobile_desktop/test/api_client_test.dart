@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
@@ -126,6 +127,126 @@ void main() {
       ),
     );
     await server.handled;
+  });
+
+  test('postMultipartFiles uploads multiple sanitized files with auth',
+      () async {
+    final server = await _startServer((request) async {
+      expect(request.method, 'POST');
+      expect(request.uri.path,
+          '/api/travel-groups/group-1/attachments/guest_info');
+      expect(
+        request.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer test-token',
+      );
+      final contentType =
+          request.headers.value(HttpHeaders.contentTypeHeader) ?? '';
+      expect(contentType, startsWith('multipart/form-data; boundary='));
+
+      final body = utf8.decode(await request.fold<List<int>>(
+        <int>[],
+        (bytes, chunk) => bytes..addAll(chunk),
+      ));
+      expect(body, contains('name="files"'));
+      expect(body, contains('filename="guest-list.csv"'));
+      expect(body, contains("filename*=UTF-8''guest-list.csv"));
+      expect(body, contains('Content-Type: text/csv'));
+      expect(body, contains('name,phone'));
+      expect(body, contains('filename="notes.txt"'));
+      expect(body, contains('guest notes'));
+      expect(body, isNot(contains('../private')));
+      expect(body, isNot(contains(r'..\private')));
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'data': {
+            'attachments': [
+              {'id': 'attachment-1'},
+              {'id': 'attachment-2'},
+            ],
+          },
+        }),
+      );
+      await request.response.close();
+    });
+    final client = ApiClient(baseUrl: server.baseUrl);
+    addTearDown(() => client.close(force: true));
+
+    final payload = await client.postMultipartFiles(
+      '/api/travel-groups/group-1/attachments/guest_info',
+      token: 'test-token',
+      maxFileSizeBytes: 20 * 1024 * 1024,
+      files: <ApiMultipartFile>[
+        ApiMultipartFile.fromBytes(
+          fileName: '../../private\\guest-list.csv',
+          bytes: Uint8List.fromList(utf8.encode('name,phone')),
+        ),
+        ApiMultipartFile.fromBytes(
+          fileName: 'notes.txt',
+          bytes: Uint8List.fromList(utf8.encode('guest notes')),
+          contentType: 'text/plain',
+        ),
+      ],
+    );
+    await server.handled;
+
+    expect((payload['data'] as Map)['attachments'], hasLength(2));
+  });
+
+  test('postMultipartFiles rejects oversized data before network access',
+      () async {
+    final client = ApiClient(baseUrl: 'http://127.0.0.1:1');
+    addTearDown(() => client.close(force: true));
+
+    await expectLater(
+      client.postMultipartFiles(
+        '/api/upload',
+        maxFileSizeBytes: 3,
+        files: <ApiMultipartFile>[
+          ApiMultipartFile.fromBytes(
+            fileName: 'too-large.txt',
+            bytes: Uint8List.fromList(<int>[1, 2, 3, 4]),
+          ),
+        ],
+      ),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.statusCode, 'statusCode', 0)
+            .having((error) => error.code, 'code', 'FILE_TOO_LARGE'),
+      ),
+    );
+  });
+
+  test('deleteJson preserves JSON response and error behavior', () async {
+    final server = await _startServer((request) async {
+      expect(request.method, 'DELETE');
+      expect(request.uri.path, '/api/travel-groups/group-1/attachments/file-1');
+      expect(
+        request.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer test-token',
+      );
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'data': {
+            'attachment': {'id': 'file-1'},
+          },
+        }),
+      );
+      await request.response.close();
+    });
+    final client = ApiClient(baseUrl: server.baseUrl);
+    addTearDown(() => client.close(force: true));
+
+    final payload = await client.deleteJson(
+      '/api/travel-groups/group-1/attachments/file-1',
+      token: 'test-token',
+    );
+    await server.handled;
+
+    expect(((payload['data'] as Map)['attachment'] as Map)['id'], 'file-1');
   });
 }
 

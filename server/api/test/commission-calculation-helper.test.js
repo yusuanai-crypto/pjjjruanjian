@@ -434,6 +434,176 @@ test('unit: stage7 percentage calculations round half up to cents', () => {
   assert.deepEqual(result.warnings, []);
 });
 
+test('unit: stage10 deduction matching prefers productId and falls back only for missing ids', () => {
+  const productIdResult = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        items: [
+          {
+            id: 'stage10-item-id-match',
+            productId: 'product-a',
+            productName: 'same snapshot name',
+            quantity: 1,
+            unitPriceCents: 100000,
+            subtotalCents: 100000,
+          },
+        ],
+      },
+      salesDeductionRules: [
+        salesDeductionRule({
+          id: 'different-product-newer-rule',
+          productId: 'product-b',
+          productName: 'same snapshot name',
+          deductionCostCents: 90000,
+          effectiveFrom: '2026-07-10',
+        }),
+        salesDeductionRule({
+          id: 'matching-product-id-rule',
+          productId: 'product-a',
+          productName: 'old snapshot name',
+          deductionCostCents: 12000,
+          effectiveFrom: '2026-07-01',
+        }),
+        salesDeductionRule({
+          id: 'legacy-name-fallback-rule',
+          productId: null,
+          productName: 'same snapshot name',
+          deductionCostCents: 80000,
+          effectiveFrom: '2026-07-14',
+        }),
+      ],
+      agencyDeductionRules: [],
+    }),
+  );
+  assert.equal(productIdResult.salesDeduction.items[0].ruleId, 'matching-product-id-rule');
+  assert.equal(productIdResult.salesDeduction.totalAmountCents, 12000);
+
+  const legacyRuleFallback = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        items: [
+          {
+            id: 'stage10-item-legacy-rule',
+            productId: 'product-a',
+            productName: ' legacy name ',
+            quantity: 2,
+            unitPriceCents: 100000,
+            subtotalCents: 200000,
+          },
+        ],
+      },
+      salesDeductionRules: [
+        salesDeductionRule({
+          id: 'legacy-rule-without-id',
+          productId: null,
+          productName: 'legacyname',
+          deductionCostCents: 1000,
+        }),
+      ],
+      agencyDeductionRules: [],
+    }),
+  );
+  assert.equal(legacyRuleFallback.salesDeduction.items[0].ruleId, 'legacy-rule-without-id');
+  assert.equal(legacyRuleFallback.salesDeduction.totalAmountCents, 2000);
+
+  const legacyOrderFallback = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        items: [
+          {
+            id: 'stage10-legacy-order-item',
+            productId: null,
+            productName: 'current product snapshot',
+            quantity: 1,
+            unitPriceCents: 100000,
+            subtotalCents: 100000,
+            actualUnitCostCents: 999999,
+            actualCostSubtotalCents: 999999,
+            grossProfitCents: -899999,
+          },
+        ],
+      },
+      salesDeductionRules: [
+        salesDeductionRule({
+          id: 'new-rule-for-legacy-order',
+          productId: 'product-current',
+          productName: 'currentproductsnapshot',
+          deductionCostCents: 3000,
+        }),
+      ],
+      agencyDeductionRules: [],
+    }),
+  );
+  assert.equal(legacyOrderFallback.salesDeduction.items[0].ruleId, 'new-rule-for-legacy-order');
+  assert.equal(legacyOrderFallback.salesDeduction.totalAmountCents, 3000);
+  assert.equal(legacyOrderFallback.amounts.employeeBaseAmountCents, 897000);
+});
+
+test('unit: stage10 product actual-cost fields do not change commission rebate or points results', () => {
+  const baseItem = {
+    id: 'stage10-cost-isolation-item',
+    productId: 'stage10-cost-isolation-product',
+    productName: 'stage10 cost isolation product',
+    quantity: 2,
+    unitPriceCents: 250000,
+    subtotalCents: 500000,
+  };
+  const overrides = {
+    salesDeductionRules: [
+      salesDeductionRule({
+        id: 'stage10-sales-cost-rule',
+        productId: baseItem.productId,
+        productName: baseItem.productName,
+        deductionCostCents: 10000,
+      }),
+    ],
+    agencyDeductionRules: [
+      agencyDeductionRule({
+        id: 'stage10-agency-wrong-product-rule',
+        productId: 'another-product',
+        productName: baseItem.productName,
+        deductionCostCents: 90000,
+        effectiveFrom: '2026-07-14',
+      }),
+      agencyDeductionRule({
+        id: 'stage10-agency-product-id-rule',
+        productId: baseItem.productId,
+        productName: 'stale product snapshot',
+        deductionCostCents: 15000,
+      }),
+    ],
+  };
+  const withoutActualCost = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      ...overrides,
+      salesOrder: { items: [baseItem] },
+    }),
+  );
+  const withActualCost = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      ...overrides,
+      salesOrder: {
+        items: [
+          {
+            ...baseItem,
+            actualUnitCostCents: 888888,
+            actualCostSubtotalCents: 1777776,
+            grossProfitCents: -1277776,
+          },
+        ],
+      },
+    }),
+  );
+
+  assert.equal(
+    withActualCost.agencyDeduction.items[0].ruleId,
+    'stage10-agency-product-id-rule',
+  );
+  assert.deepEqual(withActualCost.amounts, withoutActualCost.amounts);
+  assert.deepEqual(withActualCost.commissionLines, withoutActualCost.commissionLines);
+  assert.deepEqual(withActualCost.agencyRebateLines, withoutActualCost.agencyRebateLines);
+});
+
 function buildCalculationInput(overrides = {}) {
   const salesOrder = {
     ...buildOrder(),
@@ -586,6 +756,9 @@ function buildOrder() {
 function salesDeductionRule(overrides = {}) {
   return {
     id: overrides.id || 'sales-deduction-rule',
+    productId: Object.prototype.hasOwnProperty.call(overrides, 'productId')
+      ? overrides.productId
+      : null,
     productName: overrides.productName || 'stage7 test sauce A',
     deductionCostCents: overrides.deductionCostCents ?? 0,
     effectiveFrom: new Date(`${overrides.effectiveFrom || '2026-07-01'}T00:00:00.000Z`),

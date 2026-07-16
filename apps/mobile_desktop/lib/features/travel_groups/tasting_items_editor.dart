@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/business/business_api.dart';
+import '../../shared/widgets/product_option_picker.dart';
+
 class TastingItemDraft {
   const TastingItemDraft({
+    this.productId,
     this.productName = '',
     this.quantity = 1,
     this.unit = '',
     this.note,
   });
 
+  final String? productId;
   final String productName;
   final int quantity;
   final String unit;
@@ -19,10 +24,12 @@ class TastingItemsEditor extends StatefulWidget {
   const TastingItemsEditor({
     super.key,
     this.initialItems = const <TastingItemDraft>[],
+    required this.businessApi,
     required this.onChanged,
   });
 
   final List<TastingItemDraft> initialItems;
+  final BusinessApi businessApi;
   final ValueChanged<List<Map<String, dynamic>>> onChanged;
 
   @override
@@ -32,14 +39,16 @@ class TastingItemsEditor extends StatefulWidget {
 class TastingItemsEditorState extends State<TastingItemsEditor> {
   final _formKey = GlobalKey<FormState>();
   final List<_TastingItemRowState> _rows = <_TastingItemRowState>[];
+  List<ProductOptionRecord> _productOptions = const [];
+  bool _loadingProductOptions = true;
+  String? _productOptionsError;
 
   List<Map<String, dynamic>> get tastingItems {
     return [
       for (var index = 0; index < _rows.length; index += 1)
         {
-          'productName': _rows[index].productName,
+          'productId': _rows[index].productId,
           'quantity': _rows[index].quantity,
-          'unit': _rows[index].unit,
           'note': _rows[index].note,
           'sortOrder': index + 1,
         },
@@ -64,6 +73,7 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
     for (final item in widget.initialItems) {
       _rows.add(_TastingItemRowState.fromDraft(item));
     }
+    _loadProductOptions();
   }
 
   @override
@@ -72,6 +82,31 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
     if (oldWidget.initialItems != widget.initialItems) {
       _replaceRows(widget.initialItems);
       _notifyChanged();
+    }
+    if (oldWidget.businessApi != widget.businessApi) {
+      _loadProductOptions();
+    }
+  }
+
+  Future<void> _loadProductOptions() async {
+    setState(() {
+      _loadingProductOptions = true;
+      _productOptionsError = null;
+    });
+    try {
+      final options = await widget.businessApi.listProductOptions();
+      if (!mounted) return;
+      setState(() {
+        _productOptions = options;
+        _loadingProductOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _productOptions = const [];
+        _loadingProductOptions = false;
+        _productOptionsError = error.toString();
+      });
     }
   }
 
@@ -137,6 +172,14 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
                 row: _rows[index],
                 onChanged: _notifyChanged,
                 onDelete: () => _deleteRow(index),
+                productOptions: _productOptions,
+                loadingProductOptions: _loadingProductOptions,
+                productOptionsError: _productOptionsError,
+                onRetryProductOptions: _loadProductOptions,
+                onProductChanged: (product) {
+                  setState(() => _rows[index].selectProduct(product));
+                  _notifyChanged();
+                },
               ),
               if (index != _rows.length - 1) const SizedBox(height: 12),
             ],
@@ -176,12 +219,22 @@ class _TastingItemRow extends StatelessWidget {
     required this.row,
     required this.onChanged,
     required this.onDelete,
+    required this.productOptions,
+    required this.loadingProductOptions,
+    required this.productOptionsError,
+    required this.onRetryProductOptions,
+    required this.onProductChanged,
   });
 
   final int index;
   final _TastingItemRowState row;
   final VoidCallback onChanged;
   final VoidCallback onDelete;
+  final List<ProductOptionRecord> productOptions;
+  final bool loadingProductOptions;
+  final String? productOptionsError;
+  final VoidCallback onRetryProductOptions;
+  final ValueChanged<ProductOptionRecord> onProductChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -196,13 +249,16 @@ class _TastingItemRow extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 640;
-            Widget productField() => TextFormField(
+            Widget productField() => ProductOptionPickerField(
                   key: ValueKey('tasting_product_$index'),
-                  controller: row.productNameController,
-                  decoration: const InputDecoration(labelText: '酒品'),
-                  textInputAction: TextInputAction.next,
-                  validator: _requiredValidator('酒品不能为空'),
-                  onChanged: (_) => onChanged(),
+                  options: productOptions,
+                  loading: loadingProductOptions,
+                  loadError: productOptionsError,
+                  productId: row.productId,
+                  snapshotName: row.productName,
+                  snapshotUnit: row.unit,
+                  onRetry: onRetryProductOptions,
+                  onChanged: onProductChanged,
                 );
             Widget quantityField() => TextFormField(
                   key: ValueKey('tasting_quantity_$index'),
@@ -212,14 +268,6 @@ class _TastingItemRow extends StatelessWidget {
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   textInputAction: TextInputAction.next,
                   validator: _quantityValidator,
-                  onChanged: (_) => onChanged(),
-                );
-            Widget unitField() => TextFormField(
-                  key: ValueKey('tasting_unit_$index'),
-                  controller: row.unitController,
-                  decoration: const InputDecoration(labelText: '单位'),
-                  textInputAction: TextInputAction.next,
-                  validator: _requiredValidator('单位不能为空'),
                   onChanged: (_) => onChanged(),
                 );
             Widget noteField() => TextFormField(
@@ -256,8 +304,6 @@ class _TastingItemRow extends StatelessWidget {
                   const SizedBox(height: 8),
                   quantityField(),
                   const SizedBox(height: 8),
-                  unitField(),
-                  const SizedBox(height: 8),
                   noteField(),
                 ],
               );
@@ -269,8 +315,6 @@ class _TastingItemRow extends StatelessWidget {
                 Expanded(flex: 3, child: productField()),
                 const SizedBox(width: 12),
                 Expanded(child: quantityField()),
-                const SizedBox(width: 12),
-                Expanded(child: unitField()),
                 const SizedBox(width: 12),
                 Expanded(flex: 2, child: noteField()),
                 const SizedBox(width: 12),
@@ -286,20 +330,20 @@ class _TastingItemRow extends StatelessWidget {
 
 class _TastingItemRowState {
   _TastingItemRowState({
-    required String productName,
+    required this.productId,
+    required this.productName,
     required int quantity,
-    required String unit,
+    required this.unit,
     required String? note,
-  })  : productNameController = TextEditingController(text: productName),
-        quantityController = TextEditingController(
+  })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
         ),
-        unitController = TextEditingController(text: unit),
         noteController = TextEditingController(text: note ?? '');
 
   factory _TastingItemRowState.empty() {
     return _TastingItemRowState(
       productName: '',
+      productId: null,
       quantity: 1,
       unit: '',
       note: null,
@@ -309,22 +353,26 @@ class _TastingItemRowState {
   factory _TastingItemRowState.fromDraft(TastingItemDraft item) {
     return _TastingItemRowState(
       productName: item.productName,
+      productId: item.productId,
       quantity: item.quantity,
       unit: item.unit,
       note: item.note,
     );
   }
 
-  final TextEditingController productNameController;
+  String? productId;
+  String productName;
+  String unit;
   final TextEditingController quantityController;
-  final TextEditingController unitController;
   final TextEditingController noteController;
-
-  String get productName => productNameController.text.trim();
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
 
-  String get unit => unitController.text.trim();
+  void selectProduct(ProductOptionRecord product) {
+    productId = product.id;
+    productName = product.name;
+    unit = product.unit;
+  }
 
   String? get note {
     final text = noteController.text.trim();
@@ -332,20 +380,9 @@ class _TastingItemRowState {
   }
 
   void dispose() {
-    productNameController.dispose();
     quantityController.dispose();
-    unitController.dispose();
     noteController.dispose();
   }
-}
-
-FormFieldValidator<String> _requiredValidator(String message) {
-  return (value) {
-    if (value == null || value.trim().isEmpty) {
-      return message;
-    }
-    return null;
-  };
 }
 
 String? _quantityValidator(String? value) {

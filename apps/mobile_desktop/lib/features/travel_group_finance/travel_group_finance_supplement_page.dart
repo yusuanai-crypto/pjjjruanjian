@@ -1,4 +1,6 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
@@ -17,12 +19,17 @@ class _TravelGroupFinanceSupplementPageState
     extends State<TravelGroupFinanceSupplementPage> {
   late final TextEditingController _agencyFilterController;
   late final TextEditingController _guideFilterController;
-  late final TextEditingController _returnedAmountFilterController;
+  late final TextEditingController _unreturnedPointsFilterController;
   late final List<_FinanceGroupDraft> _drafts;
 
   String _agencyQuery = '';
   String _guideQuery = '';
-  String _returnedAmountQuery = '';
+  DateTimeRange? _dateRange;
+  String _tasterFilter = _allFilter;
+  String _unreturnedPointsQuery = '';
+  String _guideInfoSentFilter = _allFilter;
+  String _travelAgencyInfoSentFilter = _allFilter;
+  String _statusFilter = _allFilter;
   int _rowSequence = _financeGroupRecords.length;
 
   @override
@@ -30,7 +37,7 @@ class _TravelGroupFinanceSupplementPageState
     super.initState();
     _agencyFilterController = TextEditingController();
     _guideFilterController = TextEditingController();
-    _returnedAmountFilterController = TextEditingController();
+    _unreturnedPointsFilterController = TextEditingController();
     _drafts = [
       for (final record in _financeGroupRecords)
         _FinanceGroupDraft.fromRecord(record),
@@ -41,17 +48,24 @@ class _TravelGroupFinanceSupplementPageState
   void dispose() {
     _agencyFilterController.dispose();
     _guideFilterController.dispose();
-    _returnedAmountFilterController.dispose();
+    _unreturnedPointsFilterController.dispose();
     super.dispose();
   }
 
   List<_FinanceGroupDraft> get _visibleDrafts {
     final agencyQuery = _agencyQuery.trim().toLowerCase();
     final guideQuery = _guideQuery.trim().toLowerCase();
-    final returnedAmountFilter =
-        _optionalCentsFromText(_returnedAmountQuery.trim());
+    final unreturnedPointsFilter = int.tryParse(_unreturnedPointsQuery.trim());
 
     return _drafts.where((draft) {
+      if (_dateRange != null) {
+        final date = _dateFromText(draft.dateText);
+        if (date == null ||
+            date.isBefore(_dateRange!.start) ||
+            date.isAfter(_dateRange!.end)) {
+          return false;
+        }
+      }
       if (agencyQuery.isNotEmpty &&
           !draft.travelAgencyText.toLowerCase().contains(agencyQuery)) {
         return false;
@@ -60,8 +74,24 @@ class _TravelGroupFinanceSupplementPageState
           !draft.guideNameText.toLowerCase().contains(guideQuery)) {
         return false;
       }
-      if (returnedAmountFilter != null &&
-          draft.returnedAmountCents < returnedAmountFilter) {
+      if (_tasterFilter != _allFilter &&
+          draft.tasterNameText != _tasterFilter) {
+        return false;
+      }
+      if (unreturnedPointsFilter != null &&
+          draft.unreturnedPoints != unreturnedPointsFilter) {
+        return false;
+      }
+      if (!_matchesSentFilter(draft.guideInfoSent, _guideInfoSentFilter)) {
+        return false;
+      }
+      if (!_matchesSentFilter(
+        draft.travelAgencyInfoSent,
+        _travelAgencyInfoSentFilter,
+      )) {
+        return false;
+      }
+      if (_statusFilter != _allFilter && draft.status != _statusFilter) {
         return false;
       }
       return true;
@@ -82,6 +112,28 @@ class _TravelGroupFinanceSupplementPageState
     );
   }
 
+  List<String> get _tasterOptions {
+    final options = _drafts
+        .map((draft) => draft.tasterNameText.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .toList();
+    options.sort();
+    return options;
+  }
+
+  DateTime get _datePickerInitialDate {
+    final dates = _drafts
+        .map((draft) => _dateFromText(draft.dateText))
+        .whereType<DateTime>()
+        .toList();
+    if (dates.isEmpty) {
+      return DateTime.now();
+    }
+    dates.sort();
+    return dates.last;
+  }
+
   void _addDraftRow() {
     setState(() {
       _rowSequence += 1;
@@ -93,10 +145,15 @@ class _TravelGroupFinanceSupplementPageState
     setState(() {
       _agencyFilterController.clear();
       _guideFilterController.clear();
-      _returnedAmountFilterController.clear();
+      _unreturnedPointsFilterController.clear();
       _agencyQuery = '';
       _guideQuery = '';
-      _returnedAmountQuery = '';
+      _dateRange = null;
+      _tasterFilter = _allFilter;
+      _unreturnedPointsQuery = '';
+      _guideInfoSentFilter = _allFilter;
+      _travelAgencyInfoSentFilter = _allFilter;
+      _statusFilter = _allFilter;
     });
   }
 
@@ -117,25 +174,72 @@ class _TravelGroupFinanceSupplementPageState
             ResponsiveFormGrid(
               children: [
                 TextField(
+                  key: const ValueKey('finance-filter-agency'),
                   controller: _agencyFilterController,
                   decoration: const InputDecoration(labelText: '旅行社'),
                   onChanged: (value) => setState(() => _agencyQuery = value),
                 ),
                 TextField(
+                  key: const ValueKey('finance-filter-guide'),
                   controller: _guideFilterController,
                   decoration: const InputDecoration(labelText: '导游'),
                   onChanged: (value) => setState(() => _guideQuery = value),
                 ),
+                _DateRangeFilter(
+                  value: _dateRange,
+                  initialDate: _datePickerInitialDate,
+                  onChanged: (value) => setState(() => _dateRange = value),
+                ),
+                _FilterDropdown(
+                  controlKey: const ValueKey('finance-filter-taster'),
+                  label: '品鉴师',
+                  value: _tasterFilter,
+                  items: [
+                    const MapEntry(_allFilter, '全部'),
+                    for (final taster in _tasterOptions)
+                      MapEntry(taster, taster),
+                  ],
+                  onChanged: (value) => setState(() => _tasterFilter = value),
+                ),
                 TextField(
-                  controller: _returnedAmountFilterController,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
+                  key: const ValueKey('finance-filter-unreturned-points'),
+                  controller: _unreturnedPointsFilterController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: const [_NonNegativeIntegerFormatter()],
                   decoration: const InputDecoration(
-                    labelText: '已返金额',
-                    prefixText: '¥ ',
+                    labelText: '未返积分',
+                    hintText: '请输入非负整数',
                   ),
+                  onChanged: (value) => setState(
+                    () => _unreturnedPointsQuery = value,
+                  ),
+                ),
+                _FilterDropdown(
+                  controlKey: const ValueKey('finance-filter-guide-info-sent'),
+                  label: '导游信息发送',
+                  value: _guideInfoSentFilter,
+                  items: _sentFilterItems,
                   onChanged: (value) =>
-                      setState(() => _returnedAmountQuery = value),
+                      setState(() => _guideInfoSentFilter = value),
+                ),
+                _FilterDropdown(
+                  controlKey: const ValueKey('finance-filter-agency-info-sent'),
+                  label: '旅行团信息发送',
+                  value: _travelAgencyInfoSentFilter,
+                  items: _sentFilterItems,
+                  onChanged: (value) =>
+                      setState(() => _travelAgencyInfoSentFilter = value),
+                ),
+                _FilterDropdown(
+                  controlKey: const ValueKey('finance-filter-status'),
+                  label: '状态',
+                  value: _statusFilter,
+                  items: [
+                    const MapEntry(_allFilter, '全部'),
+                    for (final status in _financeStatuses)
+                      MapEntry(status, status),
+                  ],
+                  onChanged: (value) => setState(() => _statusFilter = value),
                 ),
               ],
             ),
@@ -143,6 +247,7 @@ class _TravelGroupFinanceSupplementPageState
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
+                key: const ValueKey('finance-filter-clear'),
                 onPressed: _clearFilters,
                 icon: const Icon(Icons.filter_alt_off_rounded),
                 label: const Text('清空筛选'),
@@ -183,6 +288,127 @@ class _TravelGroupFinanceSupplementPageState
           ],
         ),
       ],
+    );
+  }
+}
+
+class _DateRangeFilter extends StatelessWidget {
+  const _DateRangeFilter({
+    required this.value,
+    required this.initialDate,
+    required this.onChanged,
+  });
+
+  final DateTimeRange? value;
+  final DateTime initialDate;
+  final ValueChanged<DateTimeRange?> onChanged;
+
+  Future<void> _pickRange(BuildContext context) async {
+    final initialRange = value ??
+        DateTimeRange(
+          start: initialDate,
+          end: initialDate,
+        );
+    final result = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2030),
+      initialDateRange: initialRange,
+      locale: const Locale('zh', 'CN'),
+      helpText: '选择日期范围',
+      cancelText: '取消',
+      confirmText: '确定',
+      saveText: '确定',
+      fieldStartHintText: '开始日期',
+      fieldEndHintText: '结束日期',
+      fieldStartLabelText: '开始日期',
+      fieldEndLabelText: '结束日期',
+      errorFormatText: '请输入正确日期',
+      errorInvalidText: '日期无效',
+      errorInvalidRangeText: '结束日期不能早于开始日期',
+    );
+    if (result != null) {
+      onChanged(
+        DateTimeRange(
+          start: _dateOnly(result.start),
+          end: _dateOnly(result.end),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = value == null
+        ? '全部日期'
+        : '${_formatDate(value!.start)} 至 ${_formatDate(value!.end)}';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: const ValueKey('finance-filter-date'),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        onTap: () => _pickRange(context),
+        child: InputDecorator(
+          decoration: InputDecoration(
+            labelText: '日期',
+            prefixIcon: const Icon(Icons.date_range_rounded),
+            suffixIcon: value == null
+                ? null
+                : IconButton(
+                    key: const ValueKey('finance-filter-date-clear'),
+                    tooltip: '清除日期',
+                    onPressed: () => onChanged(null),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+          ),
+          child: Text(label, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterDropdown extends StatelessWidget {
+  const _FilterDropdown({
+    required this.controlKey,
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final Key controlKey;
+  final String label;
+  final String value;
+  final List<MapEntry<String, String>> items;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final values = items.map((item) => item.key).toSet();
+    final safeValue = values.contains(value) ? value : _allFilter;
+    return InputDecorator(
+      decoration: InputDecoration(labelText: label),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          key: controlKey,
+          value: safeValue,
+          isExpanded: true,
+          isDense: true,
+          items: [
+            for (final item in items)
+              DropdownMenuItem(
+                value: item.key,
+                child: Text(item.value, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: (next) {
+            if (next != null) {
+              onChanged(next);
+            }
+          },
+        ),
+      ),
     );
   }
 }
@@ -273,6 +499,7 @@ class _FinancePointTable extends StatelessWidget {
         rows: [
           for (final draft in drafts)
             DataRow(
+              key: ValueKey('finance-row-${draft.rowKey}'),
               cells: [
                 DataCell(_TableInputCell(
                   cellKey: '${draft.rowKey}:date',
@@ -423,6 +650,7 @@ class _FinancePointTable extends StatelessWidget {
                   width: 88,
                 )),
                 DataCell(Switch(
+                  key: ValueKey('${draft.rowKey}:guideInfoSent'),
                   value: draft.guideInfoSent,
                   onChanged: (value) {
                     draft.guideInfoSent = value;
@@ -430,6 +658,7 @@ class _FinancePointTable extends StatelessWidget {
                   },
                 )),
                 DataCell(Switch(
+                  key: ValueKey('${draft.rowKey}:travelAgencyInfoSent'),
                   value: draft.travelAgencyInfoSent,
                   onChanged: (value) {
                     draft.travelAgencyInfoSent = value;
@@ -462,6 +691,7 @@ class _StatusDropdownCell extends StatelessWidget {
     return SizedBox(
       width: 108,
       child: DropdownButton<String>(
+        key: ValueKey('${draft.rowKey}:status'),
         value: draft.status,
         isExpanded: true,
         underline: const SizedBox.shrink(),
@@ -481,17 +711,123 @@ class _StatusDropdownCell extends StatelessWidget {
   }
 }
 
-class _TableScroller extends StatelessWidget {
+class _TableScroller extends StatefulWidget {
   const _TableScroller({required this.child});
 
   final Widget child;
 
   @override
+  State<_TableScroller> createState() => _TableScrollerState();
+}
+
+class _TableScrollerState extends State<_TableScroller> {
+  final ScrollController _scrollController = ScrollController();
+  bool _hasHorizontalOverflow = false;
+  bool _overflowUpdateScheduled = false;
+  bool? _pendingOverflow;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleOverflowUpdate(bool hasOverflow) {
+    _pendingOverflow = hasOverflow;
+    if (_overflowUpdateScheduled) {
+      return;
+    }
+    _overflowUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _overflowUpdateScheduled = false;
+      final next = _pendingOverflow;
+      _pendingOverflow = null;
+      if (!mounted || next == null || next == _hasHorizontalOverflow) {
+        return;
+      }
+      setState(() => _hasHorizontalOverflow = next);
+    });
+  }
+
+  bool _handleScrollMetrics(ScrollMetricsNotification notification) {
+    if (notification.metrics.axis == Axis.horizontal) {
+      _scheduleOverflowUpdate(notification.metrics.maxScrollExtent > 0);
+    }
+    return false;
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || !_scrollController.hasClients) {
+      return;
+    }
+
+    final delta = event.scrollDelta;
+    final shiftPressed = HardwareKeyboard.instance.isShiftPressed;
+    final isHorizontalGesture = delta.dx.abs() > delta.dy.abs();
+    if (!shiftPressed && !isHorizontalGesture) {
+      return;
+    }
+
+    final horizontalDelta =
+        shiftPressed && delta.dy.abs() > delta.dx.abs() ? delta.dy : delta.dx;
+    if (horizontalDelta == 0) {
+      return;
+    }
+
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
+      if (!_scrollController.hasClients) {
+        return;
+      }
+      final position = _scrollController.position;
+      final target = (_scrollController.offset + horizontalDelta)
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      _scrollController.jumpTo(target);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scrollbar(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: child,
+    final scrollbarTheme = Theme.of(context).scrollbarTheme.copyWith(
+          thickness: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.dragged) ||
+                states.contains(WidgetState.hovered)) {
+              return 10;
+            }
+            return 8;
+          }),
+          radius: const Radius.circular(8),
+          minThumbLength: 48,
+          mainAxisMargin: 4,
+          crossAxisMargin: 1,
+        );
+
+    return NotificationListener<ScrollMetricsNotification>(
+      onNotification: _handleScrollMetrics,
+      child: ScrollbarTheme(
+        data: scrollbarTheme,
+        child: Scrollbar(
+          key: const ValueKey('finance-table-scrollbar'),
+          controller: _scrollController,
+          thumbVisibility: _hasHorizontalOverflow,
+          interactive: true,
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: _hasHorizontalOverflow ? 10 : 0,
+            ),
+            child: SingleChildScrollView(
+              key: const ValueKey('finance-table-horizontal-scroll-view'),
+              controller: _scrollController,
+              primary: false,
+              scrollDirection: Axis.horizontal,
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerSignal: _handlePointerSignal,
+                child: widget.child,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -678,6 +1014,7 @@ class _FinanceGroupDraft {
 
   int get orderAmountCents => _centsFromText(orderAmountText);
   int get returnedAmountCents => _centsFromText(returnedAmountText);
+  int get unreturnedPoints => int.tryParse(unreturnedPointsText.trim()) ?? 0;
 }
 
 class _FinanceGroupRecord {
@@ -723,6 +1060,16 @@ class _FinanceGroupRecord {
   final bool guideInfoSent;
   final bool travelAgencyInfoSent;
 }
+
+const _allFilter = '__all__';
+const _sentFilter = '__sent__';
+const _notSentFilter = '__not_sent__';
+
+const _sentFilterItems = <MapEntry<String, String>>[
+  MapEntry(_allFilter, '全部'),
+  MapEntry(_sentFilter, '已发送'),
+  MapEntry(_notSentFilter, '未发送'),
+];
 
 const _financeStatuses = ['待补充', '待复核', '已完成'];
 
@@ -801,18 +1148,53 @@ int _centsFromText(String value) {
   return (amount * 100).round();
 }
 
-int? _optionalCentsFromText(String value) {
-  final normalized = value.replaceAll(',', '').replaceAll('¥', '').trim();
-  if (normalized.isEmpty) {
-    return null;
-  }
-  final amount = double.tryParse(normalized);
-  return amount == null ? null : (amount * 100).round();
-}
-
 String _yuanText(int cents) {
   if (cents == 0) {
     return '';
   }
   return (cents / 100).toStringAsFixed(2);
+}
+
+bool _matchesSentFilter(bool sent, String filter) {
+  return switch (filter) {
+    _sentFilter => sent,
+    _notSentFilter => !sent,
+    _ => true,
+  };
+}
+
+DateTime? _dateFromText(String value) {
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value.trim());
+  if (match == null) {
+    return null;
+  }
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  final date = DateTime(year, month, day);
+  if (date.year != year || date.month != month || date.day != day) {
+    return null;
+  }
+  return date;
+}
+
+DateTime _dateOnly(DateTime value) =>
+    DateTime(value.year, value.month, value.day);
+
+String _formatDate(DateTime value) {
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
+
+class _NonNegativeIntegerFormatter extends TextInputFormatter {
+  const _NonNegativeIntegerFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return RegExp(r'^\d*$').hasMatch(newValue.text) ? newValue : oldValue;
+  }
 }

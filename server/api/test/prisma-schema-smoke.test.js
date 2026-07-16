@@ -893,6 +893,98 @@ test('smoke: phase 7 Prisma migration creates commission tables and traceability
   );
 });
 
+test('smoke: TravelGroup exposes optional intake fields and liaison taster relation', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const user = extractPrismaBlock(schema, 'model User {');
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+
+  for (const field of [
+    ['sourceRegion', 'String\\?', 'source_region', '@db\\.VarChar\\(120\\)'],
+    ['ageInfo', 'String\\?', 'age_info', '@db\\.VarChar\\(120\\)'],
+    ['mentionedFeitian', 'Boolean\\?', 'mentioned_feitian', ''],
+    [
+      'previousStopOrderStatus',
+      'String\\?',
+      'previous_stop_order_status',
+      '@db\\.VarChar\\(255\\)',
+    ],
+    ['keyCustomerInfo', 'String\\?', 'key_customer_info', '@db\\.Text'],
+    ['keyCustomerPhotos', 'Json\\?', 'key_customer_photos', ''],
+    ['guestInfoAttachments', 'Json\\?', 'guest_info_attachments', ''],
+    ['liaisonTasterId', 'String\\?', 'liaison_taster_id', '@db\\.Char\\(36\\)'],
+    [
+      'liaisonTasterName',
+      'String\\?',
+      'liaison_taster_name',
+      '@db\\.VarChar\\(80\\)',
+    ],
+    [
+      'expectedArrivalTime',
+      'String\\?',
+      'expected_arrival_time',
+      '@db\\.VarChar\\(30\\)',
+    ],
+  ]) {
+    assert.match(
+      travelGroup,
+      new RegExp(
+        `${field[0]}\\s+${field[1]}\\s+@map\\("${field[2]}"\\)${
+          field[3] ? `\\s+${field[3]}` : ''
+        }`,
+      ),
+    );
+  }
+
+  assert.match(
+    travelGroup,
+    /liaisonTaster\s+User\?\s+@relation\("TravelGroupLiaisonTaster", fields: \[liaisonTasterId\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(travelGroup, /@@index\(\[liaisonTasterId\]\)/);
+  assert.match(
+    user,
+    /liaisonTasterTravelGroups\s+TravelGroup\[\]\s+@relation\("TravelGroupLiaisonTaster"\)/,
+  );
+});
+
+test('smoke: travel group intake migration is additive and nullable', () => {
+  const migrationName = '20260714000100_add_travel_group_intake_fields';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+
+  const migration = readMigration(migrationName);
+  for (const column of [
+    ['source_region', 'VARCHAR\\(120\\)'],
+    ['age_info', 'VARCHAR\\(120\\)'],
+    ['mentioned_feitian', 'BOOLEAN'],
+    ['previous_stop_order_status', 'VARCHAR\\(255\\)'],
+    ['key_customer_info', 'TEXT'],
+    ['key_customer_photos', 'JSON'],
+    ['guest_info_attachments', 'JSON'],
+    ['liaison_taster_id', 'CHAR\\(36\\)'],
+    ['liaison_taster_name', 'VARCHAR\\(80\\)'],
+    ['expected_arrival_time', 'VARCHAR\\(30\\)'],
+  ]) {
+    assert.match(
+      migration,
+      new RegExp('ADD COLUMN `' + column[0] + '` ' + column[1] + ' NULL'),
+    );
+  }
+
+  assert.equal((migration.match(/ADD COLUMN/g) || []).length, 10);
+  assert.match(migration, /travel_groups_liaison_taster_id_idx/);
+  assert.match(migration, /travel_groups_liaison_taster_id_fkey/);
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`liaison_taster_id`\) REFERENCES `users`\(`id`\) ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /\bDROP\b|\bTRUNCATE\b|DELETE\s+FROM|INSERT\s+INTO|UPDATE\s+`|CREATE\s+TABLE/i,
+  );
+});
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

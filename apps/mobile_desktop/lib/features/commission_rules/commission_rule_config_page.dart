@@ -6,6 +6,7 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
+import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 
@@ -47,12 +48,15 @@ class _CommissionRuleConfigPageState extends State<CommissionRuleConfigPage>
       const <AgencyRebateRuleRecord>[];
 
   bool get _canRead =>
+      widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance ||
       widget.role == UserRole.boss;
 
   bool get _canWrite =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   @override
   void initState() {
@@ -519,7 +523,6 @@ class _RuleEditorDialog extends StatefulWidget {
 class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   final _formKey = GlobalKey<FormState>();
   final _ruleNameController = TextEditingController();
-  final _productNameController = TextEditingController();
   final _agencyIdController = TextEditingController();
   final _agencyNameController = TextEditingController();
   final _rateController = TextEditingController();
@@ -532,6 +535,15 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   final _notesController = TextEditingController();
 
   String _targetType = 'sales_commission';
+  String? _productId;
+  String? _productSnapshotName;
+  String? _selectedAgencyId;
+  List<ProductOptionRecord> _productOptions = const [];
+  List<TravelAgencyRecord> _agencyOptions = const [];
+  bool _loadingProductOptions = false;
+  bool _loadingAgencyOptions = false;
+  String? _productOptionsError;
+  String? _agencyOptionsError;
   bool _isActive = true;
   bool _saving = false;
   String? _errorMessage;
@@ -540,12 +552,12 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   void initState() {
     super.initState();
     _fillFromRecord();
+    _loadSelectionOptions();
   }
 
   @override
   void dispose() {
     _ruleNameController.dispose();
-    _productNameController.dispose();
     _agencyIdController.dispose();
     _agencyNameController.dispose();
     _rateController.dispose();
@@ -557,6 +569,58 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
     _effectiveToController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  void _loadSelectionOptions() {
+    if (widget.kind == _RuleKind.salesDeduction ||
+        widget.kind == _RuleKind.agencyDeduction) {
+      _loadProductOptions();
+    }
+    if (widget.kind == _RuleKind.agencyDeduction) {
+      _loadAgencyOptions();
+    }
+  }
+
+  Future<void> _loadProductOptions() async {
+    setState(() {
+      _loadingProductOptions = true;
+      _productOptionsError = null;
+    });
+    try {
+      final options = await widget.businessApi.listProductOptions();
+      if (!mounted) return;
+      setState(() {
+        _productOptions = options;
+        _loadingProductOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingProductOptions = false;
+        _productOptionsError = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _loadAgencyOptions() async {
+    setState(() {
+      _loadingAgencyOptions = true;
+      _agencyOptionsError = null;
+    });
+    try {
+      final options = await widget.businessApi.listTravelAgencies(limit: 100);
+      if (!mounted) return;
+      setState(() {
+        _agencyOptions = options;
+        _loadingAgencyOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingAgencyOptions = false;
+        _agencyOptionsError = _messageForError(error);
+      });
+    }
   }
 
   void _fillFromRecord() {
@@ -576,7 +640,8 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
         break;
       case _RuleKind.salesDeduction:
         if (record is SalesDeductionRuleRecord) {
-          _productNameController.text = record.productName;
+          _productId = record.productId;
+          _productSnapshotName = record.productName;
           _costController.text = _centsToYuanText(record.deductionCostCents);
           _effectiveFromController.text = record.effectiveFrom;
           _effectiveToController.text = record.effectiveTo ?? '';
@@ -588,7 +653,9 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
         if (record is AgencyDeductionRuleRecord) {
           _agencyIdController.text = record.agencyId ?? '';
           _agencyNameController.text = record.agencyName ?? '';
-          _productNameController.text = record.productName;
+          _selectedAgencyId = record.agencyId;
+          _productId = record.productId;
+          _productSnapshotName = record.productName;
           _costController.text = _centsToYuanText(record.deductionCostCents);
           _effectiveFromController.text = record.effectiveFrom;
           _effectiveToController.text = record.effectiveTo ?? '';
@@ -736,7 +803,7 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
         ];
       case _RuleKind.agencyDeduction:
         return [
-          _agencyFields(),
+          _agencySelectionField(),
           const SizedBox(height: 12),
           _productField(),
           const SizedBox(height: 12),
@@ -806,11 +873,54 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   }
 
   Widget _productField() {
-    return TextFormField(
-      key: const ValueKey('stage7-rule-product-name-field'),
-      controller: _productNameController,
-      decoration: const InputDecoration(labelText: '酒品名称'),
-      validator: _requiredValidator('请填写酒品名称'),
+    return ProductOptionPickerField(
+      key: const ValueKey('stage7-rule-product-field'),
+      options: _productOptions,
+      loading: _loadingProductOptions,
+      loadError: _productOptionsError,
+      productId: _productId,
+      snapshotName: _productSnapshotName,
+      snapshotUnit: null,
+      onRetry: _loadProductOptions,
+      onChanged: (product) => setState(() {
+        _productId = product.id;
+        _productSnapshotName = product.name;
+      }),
+    );
+  }
+
+  Widget _agencySelectionField() {
+    final hasHistoricalAgency = (_selectedAgencyId ?? '').isNotEmpty &&
+        !_agencyOptions.any((agency) => agency.id == _selectedAgencyId);
+    return DropdownButtonFormField<String>(
+      key: const ValueKey('stage7-rule-agency-field'),
+      initialValue: hasHistoricalAgency ? null : _selectedAgencyId,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: '旅行社',
+        helperText: _loadingAgencyOptions
+            ? '正在加载旅行社...'
+            : _agencyOptionsError != null
+                ? '旅行社加载失败：$_agencyOptionsError'
+                : hasHistoricalAgency
+                    ? '原旅行社不在当前可选列表，请重新选择。'
+                    : null,
+      ),
+      items: [
+        for (final agency in _agencyOptions)
+          DropdownMenuItem(value: agency.id, child: Text(agency.name)),
+      ],
+      onChanged: _loadingAgencyOptions
+          ? null
+          : (value) => setState(() => _selectedAgencyId = value),
+      validator: (_) {
+        if (_loadingAgencyOptions) return '请等待旅行社加载完成';
+        if (_agencyOptionsError != null) return '旅行社选项加载失败';
+        if ((_selectedAgencyId ?? '').isEmpty || hasHistoricalAgency) {
+          return '请选择旅行社';
+        }
+        return null;
+      },
     );
   }
 
@@ -880,14 +990,13 @@ class _RuleEditorDialogState extends State<_RuleEditorDialog> {
         break;
       case _RuleKind.salesDeduction:
         body
-          ..['productName'] = _productNameController.text.trim()
+          ..['productId'] = _productId
           ..['deductionCostCents'] = _parseMoneyCents(_costController.text);
         break;
       case _RuleKind.agencyDeduction:
         body
-          ..['agencyId'] = _nullableText(_agencyIdController.text)
-          ..['agencyName'] = _nullableText(_agencyNameController.text)
-          ..['productName'] = _productNameController.text.trim()
+          ..['agencyId'] = _selectedAgencyId
+          ..['productId'] = _productId
           ..['deductionCostCents'] = _parseMoneyCents(_costController.text);
         break;
       case _RuleKind.agencyRebate:
@@ -1050,6 +1159,25 @@ class _RuleImportDialogState extends State<_RuleImportDialog> {
           .toList();
       if (rules.length != rawRules.length || rules.isEmpty) {
         setState(() => _errorMessage = '每一行规则都必须是对象，且至少包含一行。');
+        return null;
+      }
+      if (widget.kind == _RuleKind.salesDeduction ||
+          widget.kind == _RuleKind.agencyDeduction) {
+        for (final rule in rules) {
+          if ('${rule['productId'] ?? ''}'.trim().isEmpty) {
+            setState(() => _errorMessage = '扣减成本导入必须提供 productId，不接受商品名称文本。');
+            return null;
+          }
+          rule
+            ..remove('productName')
+            ..remove('unit')
+            ..remove('actualUnitCostCents')
+            ..remove('actualCostSubtotalCents');
+        }
+      }
+      if (widget.kind == _RuleKind.agencyDeduction &&
+          rules.any((rule) => '${rule['agencyId'] ?? ''}'.trim().isEmpty)) {
+        setState(() => _errorMessage = '旅行社扣酒导入必须提供 agencyId。');
         return null;
       }
       return rules;
@@ -1215,7 +1343,7 @@ extension _RuleKindMeta on _RuleKind {
       case _RuleKind.salesDeduction:
         return const JsonEncoder.withIndent('  ').convert([
           {
-            'productName': 'Stage7 Smoke Wine',
+            'productId': 'replace-with-active-product-id',
             'deductionCostCents': 1200,
             'effectiveFrom': '2026-07-01',
             'notes': 'stage7 smoke import',
@@ -1224,8 +1352,8 @@ extension _RuleKindMeta on _RuleKind {
       case _RuleKind.agencyDeduction:
         return const JsonEncoder.withIndent('  ').convert([
           {
-            'agencyName': 'Stage7 Smoke Agency',
-            'productName': 'Stage7 Smoke Wine',
+            'agencyId': 'replace-with-travel-agency-id',
+            'productId': 'replace-with-active-product-id',
             'deductionCostCents': 800,
             'effectiveFrom': '2026-07-01',
             'notes': 'stage7 smoke import',

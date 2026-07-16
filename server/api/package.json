@@ -14,6 +14,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
+    "seed:stage10-products": "node scripts/seed-stage10-products.js",
     "migrate:legacy-json": "node scripts/migrate-legacy-json.js",
     "backfill:sales-order-customers": "node scripts/backfill-sales-order-customers.js"
   },

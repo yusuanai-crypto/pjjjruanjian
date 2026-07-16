@@ -1,4 +1,5 @@
 const USER_ROLES = [
+  'super_admin',
   'admin',
   'boss',
   'front_desk',
@@ -10,6 +11,11 @@ const USER_ROLES = [
 ];
 
 const ROLE_DEFINITIONS = {
+  super_admin: {
+    role: 'super_admin',
+    title: '超级管理员',
+    description: '维护全部账号和系统权限，可冻结或解冻管理员账号。',
+  },
   admin: {
     role: 'admin',
     title: '管理员',
@@ -48,7 +54,7 @@ const ROLE_DEFINITIONS = {
   taster: {
     role: 'taster',
     title: '品鉴师',
-    description: '查看自己的接待和提成入口。',
+    description: '查看全部旅行团，按本人接团或对接关系维护信息，并查看自己的接待和提成。',
   },
 };
 
@@ -59,9 +65,8 @@ const MENU_ENTRIES = {
   role_permissions: { id: 'role_permissions', title: '角色权限', phase: 1 },
   global_mark_query: { id: 'global_mark_query', title: '全局标记查询', phase: 1 },
   operation_logs: { id: 'operation_logs', title: '操作日志', phase: 1 },
-  travel_groups: { id: 'travel_groups', title: '旅行团管理', phase: 3 },
-  travel_group_query: { id: 'travel_group_query', title: '旅行团查询', phase: 3 },
-  pending_travel_groups: { id: 'pending_travel_groups', title: '待处理旅行团', phase: 3 },
+  travel_groups: { id: 'travel_groups', title: '旅行团录入', phase: 3 },
+  travel_group_query: { id: 'travel_group_query', title: '旅行团管理', phase: 3 },
   travel_agency_management: { id: 'travel_agency_management', title: '旅行社管理', phase: 7 },
   travel_group_finance_supplement: { id: 'travel_group_finance_supplement', title: '积分表', phase: 6 },
   travel_group_order_notes: { id: 'travel_group_order_notes', title: '订单绑定与离店备注', phase: 4 },
@@ -74,6 +79,7 @@ const MENU_ENTRIES = {
   warehouse_workspace: { id: 'warehouse_workspace', title: '库管发货', phase: 6 },
   commissions: { id: 'commissions', title: '提成积分', phase: 7 },
   commission_rules: { id: 'commission_rules', title: '提成规则', phase: 7 },
+  product_management: { id: 'product_management', title: '商品管理', phase: 10 },
   own_commissions: { id: 'own_commissions', title: '我的提成', phase: 7, dataScope: 'self' },
   analytics: { id: 'analytics', title: '数据分析', phase: 8 },
   ai_assistant: { id: 'ai_assistant', title: 'AI 助手', phase: 9 },
@@ -81,7 +87,7 @@ const MENU_ENTRIES = {
 };
 
 const ROLE_MENU_IDS = {
-  admin: [
+  super_admin: [
     'dashboard',
     'employee_accounts',
     'role_permissions',
@@ -89,7 +95,6 @@ const ROLE_MENU_IDS = {
     'operation_logs',
     'travel_groups',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -102,6 +107,32 @@ const ROLE_MENU_IDS = {
     'warehouse_workspace',
     'commissions',
     'commission_rules',
+    'product_management',
+    'analytics',
+    'ai_assistant',
+    'system_settings',
+  ],
+  admin: [
+    'dashboard',
+    'employee_accounts',
+    'role_permissions',
+    'global_mark_query',
+    'operation_logs',
+    'travel_groups',
+    'travel_group_query',
+    'travel_agency_management',
+    'travel_group_finance_supplement',
+    'travel_group_order_notes',
+    'customers',
+    'sales_orders',
+    'order_query',
+    'after_sales_orders',
+    'finance_workspace',
+    'reconciliation_table',
+    'warehouse_workspace',
+    'commissions',
+    'commission_rules',
+    'product_management',
     'analytics',
     'ai_assistant',
     'system_settings',
@@ -110,7 +141,6 @@ const ROLE_MENU_IDS = {
     'dashboard',
     'global_mark_query',
     'travel_group_query',
-    'pending_travel_groups',
     'customers',
     'order_query',
     'after_sales_orders',
@@ -120,11 +150,10 @@ const ROLE_MENU_IDS = {
     'analytics',
     'ai_assistant',
   ],
-  front_desk: ['dashboard', 'global_mark_query', 'travel_groups', 'travel_group_query', 'pending_travel_groups'],
+  front_desk: ['dashboard', 'global_mark_query', 'travel_groups', 'travel_group_query'],
   sales: [
     'dashboard',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_group_order_notes',
     'customers',
     'sales_orders',
@@ -134,7 +163,6 @@ const ROLE_MENU_IDS = {
   finance: [
     'dashboard',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'customers',
@@ -143,11 +171,12 @@ const ROLE_MENU_IDS = {
     'reconciliation_table',
     'commissions',
     'commission_rules',
+    'product_management',
     'ai_assistant',
   ],
   warehouse: ['dashboard', 'order_query', 'warehouse_workspace'],
   after_sales: ['dashboard', 'customers', 'sales_orders', 'order_query', 'after_sales_orders', 'ai_assistant'],
-  taster: ['dashboard', 'own_taster_receptions', 'own_commissions'],
+  taster: ['dashboard', 'travel_group_query', 'own_taster_receptions', 'own_commissions'],
 };
 
 const AUTHENTICATED_PERMISSIONS = ['auth:me', 'auth:change_password', 'roles:read'];
@@ -214,10 +243,33 @@ const CUSTOMER_UPDATE_PERMISSIONS = ['customers:update'];
 const CUSTOMER_FINANCE_MARK_PERMISSIONS = ['customers:finance_mark'];
 
 const FINANCE_OVERVIEW_PERMISSIONS = ['finance:overview'];
-const RECONCILIATION_PERMISSIONS = ['reconciliations:read', 'reconciliations:upsert'];
+const RECONCILIATION_READ_PERMISSIONS = ['reconciliations:read'];
+const RECONCILIATION_WRITE_PERMISSIONS = ['reconciliations:upsert'];
+const RECONCILIATION_REVIEW_PERMISSIONS = ['reconciliations:review'];
 const STRIKE_BONUS_PERMISSIONS = ['strike_bonus_awards:list', 'strike_bonus_awards:create'];
 
 const ROLE_PERMISSIONS = {
+  super_admin: [
+    ...AUTHENTICATED_PERMISSIONS,
+    ...USER_ADMIN_PERMISSIONS,
+    ...GLOBAL_MARK_READ_PERMISSION,
+    ...GLOBAL_MARK_ENABLE_PERMISSION,
+    ...GLOBAL_MARK_RESTORE_PERMISSION,
+    ...OPERATION_LOG_PERMISSIONS,
+    ...GROUP_WRITE_PERMISSIONS,
+    ...GROUP_FINANCE_MARK_PERMISSIONS,
+    ...CUSTOMER_READ_PERMISSIONS,
+    ...CUSTOMER_CREATE_PERMISSIONS,
+    ...CUSTOMER_UPDATE_PERMISSIONS,
+    ...CUSTOMER_FINANCE_MARK_PERMISSIONS,
+    ...SALES_ORDER_READ_PERMISSIONS,
+    ...SALES_ORDER_CREATE_PERMISSIONS,
+    ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
+    ...FINANCE_OVERVIEW_PERMISSIONS,
+    ...RECONCILIATION_READ_PERMISSIONS,
+    ...RECONCILIATION_REVIEW_PERMISSIONS,
+    ...STRIKE_BONUS_PERMISSIONS,
+  ],
   admin: [
     ...AUTHENTICATED_PERMISSIONS,
     ...USER_ADMIN_PERMISSIONS,
@@ -235,7 +287,8 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
-    ...RECONCILIATION_PERMISSIONS,
+    ...RECONCILIATION_READ_PERMISSIONS,
+    ...RECONCILIATION_REVIEW_PERMISSIONS,
     ...STRIKE_BONUS_PERMISSIONS,
   ],
   boss: [
@@ -247,7 +300,7 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
-    ...RECONCILIATION_PERMISSIONS,
+    ...RECONCILIATION_READ_PERMISSIONS,
     ...STRIKE_BONUS_PERMISSIONS,
   ],
   front_desk: [
@@ -279,7 +332,8 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
-    ...RECONCILIATION_PERMISSIONS,
+    ...RECONCILIATION_READ_PERMISSIONS,
+    ...RECONCILIATION_WRITE_PERMISSIONS,
     ...STRIKE_BONUS_PERMISSIONS,
   ],
   warehouse: [
@@ -305,6 +359,7 @@ const ROLE_PERMISSIONS = {
 };
 
 const ROLE_DATA_SCOPES = {
+  super_admin: { default: 'all' },
   admin: { default: 'all' },
   boss: { default: 'all' },
   front_desk: { travelGroups: 'front_desk_scope' },
@@ -312,7 +367,12 @@ const ROLE_DATA_SCOPES = {
   finance: { default: 'finance_allowed' },
   warehouse: { orders: 'delivery_related' },
   after_sales: { orders: 'after_sales_related' },
-  taster: { travelGroups: 'own_taster_id', commissions: 'own_user_id' },
+  taster: {
+    travelGroups: 'all',
+    travelGroupUpdates: 'assigned_taster_or_liaison',
+    receptions: 'own_user_id',
+    commissions: 'own_user_id',
+  },
 };
 
 function getRoleCatalog() {

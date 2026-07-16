@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 
 const _contentDispositionHeader = 'content-disposition';
 
@@ -43,6 +46,127 @@ class ApiClient {
     String? token,
   }) {
     return _requestJson('PATCH', path, body: body, token: token);
+  }
+
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) {
+    return _requestJson('DELETE', path, body: body, token: token);
+  }
+
+  Future<Map<String, dynamic>> postMultipartFiles(
+    String path, {
+    required List<ApiMultipartFile> files,
+    String fieldName = 'files',
+    Map<String, String> fields = const <String, String>{},
+    int? maxFileSizeBytes,
+    String? token,
+  }) async {
+    if (files.isEmpty) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'FILE_REQUIRED',
+        message: 'At least one file is required.',
+      );
+    }
+    if (!_multipartFieldNamePattern.hasMatch(fieldName)) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_MULTIPART_FIELD',
+        message: 'Multipart field name is invalid.',
+      );
+    }
+    if (fields.keys.any((key) => !_multipartFieldNamePattern.hasMatch(key))) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_MULTIPART_FIELD',
+        message: 'Multipart field name is invalid.',
+      );
+    }
+
+    try {
+      if (maxFileSizeBytes != null) {
+        for (final file in files) {
+          if (await file.length() > maxFileSizeBytes) {
+            throw ApiException(
+              statusCode: 0,
+              code: 'FILE_TOO_LARGE',
+              message: 'File ${file.fileName} exceeds the allowed upload size.',
+            );
+          }
+        }
+      }
+
+      final boundary = _createMultipartBoundary();
+      final request =
+          await _httpClient.openUrl('POST', Uri.parse('$_baseUrl$path'));
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'multipart/form-data; boundary=$boundary',
+      );
+      if (token != null && token.isNotEmpty) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+
+      for (final entry in fields.entries) {
+        request.add(
+          utf8.encode(
+            '--$boundary\r\n'
+            'Content-Disposition: form-data; '
+            'name="${_escapeMultipartHeaderValue(entry.key)}"\r\n\r\n'
+            '${entry.value}\r\n',
+          ),
+        );
+      }
+      for (final file in files) {
+        final fileName = _safeMultipartFileName(file.fileName);
+        final encodedFileName = Uri.encodeComponent(fileName);
+        request.add(
+          utf8.encode(
+            '--$boundary\r\n'
+            'Content-Disposition: form-data; '
+            'name="${_escapeMultipartHeaderValue(fieldName)}"; '
+            'filename="${_escapeMultipartHeaderValue(fileName)}"; '
+            "filename*=UTF-8''$encodedFileName\r\n"
+            'Content-Type: ${_multipartContentType(file)}\r\n\r\n',
+          ),
+        );
+        await request.addStream(file.openRead());
+        request.add(const <int>[13, 10]);
+      }
+      request.add(utf8.encode('--$boundary--\r\n'));
+
+      return _decodeJsonResponse(await request.close());
+    } on ApiException {
+      rethrow;
+    } on FileSystemException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'FILE_READ_ERROR',
+        message: 'The selected file could not be read.',
+      );
+    } on SocketException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'NETWORK_ERROR',
+        message: '无法连接服务器，请检查服务器地址和网络。',
+      );
+    } on FormatException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_RESPONSE',
+        message: '服务器返回格式异常。',
+      );
+    } on ArgumentError {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_SERVER_URL',
+        message: '服务器地址格式不正确。',
+      );
+    }
   }
 
   Future<ApiDownloadedFile> getBytes(
@@ -125,17 +249,7 @@ class ApiClient {
         request.write(jsonEncode(body));
       }
 
-      final response = await request.close();
-      final text = await utf8.decoder.bind(response).join();
-      final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
-      final payload =
-          decoded is Map ? _stringKeyMap(decoded) : <String, dynamic>{};
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw ApiException.fromPayload(response.statusCode, payload);
-      }
-
-      return payload;
+      return _decodeJsonResponse(await request.close());
     } on ApiException {
       rethrow;
     } on SocketException {
@@ -158,6 +272,150 @@ class ApiClient {
       );
     }
   }
+
+  Future<Map<String, dynamic>> _decodeJsonResponse(
+    HttpClientResponse response,
+  ) async {
+    final text = await utf8.decoder.bind(response).join();
+    final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
+    final payload =
+        decoded is Map ? _stringKeyMap(decoded) : <String, dynamic>{};
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException.fromPayload(response.statusCode, payload);
+    }
+
+    return payload;
+  }
+}
+
+class ApiMultipartFile {
+  const ApiMultipartFile.fromBytes({
+    required this.fileName,
+    required Uint8List bytes,
+    this.contentType,
+  })  : _bytes = bytes,
+        _path = null;
+
+  const ApiMultipartFile.fromPath({
+    required this.fileName,
+    required String path,
+    this.contentType,
+  })  : _path = path,
+        _bytes = null;
+
+  factory ApiMultipartFile.fromPlatformFile(
+    PlatformFile file, {
+    String? contentType,
+  }) {
+    final bytes = file.bytes;
+    if (bytes != null) {
+      return ApiMultipartFile.fromBytes(
+        fileName: file.name,
+        bytes: bytes,
+        contentType: contentType,
+      );
+    }
+    final path = file.path;
+    if (path == null || path.trim().isEmpty) {
+      throw ArgumentError.value(
+        file.name,
+        'file',
+        'Selected file has neither bytes nor a readable path.',
+      );
+    }
+    return ApiMultipartFile.fromPath(
+      fileName: file.name,
+      path: path,
+      contentType: contentType,
+    );
+  }
+
+  final String fileName;
+  final String? contentType;
+  final Uint8List? _bytes;
+  final String? _path;
+
+  Future<int> length() async {
+    final bytes = _bytes;
+    if (bytes != null) {
+      return bytes.length;
+    }
+    return File(_path!).length();
+  }
+
+  Stream<List<int>> openRead() {
+    final bytes = _bytes;
+    if (bytes != null) {
+      return Stream<List<int>>.value(bytes);
+    }
+    return File(_path!).openRead();
+  }
+}
+
+final RegExp _multipartFieldNamePattern = RegExp(r'^[A-Za-z0-9_.-]+$');
+final RegExp _multipartContentTypePattern =
+    RegExp(r'^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$');
+
+String _createMultipartBoundary() {
+  final random = Random.secure();
+  final randomHex = List<String>.generate(
+    24,
+    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
+  return '----jiangjiu-$randomHex';
+}
+
+String _escapeMultipartHeaderValue(String value) {
+  return value
+      .replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), '_')
+      .replaceAll('\\', '_')
+      .replaceAll('"', '_');
+}
+
+String _safeMultipartFileName(String value) {
+  final segments = value.replaceAll('\\', '/').split('/');
+  final baseName = segments.isEmpty ? '' : segments.last;
+  final sanitized = _escapeMultipartHeaderValue(baseName).trim();
+  final fileName = sanitized.isEmpty ? 'attachment' : sanitized;
+  return fileName.length <= 255 ? fileName : fileName.substring(0, 255);
+}
+
+String _multipartContentType(ApiMultipartFile file) {
+  final provided = file.contentType?.split(';').first.trim().toLowerCase();
+  if (provided != null && _multipartContentTypePattern.hasMatch(provided)) {
+    return provided;
+  }
+  return _inferContentType(file.fileName);
+}
+
+String _inferContentType(String fileName) {
+  final normalized = fileName.toLowerCase();
+  final dotIndex = normalized.lastIndexOf('.');
+  final extension = dotIndex >= 0 ? normalized.substring(dotIndex) : '';
+  return const <String, String>{
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.tif': 'image/tiff',
+        '.tiff': 'image/tiff',
+        '.avif': 'image/avif',
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx':
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx':
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.csv': 'text/csv',
+        '.txt': 'text/plain',
+        '.log': 'text/plain',
+        '.md': 'text/markdown',
+      }[extension] ??
+      'application/octet-stream';
 }
 
 Map<String, dynamic> _stringKeyMap(Map value) {

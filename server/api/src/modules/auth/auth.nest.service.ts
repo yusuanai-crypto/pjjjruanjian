@@ -6,7 +6,7 @@ import { OperationLogsNestService } from '../operation-logs/operation-log.nest.s
 import { UsersNestService, toPublicUser } from '../users/users.nest.service';
 import { createToken, verifyToken } from './token';
 import { getRoleCatalog, getRoleDataScope, getRoleMenus, getRolePermissions } from './roles';
-import { hashPassword, verifyPassword } from './password';
+import { TEMPORARY_PASSWORD, hashPassword, verifyPassword } from './password';
 import { normalizeUsername } from '../users/users.repository';
 
 @Injectable()
@@ -75,6 +75,9 @@ export class AuthNestService {
     if (!user.isActive) {
       throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
     }
+    if (user.mustChangePassword && !isPasswordChangeAllowedPath(request)) {
+      throw createHttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Password change is required before continuing.');
+    }
     return user;
   }
 
@@ -86,8 +89,13 @@ export class AuthNestService {
     if (!verifyPassword(patch?.currentPassword, user.passwordHash)) {
       throw createHttpError(400, 'CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
     }
+    if (patch?.newPassword === TEMPORARY_PASSWORD) {
+      throw createHttpError(400, 'TEMPORARY_PASSWORD_NOT_ALLOWED', 'New password cannot be the temporary password.');
+    }
 
-    const nextUser = await this.usersService.updatePassword(user.id, hashPassword(patch.newPassword));
+    const nextUser = await this.usersService.updatePassword(user.id, hashPassword(patch.newPassword), {
+      mustChangePassword: false,
+    });
 
     await this.operationLogsService.appendLog({
       userId: user.id,
@@ -107,7 +115,7 @@ export class AuthNestService {
   }
 
   requireAdmin(user: any) {
-    if (user.role !== 'admin') {
+    if (!isAdminRole(user?.role)) {
       throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
     }
   }
@@ -124,4 +132,13 @@ export class AuthNestService {
 
 function getTokenSecret() {
   return process.env.AUTH_TOKEN_SECRET || 'jiangjiu-dev-token-secret-change-me';
+}
+
+function isAdminRole(role: string) {
+  return role === 'super_admin' || role === 'admin';
+}
+
+function isPasswordChangeAllowedPath(request: any) {
+  const path = String(request?.path || request?.url || '');
+  return path.includes('/auth/me') || path.includes('/auth/change-password');
 }

@@ -128,6 +128,28 @@ const TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS = [
 ];
 
 const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
+  super_admin: [
+    'groupNo',
+    'visitDate',
+    'travelAgency',
+    'licensePlate',
+    'guideId',
+    'guideName',
+    'guidePhone',
+    'guestCount',
+    'tastingRoomNo',
+    'tasterId',
+    'tasterName',
+    'arrivalTime',
+    'groupType',
+    'wineDetails',
+    'departureTime',
+    'remarks',
+    'tasterSummary',
+    'tastingItems',
+    ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
+    ...TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS,
+  ],
   admin: [
     'groupNo',
     'visitDate',
@@ -406,6 +428,21 @@ const TRAVEL_GROUP_EXPORT_COLUMNS = [
 const TRAVEL_GROUP_EXPORT_AMOUNT_KEYS = new Set(['orderAmountYuan']);
 
 const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
+  super_admin: [
+    'orderType',
+    'salesUserId',
+    'outreachUserId',
+    'salesFormNo',
+    'orderDate',
+    'customerId',
+    'customer',
+    'travelGroupId',
+    'cashOnDeliveryAmountCents',
+    'invoiceRequired',
+    'remark',
+    'items',
+    'status',
+  ],
   admin: [
     'orderType',
     'salesUserId',
@@ -1493,6 +1530,18 @@ export class BusinessDataNestService {
           );
         }
       }
+      if (data.salesUserId) {
+        await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
+          'SALES',
+          'sales',
+        ]);
+      }
+      if (data.outreachUserId) {
+        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
+          'SALES',
+          'sales',
+        ]);
+      }
 
       const orderItems = await resolveSalesOrderItemSnapshots(
         tx,
@@ -1682,7 +1731,18 @@ export class BusinessDataNestService {
           );
         }
       }
-
+      if (data.salesUserId) {
+        await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
+          'SALES',
+          'sales',
+        ]);
+      }
+      if (data.outreachUserId) {
+        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
+          'SALES',
+          'sales',
+        ]);
+      }
 
       const finalOrderDate = data.orderDate || current.orderDate;
       const orderDateChanged =
@@ -3398,6 +3458,12 @@ function buildGroupWhere(filters: any = {}, kind = '') {
       contains: groupNo,
     };
   }
+  const travelAgency = normalizeOptionalString(filters.travelAgency);
+  if (travelAgency) {
+    where.travelAgency = {
+      contains: travelAgency,
+    };
+  }
   const guideId = normalizeOptionalString(filters.guideId);
   if (guideId && kind === 'travel') {
     where.guideId = guideId;
@@ -3829,7 +3895,7 @@ function assertReconciliationManualPatchAllowedFields(payload: any) {
 }
 
 function assertCanUpdateSalesOrder(actor: any, order: any) {
-  if (actor?.role === 'admin' || actor?.role === 'finance') {
+  if (actor?.role === 'super_admin' || actor?.role === 'admin' || actor?.role === 'finance') {
     return;
   }
   if (
@@ -6148,7 +6214,11 @@ function toStrikeBonusAwardDto(row: any) {
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (
+    !actor ||
+    (!roles.includes(actor.role) &&
+      !(actor.role === 'super_admin' && roles.includes('admin')))
+  ) {
     throw createHttpError(
       403,
       'PERMISSION_DENIED',
@@ -6577,6 +6647,34 @@ async function findActiveTasterUser(
       400,
       isLiaison ? 'INVALID_LIAISON_TASTER' : 'INVALID_TASTER',
       `${fieldName} must reference an active taster user.`,
+    );
+  }
+  return user;
+}
+
+async function findActiveRoleUser(
+  prisma: any,
+  id: string,
+  fieldName: string,
+  roles: string[],
+) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id,
+    },
+  });
+  if (!user) {
+    throw createHttpError(
+      404,
+      'ASSIGNEE_NOT_FOUND',
+      `${fieldName} does not reference an existing user.`,
+    );
+  }
+  if (!Boolean(user.isActive) || !roles.includes(String(user.role || ''))) {
+    throw createHttpError(
+      400,
+      'INVALID_ASSIGNEE',
+      `${fieldName} must reference an active user with an allowed role.`,
     );
   }
   return user;

@@ -25,9 +25,11 @@ class ResponsivePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final horizontalPadding = constraints.maxWidth >= AppBreakpoints.desktop ? 24.0 : 12.0;
+        final horizontalPadding =
+            constraints.maxWidth >= AppBreakpoints.desktop ? 24.0 : 12.0;
         return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(horizontalPadding, 16, horizontalPadding, 24),
+          padding:
+              EdgeInsets.fromLTRB(horizontalPadding, 16, horizontalPadding, 24),
           child: Center(
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxWidth),

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/auth/auth_controller.dart';
 import '../core/storage/session_storage.dart';
+import '../features/login/force_change_password_page.dart';
 import '../features/login/login_page.dart';
 import '../features/shell/app_shell.dart';
 import 'destinations.dart';
@@ -17,6 +20,7 @@ class JiangjiuApp extends StatefulWidget {
 
 class _JiangjiuAppState extends State<JiangjiuApp> {
   AuthController? _authController;
+  Timer? _sessionRefreshTimer;
   bool _bootstrapping = true;
   String _selectedDestinationId = 'dashboard';
 
@@ -24,6 +28,16 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   void initState() {
     super.initState();
     _bootstrapAuth();
+    _sessionRefreshTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _refreshSessionIfNeeded(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _sessionRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _bootstrapAuth() async {
@@ -70,6 +84,40 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
     });
   }
 
+  Future<void> _handleChangePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final authController = _authController;
+    if (authController == null) {
+      return;
+    }
+    await authController.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    setState(() {
+      _selectedDestinationId = _firstDestinationId(authController);
+    });
+  }
+
+  Future<void> _refreshSessionIfNeeded() async {
+    final authController = _authController;
+    if (!mounted || authController?.session == null) {
+      return;
+    }
+    try {
+      await authController!.refreshSession();
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _selectedDestinationId = 'dashboard');
+      }
+    }
+  }
+
   void _handleDestinationChanged(String destinationId) {
     setState(() {
       _selectedDestinationId = destinationId;
@@ -106,6 +154,11 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
                   initialMessage: authController.restoreMessage,
                   onLogin: _handleLogin,
                 )
+              : session.user.mustChangePassword
+                  ? ForceChangePasswordPage(
+                      onSubmit: _handleChangePassword,
+                      onLogout: _handleLogout,
+                    )
               : AppShell(
                   apiClient: authController.apiClient,
                   token: authController.token,

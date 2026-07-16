@@ -5,6 +5,7 @@ import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
+import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 
@@ -41,7 +42,9 @@ class _TravelAgencyManagementPageState
       const <AgencyDeductionRuleRecord>[];
 
   bool get _canManage =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   @override
   void initState() {
@@ -927,7 +930,6 @@ class _DeductionRuleDialog extends StatefulWidget {
 
 class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _productNameController;
   late final TextEditingController _costController;
   late final TextEditingController _effectiveFromController;
   late final TextEditingController _effectiveToController;
@@ -935,6 +937,11 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
   late bool _isActive;
   bool _saving = false;
   String? _errorMessage;
+  String? _productId;
+  String? _productSnapshotName;
+  List<ProductOptionRecord> _productOptions = const [];
+  bool _loadingProductOptions = true;
+  String? _productOptionsError;
 
   bool get _editing => widget.rule != null;
 
@@ -942,8 +949,8 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
   void initState() {
     super.initState();
     final rule = widget.rule;
-    _productNameController =
-        TextEditingController(text: rule?.productName ?? '');
+    _productId = rule?.productId;
+    _productSnapshotName = rule?.productName;
     _costController = TextEditingController(
         text: _moneyInputText(rule?.deductionCostCents ?? 0));
     _effectiveFromController =
@@ -952,16 +959,37 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
         TextEditingController(text: rule?.effectiveTo ?? '');
     _notesController = TextEditingController(text: rule?.notes ?? '');
     _isActive = rule?.isActive ?? true;
+    _loadProductOptions();
   }
 
   @override
   void dispose() {
-    _productNameController.dispose();
     _costController.dispose();
     _effectiveFromController.dispose();
     _effectiveToController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadProductOptions() async {
+    setState(() {
+      _loadingProductOptions = true;
+      _productOptionsError = null;
+    });
+    try {
+      final options = await widget.businessApi.listProductOptions();
+      if (!mounted) return;
+      setState(() {
+        _productOptions = options;
+        _loadingProductOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingProductOptions = false;
+        _productOptionsError = _messageForError(error);
+      });
+    }
   }
 
   @override
@@ -986,12 +1014,20 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
               ResponsiveFormGrid(
                 minItemWidth: 180,
                 children: [
-                  TextFormField(
+                  ProductOptionPickerField(
                     key:
                         const ValueKey('travel-agency-deduction-product-field'),
-                    controller: _productNameController,
-                    decoration: const InputDecoration(labelText: '商品名称'),
-                    validator: _requiredValidator('请填写商品名称'),
+                    options: _productOptions,
+                    loading: _loadingProductOptions,
+                    loadError: _productOptionsError,
+                    productId: _productId,
+                    snapshotName: _productSnapshotName,
+                    snapshotUnit: null,
+                    onRetry: _loadProductOptions,
+                    onChanged: (product) => setState(() {
+                      _productId = product.id;
+                      _productSnapshotName = product.name;
+                    }),
                   ),
                   TextFormField(
                     key: const ValueKey('travel-agency-deduction-cost-field'),
@@ -1076,8 +1112,7 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
     try {
       final body = <String, dynamic>{
         'agencyId': widget.agency.id,
-        'agencyName': widget.agency.name,
-        'productName': _productNameController.text.trim(),
+        'productId': _productId,
         'deductionCostCents': costCents,
         'effectiveFrom': _effectiveFromController.text.trim(),
         'effectiveTo': _nullableText(_effectiveToController.text),

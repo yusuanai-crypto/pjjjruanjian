@@ -44,7 +44,9 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   String? _formErrorMessage;
 
   bool get _canEditPacking =>
-      widget.role == UserRole.admin || widget.role == UserRole.warehouse;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.warehouse;
 
   @override
   void initState() {

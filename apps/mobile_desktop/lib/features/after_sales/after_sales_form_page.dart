@@ -57,7 +57,9 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   String _status = _afterSalesStatusOptions.first.value;
 
   bool get _canManageAfterSales =>
-      widget.role == UserRole.admin || widget.role == UserRole.afterSales;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.afterSales;
 
   @override
   void initState() {

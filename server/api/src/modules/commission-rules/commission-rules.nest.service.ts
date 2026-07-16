@@ -62,7 +62,7 @@ const RULE_CONFIG: Record<string, any> = {
     overlapCode: 'RULE_EFFECTIVE_RANGE_OVERLAP',
     orderBy: { updatedAt: 'desc' },
     allowedFields: [
-      'productName',
+      'productId',
       'deductionCostCents',
       'effectiveFrom',
       'effectiveTo',
@@ -72,9 +72,7 @@ const RULE_CONFIG: Record<string, any> = {
     toDto: toSalesDeductionRuleDto,
     buildWhere: buildSalesDeductionRuleWhere,
     buildData: buildSalesDeductionRuleData,
-    dimensionKeys: (rule: any) => [
-      `product:${normalizeComparable(rule.productName)}`,
-    ],
+    dimensionKeys: (rule: any) => buildProductDimensionKeys(rule),
   },
   agencyDeduction: {
     delegate: 'agencyDeductionRule',
@@ -87,7 +85,7 @@ const RULE_CONFIG: Record<string, any> = {
     allowedFields: [
       'agencyId',
       'agencyName',
-      'productName',
+      'productId',
       'deductionCostCents',
       'effectiveFrom',
       'effectiveTo',
@@ -97,8 +95,7 @@ const RULE_CONFIG: Record<string, any> = {
     toDto: toAgencyDeductionRuleDto,
     buildWhere: buildAgencyDeductionRuleWhere,
     buildData: buildAgencyDeductionRuleData,
-    dimensionKeys: (rule: any) =>
-      buildAgencyDimensionKeys(rule, normalizeComparable(rule.productName)),
+    dimensionKeys: (rule: any) => buildAgencyProductDimensionKeys(rule),
   },
   agencyRebate: {
     delegate: 'agencyRebateRule',
@@ -234,7 +231,12 @@ export class CommissionRulesNestService {
   }
 
   private async listRules(kind: RuleKind, actor: any, filters: any = {}) {
-    requireAnyRole(actor, READ_RULE_ROLES);
+    requireAnyRole(
+      actor,
+      kind === 'salesDeduction' || kind === 'agencyDeduction'
+        ? WRITE_RULE_ROLES
+        : READ_RULE_ROLES,
+    );
     const config = RULE_CONFIG[kind];
     const rules = await this.delegate(config).findMany({
       where: config.buildWhere(filters),
@@ -349,6 +351,7 @@ export class CommissionRulesNestService {
     const config = RULE_CONFIG[kind];
     assertAllowedFields(payload, config.allowedFields);
     const data = config.buildData(payload, true, actor);
+    await this.attachTrustedProductSnapshot(kind, data);
     assertFinalEffectiveDateRange(data);
     await this.assertAgencyRuleMatchable(kind, data);
     await this.assertAgencyExists(data);
@@ -370,6 +373,7 @@ export class CommissionRulesNestService {
 
     const current = await this.findRuleOrThrow(config, ruleId);
     const data = config.buildData(payload, false, actor);
+    await this.attachTrustedProductSnapshot(kind, data, current);
     const nextForValidation = {
       ...current,
       ...data,
@@ -431,7 +435,6 @@ export class CommissionRulesNestService {
       return;
     }
     const config = RULE_CONFIG[kind];
-    const candidateKeys = new Set(config.dimensionKeys(candidate));
     const rules = await this.delegate(config).findMany({
       where: {
         isActive: true,
@@ -441,8 +444,7 @@ export class CommissionRulesNestService {
       if (excludeId && rule.id === excludeId) {
         return false;
       }
-      const ruleKeys = config.dimensionKeys(rule);
-      if (!ruleKeys.some((key: string) => candidateKeys.has(key))) {
+      if (!rulesShareDimension(kind, candidate, rule, config)) {
         return false;
       }
       return intervalsOverlap(candidate, rule);
@@ -487,6 +489,38 @@ export class CommissionRulesNestService {
         'agencyId does not match an existing travel agency.',
       );
     }
+  }
+
+  private async attachTrustedProductSnapshot(
+    kind: RuleKind,
+    data: any,
+    current?: any,
+  ) {
+    if (kind !== 'salesDeduction' && kind !== 'agencyDeduction') {
+      return;
+    }
+    const productId = normalizeRequiredString(data.productId, 'productId');
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+    });
+    if (!product) {
+      throw createHttpError(404, 'PRODUCT_NOT_FOUND', 'Product does not exist.');
+    }
+    const matchesExistingProduct = current
+      ? normalizeOptionalString(current.productId) === productId ||
+        (!normalizeOptionalString(current.productId) &&
+          normalizeProductComparable(current.productName) ===
+            normalizeProductComparable(product.name))
+      : false;
+    if (!product.isActive && !matchesExistingProduct) {
+      throw createHttpError(
+        400,
+        'PRODUCT_INACTIVE',
+        'Inactive products cannot be used to create or retarget deduction rules.',
+      );
+    }
+    data.productId = product.id;
+    data.productName = product.name;
   }
 }
 
@@ -547,6 +581,10 @@ function buildCommissionRuleWhere(filters: any = {}) {
 
 function buildSalesDeductionRuleWhere(filters: any = {}) {
   const where: any = {};
+  const productId = normalizeOptionalString(filters.productId);
+  if (productId) {
+    where.productId = productId;
+  }
   const productName = normalizeOptionalString(filters.productName);
   if (productName) {
     where.productName = {
@@ -568,6 +606,10 @@ function buildAgencyDeductionRuleWhere(filters: any = {}) {
     where.agencyName = {
       contains: agencyName,
     };
+  }
+  const productId = normalizeOptionalString(filters.productId);
+  if (productId) {
+    where.productId = productId;
   }
   const productName = normalizeOptionalString(filters.productName);
   if (productName) {
@@ -648,10 +690,10 @@ function buildSalesDeductionRuleData(
     updatedAt: now,
     updatedById: actor.id,
   };
-  assignString(data, 'productName', payload?.productName, {
-    fieldName: 'productName',
-    maxLength: 160,
-    required: creating,
+  assignString(data, 'productId', payload?.productId, {
+    fieldName: 'productId',
+    maxLength: 36,
+    required: true,
   });
   assignNonNegativeInteger(
     data,
@@ -768,6 +810,7 @@ function toCommissionRuleDto(rule: any) {
 function toSalesDeductionRuleDto(rule: any) {
   return {
     id: rule.id,
+    productId: rule.productId || null,
     productName: rule.productName,
     deductionCostCents: Number(rule.deductionCostCents || 0),
     effectiveFrom: toDateOnly(rule.effectiveFrom),
@@ -786,6 +829,7 @@ function toAgencyDeductionRuleDto(rule: any) {
     id: rule.id,
     agencyId: rule.agencyId || null,
     agencyName: rule.agencyName || null,
+    productId: rule.productId || null,
     productName: rule.productName,
     deductionCostCents: Number(rule.deductionCostCents || 0),
     effectiveFrom: toDateOnly(rule.effectiveFrom),
@@ -838,6 +882,79 @@ function buildAgencyDimensionKeys(rule: any, suffix?: string) {
     keys.push(`agency_name:${normalizeComparable(rule.agencyName)}${tail}`);
   }
   return keys;
+}
+
+function buildProductDimensionKeys(rule: any) {
+  const productId = normalizeOptionalString(rule.productId);
+  if (productId) {
+    return [`product_id:${productId}`];
+  }
+  const productName = normalizeProductComparable(rule.productName);
+  return productName ? [`product_name:${productName}`] : [];
+}
+
+function buildAgencyProductDimensionKeys(rule: any) {
+  const productKeys = buildProductDimensionKeys(rule);
+  return productKeys.flatMap((productKey) =>
+    buildAgencyDimensionKeys(rule, productKey),
+  );
+}
+
+function rulesShareDimension(
+  kind: RuleKind,
+  left: any,
+  right: any,
+  config: any,
+) {
+  if (kind === 'salesDeduction') {
+    return referencesMatch(
+      left.productId,
+      right.productId,
+      left.productName,
+      right.productName,
+      normalizeProductComparable,
+    );
+  }
+  if (kind === 'agencyDeduction') {
+    return (
+      referencesMatch(
+        left.agencyId,
+        right.agencyId,
+        left.agencyName,
+        right.agencyName,
+      ) &&
+      referencesMatch(
+        left.productId,
+        right.productId,
+        left.productName,
+        right.productName,
+        normalizeProductComparable,
+      )
+    );
+  }
+  const leftKeys = new Set(config.dimensionKeys(left));
+  return config
+    .dimensionKeys(right)
+    .some((key: string) => leftKeys.has(key));
+}
+
+function referencesMatch(
+  leftId: unknown,
+  rightId: unknown,
+  leftName: unknown,
+  rightName: unknown,
+  normalizeName: (value: unknown) => string = normalizeComparable,
+) {
+  const normalizedLeftId = normalizeOptionalString(leftId);
+  const normalizedRightId = normalizeOptionalString(rightId);
+  if (normalizedLeftId && normalizedRightId) {
+    return normalizedLeftId === normalizedRightId;
+  }
+  const normalizedLeftName = normalizeName(leftName);
+  const normalizedRightName = normalizeName(rightName);
+  return Boolean(
+    normalizedLeftName && normalizedLeftName === normalizedRightName,
+  );
 }
 
 function intervalsOverlap(left: any, right: any) {
@@ -1069,6 +1186,13 @@ function normalizeComparable(value: unknown) {
   return String(normalizeOptionalString(value) || '').toLowerCase();
 }
 
+function normalizeProductComparable(value: unknown) {
+  return String(normalizeOptionalString(value) || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
 function normalizeBoolean(value: unknown, fieldName: string) {
   if (typeof value === 'boolean') {
     return value;
@@ -1152,7 +1276,11 @@ function toIsoString(value: unknown) {
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (
+    !actor ||
+    (!roles.includes(actor.role) &&
+      !(actor.role === 'super_admin' && roles.includes('admin')))
+  ) {
     throw createHttpError(
       403,
       'PERMISSION_DENIED',

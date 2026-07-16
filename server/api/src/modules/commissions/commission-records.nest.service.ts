@@ -1709,7 +1709,11 @@ function assertTravelGroupTasterMatches(travelGroup: any, taster: any) {
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (
+    !actor ||
+    (!roles.includes(actor.role) &&
+      !(actor.role === 'super_admin' && roles.includes('admin')))
+  ) {
     throw createHttpError(
       403,
       'PERMISSION_DENIED',

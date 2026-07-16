@@ -48,6 +48,7 @@ class AppShell extends StatelessWidget {
           apiClient: apiClient,
           token: token,
           role: role,
+          currentUserId: user.id,
           allowedDestinations: destinations,
           onOpenDestination: onDestinationChanged,
         );
@@ -372,6 +373,7 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
     final settings = _settings;
     if (settings != null &&
         settings.onlyShowMarkedRecords &&
+        widget.role != UserRole.superAdmin &&
         widget.role != UserRole.admin) {
       return const SizedBox.shrink();
     }
@@ -498,6 +500,7 @@ class _GlobalMarkQuerySettings {
 
 bool _canControlGlobalMarkQuery(UserRole role) {
   return role == UserRole.admin ||
+      role == UserRole.superAdmin ||
       role == UserRole.boss ||
       role == UserRole.frontDesk ||
       role == UserRole.afterSales;

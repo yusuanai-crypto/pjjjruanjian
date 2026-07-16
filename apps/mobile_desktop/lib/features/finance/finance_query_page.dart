@@ -67,18 +67,27 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
   String _summaryConfirmFilter = _summaryConfirmAll;
 
   bool get _canConfirmAfterSalesRefund =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canEditFinanceOrders =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canManageTasterCommission =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canManageTravelGroupFinanceSummary =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canExportStage7 =>
+      widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance ||
       widget.role == UserRole.boss;

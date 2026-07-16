@@ -23,7 +23,7 @@ export interface AiPolicyInput {
   question?: string | null;
 }
 
-const AI_ALLOWED_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
+const AI_ALLOWED_ROLES = ['super_admin', 'admin', 'boss', 'finance', 'after_sales'];
 const READ_ONLY_ANALYTICS_INTENTS = [
   'analytics_overview',
   'analytics_trend',
@@ -60,6 +60,7 @@ const ADMIN_BOSS_INTENTS = [
   ...AFTER_SALES_INTENTS,
 ];
 const ROLE_INTENTS: Record<string, string[]> = {
+  super_admin: ADMIN_BOSS_INTENTS,
   admin: ADMIN_BOSS_INTENTS,
   boss: ADMIN_BOSS_INTENTS,
   finance: [...READ_ONLY_ANALYTICS_INTENTS, ...FINANCE_INTENTS],

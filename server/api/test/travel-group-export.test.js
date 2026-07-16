@@ -17,15 +17,24 @@ const EXPECTED_HEADERS = [
   '团号',
   '日期',
   '旅行社',
+  '客源地',
+  '年龄描述',
   '车牌号',
   '导游',
   '导游电话',
   '人数',
   '品鉴馆馆号',
   '品鉴师',
+  '对接品鉴师',
+  '预计进店时间',
   '进店时间',
   '离店时间',
   '团型',
+  '是否提及飞天',
+  '前站出单情况',
+  '重点客户信息',
+  '重点客户照片数',
+  '客人信息附件数',
   '品酒种类和瓶数',
   '是否出单',
   '订单总额',
@@ -91,7 +100,7 @@ test('GET /api/travel-groups/export.xlsx reuses filters and exports documented c
     async (baseUrl) => {
       const admin = await login(baseUrl);
       const query =
-        'keyword=Alpha&dateFrom=2026-07-01&dateTo=2026-07-02&groupType=vip&financeMark=true';
+        'keyword=Alpha&travelAgency=Alpha%20Travel%20Agency&dateFrom=2026-07-01&dateTo=2026-07-02&groupType=vip&financeMark=true';
 
       const list = await requestJson(baseUrl, `/api/travel-groups?${query}`, {
         token: admin.token,
@@ -123,15 +132,24 @@ test('GET /api/travel-groups/export.xlsx reuses filters and exports documented c
       assert.equal(row['团号'], 'TG-EXPORT-ALPHA');
       assert.equal(row['日期'], '2026-07-01');
       assert.equal(row['旅行社'], 'Alpha Travel Agency');
+      assert.equal(row['客源地'], '华东');
+      assert.equal(row['年龄描述'], '35-55岁');
       assert.equal(row['车牌号'], '贵A12345');
       assert.equal(row['导游'], 'Alpha Guide');
       assert.equal(row['导游电话'], '13900001111');
       assert.equal(row['人数'], 18);
       assert.equal(row['品鉴馆馆号'], 'A101');
       assert.equal(row['品鉴师'], 'Alpha Taster');
+      assert.equal(row['对接品鉴师'], 'Alpha Liaison Taster');
+      assert.equal(row['预计进店时间'], '09:15');
       assert.equal(row['进店时间'], '09:30');
       assert.equal(row['离店时间'], '11:00');
       assert.equal(row['团型'], 'vip');
+      assert.equal(row['是否提及飞天'], '否');
+      assert.equal(row['前站出单情况'], '均单');
+      assert.equal(row['重点客户信息'], 'Alpha VIP customer');
+      assert.equal(row['重点客户照片数'], 2);
+      assert.equal(row['客人信息附件数'], 1);
       assert.equal(row['品酒种类和瓶数'], '茅台迎宾 2 瓶；红缨子 1 瓶');
       assert.equal(row['是否出单'], '是');
       assert.equal(row['订单总额'], 300);
@@ -140,7 +158,11 @@ test('GET /api/travel-groups/export.xlsx reuses filters and exports documented c
       assert.equal(row['备注'], 'Alpha remarks');
       assert.equal(row['创建时间'], '2026-07-01T08:00:00.000Z');
       assert.equal(row['更新时间'], '2026-07-01T12:00:00.000Z');
-      assert.equal(worksheet.getCell('O2').numFmt, '0.00');
+      assert.equal(
+        worksheet.getColumn(EXPECTED_HEADERS.indexOf('订单总额') + 1).numFmt,
+        '0.00',
+      );
+      assert.equal(JSON.stringify(row).includes('D:\\private'), false);
     },
     {
       prisma: buildTravelGroupExportPrismaOptions(),
@@ -309,15 +331,29 @@ function buildTravelGroupExportPrismaOptions() {
         groupNo: 'TG-EXPORT-ALPHA',
         visitDate: '2026-07-01T00:00:00.000Z',
         travelAgency: 'Alpha Travel Agency',
+        sourceRegion: '华东',
+        ageInfo: '35-55岁',
         licensePlate: '贵A12345',
         guideName: 'Alpha Guide',
         guidePhone: '13900001111',
         guestCount: 18,
         tastingRoomNo: 'A101',
         tasterName: 'Alpha Taster',
+        liaisonTasterName: 'Alpha Liaison Taster',
+        expectedArrivalTime: '09:15',
         arrivalTime: '09:30',
         departureTime: '11:00',
         groupType: 'vip',
+        mentionedFeitian: false,
+        previousStopOrderStatus: '均单',
+        keyCustomerInfo: 'Alpha VIP customer',
+        keyCustomerPhotos: [
+          { name: 'vip-a.jpg', physicalPath: 'D:\\private\\vip-a.jpg' },
+          { name: 'vip-b.jpg', physicalPath: 'D:\\private\\vip-b.jpg' },
+        ],
+        guestInfoAttachments: [
+          { name: 'guest.xlsx', physicalPath: 'D:\\private\\guest.xlsx' },
+        ],
         wineDetails: '茅台迎宾 2 瓶；红缨子 1 瓶',
         remarks: 'Alpha remarks',
         tasterSummary: 'Alpha summary',

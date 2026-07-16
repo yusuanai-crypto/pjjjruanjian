@@ -136,15 +136,23 @@ function toGlobalMarkQuerySettings(settings: any[]) {
 }
 
 function requireAdmin(actor: any) {
-  if (!actor || actor.role !== 'admin') {
+  if (!actor || !isAdminRole(actor.role)) {
     throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
   }
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
-  if (!actor || !roles.includes(actor.role)) {
+  if (!actor || !isRoleAllowed(actor.role, roles)) {
     throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
   }
+}
+
+function isAdminRole(role: string) {
+  return role === 'super_admin' || role === 'admin';
+}
+
+function isRoleAllowed(role: string, roles: string[]) {
+  return roles.includes(role) || (role === 'super_admin' && roles.includes('admin'));
 }
 
 function nonEmptyOrNull(value: unknown) {

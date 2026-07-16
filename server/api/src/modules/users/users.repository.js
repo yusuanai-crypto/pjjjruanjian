@@ -64,10 +64,14 @@ function createDefaultState() {
         name: '系统管理员',
         username: 'admin',
         passwordHash: hashPassword(BOOTSTRAP_ADMIN_PASSWORD),
-        role: 'admin',
+        role: 'super_admin',
         phone: null,
         leaderId: null,
         isActive: true,
+        mustChangePassword: false,
+        statusReason: null,
+        statusChangedAt: null,
+        statusChangedBy: null,
         createdAt: now,
         updatedAt: now,
       },
@@ -93,6 +97,13 @@ function normalizeUser(user) {
     phone: user.phone ? String(user.phone).trim() : null,
     leaderId: user.leaderId || user.leader_id || null,
     isActive: user.isActive !== undefined ? Boolean(user.isActive) : Boolean(user.is_active ?? true),
+    mustChangePassword:
+      user.mustChangePassword !== undefined
+        ? Boolean(user.mustChangePassword)
+        : Boolean(user.must_change_password ?? false),
+    statusReason: user.statusReason || user.status_reason || null,
+    statusChangedAt: user.statusChangedAt || user.status_changed_at || null,
+    statusChangedBy: user.statusChangedBy || user.status_changed_by || null,
     createdAt: user.createdAt || user.created_at || now,
     updatedAt: user.updatedAt || user.updated_at || now,
   };

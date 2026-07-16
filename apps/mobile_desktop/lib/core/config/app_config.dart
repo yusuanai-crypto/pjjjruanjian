@@ -12,6 +12,8 @@ class AppConfig {
       return defaultApiBaseUrl;
     }
     final withScheme = trimmed.contains('://') ? trimmed : 'http://$trimmed';
-    return withScheme.endsWith('/') ? withScheme.substring(0, withScheme.length - 1) : withScheme;
+    return withScheme.endsWith('/')
+        ? withScheme.substring(0, withScheme.length - 1)
+        : withScheme;
   }
 }

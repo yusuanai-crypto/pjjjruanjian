@@ -2,7 +2,7 @@ const { createHttpError } = require('../../common/errors');
 const { getBearerToken } = require('../../common/http');
 const { createToken, verifyToken } = require('./token');
 const { getRoleCatalog, getRoleDataScope, getRoleMenus, getRolePermissions } = require('./roles');
-const { hashPassword, verifyPassword } = require('./password');
+const { TEMPORARY_PASSWORD, hashPassword, verifyPassword } = require('./password');
 const { createUserRepository, normalizeUsername } = require('../users/users.repository');
 const { createOperationLogRepository } = require('../operation-logs/operation-log.repository');
 
@@ -70,6 +70,9 @@ function createAuthService(options = {}) {
       if (!user.isActive) {
         throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
       }
+      if (user.mustChangePassword && !isPasswordChangeAllowedPath(request)) {
+        throw createHttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Password change is required before continuing.');
+      }
       return user;
     },
 
@@ -81,10 +84,14 @@ function createAuthService(options = {}) {
       if (!verifyPassword(patch?.currentPassword, user.passwordHash)) {
         throw createHttpError(400, 'CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
       }
+      if (patch?.newPassword === TEMPORARY_PASSWORD) {
+        throw createHttpError(400, 'TEMPORARY_PASSWORD_NOT_ALLOWED', 'New password cannot be the temporary password.');
+      }
 
       const nextUser = {
         ...user,
         passwordHash: hashPassword(patch.newPassword),
+        mustChangePassword: false,
         updatedAt: new Date().toISOString(),
       };
       userRepository.saveUser(nextUser);
@@ -107,13 +114,13 @@ function createAuthService(options = {}) {
     },
 
     requireAdmin(user) {
-      if (user.role !== 'admin') {
+      if (!isAdminRole(user?.role)) {
         throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
       }
     },
 
     requireAnyRole(user, roles) {
-      if (!roles.includes(user.role)) {
+      if (!isRoleAllowed(user?.role, roles)) {
         throw createHttpError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.');
       }
     },
@@ -138,9 +145,26 @@ function toPublicUser(user) {
     phone: user.phone,
     leaderId: user.leaderId,
     isActive: user.isActive,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    statusReason: user.statusReason || null,
+    statusChangedAt: user.statusChangedAt || null,
+    statusChangedBy: user.statusChangedBy || null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
+}
+
+function isAdminRole(role) {
+  return role === 'super_admin' || role === 'admin';
+}
+
+function isRoleAllowed(role, roles) {
+  return roles.includes(role) || (role === 'super_admin' && roles.includes('admin'));
+}
+
+function isPasswordChangeAllowedPath(request) {
+  const path = String(request?.path || request?.url || '');
+  return path.includes('/auth/me') || path.includes('/auth/change-password');
 }
 
 module.exports = {

@@ -118,15 +118,17 @@ test('contract: stage7 rule CRUD enforces role permissions', async () => {
     assert.equal(bossList.response.status, 200);
     assert.equal(bossList.body.data.commissionRules.length, 2);
 
-    const ruleReadRoutes = [
+    const generalRuleReadRoutes = [
       '/api/commission-rules',
+      '/api/agency-rebate-rules',
+    ];
+    const deductionRuleReadRoutes = [
       '/api/sales-deduction-rules',
       '/api/agency-deduction-rules',
-      '/api/agency-rebate-rules',
     ];
     const readAllowed = [admin, finance, boss];
     const readDenied = [sales, warehouse, afterSales, frontDesk, taster];
-    for (const route of ruleReadRoutes) {
+    for (const route of generalRuleReadRoutes) {
       for (const session of readAllowed) {
         const allowed = await requestJson(baseUrl, route, {
           token: session.token,
@@ -134,6 +136,20 @@ test('contract: stage7 rule CRUD enforces role permissions', async () => {
         assert.equal(allowed.response.status, 200);
       }
       for (const session of readDenied) {
+        const denied = await requestJson(baseUrl, route, {
+          token: session.token,
+        });
+        assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      }
+    }
+    for (const route of deductionRuleReadRoutes) {
+      for (const session of [admin, finance]) {
+        const allowed = await requestJson(baseUrl, route, {
+          token: session.token,
+        });
+        assert.equal(allowed.response.status, 200);
+      }
+      for (const session of [boss, ...readDenied]) {
         const denied = await requestJson(baseUrl, route, {
           token: session.token,
         });
@@ -288,6 +304,21 @@ test('contract: stage7 rule CRUD enforces role permissions', async () => {
 test('contract: stage7 rule CRUD validates fields', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const costProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'stage7 test wine',
+    );
+    const invalidRangeProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'stage7 test wine invalid range',
+    );
+    const trimmedProductFixture = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      '  Stage7 Smoke Trimmed Wine  ',
+    );
 
     const negativeRate = await requestJson(baseUrl, '/api/commission-rules', {
       method: 'POST',
@@ -308,7 +339,7 @@ test('contract: stage7 rule CRUD validates fields', async () => {
         method: 'POST',
         token: admin.token,
         body: {
-          productName: ' stage7 test wine ',
+          productId: costProduct.id,
           deductionCostCents: -1,
           effectiveFrom: '2026-07-01',
         },
@@ -323,7 +354,7 @@ test('contract: stage7 rule CRUD validates fields', async () => {
         method: 'POST',
         token: admin.token,
         body: {
-          productName: 'stage7 test wine invalid range',
+          productId: invalidRangeProduct.id,
           deductionCostCents: 100,
           effectiveFrom: '2026-08-01',
           effectiveTo: '2026-07-31',
@@ -356,7 +387,6 @@ test('contract: stage7 rule CRUD validates fields', async () => {
         token: admin.token,
         body: {
           agencyName: 'Stage7 Test Agency',
-          productName: '   ',
           deductionCostCents: 100,
           effectiveFrom: '2026-07-01',
         },
@@ -371,7 +401,7 @@ test('contract: stage7 rule CRUD validates fields', async () => {
         method: 'POST',
         token: admin.token,
         body: {
-          productName: '  Stage7 Smoke Trimmed Wine  ',
+          productId: trimmedProductFixture.id,
           deductionCostCents: 100,
           effectiveFrom: '2026-07-01',
         },
@@ -388,6 +418,16 @@ test('contract: stage7 rule CRUD validates fields', async () => {
 test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const overlapProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Overlap Wine',
+    );
+    const agencyProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Agency Wine',
+    );
 
     const firstSalesDeduction = await requestJson(
       baseUrl,
@@ -396,7 +436,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         method: 'POST',
         token: admin.token,
         body: {
-          productName: 'Stage7 Test Overlap Wine',
+          productId: overlapProduct.id,
           deductionCostCents: 100,
           effectiveFrom: '2026-01-01',
           effectiveTo: '2026-06-30',
@@ -412,7 +452,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         method: 'POST',
         token: admin.token,
         body: {
-          productName: 'Stage7 Test Overlap Wine',
+          productId: overlapProduct.id,
           deductionCostCents: 120,
           effectiveFrom: '2026-06-01',
           effectiveTo: '2026-12-31',
@@ -428,7 +468,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         method: 'POST',
         token: admin.token,
         body: {
-          productName: 'Stage7 Test Overlap Wine',
+          productId: overlapProduct.id,
           deductionCostCents: 130,
           effectiveFrom: '2026-06-01',
           effectiveTo: '2026-12-31',
@@ -445,7 +485,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         method: 'POST',
         token: admin.token,
         body: {
-          productName: 'Stage7 Test Overlap Wine',
+          productId: overlapProduct.id,
           deductionCostCents: 140,
           effectiveFrom: '2026-07-01',
           effectiveTo: '2026-12-31',
@@ -462,7 +502,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         token: admin.token,
         body: {
           agencyName: 'Stage7 Test Overlap Agency',
-          productName: 'Stage7 Test Agency Wine',
+          productId: agencyProduct.id,
           deductionCostCents: 100,
           effectiveFrom: '2026-01-01',
         },
@@ -478,7 +518,7 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
         token: admin.token,
         body: {
           agencyName: 'Stage7 Test Overlap Agency',
-          productName: 'Stage7 Test Agency Wine',
+          productId: agencyProduct.id,
           deductionCostCents: 110,
           effectiveFrom: '2026-02-01',
         },
@@ -578,6 +618,16 @@ test('contract: stage7 rule CRUD writes operation logs with before and after', a
 test('contract: stage7 rule CRUD writes create update and disable logs for every rule table', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const salesLogProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Log Inventory Sales Wine',
+    );
+    const agencyLogProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Log Inventory Agency Wine',
+    );
     const cases = [
       {
         route: '/api/commission-rules',
@@ -600,8 +650,9 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
         responseKey: 'salesDeductionRule',
         logPrefix: 'sales_deduction_rules',
         entityType: 'sales_deduction_rule',
+        productId: salesLogProduct.id,
         createBody: {
-          productName: 'Stage7 Smoke Log Inventory Sales Wine',
+          productId: salesLogProduct.id,
           deductionCostCents: 1200,
           effectiveFrom: '2031-01-01',
           notes: 'stage7 smoke log inventory create sales deduction',
@@ -615,9 +666,10 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
         responseKey: 'agencyDeductionRule',
         logPrefix: 'agency_deduction_rules',
         entityType: 'agency_deduction_rule',
+        productId: agencyLogProduct.id,
         createBody: {
           agencyName: 'Stage7 Smoke Log Inventory Agency Deduction',
-          productName: 'Stage7 Smoke Log Inventory Agency Wine',
+          productId: agencyLogProduct.id,
           deductionCostCents: 2200,
           effectiveFrom: '2031-01-01',
           notes: 'stage7 smoke log inventory create agency deduction',
@@ -657,7 +709,10 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
       const updated = await requestJson(baseUrl, `${ruleCase.route}/${rule.id}`, {
         method: 'PATCH',
         token: admin.token,
-        body: ruleCase.updateBody,
+        body: {
+          ...ruleCase.updateBody,
+          ...(ruleCase.productId ? { productId: ruleCase.productId } : {}),
+        },
       });
       assert.equal(updated.response.status, 200);
 
@@ -665,6 +720,7 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
         method: 'PATCH',
         token: admin.token,
         body: {
+          ...(ruleCase.productId ? { productId: ruleCase.productId } : {}),
           isActive: false,
         },
       });
@@ -720,6 +776,16 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
 test('contract: stage7 rule batch import succeeds for structured JSON templates', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const batchProductA = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Batch Wine A',
+    );
+    const batchProductB = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Batch Wine B',
+    );
 
     const salesImport = await requestJson(
       baseUrl,
@@ -730,13 +796,13 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
         body: {
           rules: [
             {
-              productName: '  Stage7 Smoke Batch Wine A  ',
+              productId: batchProductA.id,
               deductionCostCents: 1000,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 smoke sales batch import a',
             },
             {
-              productName: 'Stage7 Smoke Batch Wine B',
+              productId: batchProductB.id,
               deductionCostCents: 2000,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 smoke sales batch import b',
@@ -762,14 +828,14 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
           rules: [
             {
               agencyName: 'Stage7 Smoke Batch Agency A',
-              productName: 'Stage7 Smoke Batch Wine A',
+              productId: batchProductA.id,
               deductionCostCents: 3000,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 smoke agency deduction batch import a',
             },
             {
               agencyName: 'Stage7 Smoke Batch Agency B',
-              productName: 'Stage7 Smoke Batch Wine B',
+              productId: batchProductB.id,
               deductionCostCents: 4000,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 smoke agency deduction batch import b',
@@ -842,6 +908,21 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
 test('contract: stage7 rule batch import reports partial failures per row', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const partialProductA = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Partial Success A',
+    );
+    const partialFailureProduct = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Partial Failure',
+    );
+    const partialProductB = await createRuleTestProduct(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Partial Success B',
+    );
 
     const result = await requestJson(
       baseUrl,
@@ -852,19 +933,19 @@ test('contract: stage7 rule batch import reports partial failures per row', asyn
         body: {
           rules: [
             {
-              productName: 'Stage7 Test Partial Success A',
+              productId: partialProductA.id,
               deductionCostCents: 100,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 test partial success a',
             },
             {
-              productName: 'Stage7 Test Partial Failure',
+              productId: partialFailureProduct.id,
               deductionCostCents: -1,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 test partial failure',
             },
             {
-              productName: 'Stage7 Test Partial Success B',
+              productId: partialProductB.id,
               deductionCostCents: 200,
               effectiveFrom: '2026-07-01',
               notes: 'stage7 test partial success b',
@@ -992,6 +1073,19 @@ async function findOperationLog(baseUrl, token, action, entityId) {
   const log = logs.body.data.logs.find((item) => item.entityId === entityId);
   assert.ok(log, `${action} log for ${entityId} should exist`);
   return log;
+}
+
+async function createRuleTestProduct(baseUrl, token, name) {
+  const result = await requestJson(baseUrl, '/api/products', {
+    method: 'POST',
+    token,
+    body: {
+      name,
+      unit: 'bottle',
+    },
+  });
+  assert.equal(result.response.status, 201);
+  return result.body.data.product;
 }
 
 function assertStage7WriteLog(log, expected) {

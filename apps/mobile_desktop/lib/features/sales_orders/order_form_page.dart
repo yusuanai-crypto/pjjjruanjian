@@ -6,10 +6,10 @@ import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
+import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../customers/customer_picker_dialog.dart';
-import '../travel_groups/travel_group_picker_dialog.dart';
 
 class OrderFormPage extends StatefulWidget {
   const OrderFormPage({
@@ -32,26 +32,23 @@ class _OrderFormPageState extends State<OrderFormPage> {
   late final TextEditingController _customerPhoneController;
   late final TextEditingController _addressController;
   late final TextEditingController _orderDateController;
-  late final TextEditingController _salesFormNoController;
   late final TextEditingController _cashOnDeliveryAmountController;
   late final TextEditingController _remarkController;
   late final List<String> _provinceOptions;
 
-  String _orderType = _orderTypeOptions.first.value;
   CustomerRecord? _selectedCustomer;
-  TravelGroupRecord? _selectedTravelGroup;
   String? _province;
   String? _city;
   String? _district;
-  bool _invoiceRequired = false;
   bool _saving = false;
   String? _errorMessage;
   String? _successMessage;
   String? _lastSavedOrderNo;
   Map<String, dynamic>? _localDraft;
   late List<_OrderItemDraft> _items;
-
-  bool get _isTravelGroupOrder => _orderType == 'travel_group';
+  List<ProductOptionRecord> _productOptions = const [];
+  bool _loadingProductOptions = true;
+  String? _productOptionsError;
 
   @override
   void initState() {
@@ -63,11 +60,11 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _customerPhoneController = TextEditingController();
     _addressController = TextEditingController();
     _orderDateController = TextEditingController(text: formatDate(_orderDate));
-    _salesFormNoController = TextEditingController();
     _cashOnDeliveryAmountController = TextEditingController();
     _remarkController = TextEditingController();
     _provinceOptions = administrativeProvinceNames();
     _items = _initialOrderItems();
+    _loadProductOptions();
   }
 
   @override
@@ -77,6 +74,29 @@ class _OrderFormPageState extends State<OrderFormPage> {
         oldWidget.token != widget.token) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+      _loadProductOptions();
+    }
+  }
+
+  Future<void> _loadProductOptions() async {
+    setState(() {
+      _loadingProductOptions = true;
+      _productOptionsError = null;
+    });
+    try {
+      final options = await _businessApi.listProductOptions();
+      if (!mounted) return;
+      setState(() {
+        _productOptions = options;
+        _loadingProductOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _productOptions = const [];
+        _loadingProductOptions = false;
+        _productOptionsError = _messageForError(error);
+      });
     }
   }
 
@@ -86,7 +106,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _customerPhoneController.dispose();
     _addressController.dispose();
     _orderDateController.dispose();
-    _salesFormNoController.dispose();
     _cashOnDeliveryAmountController.dispose();
     _remarkController.dispose();
     _disposeItems();
@@ -124,21 +143,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
       return;
     }
     _applyCustomer(selected);
-  }
-
-  Future<void> _selectTravelGroup() async {
-    final selected = await showDialog<TravelGroupRecord>(
-      context: context,
-      builder: (context) => TravelGroupPickerDialog(
-        businessApi: _businessApi,
-        initialQuery: _selectedTravelGroup?.groupNo,
-      ),
-    );
-
-    if (selected == null) {
-      return;
-    }
-    setState(() => _selectedTravelGroup = selected);
   }
 
   Future<void> _saveOrder() async {
@@ -193,28 +197,22 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _customerNameController.clear();
     _customerPhoneController.clear();
     _addressController.clear();
-    _salesFormNoController.clear();
     _cashOnDeliveryAmountController.clear();
     _remarkController.clear();
     _orderDate = now;
     _orderDateController.text = formatDate(now);
-    _orderType = _orderTypeOptions.first.value;
     _selectedCustomer = null;
-    _selectedTravelGroup = null;
     _province = null;
     _city = null;
     _district = null;
-    _invoiceRequired = false;
     _replaceItems(_initialOrderItems());
   }
 
   Map<String, dynamic> _buildOrderPayload({bool validateRequired = true}) {
     final payload = <String, dynamic>{
-      'orderType': _orderType,
+      'orderType': _orderEntryOrderType,
       'orderDate': formatDate(_orderDate),
-      'invoiceRequired': _invoiceRequired,
     };
-    _putNonEmpty(payload, 'salesFormNo', _salesFormNoController.text);
     _putNonEmpty(payload, 'remark', _remarkController.text);
 
     final cashOnDeliveryAmountCents =
@@ -229,15 +227,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
       payload['customerId'] = _selectedCustomer!.id;
     } else if (customerPayload != null) {
       payload['customer'] = customerPayload;
-    }
-
-    if (_isTravelGroupOrder) {
-      if (validateRequired && _selectedTravelGroup == null) {
-        throw const _OrderFormValidationError('旅行团订单必须选择旅行团。');
-      }
-      if (_selectedTravelGroup != null) {
-        payload['travelGroupId'] = _selectedTravelGroup!.id;
-      }
     }
 
     final itemPayloads = _itemPayloads(validateRequired: validateRequired);
@@ -279,8 +268,8 @@ class _OrderFormPageState extends State<OrderFormPage> {
         continue;
       }
 
-      if (validateRequired && item.name.isEmpty) {
-        throw _OrderFormValidationError('第 ${index + 1} 条明细请填写酒品名称。');
+      if (validateRequired && item.productId == null) {
+        throw _OrderFormValidationError('第 ${index + 1} 条明细请选择启用商品。');
       }
       if (validateRequired && item.quantity <= 0) {
         throw _OrderFormValidationError('第 ${index + 1} 条明细数量必须大于 0。');
@@ -291,12 +280,12 @@ class _OrderFormPageState extends State<OrderFormPage> {
           '第 ${index + 1} 条明细单价必须为有效的非负金额。',
         );
       }
-      if (!validateRequired && item.name.isEmpty) {
+      if (!validateRequired && item.productId == null) {
         continue;
       }
 
       final itemPayload = <String, dynamic>{
-        'productName': item.name,
+        'productId': item.productId,
         'quantity': item.quantity,
         'unitPriceCents': unitPriceCents,
         'deliveryType': item.deliveryType.value,
@@ -337,6 +326,10 @@ class _OrderFormPageState extends State<OrderFormPage> {
 
   void _updateItemDeliveryType(int index, DeliveryType deliveryType) {
     setState(() => _items[index].deliveryType = deliveryType);
+  }
+
+  void _updateItemProduct(int index, ProductOptionRecord product) {
+    setState(() => _items[index].selectProduct(product));
   }
 
   void _disposeItems() {
@@ -508,76 +501,28 @@ class _OrderFormPageState extends State<OrderFormPage> {
               FormSection(
                 title: '订单信息',
                 children: [
-                  ResponsiveFormGrid(
-                    children: [
-                      DropdownButtonFormField<String>(
-                        key: const ValueKey('order-type-field'),
-                        initialValue: _orderType,
-                        isExpanded: true,
-                        decoration: const InputDecoration(labelText: '订单类型'),
-                        items: [
-                          for (final type in _orderTypeOptions)
-                            DropdownMenuItem(
-                              value: type.value,
-                              child: Text(type.label),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) {
-                            return;
-                          }
-                          setState(() {
-                            _orderType = value;
-                            if (!_isTravelGroupOrder) {
-                              _selectedTravelGroup = null;
-                            }
-                          });
-                        },
-                      ),
-                      TextField(
-                        controller: _orderDateController,
-                        readOnly: true,
-                        onTap: _pickOrderDate,
-                        decoration: const InputDecoration(
-                          labelText: '订单日期',
-                          suffixIcon: Icon(Icons.calendar_today_rounded),
-                        ),
-                      ),
-                      TextField(
-                        key: const ValueKey('order-sales-form-no-field'),
-                        controller: _salesFormNoController,
-                        onChanged: (_) => setState(() {}),
-                        decoration:
-                            const InputDecoration(labelText: '销售单号（可选）'),
-                      ),
-                      CheckboxListTile(
-                        key: const ValueKey('invoice-required-checkbox'),
-                        value: _invoiceRequired,
-                        onChanged: (value) {
-                          setState(() => _invoiceRequired = value ?? false);
-                        },
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: const Text('客户需要开票'),
-                      ),
-                    ],
-                  ),
-                  if (_isTravelGroupOrder) ...[
-                    const SizedBox(height: 12),
-                    _TravelGroupSelector(
-                      group: _selectedTravelGroup,
-                      onSelect: _selectTravelGroup,
-                      onClear: () =>
-                          setState(() => _selectedTravelGroup = null),
+                  TextField(
+                    key: const ValueKey('order-date-field'),
+                    controller: _orderDateController,
+                    readOnly: true,
+                    onTap: _pickOrderDate,
+                    decoration: const InputDecoration(
+                      labelText: '订单日期',
+                      suffixIcon: Icon(Icons.calendar_today_rounded),
                     ),
-                  ],
+                  ),
                   const SizedBox(height: 12),
                   _OrderItemsEditor(
                     items: _items,
+                    productOptions: _productOptions,
+                    loadingProductOptions: _loadingProductOptions,
+                    productOptionsError: _productOptionsError,
+                    onRetryProductOptions: _loadProductOptions,
                     onAdd: _addItem,
                     onDelete: _deleteItem,
                     onChanged: () => setState(() {}),
                     onDeliveryTypeChanged: _updateItemDeliveryType,
+                    onProductChanged: _updateItemProduct,
                   ),
                   const SizedBox(height: 12),
                   ResponsiveFormGrid(
@@ -613,89 +558,14 @@ class _OrderFormPageState extends State<OrderFormPage> {
           ),
           secondary: _OrderSummary(
             orderDate: _orderDate,
-            orderTypeLabel: _orderTypeLabel(_orderType),
             customerName: _customerNameController.text,
             customerPhone: _customerPhoneController.text,
-            travelGroup: _selectedTravelGroup,
-            salesFormNo: _salesFormNoController.text,
-            invoiceRequired: _invoiceRequired,
             totalAmountCents: totalAmountCents,
             localDraft: _localDraft,
             lastSavedOrderNo: _lastSavedOrderNo,
           ),
         ),
       ],
-    );
-  }
-}
-
-class _TravelGroupSelector extends StatelessWidget {
-  const _TravelGroupSelector({
-    required this.group,
-    required this.onSelect,
-    required this.onClear,
-  });
-
-  final TravelGroupRecord? group;
-  final VoidCallback onSelect;
-  final VoidCallback onClear;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('select-travel-group-button'),
-                  onPressed: onSelect,
-                  icon: const Icon(Icons.directions_bus_rounded),
-                  label: Text(group == null ? '选择旅行团' : '重新选择旅行团'),
-                ),
-                if (group != null)
-                  TextButton.icon(
-                    key: const ValueKey('clear-travel-group-button'),
-                    onPressed: onClear,
-                    icon: const Icon(Icons.close_rounded),
-                    label: const Text('清除'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (group == null)
-              Text(
-                '旅行团订单保存前必须选择旅行团。',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              )
-            else
-              _SelectionSummary(
-                icon: Icons.directions_bus_rounded,
-                title: group!.groupNo,
-                subtitle:
-                    '${_display(group!.travelAgency, '未填写旅行社')} · ${_display(group!.guideName, '未填写导游')} · ${_display(group!.visitDate, '未填写到店日期')}',
-                trailing: StatusTag(
-                  label: group!.financeMark ? '已标记' : '未标记',
-                  tone: group!.financeMark
-                      ? StatusTone.success
-                      : StatusTone.neutral,
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -756,18 +626,28 @@ class _SelectionSummary extends StatelessWidget {
 class _OrderItemsEditor extends StatelessWidget {
   const _OrderItemsEditor({
     required this.items,
+    required this.productOptions,
+    required this.loadingProductOptions,
+    required this.productOptionsError,
+    required this.onRetryProductOptions,
     required this.onAdd,
     required this.onDelete,
     required this.onChanged,
     required this.onDeliveryTypeChanged,
+    required this.onProductChanged,
   });
 
   final List<_OrderItemDraft> items;
+  final List<ProductOptionRecord> productOptions;
+  final bool loadingProductOptions;
+  final String? productOptionsError;
+  final VoidCallback onRetryProductOptions;
   final VoidCallback onAdd;
   final ValueChanged<int> onDelete;
   final VoidCallback onChanged;
   final void Function(int index, DeliveryType deliveryType)
       onDeliveryTypeChanged;
+  final void Function(int index, ProductOptionRecord product) onProductChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -815,6 +695,12 @@ class _OrderItemsEditor extends StatelessWidget {
                   onDelete: () => onDelete(index),
                   onDeliveryTypeChanged: (deliveryType) =>
                       onDeliveryTypeChanged(index, deliveryType),
+                  productOptions: productOptions,
+                  loadingProductOptions: loadingProductOptions,
+                  productOptionsError: productOptionsError,
+                  onRetryProductOptions: onRetryProductOptions,
+                  onProductChanged: (product) =>
+                      onProductChanged(index, product),
                 ),
                 if (index != items.length - 1) const Divider(height: 20),
               ],
@@ -832,6 +718,11 @@ class _ItemRow extends StatelessWidget {
     required this.onChanged,
     required this.onDelete,
     required this.onDeliveryTypeChanged,
+    required this.productOptions,
+    required this.loadingProductOptions,
+    required this.productOptionsError,
+    required this.onRetryProductOptions,
+    required this.onProductChanged,
   });
 
   final int index;
@@ -839,6 +730,11 @@ class _ItemRow extends StatelessWidget {
   final VoidCallback onChanged;
   final VoidCallback onDelete;
   final ValueChanged<DeliveryType> onDeliveryTypeChanged;
+  final List<ProductOptionRecord> productOptions;
+  final bool loadingProductOptions;
+  final String? productOptionsError;
+  final VoidCallback onRetryProductOptions;
+  final ValueChanged<ProductOptionRecord> onProductChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -867,12 +763,19 @@ class _ItemRow extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 680;
-        final productField = TextField(
+        final productField = ProductOptionPickerField(
           key: ValueKey('order-item-product-$index'),
-          controller: item.nameController,
-          onChanged: (_) => onChanged(),
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(labelText: '酒品名称'),
+          options: productOptions,
+          loading: loadingProductOptions,
+          loadError: productOptionsError,
+          productId: item.productId,
+          snapshotName: item.snapshotName,
+          snapshotUnit: item.snapshotUnit,
+          onRetry: onRetryProductOptions,
+          onChanged: (product) {
+            onProductChanged(product);
+            onChanged();
+          },
         );
         final quantityField = TextField(
           key: ValueKey('order-item-quantity-$index'),
@@ -979,24 +882,16 @@ class _ItemRow extends StatelessWidget {
 class _OrderSummary extends StatelessWidget {
   const _OrderSummary({
     required this.orderDate,
-    required this.orderTypeLabel,
     required this.customerName,
     required this.customerPhone,
-    required this.travelGroup,
-    required this.salesFormNo,
-    required this.invoiceRequired,
     required this.totalAmountCents,
     required this.localDraft,
     required this.lastSavedOrderNo,
   });
 
   final DateTime orderDate;
-  final String orderTypeLabel;
   final String customerName;
   final String customerPhone;
-  final TravelGroupRecord? travelGroup;
-  final String salesFormNo;
-  final bool invoiceRequired;
   final int totalAmountCents;
   final Map<String, dynamic>? localDraft;
   final String? lastSavedOrderNo;
@@ -1012,23 +907,12 @@ class _OrderSummary extends StatelessWidget {
         ],
         _SummaryLine(label: '订单日期', value: formatDate(orderDate)),
         const SizedBox(height: 10),
-        _SummaryLine(label: '订单类型', value: orderTypeLabel),
-        const SizedBox(height: 10),
         _SummaryLine(
           label: '客户',
           value: customerName.trim().isEmpty
               ? '未选择客户'
               : '$customerName ${customerPhone.trim()}',
         ),
-        const SizedBox(height: 10),
-        _SummaryLine(
-          label: '旅行团',
-          value: travelGroup == null ? '未选择旅行团' : travelGroup!.groupNo,
-        ),
-        if (salesFormNo.trim().isNotEmpty) ...[
-          const SizedBox(height: 10),
-          _SummaryLine(label: '销售单号', value: salesFormNo.trim()),
-        ],
         const Divider(height: 24),
         Row(
           children: [
@@ -1043,10 +927,6 @@ class _OrderSummary extends StatelessWidget {
           children: [
             const StatusTag(label: '逐项配送', tone: StatusTone.info),
             const StatusTag(label: '后端生成系统单号', tone: StatusTone.info),
-            StatusTag(
-              label: invoiceRequired ? '需要开票' : '无需开票',
-              tone: invoiceRequired ? StatusTone.warning : StatusTone.neutral,
-            ),
             if (localDraft != null)
               const StatusTag(label: '本页草稿', tone: StatusTone.success),
           ],
@@ -1082,22 +962,16 @@ class _SummaryLine extends StatelessWidget {
   }
 }
 
-class _OrderTypeOption {
-  const _OrderTypeOption(this.value, this.label);
-
-  final String value;
-  final String label;
-}
-
 class _OrderItemDraft {
   _OrderItemDraft({
-    required String name,
+    required this.productId,
+    required this.snapshotName,
+    required this.snapshotUnit,
     required int quantity,
     required int unitPriceCents,
     required this.deliveryType,
     String? notes,
-  })  : nameController = TextEditingController(text: name),
-        quantityController = TextEditingController(
+  })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
         ),
         unitPriceController = TextEditingController(
@@ -1107,20 +981,28 @@ class _OrderItemDraft {
 
   factory _OrderItemDraft.empty() {
     return _OrderItemDraft(
-      name: '',
+      productId: null,
+      snapshotName: null,
+      snapshotUnit: null,
       quantity: 1,
       unitPriceCents: 0,
       deliveryType: DeliveryType.shipping,
     );
   }
 
-  final TextEditingController nameController;
+  String? productId;
+  String? snapshotName;
+  String? snapshotUnit;
   final TextEditingController quantityController;
   final TextEditingController unitPriceController;
   final TextEditingController notesController;
   DeliveryType deliveryType;
 
-  String get name => nameController.text.trim();
+  void selectProduct(ProductOptionRecord product) {
+    productId = product.id;
+    snapshotName = product.name;
+    snapshotUnit = product.unit;
+  }
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
 
@@ -1131,14 +1013,13 @@ class _OrderItemDraft {
   String get notes => notesController.text.trim();
 
   bool get isBlank {
-    return name.isEmpty &&
+    return productId == null &&
         quantityController.text.trim().isEmpty &&
         unitPriceController.text.trim().isEmpty &&
         notes.isEmpty;
   }
 
   void dispose() {
-    nameController.dispose();
     quantityController.dispose();
     unitPriceController.dispose();
     notesController.dispose();
@@ -1169,38 +1050,12 @@ class _InlineNotice extends StatelessWidget {
   }
 }
 
-const _orderTypeOptions = <_OrderTypeOption>[
-  _OrderTypeOption('travel_group', '旅行团订单'),
-  _OrderTypeOption('buyback', '回购订单'),
-  _OrderTypeOption('external', '外销订单'),
-  _OrderTypeOption('internal', '内购订单'),
-  _OrderTypeOption('after_sales', '售后订单'),
-];
+const _orderEntryOrderType = 'external';
 
 List<_OrderItemDraft> _initialOrderItems() {
   return [
-    _OrderItemDraft(
-      name: '酱香珍藏 53°',
-      quantity: 2,
-      unitPriceCents: 129900,
-      deliveryType: DeliveryType.shipping,
-    ),
-    _OrderItemDraft(
-      name: '年份礼盒',
-      quantity: 1,
-      unitPriceCents: 388000,
-      deliveryType: DeliveryType.selfPickup,
-    ),
+    _OrderItemDraft.empty(),
   ];
-}
-
-String _orderTypeLabel(String value) {
-  for (final option in _orderTypeOptions) {
-    if (option.value == value) {
-      return option.label;
-    }
-  }
-  return _orderTypeOptions.first.label;
 }
 
 String _customerSummary(CustomerRecord customer) {
@@ -1254,11 +1109,6 @@ String _moneyTextFromCents(int cents) {
     return '${cents ~/ 100}';
   }
   return (cents / 100).toStringAsFixed(2);
-}
-
-String _display(String? value, String fallback) {
-  final text = value?.trim() ?? '';
-  return text.isEmpty ? fallback : text;
 }
 
 String _messageForError(Object error) {

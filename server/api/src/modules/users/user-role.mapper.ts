@@ -1,6 +1,7 @@
 import type { UserRole } from '@prisma/client';
 
 export const PRISMA_ROLE_BY_APP_ROLE: Record<string, UserRole> = {
+  super_admin: 'SUPER_ADMIN',
   admin: 'ADMIN',
   boss: 'BOSS',
   front_desk: 'FRONT_DESK',

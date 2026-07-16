@@ -1,4 +1,5 @@
 enum UserRole {
+  superAdmin('super_admin', '超级管理员'),
   admin('admin', '管理员'),
   boss('boss', '老板'),
   frontDesk('front_desk', '前台'),
@@ -22,6 +23,7 @@ class RoleDefinition {
 }
 
 const roleDefinitions = <RoleDefinition>[
+  RoleDefinition(role: UserRole.superAdmin, description: '维护全部账号、权限、系统设置和操作日志'),
   RoleDefinition(role: UserRole.admin, description: '维护账号、权限、系统设置和操作日志'),
   RoleDefinition(role: UserRole.boss, description: '查看经营数据、全局标记查询和 AI 助手'),
   RoleDefinition(role: UserRole.frontDesk, description: '录入旅行团并管理前台查询入口'),
@@ -32,7 +34,10 @@ const roleDefinitions = <RoleDefinition>[
   RoleDefinition(role: UserRole.finance, description: '核对金额、标记信息、物流和提成'),
   RoleDefinition(role: UserRole.warehouse, description: '处理待发货订单、物流方式和打包状态'),
   RoleDefinition(role: UserRole.afterSales, description: '查询订单并创建售后处理记录'),
-  RoleDefinition(role: UserRole.taster, description: '查看本人接待和提成入口'),
+  RoleDefinition(
+    role: UserRole.taster,
+    description: '全量查看旅行团，按接团或对接关系编辑，并查看本人接待和提成',
+  ),
 ];
 
 class SharedMenuEntry {
@@ -50,9 +55,9 @@ class SharedMenuEntry {
 const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'dashboard', label: '首页', phase: 1),
   SharedMenuEntry(id: 'role_menu', label: '角色菜单', phase: 2),
+  SharedMenuEntry(id: 'employee_accounts', label: '员工账号', phase: 1),
   SharedMenuEntry(id: 'travel_group_form', label: '旅行团录入', phase: 3),
-  SharedMenuEntry(id: 'travel_group_query', label: '旅行团查询', phase: 3),
-  SharedMenuEntry(id: 'pending_travel_groups', label: '待处理旅行团', phase: 3),
+  SharedMenuEntry(id: 'travel_group_query', label: '旅行团管理', phase: 3),
   SharedMenuEntry(id: 'travel_agency_management', label: '旅行社管理', phase: 7),
   SharedMenuEntry(
     id: 'travel_group_finance_supplement',
@@ -63,10 +68,11 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'order_form', label: '订单录入', phase: 4),
   SharedMenuEntry(id: 'order_query', label: '订单管理', phase: 4),
   SharedMenuEntry(id: 'qr_sales_sheet', label: '二维码销售单', phase: 5),
-  SharedMenuEntry(id: 'taster_summary', label: '品鉴师接待总结', phase: 3),
+  SharedMenuEntry(id: 'taster_summary', label: '我的接待', phase: 3),
   SharedMenuEntry(id: 'taster_commissions', label: '我的提成', phase: 7),
   SharedMenuEntry(id: 'finance_query', label: '财务查询', phase: 6),
   SharedMenuEntry(id: 'commission_rules', label: '提成规则', phase: 7),
+  SharedMenuEntry(id: 'product_management', label: '商品管理', phase: 10),
   SharedMenuEntry(id: 'reconciliation_table', label: '对账表', phase: 6),
   SharedMenuEntry(id: 'warehouse_packing', label: '库管打包', phase: 6),
   SharedMenuEntry(id: 'after_sales_form', label: '售后处理', phase: 6),
@@ -75,12 +81,12 @@ const sharedMenuEntries = <SharedMenuEntry>[
 ];
 
 const roleMenuIds = <UserRole, List<String>>{
-  UserRole.admin: [
+  UserRole.superAdmin: [
     'dashboard',
     'role_menu',
+    'employee_accounts',
     'travel_group_form',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -90,6 +96,29 @@ const roleMenuIds = <UserRole, List<String>>{
     'taster_summary',
     'finance_query',
     'commission_rules',
+    'product_management',
+    'reconciliation_table',
+    'warehouse_packing',
+    'after_sales_form',
+    'analytics',
+    'ai_assistant',
+  ],
+  UserRole.admin: [
+    'dashboard',
+    'role_menu',
+    'employee_accounts',
+    'travel_group_form',
+    'travel_group_query',
+    'travel_agency_management',
+    'travel_group_finance_supplement',
+    'travel_group_order_notes',
+    'order_form',
+    'order_query',
+    'qr_sales_sheet',
+    'taster_summary',
+    'finance_query',
+    'commission_rules',
+    'product_management',
     'reconciliation_table',
     'warehouse_packing',
     'after_sales_form',
@@ -100,7 +129,6 @@ const roleMenuIds = <UserRole, List<String>>{
     'dashboard',
     'role_menu',
     'travel_group_query',
-    'pending_travel_groups',
     'order_query',
     'after_sales_form',
     'finance_query',
@@ -114,13 +142,11 @@ const roleMenuIds = <UserRole, List<String>>{
     'role_menu',
     'travel_group_form',
     'travel_group_query',
-    'pending_travel_groups',
   ],
   UserRole.sales: [
     'dashboard',
     'role_menu',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_group_order_notes',
     'order_form',
     'order_query',
@@ -131,11 +157,11 @@ const roleMenuIds = <UserRole, List<String>>{
     'dashboard',
     'role_menu',
     'travel_group_query',
-    'pending_travel_groups',
     'travel_agency_management',
     'order_query',
     'finance_query',
     'commission_rules',
+    'product_management',
     'reconciliation_table',
     'analytics',
     'ai_assistant',
@@ -157,6 +183,7 @@ const roleMenuIds = <UserRole, List<String>>{
   UserRole.taster: [
     'dashboard',
     'role_menu',
+    'travel_group_query',
     'taster_summary',
     'taster_commissions',
   ],

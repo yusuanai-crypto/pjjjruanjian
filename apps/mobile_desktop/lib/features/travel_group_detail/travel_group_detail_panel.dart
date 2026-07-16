@@ -6,6 +6,10 @@ import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/status_tag.dart';
 
+typedef TravelGroupAttachmentAction = void Function(
+  TravelGroupAttachmentRecord attachment,
+);
+
 class TravelGroupDetailPanel extends StatelessWidget {
   const TravelGroupDetailPanel({
     super.key,
@@ -16,6 +20,9 @@ class TravelGroupDetailPanel extends StatelessWidget {
     this.onEdit,
     this.onFinanceMark,
     this.onSummary,
+    this.onPreviewAttachment,
+    this.onDownloadAttachment,
+    this.onDeleteAttachment,
   });
 
   final TravelGroupRecord group;
@@ -25,6 +32,9 @@ class TravelGroupDetailPanel extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onFinanceMark;
   final VoidCallback? onSummary;
+  final TravelGroupAttachmentAction? onPreviewAttachment;
+  final TravelGroupAttachmentAction? onDownloadAttachment;
+  final TravelGroupAttachmentAction? onDeleteAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -79,13 +89,14 @@ class TravelGroupDetailPanel extends StatelessWidget {
         const Divider(height: 24),
         const _SectionTitle('基础信息'),
         _InfoRow(label: '团号', value: group.groupNo),
-        _InfoRow(label: '日期', value: group.visitDate),
+        _InfoRow(label: '进店日期', value: group.visitDate),
         _InfoRow(label: '旅行社', value: group.travelAgency),
         _InfoRow(label: '车牌号', value: group.licensePlate),
         _InfoRow(label: '品鉴馆', value: group.tastingRoomNo),
         _InfoRow(label: '团型', value: group.groupType),
         _InfoRow(label: '人数', value: '${group.guestCount} 人'),
-        _InfoRow(label: '进店', value: group.arrivalTime),
+        _InfoRow(label: '预计进店时间', value: group.expectedArrivalTime),
+        _InfoRow(label: '实际进店时间', value: group.arrivalTime),
         _InfoRow(label: '离店', value: group.departureTime),
         _InfoRow(label: '备注', value: group.remarks),
         const Divider(height: 24),
@@ -95,12 +106,42 @@ class TravelGroupDetailPanel extends StatelessWidget {
         _InfoRow(label: '手机号', value: group.guidePhone),
         _InfoRow(label: '旅行社', value: group.travelAgency),
         const Divider(height: 24),
+        const _SectionTitle('客户补充信息'),
+        _InfoRow(label: '客源地', value: group.sourceRegion),
+        _InfoRow(label: '年龄描述', value: group.ageInfo),
+        _InfoRow(
+          label: '提及飞天',
+          value: _mentionedFeitianLabel(group.mentionedFeitian),
+        ),
+        _InfoRow(label: '前站出单情况', value: group.previousStopOrderStatus),
+        _InfoRow(label: '重点客户信息', value: group.keyCustomerInfo),
+        const Divider(height: 24),
         const _SectionTitle('品鉴师'),
+        _InfoRow(label: '对接品鉴师ID', value: group.liaisonTasterId),
+        _InfoRow(label: '对接品鉴师', value: group.liaisonTasterName),
         _InfoRow(label: '品鉴师ID', value: group.tasterId),
-        _InfoRow(label: '姓名', value: group.tasterName),
+        _InfoRow(label: '品鉴师', value: group.tasterName),
         _InfoRow(label: '总结', value: group.tasterSummary),
         _InfoRow(label: '总结时间', value: group.tasterSummaryAt),
         _InfoRow(label: '品鉴备注', value: group.wineDetails),
+        const Divider(height: 24),
+        _AttachmentSection(
+          title: '重点客户照片',
+          emptyText: '暂无重点客户照片',
+          attachments: group.keyCustomerPhotos,
+          onPreview: onPreviewAttachment,
+          onDownload: onDownloadAttachment,
+          onDelete: onDeleteAttachment,
+        ),
+        const Divider(height: 24),
+        _AttachmentSection(
+          title: '客人信息附件',
+          emptyText: '暂无客人信息附件',
+          attachments: group.guestInfoAttachments,
+          onPreview: onPreviewAttachment,
+          onDownload: onDownloadAttachment,
+          onDelete: onDeleteAttachment,
+        ),
         const Divider(height: 24),
         const _SectionTitle('品酒明细'),
         if (group.tastingItems.isEmpty)
@@ -191,6 +232,133 @@ class TravelGroupDetailPanel extends StatelessWidget {
         _InfoRow(label: '标记人', value: group.markedById),
         _InfoRow(label: '标记时间', value: group.markedAt),
       ],
+    );
+  }
+}
+
+class _AttachmentSection extends StatelessWidget {
+  const _AttachmentSection({
+    required this.title,
+    required this.emptyText,
+    required this.attachments,
+    required this.onPreview,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  final String title;
+  final String emptyText;
+  final List<TravelGroupAttachmentRecord> attachments;
+  final TravelGroupAttachmentAction? onPreview;
+  final TravelGroupAttachmentAction? onDownload;
+  final TravelGroupAttachmentAction? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SectionTitle(title),
+        if (attachments.isEmpty)
+          Text(emptyText)
+        else
+          for (final attachment in attachments)
+            _AttachmentTile(
+              attachment: attachment,
+              onPreview: onPreview,
+              onDownload: onDownload,
+              onDelete: onDelete,
+            ),
+      ],
+    );
+  }
+}
+
+class _AttachmentTile extends StatelessWidget {
+  const _AttachmentTile({
+    required this.attachment,
+    required this.onPreview,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  final TravelGroupAttachmentRecord attachment;
+  final TravelGroupAttachmentAction? onPreview;
+  final TravelGroupAttachmentAction? onDownload;
+  final TravelGroupAttachmentAction? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final isImage = _isImageAttachment(attachment);
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      key: ValueKey('travel-group-attachment-${attachment.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: const BorderRadius.all(Radius.circular(8)),
+              ),
+              child: Icon(
+                isImage ? Icons.image_rounded : Icons.description_rounded,
+                color: scheme.primary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    attachment.originalName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_display(attachment.contentType)} · '
+                    '${_formatFileSize(attachment.size)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      if (isImage && onPreview != null)
+                        TextButton.icon(
+                          onPressed: () => onPreview!(attachment),
+                          icon: const Icon(Icons.visibility_rounded),
+                          label: const Text('预览'),
+                        ),
+                      if (onDownload != null)
+                        TextButton.icon(
+                          onPressed: () => onDownload!(attachment),
+                          icon: const Icon(Icons.download_rounded),
+                          label: const Text('下载'),
+                        ),
+                      if (onDelete != null)
+                        TextButton.icon(
+                          onPressed: () => onDelete!(attachment),
+                          icon: const Icon(Icons.delete_outline_rounded),
+                          label: const Text('删除'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -286,8 +454,38 @@ String _display(String? value) {
   return text.isEmpty ? '-' : text;
 }
 
+String _mentionedFeitianLabel(bool? value) {
+  if (value == null) {
+    return '未填写';
+  }
+  return value ? '是' : '否';
+}
+
+bool _isImageAttachment(TravelGroupAttachmentRecord attachment) {
+  if ((attachment.contentType ?? '').toLowerCase().startsWith('image/')) {
+    return true;
+  }
+  final name = attachment.originalName.toLowerCase();
+  return const ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+      .any(name.endsWith);
+}
+
+String _formatFileSize(int bytes) {
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  final kilobytes = bytes / 1024;
+  if (kilobytes < 1024) {
+    return '${kilobytes.toStringAsFixed(kilobytes >= 10 ? 0 : 1)} KB';
+  }
+  final megabytes = kilobytes / 1024;
+  return '${megabytes.toStringAsFixed(megabytes >= 10 ? 0 : 1)} MB';
+}
+
 String _roleLabel(UserRole role) {
   switch (role) {
+    case UserRole.superAdmin:
+      return '超级管理员';
     case UserRole.admin:
       return '管理员';
     case UserRole.boss:

@@ -4,40 +4,44 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
 
 void main() {
-  testWidgets('requires a travel group for travel group orders',
-      (tester) async {
+  testWidgets('removes deprecated order metadata controls', (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
-    await tester.enterText(
-      find.byKey(const ValueKey('order-customer-name-field')),
-      '张女士',
+    expect(find.byKey(const ValueKey('order-date-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('order-type-field')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('order-sales-form-no-field')),
+      findsNothing,
     );
-    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
-    await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('旅行团订单必须选择旅行团。'), findsOneWidget);
-    expect(apiClient.lastSalesOrderBody, isNull);
+    expect(
+      find.byKey(const ValueKey('invoice-required-checkbox')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('select-travel-group-button')),
+      findsNothing,
+    );
+    expect(find.text('订单类型'), findsNothing);
+    expect(find.text('销售单号（可选）'), findsNothing);
+    expect(find.text('客户需要开票'), findsNothing);
+    expect(find.text('选择旅行团'), findsNothing);
   });
 
-  testWidgets('saves selected customer and travel group with phase 4 payload',
-      (tester) async {
+  testWidgets('saves an order without removed metadata fields', (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
     await _selectExistingCustomer(tester);
-    await _selectTravelGroup(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
     await tester.enterText(
-      find.byKey(const ValueKey('order-sales-form-no-field')),
-      'XS-20260630-01',
+      find.byKey(const ValueKey('order-item-quantity-0')),
+      '2',
     );
-    final invoiceCheckbox =
-        find.byKey(const ValueKey('invoice-required-checkbox'));
-    await tester.ensureVisible(invoiceCheckbox);
-    await tester.tap(invoiceCheckbox);
-    await tester.pumpAndSettle();
-
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-unit-price-0')),
+      '1299',
+    );
     await tester
         .ensureVisible(find.byKey(const ValueKey('order-item-notes-0')));
     await tester.enterText(
@@ -53,12 +57,15 @@ void main() {
     expect(body.containsKey('orderNo'), isFalse);
     expect(body['customerId'], 'customer-1');
     expect(body.containsKey('customer'), isFalse);
-    expect(body['travelGroupId'], 'group-1');
-    expect(body['salesFormNo'], 'XS-20260630-01');
-    expect(body['invoiceRequired'], isTrue);
+    expect(body['orderType'], 'external');
+    expect(body.containsKey('travelGroupId'), isFalse);
+    expect(body.containsKey('salesFormNo'), isFalse);
+    expect(body.containsKey('invoiceRequired'), isFalse);
 
     final items = body['items'] as List<dynamic>;
-    expect(items.first['productName'], '酱香珍藏 53°');
+    expect(items.first['productId'], 'product-1');
+    expect(items.first.containsKey('productName'), isFalse);
+    expect(items.first.containsKey('unit'), isFalse);
     expect(items.first['quantity'], 2);
     expect(items.first['unitPriceCents'], 129900);
     expect(items.first['deliveryType'], 'shipping');
@@ -107,7 +114,17 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
-    expect(find.text('¥6478.00'), findsOneWidget);
+    expect(find.text('¥0.00'), findsWidgets);
+
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-quantity-0')),
+      '2',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-unit-price-0')),
+      '1299',
+    );
 
     final addButton = find.byKey(const ValueKey('order-item-add-button'));
     await tester.ensureVisible(addButton);
@@ -115,47 +132,35 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester
-        .ensureVisible(find.byKey(const ValueKey('order-item-product-2')));
+        .ensureVisible(find.byKey(const ValueKey('order-item-product-1')));
+    await _selectProductForItem(tester, 1, 'product-2');
     await tester.enterText(
-      find.byKey(const ValueKey('order-item-product-2')),
-      '测试小样',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('order-item-quantity-2')),
+      find.byKey(const ValueKey('order-item-quantity-1')),
       '3',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('order-item-unit-price-2')),
+      find.byKey(const ValueKey('order-item-unit-price-1')),
       '100',
     );
     await _selectDropdownValue(
       tester,
-      key: const ValueKey('order-item-delivery-2'),
+      key: const ValueKey('order-item-delivery-1'),
       label: '自带',
     );
 
-    expect(find.text('¥6778.00'), findsOneWidget);
-
-    final deleteSecondItem = find.byKey(const ValueKey('order-item-delete-1'));
-    await tester.ensureVisible(deleteSecondItem);
-    await tester.tap(deleteSecondItem);
-    await tester.pumpAndSettle();
-
-    expect(find.text('年份礼盒'), findsNothing);
     expect(find.text('¥2898.00'), findsOneWidget);
 
     await _selectExistingCustomer(tester);
-    await _selectTravelGroup(tester);
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
     await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
     await tester.pumpAndSettle();
 
     final items = apiClient.lastSalesOrderBody!['items'] as List<dynamic>;
     expect(items, hasLength(2));
-    expect(items.first['productName'], '酱香珍藏 53°');
+    expect(items.first['productId'], 'product-1');
     expect(items.first['deliveryType'], 'shipping');
     expect(items.first['sortOrder'], 1);
-    expect(items.last['productName'], '测试小样');
+    expect(items.last['productId'], 'product-2');
     expect(items.last['quantity'], 3);
     expect(items.last['unitPriceCents'], 10000);
     expect(items.last['deliveryType'], 'self_pickup');
@@ -168,18 +173,11 @@ void main() {
     await _pumpOrderForm(tester, apiClient);
 
     await _selectExistingCustomer(tester);
-    await _selectTravelGroup(tester);
-    await tester
-        .ensureVisible(find.byKey(const ValueKey('order-item-product-0')));
-    await tester.enterText(
-      find.byKey(const ValueKey('order-item-product-0')),
-      '',
-    );
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
     await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
     await tester.pumpAndSettle();
 
-    expect(find.text('第 1 条明细请填写酒品名称。'), findsOneWidget);
+    expect(find.text('第 1 条明细请选择启用商品。'), findsOneWidget);
     expect(apiClient.lastSalesOrderBody, isNull);
   });
 }
@@ -211,13 +209,18 @@ Future<void> _selectExistingCustomer(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> _selectTravelGroup(WidgetTester tester) async {
-  final button = find.byKey(const ValueKey('select-travel-group-button'));
-  await tester.ensureVisible(button);
+Future<void> _selectProductForItem(
+  WidgetTester tester,
+  int index,
+  String productId,
+) async {
+  final field = find.byKey(ValueKey('order-item-product-$index'));
+  await tester.ensureVisible(field);
   await tester.pumpAndSettle();
-  await tester.tap(button);
+  final target = find.descendant(of: field, matching: find.byType(InkWell));
+  await tester.tap(target.first);
   await tester.pumpAndSettle();
-  await tester.tap(find.text('TG20260630001').last);
+  await tester.tap(find.byKey(ValueKey('product-option-$productId')));
   await tester.pumpAndSettle();
 }
 
@@ -243,17 +246,20 @@ class _FakeApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path == '/api/products/options') {
+      return {
+        'data': {
+          'products': const [
+            {'id': 'product-1', 'name': '酱香珍藏 53°', 'unit': '瓶'},
+            {'id': 'product-2', 'name': '测试小样', 'unit': '盒'},
+          ],
+        },
+      };
+    }
     if (path.startsWith('/api/customers')) {
       return {
         'data': {
           'customers': [_customerJson()],
-        },
-      };
-    }
-    if (path.startsWith('/api/travel-groups')) {
-      return {
-        'data': {
-          'travelGroups': [_travelGroupJson()],
         },
       };
     }
@@ -318,7 +324,7 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
   return {
     'id': 'order-1',
     'orderNo': 'SO20260630001',
-    'orderType': body['orderType'] ?? 'travel_group',
+    'orderType': body['orderType'] ?? 'external',
     'orderDate': body['orderDate'] ?? '2026-06-30',
     'customerId': body['customerId'] ?? customer['id'],
     'customer': customer,
@@ -328,8 +334,8 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
     'city': customer['city'],
     'district': customer['district'],
     'address': customer['address'],
-    'travelGroupId': body['travelGroupId'],
-    'travelGroup': body['travelGroupId'] == null ? null : _travelGroupJson(),
+    'travelGroupId': null,
+    'travelGroup': null,
     'salesFormNo': body['salesFormNo'],
     'totalAmountCents': totalAmountCents,
     'cashOnDeliveryAmountCents': body['cashOnDeliveryAmountCents'] ?? 0,
@@ -374,26 +380,5 @@ Map<String, dynamic> _customerJson({
     'updatedById': null,
     'createdAt': null,
     'updatedAt': null,
-  };
-}
-
-Map<String, dynamic> _travelGroupJson() {
-  return {
-    'id': 'group-1',
-    'kind': 'travel',
-    'groupNo': 'TG20260630001',
-    'visitDate': '2026-06-30',
-    'travelAgency': '测试旅行社',
-    'guideName': '李导',
-    'guestCount': 20,
-    'status': 'unmarked',
-    'financeMark': true,
-    'tastingItems': const [],
-    'salesOrders': const [],
-    'orderSummary': const {
-      'orderCount': 0,
-      'totalAmountCents': 0,
-      'cashOnDeliveryAmountCents': 0,
-    },
   };
 }

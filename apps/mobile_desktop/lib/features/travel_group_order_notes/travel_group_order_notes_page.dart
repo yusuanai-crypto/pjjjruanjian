@@ -289,6 +289,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
             onSelectGroup: _selectGroup,
           ),
           secondary: _BindingPanel(
+            businessApi: _businessApi,
             group: selectedGroup,
             orders: _orders,
             selectedOrderIds: _selectedOrderIds,
@@ -436,6 +437,7 @@ class _GroupQueue extends StatelessWidget {
 
 class _BindingPanel extends StatelessWidget {
   const _BindingPanel({
+    required this.businessApi,
     required this.group,
     required this.orders,
     required this.selectedOrderIds,
@@ -450,6 +452,7 @@ class _BindingPanel extends StatelessWidget {
     required this.onClear,
   });
 
+  final BusinessApi businessApi;
   final TravelGroupRecord? group;
   final List<SalesOrderRecord> orders;
   final Set<String> selectedOrderIds;
@@ -480,6 +483,7 @@ class _BindingPanel extends StatelessWidget {
         _SelectedGroupHeader(group: selectedGroup),
         const SizedBox(height: 12),
         _TastingItemsBox(
+          businessApi: businessApi,
           tastingItemsKey: tastingItemsKey,
           initialItems: initialTastingItems,
           onChanged: onTastingItemsChanged,
@@ -518,11 +522,13 @@ class _BindingPanel extends StatelessWidget {
 
 class _TastingItemsBox extends StatelessWidget {
   const _TastingItemsBox({
+    required this.businessApi,
     required this.tastingItemsKey,
     required this.initialItems,
     required this.onChanged,
   });
 
+  final BusinessApi businessApi;
   final GlobalKey<TastingItemsEditorState> tastingItemsKey;
   final List<TastingItemDraft> initialItems;
   final ValueChanged<List<Map<String, dynamic>>> onChanged;
@@ -550,6 +556,7 @@ class _TastingItemsBox extends StatelessWidget {
             const SizedBox(height: 8),
             TastingItemsEditor(
               key: tastingItemsKey,
+              businessApi: businessApi,
               initialItems: initialItems,
               onChanged: onChanged,
             ),
@@ -734,6 +741,7 @@ List<TastingItemDraft> _tastingDraftsFromGroup(TravelGroupRecord? group) {
   return [
     for (final item in _sortedTastingItems(group.tastingItems))
       TastingItemDraft(
+        productId: item.productId,
         productName: item.productName,
         quantity: item.quantity,
         unit: item.unit,
@@ -750,9 +758,8 @@ List<Map<String, dynamic>> _tastingPayloadFromGroup(TravelGroupRecord? group) {
   return [
     for (var index = 0; index < sortedItems.length; index += 1)
       {
-        'productName': sortedItems[index].productName,
+        'productId': sortedItems[index].productId,
         'quantity': sortedItems[index].quantity,
-        'unit': sortedItems[index].unit,
         'note': sortedItems[index].note,
         'sortOrder': index + 1,
       },

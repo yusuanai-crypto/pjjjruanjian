@@ -94,7 +94,10 @@ class _StateSurface extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (action != null) ...[
               const SizedBox(height: 16),
@@ -106,4 +109,3 @@ class _StateSurface extends StatelessWidget {
     );
   }
 }
-

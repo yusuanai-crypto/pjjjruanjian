@@ -60,6 +60,10 @@ async function withNestApiServer(run, options = {}) {
     AI_MAX_QUESTION_LENGTH: process.env.AI_MAX_QUESTION_LENGTH,
     AI_DAILY_LIMIT_PER_USER: process.env.AI_DAILY_LIMIT_PER_USER,
     AI_HISTORY_RETENTION_DAYS: process.env.AI_HISTORY_RETENTION_DAYS,
+    TRAVEL_GROUP_ATTACHMENT_DIR: process.env.TRAVEL_GROUP_ATTACHMENT_DIR,
+    ALIYUN_SMS_MOCK: process.env.ALIYUN_SMS_MOCK,
+    SMS_VERIFICATION_DEBUG: process.env.SMS_VERIFICATION_DEBUG,
+    SMS_CODE_TTL_SECONDS: process.env.SMS_CODE_TTL_SECONDS,
   };
 
   process.env.PHASE0_CONFIRMATION_STORE = stores.phase0StorePath;
@@ -97,6 +101,8 @@ async function withNestApiServer(run, options = {}) {
   try {
     await run(baseUrl, { prisma, stores });
   } finally {
+    stage10FixtureCatalogs.delete(baseUrl);
+    stage10FixtureAdminTokens.delete(baseUrl);
     await app.close();
     restoreEnv(previousEnv);
   }
@@ -110,10 +116,14 @@ function createInMemoryPrisma(options = {}) {
       name: '系统管理员',
       username: 'admin',
       passwordHash: hashPassword(BOOTSTRAP_ADMIN_PASSWORD),
-      role: 'ADMIN',
+      role: 'SUPER_ADMIN',
       phone: null,
       leaderId: null,
       isActive: true,
+      mustChangePassword: false,
+      statusReason: null,
+      statusChangedAt: null,
+      statusChangedBy: null,
       createdAt: now,
       updatedAt: now,
     },
@@ -130,9 +140,12 @@ function createInMemoryPrisma(options = {}) {
     ),
   ];
   const operationLogs = [];
+  const smsVerificationCodes = [];
   const aiChatMessages = [];
   const travelAgencies = [];
   const guides = [];
+  const products = [];
+  const productActualCosts = [];
   const travelGroups = [];
   const travelGroupTastingItems = [];
   const guideCarriedGroups = [];
@@ -172,9 +185,12 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    smsVerificationCodes,
     aiChatMessages,
     travelAgencies,
     guides,
+    products,
+    productActualCosts,
     travelGroups,
     travelGroupTastingItems,
     guideCarriedGroups,
@@ -291,6 +307,47 @@ function createInMemoryPrisma(options = {}) {
         );
       },
     },
+    smsVerificationCode: {
+      create: async ({ data }) => {
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          expiresAt: asDate(data.expiresAt),
+          consumedAt: asDate(data.consumedAt),
+          createdAt: asDate(data.createdAt) || new Date(),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        smsVerificationCodes.push(row);
+        return copyRow(row);
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        return sortRows(
+          smsVerificationCodes
+            .filter((code) => matchesWhere(code, where))
+            .map(copyRow),
+          orderBy,
+        );
+      },
+      update: async ({ where, data }) => {
+        const index = smsVerificationCodes.findIndex((code) =>
+          matchesUnique(code, where),
+        );
+        if (index < 0) {
+          throw new Error('SMS verification code not found in test Prisma store.');
+        }
+        smsVerificationCodes[index] = {
+          ...smsVerificationCodes[index],
+          ...data,
+          expiresAt: asDate(data.expiresAt) || smsVerificationCodes[index].expiresAt,
+          consumedAt:
+            data.consumedAt === null
+              ? null
+              : asDate(data.consumedAt) || smsVerificationCodes[index].consumedAt,
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        return copyRow(smsVerificationCodes[index]);
+      },
+    },
     aiChatMessage: {
       create: async ({ data }) => {
         const row = {
@@ -318,6 +375,8 @@ function createInMemoryPrisma(options = {}) {
     },
     travelAgency: createTravelAgencyDelegate(travelAgencies),
     guide: createGuideDelegate(guides),
+    product: createProductDelegate(products),
+    productActualCost: createProductActualCostDelegate(productActualCosts),
     commissionRule: createRuleDelegate(commissionRules),
     salesDeductionRule: createRuleDelegate(salesDeductionRules),
     agencyDeductionRule: createRuleDelegate(agencyDeductionRules),
@@ -501,8 +560,44 @@ function createInMemoryPrisma(options = {}) {
               row,
               include,
               reconciliationPaymentMethods,
+              users,
             )
           : null;
+      },
+      findMany: async ({ where, include, orderBy, take } = {}) => {
+        const rows = sortRows(
+          dailyReconciliations
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        ).slice(0, take || dailyReconciliations.length);
+        return rows.map((row) =>
+          withReconciliationIncludes(
+            row,
+            include,
+            reconciliationPaymentMethods,
+            users,
+          ),
+        );
+      },
+      update: async ({ where, data, include } = {}) => {
+        const index = dailyReconciliations.findIndex((item) =>
+          matchesUnique(item, where),
+        );
+        if (index < 0) {
+          throw new Error('Daily reconciliation not found.');
+        }
+        dailyReconciliations[index] = {
+          ...dailyReconciliations[index],
+          ...withoutNested(data, 'paymentMethods'),
+          updatedAt: asDate(data?.updatedAt) || new Date(),
+        };
+        return withReconciliationIncludes(
+          dailyReconciliations[index],
+          include,
+          reconciliationPaymentMethods,
+          users,
+        );
       },
       upsert: async ({ where, update, create, include } = {}) => {
         const index = dailyReconciliations.findIndex((item) =>
@@ -516,23 +611,26 @@ function createInMemoryPrisma(options = {}) {
             ...withoutNested(update, 'paymentMethods'),
             updatedAt: asDate(update.updatedAt) || new Date(),
           };
-          removeWhere(
-            reconciliationPaymentMethods,
-            (method) =>
-              method.reconciliationId === dailyReconciliations[index].id,
-          );
-          for (const method of nestedUpdateMethods) {
-            reconciliationPaymentMethods.push({
-              ...method,
-              id: method.id || crypto.randomUUID(),
-              reconciliationId: dailyReconciliations[index].id,
-              createdAt: asDate(method.createdAt) || new Date(),
-            });
+          if (update?.paymentMethods) {
+            removeWhere(
+              reconciliationPaymentMethods,
+              (method) =>
+                method.reconciliationId === dailyReconciliations[index].id,
+            );
+            for (const method of nestedUpdateMethods) {
+              reconciliationPaymentMethods.push({
+                ...method,
+                id: method.id || crypto.randomUUID(),
+                reconciliationId: dailyReconciliations[index].id,
+                createdAt: asDate(method.createdAt) || new Date(),
+              });
+            }
           }
           return withReconciliationIncludes(
             dailyReconciliations[index],
             include,
             reconciliationPaymentMethods,
+            users,
           );
         }
 
@@ -555,6 +653,7 @@ function createInMemoryPrisma(options = {}) {
           row,
           include,
           reconciliationPaymentMethods,
+          users,
         );
       },
     },
@@ -587,9 +686,13 @@ function createInMemoryPrisma(options = {}) {
     aiChatMessages,
     travelAgencies,
     guides,
+    products,
+    productActualCosts,
     travelGroups,
+    travelGroupTastingItems,
     customers,
     salesOrders,
+    salesOrderItems,
     afterSalesOrders,
     commissionRecords,
     travelGroupFinanceSummaries,
@@ -633,6 +736,121 @@ function createGuideDelegate(rows) {
       return copyRow(rows[index]);
     },
   };
+}
+
+function createProductDelegate(rows) {
+  return {
+    findUnique: async ({ where }) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findMany: async ({ where, orderBy, skip, take, select } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      const start = skip || 0;
+      return result
+        .slice(start, take ? start + take : result.length)
+        .map((row) => (select ? selectRow(row, select) : row));
+    },
+    count: async ({ where } = {}) =>
+      rows.filter((item) => matchesWhere(item, where)).length,
+    create: async ({ data }) => {
+      assertUniqueProduct(rows, data);
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        isActive: data.isActive ?? true,
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data }) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Product not found in test Prisma store.');
+      }
+      assertUniqueProduct(rows, data, rows[index].id);
+      rows[index] = {
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return copyRow(rows[index]);
+    },
+  };
+}
+
+function createProductActualCostDelegate(rows) {
+  return {
+    findUnique: async ({ where }) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findFirst: async ({ where, orderBy } = {}) => {
+      const row = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      )[0];
+      return row || null;
+    },
+    findMany: async ({ where, orderBy, skip, take } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      const start = skip || 0;
+      return result.slice(start, take ? start + take : result.length);
+    },
+    create: async ({ data }) => {
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        isActive: data.isActive ?? true,
+        effectiveFrom: asDate(data.effectiveFrom),
+        effectiveTo: asDate(data.effectiveTo),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data }) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error('Product actual cost not found in test Prisma store.');
+      }
+      rows[index] = {
+        ...rows[index],
+        ...data,
+        ...(data.effectiveFrom !== undefined
+          ? { effectiveFrom: asDate(data.effectiveFrom) }
+          : {}),
+        ...(data.effectiveTo !== undefined
+          ? { effectiveTo: asDate(data.effectiveTo) }
+          : {}),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return copyRow(rows[index]);
+    },
+  };
+}
+
+function assertUniqueProduct(rows, data, excludeId = null) {
+  for (const field of ['name', 'normalizedName']) {
+    if (data[field] === undefined) {
+      continue;
+    }
+    const duplicate = rows.find(
+      (row) => row.id !== excludeId && row[field] === data[field],
+    );
+    if (duplicate) {
+      throw createPrismaUniqueError(field);
+    }
+  }
 }
 
 function createTravelAgencyDelegate(rows) {
@@ -1031,6 +1249,13 @@ function seedUsers(rows, seeds, now) {
       phone: seed.phone ?? null,
       leaderId: seed.leaderId ?? null,
       isActive: seed.isActive === undefined ? true : Boolean(seed.isActive),
+      mustChangePassword:
+        seed.mustChangePassword === undefined
+          ? false
+          : Boolean(seed.mustChangePassword),
+      statusReason: seed.statusReason ?? null,
+      statusChangedAt: asDate(seed.statusChangedAt) || null,
+      statusChangedBy: seed.statusChangedBy ?? null,
       createdAt: asDate(seed.createdAt) || now,
       updatedAt: asDate(seed.updatedAt) || now,
     });
@@ -1097,6 +1322,20 @@ function seedTravelGroups(rows, seeds, now) {
       guestCount: seed.guestCount ?? 10,
       tastingRoomNo: seedValue(seed, 'tastingRoomNo', 'Seed Room'),
       tasterName: seedValue(seed, 'tasterName', 'Seed Taster'),
+      sourceRegion: seedValue(seed, 'sourceRegion', null),
+      ageInfo: seedValue(seed, 'ageInfo', null),
+      mentionedFeitian: seedValue(seed, 'mentionedFeitian', null),
+      previousStopOrderStatus: seedValue(
+        seed,
+        'previousStopOrderStatus',
+        null,
+      ),
+      keyCustomerInfo: seedValue(seed, 'keyCustomerInfo', null),
+      keyCustomerPhotos: seedValue(seed, 'keyCustomerPhotos', null),
+      guestInfoAttachments: seedValue(seed, 'guestInfoAttachments', null),
+      liaisonTasterId: seedValue(seed, 'liaisonTasterId', null),
+      liaisonTasterName: seedValue(seed, 'liaisonTasterName', null),
+      expectedArrivalTime: seedValue(seed, 'expectedArrivalTime', null),
       arrivalTime: seedValue(seed, 'arrivalTime', null),
       groupType: seedValue(seed, 'groupType', 'seed'),
       wineDetails: seedValue(seed, 'wineDetails', null),
@@ -1137,6 +1376,7 @@ function seedValue(seed, key, fallback) {
 function toSeedPrismaRole(role) {
   const value = String(role || '').trim();
   const map = {
+    super_admin: 'SUPER_ADMIN',
     admin: 'ADMIN',
     boss: 'BOSS',
     front_desk: 'FRONT_DESK',
@@ -1198,11 +1438,16 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       salesOrderItems.push({
         id: item.id || crypto.randomUUID(),
         salesOrderId: row.id,
+        productId: item.productId ?? null,
         productName: item.productName || 'Seed Product',
+        unit: item.unit ?? null,
         quantity,
         unitPriceCents,
         subtotalCents:
           item.subtotalCents ?? Number(quantity || 0) * Number(unitPriceCents || 0),
+        actualUnitCostCents: item.actualUnitCostCents ?? null,
+        actualCostSubtotalCents: item.actualCostSubtotalCents ?? null,
+        grossProfitCents: item.grossProfitCents ?? null,
         deliveryType: item.deliveryType || 'SHIPPING',
         notes: item.notes ?? null,
         sortOrder: item.sortOrder ?? 0,
@@ -1530,6 +1775,12 @@ function withTravelGroupIncludes(group, include, relations) {
     const taster = users.find((user) => user.id === group.tasterId);
     row.taster = taster ? copyRow(taster) : null;
   }
+  if (include?.liaisonTaster) {
+    const liaisonTaster = users.find(
+      (user) => user.id === group.liaisonTasterId,
+    );
+    row.liaisonTaster = liaisonTaster ? copyRow(liaisonTaster) : null;
+  }
   if (include?.salesOrders) {
     const includeConfig =
       typeof include.salesOrders === 'object' ? include.salesOrders : {};
@@ -1785,12 +2036,16 @@ function withTravelGroupFinanceSummaryIncludes(
   return row;
 }
 
-function withReconciliationIncludes(row, include, paymentMethods) {
+function withReconciliationIncludes(row, include, paymentMethods, users = []) {
   const copy = copyRow(row);
   if (include?.paymentMethods) {
     copy.paymentMethods = paymentMethods
       .filter((method) => method.reconciliationId === row.id)
       .map(copyRow);
+  }
+  if (include?.reviewedBy) {
+    const reviewer = users.find((user) => user.id === row.reviewedById);
+    copy.reviewedBy = reviewer ? copyRow(reviewer) : null;
   }
   return copy;
 }
@@ -1828,6 +2083,138 @@ async function requestJson(baseUrl, pathName, options = {}) {
     response,
     body,
   };
+}
+
+const stage10FixtureCatalogs = new Map();
+const stage10FixtureAdminTokens = new Map();
+
+async function requestJsonWithStage10ProductFixtures(
+  baseUrl,
+  pathName,
+  options = {},
+) {
+  const method = String(options.method || 'GET').toUpperCase();
+  const isSalesOrderWrite =
+    (method === 'POST' && pathName === '/api/sales-orders') ||
+    (method === 'PATCH' && /^\/api\/sales-orders\/[^/]+$/.test(pathName));
+  const isTravelGroupWrite =
+    (method === 'POST' && pathName === '/api/travel-groups') ||
+    (method === 'PATCH' && /^\/api\/travel-groups\/[^/]+$/.test(pathName));
+  if (!options.body || (!isSalesOrderWrite && !isTravelGroupWrite)) {
+    return requestJson(baseUrl, pathName, options);
+  }
+
+  const body = { ...options.body };
+  if (isSalesOrderWrite && Array.isArray(body.items)) {
+    body.items = await attachStage10ProductFixtures(
+      baseUrl,
+      body.items,
+      true,
+    );
+  }
+  if (isTravelGroupWrite && Array.isArray(body.tastingItems)) {
+    body.tastingItems = await attachStage10ProductFixtures(
+      baseUrl,
+      body.tastingItems,
+      false,
+    );
+  }
+  return requestJson(baseUrl, pathName, { ...options, body });
+}
+
+async function attachStage10ProductFixtures(baseUrl, items, requireCost) {
+  const result = [];
+  for (const item of items) {
+    if (item?.productId || !String(item?.productName || '').trim()) {
+      result.push(item);
+      continue;
+    }
+    const product = await ensureStage10ProductFixture(baseUrl, item, requireCost);
+    result.push({ ...item, productId: product.id });
+  }
+  return result;
+}
+
+async function ensureStage10ProductFixture(baseUrl, item, requireCost) {
+  const name = String(item.productName).trim();
+  const normalizedName = name
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  let catalog = stage10FixtureCatalogs.get(baseUrl);
+  if (!catalog) {
+    catalog = new Map();
+    stage10FixtureCatalogs.set(baseUrl, catalog);
+  }
+  let entry = catalog.get(normalizedName);
+  const adminToken = await getStage10FixtureAdminToken(baseUrl);
+  if (!entry) {
+    const created = await requestJson(baseUrl, '/api/products', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name,
+        unit: String(item.unit || 'bottle').trim() || 'bottle',
+      },
+    });
+    if (created.response.status === 201) {
+      entry = { product: created.body.data.product, costReady: false };
+    } else if (created.response.status === 409) {
+      const listed = await requestJson(
+        baseUrl,
+        `/api/products?keyword=${encodeURIComponent(name)}&pageSize=100`,
+        { token: adminToken },
+      );
+      const product = listed.body.data.products.find(
+        (candidate) =>
+          String(candidate.name)
+            .normalize('NFKC')
+            .replace(/\s+/g, '')
+            .toLowerCase() === normalizedName,
+      );
+      if (!product) {
+        throw new Error(`Unable to provision stage10 test product: ${name}`);
+      }
+      entry = { product, costReady: false };
+    } else {
+      throw new Error(
+        `Unable to provision stage10 test product ${name}: ${created.response.status}`,
+      );
+    }
+    catalog.set(normalizedName, entry);
+  }
+
+  if (requireCost && !entry.costReady) {
+    const cost = await requestJson(
+      baseUrl,
+      `/api/products/${entry.product.id}/actual-costs`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {
+          costCents: 0,
+          effectiveFrom: '2000-01-01',
+          notes: 'test fixture cost',
+        },
+      },
+    );
+    if (![201, 409].includes(cost.response.status)) {
+      throw new Error(
+        `Unable to provision stage10 test cost ${name}: ${cost.response.status}`,
+      );
+    }
+    entry.costReady = true;
+  }
+  return entry.product;
+}
+
+async function getStage10FixtureAdminToken(baseUrl) {
+  let tokenPromise = stage10FixtureAdminTokens.get(baseUrl);
+  if (!tokenPromise) {
+    tokenPromise = login(baseUrl).then((session) => session.token);
+    stage10FixtureAdminTokens.set(baseUrl, tokenPromise);
+  }
+  return tokenPromise;
 }
 
 async function login(
@@ -1902,9 +2289,13 @@ function assertPublicUserContract(user) {
     'id',
     'isActive',
     'leaderId',
+    'mustChangePassword',
     'name',
     'phone',
     'role',
+    'statusChangedAt',
+    'statusChangedBy',
+    'statusReason',
     'updatedAt',
     'username',
   ]);
@@ -1913,6 +2304,7 @@ function assertPublicUserContract(user) {
   assert.equal(typeof user.username, 'string');
   assert.equal(typeof user.role, 'string');
   assert.equal(typeof user.isActive, 'boolean');
+  assert.equal(typeof user.mustChangePassword, 'boolean');
   assert.equal(typeof user.createdAt, 'string');
   assert.equal(typeof user.updatedAt, 'string');
   assert.equal('passwordHash' in user, false);
@@ -1969,6 +2361,7 @@ module.exports = {
   createUser,
   login,
   requestJson,
+  requestJsonWithStage10ProductFixtures,
   withNestApiServer,
   withPhase1Server,
 };

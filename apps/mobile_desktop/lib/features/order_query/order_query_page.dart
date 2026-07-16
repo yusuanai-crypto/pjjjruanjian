@@ -11,6 +11,7 @@ import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/mark_info_button.dart';
 import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/money_text.dart';
+import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
@@ -55,21 +56,30 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   final Set<String> _busyCustomerIds = <String>{};
 
   bool get _canMark =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canEditBasics =>
+      widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.sales ||
       widget.role == UserRole.finance;
 
   bool get _canEditFullOrder =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   bool get _canGenerateQrSalesSheet =>
-      widget.role == UserRole.admin || widget.role == UserRole.sales;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.sales;
 
   bool get _canExportSalesOrders =>
-      widget.role == UserRole.admin || widget.role == UserRole.finance;
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
 
   @override
   void initState() {
@@ -1477,6 +1487,9 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   late final TextEditingController _warehouseRemarkController;
   late final List<String> _provinceOptions;
   late List<_EditableOrderItemDraft> _items;
+  List<ProductOptionRecord> _productOptions = const [];
+  bool _loadingProductOptions = true;
+  String? _productOptionsError;
   String? _province;
   String? _city;
   String? _district;
@@ -1535,6 +1548,33 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     }
     _invoiceRequired = widget.order.invoiceRequired;
     _invoiceIssued = widget.order.invoiceIssued;
+    if (widget.fullEdit) {
+      _loadProductOptions();
+    } else {
+      _loadingProductOptions = false;
+    }
+  }
+
+  Future<void> _loadProductOptions() async {
+    setState(() {
+      _loadingProductOptions = true;
+      _productOptionsError = null;
+    });
+    try {
+      final options = await widget.businessApi.listProductOptions();
+      if (!mounted) return;
+      setState(() {
+        _productOptions = options;
+        _loadingProductOptions = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _productOptions = const [];
+        _loadingProductOptions = false;
+        _productOptionsError = _messageForError(error);
+      });
+    }
   }
 
   @override
@@ -1607,6 +1647,10 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
 
   void _updateItemDeliveryType(int index, DeliveryType deliveryType) {
     setState(() => _items[index].deliveryType = deliveryType);
+  }
+
+  void _updateItemProduct(int index, ProductOptionRecord product) {
+    setState(() => _items[index].selectProduct(product));
   }
 
   void _submit() {
@@ -1696,8 +1740,8 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     final payloads = <Map<String, dynamic>>[];
     for (var index = 0; index < _items.length; index += 1) {
       final item = _items[index];
-      if (item.name.isEmpty) {
-        setState(() => _errorMessage = '第 ${index + 1} 条明细请填写酒品名称。');
+      if (item.productId == null) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细缺少商品关联，请选择启用商品。');
         return null;
       }
       if (item.quantity <= 0) {
@@ -1710,7 +1754,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         return null;
       }
       payloads.add({
-        'productName': item.name,
+        'productId': item.productId,
         'quantity': item.quantity,
         'unitPriceCents': unitPriceCents,
         'deliveryType': item.deliveryType.value,
@@ -1965,11 +2009,16 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                 const Divider(height: 26),
                 _OrderItemsEditSection(
                   items: _items,
+                  productOptions: _productOptions,
+                  loadingProductOptions: _loadingProductOptions,
+                  productOptionsError: _productOptionsError,
+                  onRetryProductOptions: _loadProductOptions,
                   totalAmountCents: totalAmountCents,
                   onAdd: _addItem,
                   onDelete: _deleteItem,
                   onChanged: () => setState(() {}),
                   onDeliveryTypeChanged: _updateItemDeliveryType,
+                  onProductChanged: _updateItemProduct,
                 ),
                 const Divider(height: 26),
                 const _SectionTitle('财务与物流'),
@@ -2088,20 +2137,30 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
 class _OrderItemsEditSection extends StatelessWidget {
   const _OrderItemsEditSection({
     required this.items,
+    required this.productOptions,
+    required this.loadingProductOptions,
+    required this.productOptionsError,
+    required this.onRetryProductOptions,
     required this.totalAmountCents,
     required this.onAdd,
     required this.onDelete,
     required this.onChanged,
     required this.onDeliveryTypeChanged,
+    required this.onProductChanged,
   });
 
   final List<_EditableOrderItemDraft> items;
+  final List<ProductOptionRecord> productOptions;
+  final bool loadingProductOptions;
+  final String? productOptionsError;
+  final VoidCallback onRetryProductOptions;
   final int totalAmountCents;
   final VoidCallback onAdd;
   final ValueChanged<int> onDelete;
   final VoidCallback onChanged;
   final void Function(int index, DeliveryType deliveryType)
       onDeliveryTypeChanged;
+  final void Function(int index, ProductOptionRecord product) onProductChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2130,6 +2189,11 @@ class _OrderItemsEditSection extends StatelessWidget {
             onDelete: () => onDelete(index),
             onDeliveryTypeChanged: (deliveryType) =>
                 onDeliveryTypeChanged(index, deliveryType),
+            productOptions: productOptions,
+            loadingProductOptions: loadingProductOptions,
+            productOptionsError: productOptionsError,
+            onRetryProductOptions: onRetryProductOptions,
+            onProductChanged: (product) => onProductChanged(index, product),
           ),
           if (index != items.length - 1) const Divider(height: 20),
         ],
@@ -2145,6 +2209,11 @@ class _OrderItemEditRow extends StatelessWidget {
     required this.onChanged,
     required this.onDelete,
     required this.onDeliveryTypeChanged,
+    required this.productOptions,
+    required this.loadingProductOptions,
+    required this.productOptionsError,
+    required this.onRetryProductOptions,
+    required this.onProductChanged,
   });
 
   final int index;
@@ -2152,6 +2221,11 @@ class _OrderItemEditRow extends StatelessWidget {
   final VoidCallback onChanged;
   final VoidCallback onDelete;
   final ValueChanged<DeliveryType> onDeliveryTypeChanged;
+  final List<ProductOptionRecord> productOptions;
+  final bool loadingProductOptions;
+  final String? productOptionsError;
+  final VoidCallback onRetryProductOptions;
+  final ValueChanged<ProductOptionRecord> onProductChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2189,11 +2263,19 @@ class _OrderItemEditRow extends StatelessWidget {
             ResponsiveFormGrid(
               minItemWidth: 170,
               children: [
-                TextField(
+                ProductOptionPickerField(
                   key: ValueKey('order-edit-item-product-$index'),
-                  controller: item.nameController,
-                  onChanged: (_) => onChanged(),
-                  decoration: const InputDecoration(labelText: '酒品名称'),
+                  options: productOptions,
+                  loading: loadingProductOptions,
+                  loadError: productOptionsError,
+                  productId: item.productId,
+                  snapshotName: item.snapshotName,
+                  snapshotUnit: item.snapshotUnit,
+                  onRetry: onRetryProductOptions,
+                  onChanged: (product) {
+                    onProductChanged(product);
+                    onChanged();
+                  },
                 ),
                 TextField(
                   key: ValueKey('order-edit-item-quantity-$index'),
@@ -2245,13 +2327,14 @@ class _OrderItemEditRow extends StatelessWidget {
 
 class _EditableOrderItemDraft {
   _EditableOrderItemDraft({
-    required String name,
+    required this.productId,
+    required this.snapshotName,
+    required this.snapshotUnit,
     required int quantity,
     required int unitPriceCents,
     required this.deliveryType,
     String? notes,
-  })  : nameController = TextEditingController(text: name),
-        quantityController = TextEditingController(
+  })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
         ),
         unitPriceController = TextEditingController(
@@ -2261,7 +2344,9 @@ class _EditableOrderItemDraft {
 
   factory _EditableOrderItemDraft.fromRecord(SalesOrderItemRecord item) {
     return _EditableOrderItemDraft(
-      name: item.productName,
+      productId: item.productId,
+      snapshotName: item.productName,
+      snapshotUnit: item.unit,
       quantity: item.quantity,
       unitPriceCents: item.unitPriceCents,
       deliveryType: _deliveryTypeFromValue(item.deliveryType),
@@ -2271,20 +2356,28 @@ class _EditableOrderItemDraft {
 
   factory _EditableOrderItemDraft.empty() {
     return _EditableOrderItemDraft(
-      name: '',
+      productId: null,
+      snapshotName: null,
+      snapshotUnit: null,
       quantity: 1,
       unitPriceCents: 0,
       deliveryType: DeliveryType.shipping,
     );
   }
 
-  final TextEditingController nameController;
+  String? productId;
+  String? snapshotName;
+  String? snapshotUnit;
   final TextEditingController quantityController;
   final TextEditingController unitPriceController;
   final TextEditingController notesController;
   DeliveryType deliveryType;
 
-  String get name => nameController.text.trim();
+  void selectProduct(ProductOptionRecord product) {
+    productId = product.id;
+    snapshotName = product.name;
+    snapshotUnit = product.unit;
+  }
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
 
@@ -2295,7 +2388,6 @@ class _EditableOrderItemDraft {
   String get notes => notesController.text.trim();
 
   void dispose() {
-    nameController.dispose();
     quantityController.dispose();
     unitPriceController.dispose();
     notesController.dispose();
@@ -2493,7 +2585,8 @@ List<SalesSheetItemRecord> _sortedSalesSheetItems(
 }
 
 bool _canViewQrSalesSheet(UserRole role) {
-  return role == UserRole.admin ||
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
       role == UserRole.sales ||
       role == UserRole.finance ||
       role == UserRole.boss ||
@@ -2501,7 +2594,9 @@ bool _canViewQrSalesSheet(UserRole role) {
 }
 
 bool _canGenerateQrSalesSheetForRole(UserRole role) {
-  return role == UserRole.admin || role == UserRole.sales;
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.sales;
 }
 
 String _orderAddress(SalesOrderRecord order) {
@@ -2559,7 +2654,9 @@ bool _customerMarked(SalesOrderRecord order) {
 }
 
 bool _canViewOrderFinancialMetrics(UserRole role) {
-  return role == UserRole.admin || role == UserRole.finance;
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.finance;
 }
 
 String _deliverySummaryLabel(SalesOrderRecord order) {

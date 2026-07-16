@@ -502,7 +502,8 @@ String _display(String? value) {
 }
 
 bool _canEdit(UserRole role) {
-  return role == UserRole.admin ||
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
       role == UserRole.frontDesk ||
       role == UserRole.sales ||
       role == UserRole.taster ||
@@ -510,11 +511,15 @@ bool _canEdit(UserRole role) {
 }
 
 bool _canMark(UserRole role) {
-  return role == UserRole.admin || role == UserRole.finance;
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.finance;
 }
 
 bool _canSubmitSummary(UserRole role) {
-  return role == UserRole.admin || role == UserRole.taster;
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.taster;
 }
 
 String _messageForError(Object error) {

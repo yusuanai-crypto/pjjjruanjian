@@ -7,10 +7,11 @@ import '../features/ai_assistant/ai_assistant_page.dart';
 import '../features/analytics/analytics_page.dart';
 import '../features/commission_rules/commission_rule_config_page.dart';
 import '../features/dashboard/dashboard_page.dart';
+import '../features/employee_accounts/employee_accounts_page.dart';
 import '../features/finance/finance_query_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
-import '../features/pending_travel_groups/pending_travel_group_table_page.dart';
+import '../features/product_management/product_management_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_page.dart';
@@ -29,10 +30,18 @@ Widget buildPageForDestination({
   required ApiClient apiClient,
   required String token,
   required UserRole role,
+  String currentUserId = '',
   required List<AppDestination> allowedDestinations,
   required ValueChanged<String> onOpenDestination,
 }) {
   switch (destinationId) {
+    case 'employee_accounts':
+      return EmployeeAccountsPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        currentUserId: currentUserId,
+      );
     case 'role_menu':
       return RoleMenuPage(
         role: role,
@@ -46,13 +55,7 @@ Widget buildPageForDestination({
         apiClient: apiClient,
         token: token,
         role: role,
-      );
-    case 'pending_travel_groups':
-      return PendingTravelGroupTablePage(
-        apiClient: apiClient,
-        token: token,
-        role: role,
-        onOpenDestination: onOpenDestination,
+        currentUserId: currentUserId,
       );
     case 'travel_group_finance_supplement':
       return const TravelGroupFinanceSupplementPage();
@@ -76,6 +79,13 @@ Widget buildPageForDestination({
         token: token,
         role: role,
       );
+    case 'product_management':
+      return ProductManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        onOpenDestination: onOpenDestination,
+      );
     case 'travel_agency_management':
       return TravelAgencyManagementPage(
         apiClient: apiClient,
@@ -83,7 +93,11 @@ Widget buildPageForDestination({
         role: role,
       );
     case 'reconciliation_table':
-      return ReconciliationTablePage(apiClient: apiClient, token: token);
+      return ReconciliationTablePage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'warehouse_packing':
       return WarehousePackingPage(
         apiClient: apiClient,

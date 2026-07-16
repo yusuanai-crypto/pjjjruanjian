@@ -26,19 +26,19 @@ const appDestinations = <AppDestination>[
       icon: Icons.account_tree_rounded,
       phase: 2),
   AppDestination(
+      id: 'employee_accounts',
+      label: '员工账号',
+      icon: Icons.manage_accounts_rounded,
+      phase: 1),
+  AppDestination(
       id: 'travel_group_form',
       label: '旅行团录入',
       icon: Icons.directions_bus_rounded,
       phase: 3),
   AppDestination(
       id: 'travel_group_query',
-      label: '旅行团查询',
+      label: '旅行团管理',
       icon: Icons.manage_search_rounded,
-      phase: 3),
-  AppDestination(
-      id: 'pending_travel_groups',
-      label: '待处理旅行团',
-      icon: Icons.pending_actions_rounded,
       phase: 3),
   AppDestination(
       id: 'travel_agency_management',
@@ -72,7 +72,7 @@ const appDestinations = <AppDestination>[
       phase: 5),
   AppDestination(
       id: 'taster_summary',
-      label: '品鉴师总结',
+      label: '我的接待',
       icon: Icons.rate_review_rounded,
       phase: 3),
   AppDestination(
@@ -90,6 +90,11 @@ const appDestinations = <AppDestination>[
       label: '提成规则',
       icon: Icons.rule_folder_rounded,
       phase: 7),
+  AppDestination(
+      id: 'product_management',
+      label: '商品管理',
+      icon: Icons.inventory_2_rounded,
+      phase: 10),
   AppDestination(
       id: 'reconciliation_table',
       label: '对账表',
@@ -145,6 +150,11 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       ids.contains('finance_query') || ids.contains('commission_rules');
   final requestedAnalytics =
       ids.contains('analytics') || ids.contains('finance_query');
+  if (role != UserRole.superAdmin &&
+      role != UserRole.admin &&
+      role != UserRole.finance) {
+    ids.remove('product_management');
+  }
   switch (role) {
     case UserRole.sales:
       ids
@@ -183,6 +193,12 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ..remove('analytics');
       _removeStage7Destinations(ids);
       break;
+    case UserRole.superAdmin:
+      ids.remove('taster_commissions');
+      if (requestedAnalytics) {
+        ids.add('analytics');
+      }
+      break;
     case UserRole.admin:
       ids.remove('taster_commissions');
       if (requestedAnalytics) {
@@ -219,6 +235,7 @@ void _removeStage7Destinations(Set<String> ids) {
 
 bool _canUseAiAssistant(UserRole role) {
   return role == UserRole.admin ||
+      role == UserRole.superAdmin ||
       role == UserRole.boss ||
       role == UserRole.finance ||
       role == UserRole.afterSales;
@@ -234,6 +251,7 @@ AppDestination destinationById(String id) {
 String _destinationIdForBackendMenu(String menuId) {
   switch (menuId) {
     case 'employee_accounts':
+      return 'employee_accounts';
     case 'role_permissions':
     case 'global_mark_query':
     case 'operation_logs':
@@ -241,8 +259,6 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'role_menu';
     case 'travel_groups':
       return 'travel_group_form';
-    case 'pending_travel_groups':
-      return 'pending_travel_groups';
     case 'travel_agency_management':
     case 'travel_agencies':
     case 'agency_deduction_rules':

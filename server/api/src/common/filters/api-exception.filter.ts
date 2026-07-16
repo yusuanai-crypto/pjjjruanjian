@@ -51,6 +51,10 @@ function getErrorCode(exception: unknown, statusCode: number) {
     return 'NOT_FOUND';
   }
 
+  if (statusCode === HttpStatus.PAYLOAD_TOO_LARGE) {
+    return 'FILE_TOO_LARGE';
+  }
+
   return 'INTERNAL_ERROR';
 }
 

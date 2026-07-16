@@ -14,12 +14,18 @@ void main() {
       onEdit: () {},
       onFinanceMark: () {},
       onSummary: () {},
+      onPreviewAttachment: (_) {},
+      onDownloadAttachment: (_) {},
+      onDeleteAttachment: (_) {},
     );
 
     expect(find.text('旅行团详情'), findsOneWidget);
     expect(find.text('基础信息'), findsOneWidget);
     expect(find.text('导游快照'), findsOneWidget);
-    expect(find.text('品鉴师'), findsOneWidget);
+    expect(find.text('品鉴师'), findsNWidgets(2));
+    expect(find.text('客户补充信息'), findsOneWidget);
+    expect(find.text('重点客户照片'), findsOneWidget);
+    expect(find.text('客人信息附件'), findsOneWidget);
     expect(find.text('品酒明细'), findsOneWidget);
     expect(find.text('待处理'), findsOneWidget);
     expect(find.text('订单概要'), findsOneWidget);
@@ -29,6 +35,19 @@ void main() {
     expect(find.text('测试旅行社'), findsAtLeastNWidgets(1));
     expect(find.text('李导'), findsOneWidget);
     expect(find.text('周品鉴师'), findsOneWidget);
+    expect(find.text('吴对接'), findsOneWidget);
+    expect(find.text('贵阳'), findsOneWidget);
+    expect(find.text('35-50 岁'), findsOneWidget);
+    expect(find.text('均单'), findsOneWidget);
+    expect(find.text('重点关注王女士'), findsOneWidget);
+    expect(find.text('09:00'), findsOneWidget);
+    expect(find.text('09:30'), findsOneWidget);
+    expect(find.text('王女士.jpg'), findsOneWidget);
+    expect(find.text('客人名单.pdf'), findsOneWidget);
+    expect(find.text('image/jpeg · 2.0 KB'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '预览'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '下载'), findsNWidgets(2));
+    expect(find.widgetWithText(TextButton, '删除'), findsNWidgets(2));
     expect(find.text('酱香珍藏'), findsOneWidget);
     expect(find.text('SO-TEST-001 · 王女士'), findsOneWidget);
     expect(find.text('待财务'), findsOneWidget);
@@ -51,6 +70,7 @@ void main() {
     expect(find.text('老板只读'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '总结'), findsNothing);
+    expect(find.widgetWithText(TextButton, '删除'), findsNothing);
     expect(find.text('财务标记'), findsOneWidget);
     expect(find.text('未标记'), findsAtLeastNWidgets(1));
   });
@@ -63,6 +83,9 @@ Future<void> _pumpPanel(
   VoidCallback? onEdit,
   VoidCallback? onFinanceMark,
   VoidCallback? onSummary,
+  TravelGroupAttachmentAction? onPreviewAttachment,
+  TravelGroupAttachmentAction? onDownloadAttachment,
+  TravelGroupAttachmentAction? onDeleteAttachment,
 }) {
   return tester.pumpWidget(
     MaterialApp(
@@ -74,6 +97,9 @@ Future<void> _pumpPanel(
             onEdit: onEdit,
             onFinanceMark: onFinanceMark,
             onSummary: onSummary,
+            onPreviewAttachment: onPreviewAttachment,
+            onDownloadAttachment: onDownloadAttachment,
+            onDeleteAttachment: onDeleteAttachment,
           ),
         ),
       ),
@@ -96,6 +122,32 @@ TravelGroupRecord _sampleGroup({required bool financeMark}) {
     'tastingRoomNo': 'A-101',
     'tasterId': 'taster-1',
     'tasterName': '周品鉴师',
+    'liaisonTasterId': 'taster-2',
+    'liaisonTasterName': '吴对接',
+    'sourceRegion': '贵阳',
+    'ageInfo': '35-50 岁',
+    'mentionedFeitian': false,
+    'previousStopOrderStatus': '均单',
+    'keyCustomerInfo': '重点关注王女士',
+    'keyCustomerPhotos': [
+      {
+        'id': 'photo-1',
+        'category': 'key_customer_photo',
+        'originalName': '王女士.jpg',
+        'contentType': 'image/jpeg',
+        'size': 2048,
+      },
+    ],
+    'guestInfoAttachments': [
+      {
+        'id': 'guest-1',
+        'category': 'guest_info',
+        'originalName': '客人名单.pdf',
+        'contentType': 'application/pdf',
+        'size': 4096,
+      },
+    ],
+    'expectedArrivalTime': '09:00',
     'arrivalTime': '09:30',
     'groupType': 'KB团',
     'wineDetails': '偏好酱香',

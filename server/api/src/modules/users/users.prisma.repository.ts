@@ -1,6 +1,7 @@
 const { normalizeUsername } = require('./users.repository');
 
 const PRISMA_ROLE_BY_APP_ROLE: Record<string, string> = {
+  super_admin: 'SUPER_ADMIN',
   admin: 'ADMIN',
   boss: 'BOSS',
   front_desk: 'FRONT_DESK',
@@ -67,6 +68,10 @@ export function toAppUser(user: any) {
     phone: user.phone,
     leaderId: user.leaderId,
     isActive: user.isActive,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    statusReason: user.statusReason,
+    statusChangedAt: toIsoString(user.statusChangedAt),
+    statusChangedBy: user.statusChangedBy,
     createdAt: toIsoString(user.createdAt),
     updatedAt: toIsoString(user.updatedAt),
   };
@@ -82,6 +87,10 @@ function toPrismaUserCreate(user: any) {
     phone: user.phone || null,
     leaderId: user.leaderId || null,
     isActive: user.isActive,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    statusReason: user.statusReason || null,
+    statusChangedAt: user.statusChangedAt ? new Date(user.statusChangedAt) : null,
+    statusChangedBy: user.statusChangedBy || null,
     createdAt: user.createdAt ? new Date(user.createdAt) : new Date(),
     updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(),
   };
@@ -96,6 +105,10 @@ function toPrismaUserUpdate(user: any) {
     phone: user.phone || null,
     leaderId: user.leaderId || null,
     isActive: user.isActive,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    statusReason: user.statusReason || null,
+    statusChangedAt: user.statusChangedAt ? new Date(user.statusChangedAt) : null,
+    statusChangedBy: user.statusChangedBy || null,
     updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(),
   };
 }

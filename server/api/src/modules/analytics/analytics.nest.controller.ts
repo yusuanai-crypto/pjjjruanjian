@@ -43,6 +43,12 @@ export class AnalyticsNestController {
     response.send(exportResult.buffer);
   }
 
+  @Get('profit-overview')
+  async profitOverview(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.getProfitOverview(actor, query);
+  }
+
   @Get('trends')
   async trends(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

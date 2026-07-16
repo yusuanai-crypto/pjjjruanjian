@@ -141,9 +141,13 @@ function createUsersService(options = {}) {
 }
 
 function requireAdmin(actor) {
-  if (!actor || actor.role !== 'admin') {
+  if (!actor || !isAdminRole(actor.role)) {
     throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
   }
+}
+
+function isAdminRole(role) {
+  return role === 'super_admin' || role === 'admin';
 }
 
 function findUserOrThrow(userRepository, id) {

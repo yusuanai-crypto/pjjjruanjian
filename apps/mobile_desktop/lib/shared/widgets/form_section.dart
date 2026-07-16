@@ -26,7 +26,8 @@ class FormSection extends StatelessWidget {
                 Expanded(
                   child: Text(
                     title,
-                    style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    style: textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
                 if (trailing != null) trailing!,

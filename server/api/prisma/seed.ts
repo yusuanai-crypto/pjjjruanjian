@@ -2,6 +2,10 @@ import 'dotenv/config';
 
 const { PrismaClient } = require('@prisma/client');
 const { hashPassword } = require('../src/modules/auth/password');
+const {
+  printStage10ProductSeedReport,
+  seedStage10ProductsAndBackfill,
+} = require('./stage10-product-seed');
 
 const prisma = new PrismaClient();
 
@@ -16,7 +20,7 @@ async function main() {
     },
     update: {
       name: '系统管理员',
-      role: 'ADMIN',
+      role: 'SUPER_ADMIN',
       isActive: true,
       updatedAt: now,
     },
@@ -25,7 +29,7 @@ async function main() {
       name: '系统管理员',
       username: 'admin',
       passwordHash: hashPassword(adminPassword),
-      role: 'ADMIN',
+      role: 'SUPER_ADMIN',
       isActive: true,
       createdAt: now,
       updatedAt: now,
@@ -138,7 +142,7 @@ async function main() {
         name: '赵导',
         phone: '13700009999',
         travelAgency: '山水国旅',
-        remarks: '系统示例待处理旅行团导游',
+        remarks: '系统示例旅行团导游',
       },
     ],
     now,
@@ -1003,6 +1007,12 @@ async function main() {
       updatedAt: now,
     },
   });
+
+  const stage10ProductReport = await seedStage10ProductsAndBackfill(prisma, {
+    actorUserId: admin.id,
+    now,
+  });
+  printStage10ProductSeedReport(stage10ProductReport);
 
   await prisma.operationLog.upsert({
     where: {

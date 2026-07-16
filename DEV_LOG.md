@@ -465,3 +465,31 @@ operationLogs: imported=0, skipped=1, failed=0
 - 本次只接入第 1 阶段数据库能力：`users`、`system_settings`、`operation_logs`。
 - 未创建旅行团、订单、售后、提成、AI 等后续业务表。
 - 未写入真实数据库密码，`.env.example` 仅提供占位示例。
+
+## 2026-07-11
+
+### 第 10 阶段：商品管理、三类成本与毛利核算验收收口
+
+- 完成商品主数据、商品实际成本历史、首批 16 项商品 seed 与历史 `productId` 安全回填，并保留历史名称、单位及订单成本快照兼容规则。
+- 完成商品管理后端 API、无成本商品 options API、销售扣单规则和旅行社扣酒规则的商品库接入、订单与品酒明细商品引用，以及财务毛利和成本覆盖状态计算。
+- 完成 Flutter `product_management` 菜单、角色与页面拦截、商品管理页面、实际成本历史维护，以及订单、品酒、销售扣单、旅行社扣酒页面的统一商品选择器。
+- 补齐后端测试：商品名称/单位校验、规范化重名、启停、无删除接口、成本区间冲突、成本权限、options 防泄露、两类扣减成本隔离、订单/品酒禁止自由商品名、订单成本和毛利快照稳定、历史订单成本覆盖状态、退款估算 warning。
+- 补齐 Flutter 测试：菜单和路由权限、商品列表/编辑/停用、元金额校验与分转换、商品选择器异常和历史兼容状态、普通角色可选择商品但不展示成本。
+- 更新 `docs/39_第10阶段商品管理、三类成本与毛利核算开发文档.md`、`docs/40_第10阶段商品管理、三类成本与毛利核算Schema差距清单.md`、`docs/42_第10阶段云服务器测试验收清单.md`。
+
+### 本地验证结果
+
+- 通过：在 `server/api` 执行 Prisma Client generate；生成 Prisma Client v6.19.3。
+- 通过：在 `server/api` 执行 `prisma validate --schema prisma/schema.prisma`；schema 校验通过。
+- 通过：执行 `prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` 静态迁移演练；生成 44,820 字节 SQL，并核验包含 `products`、`product_actual_costs`、`product_id`、`gross_profit_cents`。临时 SQL 已删除。
+- 未执行真实 MySQL `prisma migrate deploy` 和 `prisma:seed`：本机没有项目 `.env` 或可用 `DATABASE_URL`，未安装可用 MySQL/Docker，且 `127.0.0.1:3306` 不可达。未用占位连接串伪造执行结果。
+- 后端首次全量测试因 300 秒命令超时中止，不计为通过；将超时提高后重新完整执行 `node --test --require ts-node/register test/*.test.js`，结果为 304/304 通过、0 失败，测试时长约 212.1 秒。
+- 通过：在 `apps/mobile_desktop` 执行 `flutter analyze --no-pub`，结果 `No issues found`。
+- 通过：在 `apps/mobile_desktop` 执行 `flutter test`，结果 131/131 通过、0 失败。
+- 云服务器迁移、seed、真实 API 冒烟、数据库约束复核及 Flutter 连接云端 API 尚未执行；复现步骤和勾选项已写入第 10 阶段云服务器验收清单，不能标记为云端通过。
+
+### 范围说明
+
+- 第 10 阶段范围外：完整库存、批次成本、进销存、自动退货成本冲回、老板查看成本。
+- 商品实际成本、销售扣单成本、旅行社扣酒成本保持独立用途和独立展示，不互相替代或混算。
+- 历史订单缺少实际成本快照时保持 `null`，报表返回覆盖状态、缺口数量和提示，不使用当前成本伪造历史毛利。
