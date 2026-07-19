@@ -21,15 +21,21 @@ test('unit: stage7 travel group finance summary service creates summary', async 
   assert.equal(prisma.__store.summaries.length, 1);
   assertSummaryAmounts(prisma.__store.summaries[0], {
     totalSalesAmountCents: 1500000,
+    totalCashOnDeliveryCents: 300000,
+    totalPaidDepositCents: 1200000,
     confirmedRefundAmountCents: 100000,
     effectiveSalesAmountCents: 1400000,
     totalAgencyDeductionCents: 170000,
-    totalAgencyNetAmountCents: 1230000,
-    totalDailyRebateCents: 36900,
-    totalMonthlyRebateCents: 24600,
+    totalAgencyNetAmountCents: 1330000,
+    totalDailyRebateCents: 45000,
+    totalMonthlyRebateCents: 30000,
     paidRebateCents: 0,
-    unpaidRebateCents: 61500,
+    unpaidRebateCents: 75000,
   });
+  assert.equal(result.summary.paidDailyRebateCents, 0);
+  assert.equal(result.summary.unpaidDailyRebateCents, 45000);
+  assert.equal(result.summary.paidMonthlyRebateCents, 0);
+  assert.equal(result.summary.unpaidMonthlyRebateCents, 30000);
   assert.equal(
     prisma.__store.summaries[0].calculationVersion,
     'stage7_v1',
@@ -52,12 +58,14 @@ test('unit: stage7 travel group finance summary service creates summary', async 
   );
 });
 
-test('unit: stage7 travel group finance summary refreshes existing row and preserves paid rebate', async () => {
+test('unit: stage7 travel group finance summary refreshes existing row and preserves payment status', async () => {
   const prisma = createSummaryPrisma({
     summary: {
       id: 'summary-existing',
       travelGroupId: 'group-stage7',
-      paidRebateCents: 10000,
+      dailyRebatePaid: true,
+      dailyRebatePaidById: 'user-finance',
+      dailyRebatePaidAt: new Date('2026-07-18T10:00:00.000Z'),
       notes: 'stage7 test existing paid rebate note',
       guideInfoSent: true,
       travelAgencyInfoSent: true,
@@ -65,12 +73,18 @@ test('unit: stage7 travel group finance summary refreshes existing row and prese
   });
   const service = createService(prisma);
 
-  await service.refreshTravelGroupFinanceSummary('group-stage7');
+  const result = await service.refreshTravelGroupFinanceSummary('group-stage7');
 
   assert.equal(prisma.__store.summaries.length, 1);
   assert.equal(prisma.__store.summaries[0].id, 'summary-existing');
-  assert.equal(prisma.__store.summaries[0].paidRebateCents, 10000);
-  assert.equal(prisma.__store.summaries[0].unpaidRebateCents, 51500);
+  assert.equal(prisma.__store.summaries[0].dailyRebatePaid, true);
+  assert.equal(prisma.__store.summaries[0].dailyRebatePaidById, 'user-finance');
+  assert.equal(prisma.__store.summaries[0].paidRebateCents, 45000);
+  assert.equal(prisma.__store.summaries[0].unpaidRebateCents, 30000);
+  assert.equal(result.summary.paidDailyRebateCents, 45000);
+  assert.equal(result.summary.unpaidDailyRebateCents, 0);
+  assert.equal(result.summary.paidMonthlyRebateCents, 0);
+  assert.equal(result.summary.unpaidMonthlyRebateCents, 30000);
   assert.equal(
     prisma.__store.summaries[0].notes,
     'stage7 test existing paid rebate note',
@@ -165,19 +179,21 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
     summary: {
       id: 'summary-paid',
       travelGroupId: 'group-stage7',
-      paidRebateCents: 10000,
+      dailyRebatePaid: true,
     },
   });
   const service = createService(prisma);
 
   await service.refreshTravelGroupFinanceSummary('group-stage7');
 
-  assert.equal(prisma.__store.travelGroup.points, 61500);
-  assert.equal(prisma.__store.travelGroup.returnedPoints, 10000);
-  assert.equal(prisma.__store.travelGroup.unreturnedPoints, 51500);
+  assert.equal(prisma.__store.travelGroup.points, 75000);
+  assert.equal(prisma.__store.travelGroup.returnedPoints, 45000);
+  assert.equal(prisma.__store.travelGroup.unreturnedPoints, 30000);
   assert.equal(prisma.__store.travelGroup.salesAmountCents, 1500000);
+  assert.equal(prisma.__store.travelGroup.paidDepositCents, 1200000);
+  assert.equal(prisma.__store.travelGroup.cashOnDeliveryCents, 300000);
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 170000);
-  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1230000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1330000);
 });
 
 function createService(prisma) {
@@ -299,12 +315,13 @@ function createSummaryPrisma(overrides = {}) {
 
 function buildSalesOrders() {
   return [
-    salesOrder({
-      id: 'order-stage7-a',
-      orderNo: 'SO-STAGE7-SUMMARY-A',
-      totalAmountCents: 1000000,
-      status: 'PARTIAL_REFUND',
-      confirmedRefundAmountCents: 100000,
+      salesOrder({
+        id: 'order-stage7-a',
+        orderNo: 'SO-STAGE7-SUMMARY-A',
+        totalAmountCents: 1000000,
+        cashOnDeliveryAmountCents: 200000,
+        status: 'PARTIAL_REFUND',
+        confirmedRefundAmountCents: 100000,
       unconfirmedRefundAmountCents: 50000,
       items: [
         orderItem({
@@ -325,11 +342,12 @@ function buildSalesOrders() {
         }),
       ],
     }),
-    salesOrder({
-      id: 'order-stage7-b',
-      orderNo: 'SO-STAGE7-SUMMARY-B',
-      totalAmountCents: 500000,
-      status: 'VALID',
+      salesOrder({
+        id: 'order-stage7-b',
+        orderNo: 'SO-STAGE7-SUMMARY-B',
+        totalAmountCents: 500000,
+        cashOnDeliveryAmountCents: 100000,
+        status: 'VALID',
       items: [
         orderItem({
           id: 'item-c',
@@ -426,6 +444,7 @@ function salesOrder(overrides = {}) {
     orderDate: new Date('2026-07-15T00:00:00.000Z'),
     status: overrides.status || 'VALID',
     totalAmountCents: overrides.totalAmountCents || 0,
+    cashOnDeliveryAmountCents: overrides.cashOnDeliveryAmountCents || 0,
     travelGroupId: 'group-stage7',
     items: overrides.items || [
       orderItem({
@@ -498,6 +517,8 @@ function summaryRecord(overrides = {}) {
     id: overrides.id || 'summary-stage7',
     travelGroupId: overrides.travelGroupId || 'group-stage7',
     totalSalesAmountCents: overrides.totalSalesAmountCents || 0,
+    totalCashOnDeliveryCents: overrides.totalCashOnDeliveryCents || 0,
+    totalPaidDepositCents: overrides.totalPaidDepositCents || 0,
     confirmedRefundAmountCents: overrides.confirmedRefundAmountCents || 0,
     effectiveSalesAmountCents: overrides.effectiveSalesAmountCents || 0,
     totalAgencyDeductionCents: overrides.totalAgencyDeductionCents || 0,
@@ -512,6 +533,12 @@ function summaryRecord(overrides = {}) {
     totalMonthlyRebateCents: overrides.totalMonthlyRebateCents || 0,
     paidRebateCents: overrides.paidRebateCents || 0,
     unpaidRebateCents: overrides.unpaidRebateCents || 0,
+    dailyRebatePaid: overrides.dailyRebatePaid || false,
+    dailyRebatePaidById: overrides.dailyRebatePaidById || null,
+    dailyRebatePaidAt: overrides.dailyRebatePaidAt || null,
+    monthlyRebatePaid: overrides.monthlyRebatePaid || false,
+    monthlyRebatePaidById: overrides.monthlyRebatePaidById || null,
+    monthlyRebatePaidAt: overrides.monthlyRebatePaidAt || null,
     notes: overrides.notes || null,
     guideInfoSent: overrides.guideInfoSent || false,
     travelAgencyInfoSent: overrides.travelAgencyInfoSent || false,
