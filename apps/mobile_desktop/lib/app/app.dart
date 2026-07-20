@@ -11,8 +11,15 @@ import '../features/shell/app_shell.dart';
 import 'destinations.dart';
 import 'theme.dart';
 
+typedef SessionStorageFactory = Future<SessionStorage> Function();
+
 class JiangjiuApp extends StatefulWidget {
-  const JiangjiuApp({super.key});
+  const JiangjiuApp({
+    super.key,
+    this.sessionStorageFactory = SessionStorage.create,
+  });
+
+  final SessionStorageFactory sessionStorageFactory;
 
   @override
   State<JiangjiuApp> createState() => _JiangjiuAppState();
@@ -41,8 +48,11 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   }
 
   Future<void> _bootstrapAuth() async {
-    final storage = await SessionStorage.create();
-    final authController = AuthController(storage: storage);
+    final storage = await widget.sessionStorageFactory();
+    final authController = AuthController(
+      storage: storage,
+      onSessionRevoked: _handleSessionRevoked,
+    );
     await authController.restore();
 
     if (!mounted) {
@@ -81,6 +91,17 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
     await _authController?.logout();
     setState(() {
       _selectedDestinationId = 'dashboard';
+    });
+  }
+
+  void _handleSessionRevoked() {
+    Future<void>.delayed(Duration.zero, () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedDestinationId = 'dashboard';
+      });
     });
   }
 
@@ -159,16 +180,16 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
                       onSubmit: _handleChangePassword,
                       onLogout: _handleLogout,
                     )
-              : AppShell(
-                  apiClient: authController.apiClient,
-                  token: authController.token,
-                  role: session.user.role,
-                  user: session.user,
-                  allowedDestinations: destinations,
-                  selectedDestinationId: _selectedDestinationId,
-                  onDestinationChanged: _handleDestinationChanged,
-                  onLogout: _handleLogout,
-                ),
+                  : AppShell(
+                      apiClient: authController.apiClient,
+                      token: authController.token,
+                      role: session.user.role,
+                      user: session.user,
+                      allowedDestinations: destinations,
+                      selectedDestinationId: _selectedDestinationId,
+                      onDestinationChanged: _handleDestinationChanged,
+                      onLogout: _handleLogout,
+                    ),
     );
   }
 

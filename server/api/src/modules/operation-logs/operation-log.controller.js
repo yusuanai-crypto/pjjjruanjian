@@ -8,13 +8,13 @@ function createOperationLogController(authService, operationLogRepository) {
 
     if (request.method === 'GET' && url.pathname === '/api/operation-logs') {
       sendJson(response, 200, {
-        data: {
-          logs: operationLogRepository.listLogs({
-            action: url.searchParams.get('action') || undefined,
-            entityType: url.searchParams.get('entityType') || undefined,
-            userId: url.searchParams.get('userId') || undefined,
-          }),
-        },
+        data: operationLogRepository.listLogs({
+          action: url.searchParams.get('action') || undefined,
+          entityType: url.searchParams.get('entityType') || undefined,
+          userId: url.searchParams.get('userId') || undefined,
+          page: url.searchParams.get('page') || undefined,
+          pageSize: url.searchParams.get('pageSize') || undefined,
+        }),
       });
       return;
     }

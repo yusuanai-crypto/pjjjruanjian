@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -14,11 +15,17 @@ const {
 const {
   RequestValidationPipe,
 } = require('../../src/common/pipes/request-validation.pipe');
-const { hashPassword } = require('../../src/modules/auth/password');
 const {
-  BOOTSTRAP_ADMIN_PASSWORD,
-} = require('../../src/modules/users/users.repository');
+  RATE_LIMIT_CLOCK,
+  RATE_LIMIT_STORE,
+} = require('../../src/common/rate-limit/rate-limit.tokens');
+const { hashPassword } = require('../../src/modules/auth/password');
 const { PrismaService } = require('../../src/prisma/prisma.service');
+
+const BOOTSTRAP_ADMIN_PASSWORD =
+  'test-only-bootstrap-admin-password';
+const TEST_AUTH_TOKEN_SECRET =
+  'test-only-auth-token-secret-at-least-32-bytes';
 
 function createTestStores() {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -33,7 +40,11 @@ function createTestStores() {
       os.tmpdir(),
       `jiangjiu-logs-${suffix}.json`,
     ),
-    tokenSecret: `test-secret-${suffix}`,
+    attachmentTempDir: path.join(
+      os.tmpdir(),
+      `jiangjiu-upload-temp-${suffix}`,
+    ),
+    tokenSecret: TEST_AUTH_TOKEN_SECRET,
   };
 }
 
@@ -44,6 +55,7 @@ async function withPhase1Server(run, options = {}) {
 async function withNestApiServer(run, options = {}) {
   const stores = createTestStores();
   const previousEnv = {
+    NODE_ENV: process.env.NODE_ENV,
     PHASE0_CONFIRMATION_STORE: process.env.PHASE0_CONFIRMATION_STORE,
     PHASE1_USER_STORE: process.env.PHASE1_USER_STORE,
     PHASE1_SETTINGS_STORE: process.env.PHASE1_SETTINGS_STORE,
@@ -60,10 +72,40 @@ async function withNestApiServer(run, options = {}) {
     AI_MAX_QUESTION_LENGTH: process.env.AI_MAX_QUESTION_LENGTH,
     AI_DAILY_LIMIT_PER_USER: process.env.AI_DAILY_LIMIT_PER_USER,
     AI_HISTORY_RETENTION_DAYS: process.env.AI_HISTORY_RETENTION_DAYS,
+    OPERATION_LOG_RETENTION_DAYS:
+      process.env.OPERATION_LOG_RETENTION_DAYS,
+    RETENTION_CLEANUP_BATCH_SIZE:
+      process.env.RETENTION_CLEANUP_BATCH_SIZE,
     TRAVEL_GROUP_ATTACHMENT_DIR: process.env.TRAVEL_GROUP_ATTACHMENT_DIR,
+    ATTACHMENT_UPLOAD_TEMP_DIR:
+      process.env.ATTACHMENT_UPLOAD_TEMP_DIR,
+    ATTACHMENT_UPLOAD_MAX_FILE_BYTES:
+      process.env.ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
+    ATTACHMENT_UPLOAD_MAX_FILES:
+      process.env.ATTACHMENT_UPLOAD_MAX_FILES,
+    ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES:
+      process.env.ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES,
     ALIYUN_SMS_MOCK: process.env.ALIYUN_SMS_MOCK,
     SMS_VERIFICATION_DEBUG: process.env.SMS_VERIFICATION_DEBUG,
     SMS_CODE_TTL_SECONDS: process.env.SMS_CODE_TTL_SECONDS,
+    RATE_LIMIT_STORE: process.env.RATE_LIMIT_STORE,
+    RATE_LIMIT_KEY_SECRET: process.env.RATE_LIMIT_KEY_SECRET,
+    LOGIN_RATE_LIMIT_MAX_REQUESTS:
+      process.env.LOGIN_RATE_LIMIT_MAX_REQUESTS,
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+      process.env.LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    SMS_CODE_RATE_LIMIT_MAX_REQUESTS:
+      process.env.SMS_CODE_RATE_LIMIT_MAX_REQUESTS,
+    SMS_CODE_RATE_LIMIT_WINDOW_SECONDS:
+      process.env.SMS_CODE_RATE_LIMIT_WINDOW_SECONDS,
+    PASSWORD_RESET_RATE_LIMIT_MAX_REQUESTS:
+      process.env.PASSWORD_RESET_RATE_LIMIT_MAX_REQUESTS,
+    PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS:
+      process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS,
+    AI_RATE_LIMIT_MAX_REQUESTS: process.env.AI_RATE_LIMIT_MAX_REQUESTS,
+    AI_RATE_LIMIT_WINDOW_SECONDS:
+      process.env.AI_RATE_LIMIT_WINDOW_SECONDS,
+    TRUSTED_PROXY_IPS: process.env.TRUSTED_PROXY_IPS,
   };
 
   process.env.PHASE0_CONFIRMATION_STORE = stores.phase0StorePath;
@@ -71,7 +113,10 @@ async function withNestApiServer(run, options = {}) {
   process.env.PHASE1_SETTINGS_STORE = stores.settingsStorePath;
   process.env.PHASE1_OPERATION_LOG_STORE = stores.operationLogStorePath;
   process.env.AUTH_TOKEN_SECRET = stores.tokenSecret;
+  process.env.NODE_ENV = 'test';
   process.env.PRISMA_CONNECT_ON_BOOT = 'false';
+  process.env.TRUSTED_PROXY_IPS = '127.0.0.1';
+  process.env.ATTACHMENT_UPLOAD_TEMP_DIR = stores.attachmentTempDir;
   for (const [key, value] of Object.entries(options.env || {})) {
     if (value === undefined || value === null) {
       delete process.env[key];
@@ -81,12 +126,22 @@ async function withNestApiServer(run, options = {}) {
   }
 
   const prisma = createInMemoryPrisma(options.prisma || {});
-  const moduleFixture = await Test.createTestingModule({
+  let moduleBuilder = Test.createTestingModule({
     imports: [AppModule],
   })
     .overrideProvider(PrismaService)
-    .useValue(prisma)
-    .compile();
+    .useValue(prisma);
+  if (options.rateLimitStore) {
+    moduleBuilder = moduleBuilder
+      .overrideProvider(RATE_LIMIT_STORE)
+      .useValue(options.rateLimitStore);
+  }
+  if (options.rateLimitClock) {
+    moduleBuilder = moduleBuilder
+      .overrideProvider(RATE_LIMIT_CLOCK)
+      .useValue(options.rateLimitClock);
+  }
+  const moduleFixture = await moduleBuilder.compile();
 
   const app = moduleFixture.createNestApplication({ logger: false });
   app.setGlobalPrefix('api');
@@ -104,6 +159,10 @@ async function withNestApiServer(run, options = {}) {
     stage10FixtureCatalogs.delete(baseUrl);
     stage10FixtureAdminTokens.delete(baseUrl);
     await app.close();
+    await fs.rm(stores.attachmentTempDir, {
+      force: true,
+      recursive: true,
+    });
     restoreEnv(previousEnv);
   }
 }
@@ -121,6 +180,7 @@ function createInMemoryPrisma(options = {}) {
       leaderId: null,
       isActive: true,
       mustChangePassword: false,
+      tokenVersion: 0,
       statusReason: null,
       statusChangedAt: null,
       statusChangedBy: null,
@@ -167,6 +227,7 @@ function createInMemoryPrisma(options = {}) {
   const reconciliationPaymentMethods = [];
   const strikeBonusAwards = [];
   seedAiChatMessages(aiChatMessages, options.aiChatMessages || [], now);
+  seedOperationLogs(operationLogs, options.operationLogs || [], now);
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
@@ -209,18 +270,27 @@ function createInMemoryPrisma(options = {}) {
     reconciliationPaymentMethods,
     strikeBonusAwards,
   ];
+  let transactionTail = Promise.resolve();
 
   const prisma = {
     $connect: async () => undefined,
     $disconnect: async () => undefined,
     $transaction: async (operations) => {
       if (typeof operations === 'function') {
+        const previousTransaction = transactionTail;
+        let releaseTransaction;
+        transactionTail = new Promise((resolve) => {
+          releaseTransaction = resolve;
+        });
+        await previousTransaction;
         const snapshot = transactionalRows.map((rows) => rows.map(copyRow));
         try {
           return await operations(prisma);
         } catch (error) {
           restoreRows(transactionalRows, snapshot);
           throw error;
+        } finally {
+          releaseTransaction();
         }
       }
       return Promise.all(operations);
@@ -236,10 +306,14 @@ function createInMemoryPrisma(options = {}) {
           orderBy,
         );
       },
+      count: async ({ where } = {}) => {
+        return users.filter((user) => matchesWhere(user, where)).length;
+      },
       create: async ({ data }) => {
         const row = {
           ...data,
           id: data.id || crypto.randomUUID(),
+          tokenVersion: Number(data.tokenVersion || 0),
           createdAt: asDate(data.createdAt) || new Date(),
           updatedAt: asDate(data.updatedAt) || new Date(),
         };
@@ -253,7 +327,7 @@ function createInMemoryPrisma(options = {}) {
         }
         users[index] = {
           ...users[index],
-          ...data,
+          ...applyPrismaUpdateData(users[index], data),
           updatedAt: asDate(data.updatedAt) || new Date(),
         };
         return copyRow(users[index]);
@@ -300,15 +374,38 @@ function createInMemoryPrisma(options = {}) {
         operationLogs.push(row);
         return copyRow(row);
       },
-      findMany: async ({ where, orderBy } = {}) => {
-        return sortRows(
+      findMany: async ({ where, orderBy, skip, take } = {}) => {
+        const rows = sortRows(
           operationLogs.filter((log) => matchesWhere(log, where)).map(copyRow),
           orderBy,
         );
+        const start = skip || 0;
+        return rows.slice(start, take ? start + take : rows.length);
+      },
+      count: async ({ where } = {}) => {
+        return operationLogs.filter((log) => matchesWhere(log, where)).length;
+      },
+      deleteMany: async ({ where } = {}) => {
+        let count = 0;
+        for (let index = operationLogs.length - 1; index >= 0; index -= 1) {
+          if (matchesWhere(operationLogs[index], where)) {
+            operationLogs.splice(index, 1);
+            count += 1;
+          }
+        }
+        return { count };
       },
     },
     smsVerificationCode: {
       create: async ({ data }) => {
+        if (
+          data.activeKey &&
+          smsVerificationCodes.some(
+            (code) => code.activeKey === data.activeKey,
+          )
+        ) {
+          throw createPrismaUniqueError('active_key');
+        }
         const row = {
           ...data,
           id: data.id || crypto.randomUUID(),
@@ -319,6 +416,15 @@ function createInMemoryPrisma(options = {}) {
         };
         smsVerificationCodes.push(row);
         return copyRow(row);
+      },
+      findFirst: async ({ where, orderBy } = {}) => {
+        const rows = sortRows(
+          smsVerificationCodes
+            .filter((code) => matchesWhere(code, where))
+            .map(copyRow),
+          orderBy,
+        );
+        return rows[0] || null;
       },
       findMany: async ({ where, orderBy } = {}) => {
         return sortRows(
@@ -337,7 +443,7 @@ function createInMemoryPrisma(options = {}) {
         }
         smsVerificationCodes[index] = {
           ...smsVerificationCodes[index],
-          ...data,
+          ...applyPrismaUpdateData(smsVerificationCodes[index], data),
           expiresAt: asDate(data.expiresAt) || smsVerificationCodes[index].expiresAt,
           consumedAt:
             data.consumedAt === null
@@ -346,6 +452,21 @@ function createInMemoryPrisma(options = {}) {
           updatedAt: asDate(data.updatedAt) || new Date(),
         };
         return copyRow(smsVerificationCodes[index]);
+      },
+      updateMany: async ({ where, data }) => {
+        let count = 0;
+        for (let index = 0; index < smsVerificationCodes.length; index += 1) {
+          if (!matchesWhere(smsVerificationCodes[index], where)) {
+            continue;
+          }
+          smsVerificationCodes[index] = {
+            ...smsVerificationCodes[index],
+            ...applyPrismaUpdateData(smsVerificationCodes[index], data),
+            updatedAt: asDate(data.updatedAt) || new Date(),
+          };
+          count += 1;
+        }
+        return { count };
       },
     },
     aiChatMessage: {
@@ -371,6 +492,16 @@ function createInMemoryPrisma(options = {}) {
       count: async ({ where } = {}) => {
         return aiChatMessages.filter((message) => matchesWhere(message, where))
           .length;
+      },
+      deleteMany: async ({ where } = {}) => {
+        let count = 0;
+        for (let index = aiChatMessages.length - 1; index >= 0; index -= 1) {
+          if (matchesWhere(aiChatMessages[index], where)) {
+            aiChatMessages.splice(index, 1);
+            count += 1;
+          }
+        }
+        return { count };
       },
     },
     travelAgency: createTravelAgencyDelegate(travelAgencies),
@@ -683,6 +814,7 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    smsVerificationCodes,
     aiChatMessages,
     travelAgencies,
     guides,
@@ -1119,9 +1251,13 @@ function createAfterSalesOrderDelegate(rows, relations = {}) {
       const row = {
         ...data,
         id: data.id || crypto.randomUUID(),
-        financeConfirmed: Boolean(data.financeConfirmed),
-        createdAt: asDate(data.createdAt) || new Date(),
-        updatedAt: asDate(data.updatedAt) || new Date(),
+      financeConfirmed: Boolean(data.financeConfirmed),
+      warehouseConfirmedById: data.warehouseConfirmedById ?? null,
+      warehouseConfirmedAt: asDate(data.warehouseConfirmedAt) || null,
+      warehouseConfirmNote: data.warehouseConfirmNote ?? null,
+      refundProofAttachments: data.refundProofAttachments || [],
+      createdAt: asDate(data.createdAt) || new Date(),
+      updatedAt: asDate(data.updatedAt) || new Date(),
       };
       rows.push(row);
       return withAfterSalesOrderIncludes(row, include, relations);
@@ -1253,6 +1389,7 @@ function seedUsers(rows, seeds, now) {
         seed.mustChangePassword === undefined
           ? false
           : Boolean(seed.mustChangePassword),
+      tokenVersion: Number(seed.tokenVersion || 0),
       statusReason: seed.statusReason ?? null,
       statusChangedAt: asDate(seed.statusChangedAt) || null,
       statusChangedBy: seed.statusChangedBy ?? null,
@@ -1282,6 +1419,23 @@ function seedAiChatMessages(rows, seeds, now) {
       completionTokens: seed.completionTokens ?? null,
       latencyMs: seed.latencyMs ?? null,
       errorCode: seed.errorCode ?? null,
+      createdAt: asDate(seed.createdAt) || now,
+    });
+  }
+}
+
+function seedOperationLogs(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      userId: seed.userId ?? null,
+      action: seed.action || 'test.action',
+      entityType: seed.entityType || 'test',
+      entityId: seed.entityId ?? null,
+      beforeData: seed.beforeData ?? null,
+      afterData: seed.afterData ?? null,
+      sanitizationSummary: seed.sanitizationSummary ?? null,
+      ipAddress: seed.ipAddress ?? null,
       createdAt: asDate(seed.createdAt) || now,
     });
   }
@@ -1405,9 +1559,10 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       address: seed.address ?? null,
       orderDate: asDate(seed.orderDate) || now,
       salesFormNo: seed.salesFormNo ?? null,
-      qrCodeToken: seed.qrCodeToken ?? null,
+      qrCodeTokenHash: seed.qrCodeTokenHash ?? null,
       qrCodeGeneratedAt: asDate(seed.qrCodeGeneratedAt) || null,
       qrCodeExpiresAt: asDate(seed.qrCodeExpiresAt) || null,
+      qrCodeRevokedAt: asDate(seed.qrCodeRevokedAt) || null,
       totalAmountCents: seed.totalAmountCents ?? 0,
       cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
       logisticsMethod: seed.logisticsMethod ?? null,
@@ -1473,6 +1628,10 @@ function seedAfterSalesOrders(rows, seeds, now) {
       financeConfirmed: Boolean(seed.financeConfirmed),
       financeConfirmedById: seed.financeConfirmedById ?? null,
       financeConfirmedAt: asDate(seed.financeConfirmedAt) || null,
+      warehouseConfirmedById: seed.warehouseConfirmedById ?? null,
+      warehouseConfirmedAt: asDate(seed.warehouseConfirmedAt) || null,
+      warehouseConfirmNote: seed.warehouseConfirmNote ?? null,
+      refundProofAttachments: seed.refundProofAttachments || [],
       handledById: seed.handledById ?? null,
       handledAt: asDate(seed.handledAt) || null,
       completedAt: asDate(seed.completedAt) || null,
@@ -1581,6 +1740,8 @@ function normalizeTravelGroupFinanceSummaryRow(data = {}) {
     id: data.id || crypto.randomUUID(),
     travelGroupId: data.travelGroupId,
     totalSalesAmountCents: data.totalSalesAmountCents ?? 0,
+    totalCashOnDeliveryCents: data.totalCashOnDeliveryCents ?? 0,
+    totalPaidDepositCents: data.totalPaidDepositCents ?? 0,
     confirmedRefundAmountCents: data.confirmedRefundAmountCents ?? 0,
     effectiveSalesAmountCents: data.effectiveSalesAmountCents ?? 0,
     totalAgencyDeductionCents: data.totalAgencyDeductionCents ?? 0,
@@ -1593,6 +1754,12 @@ function normalizeTravelGroupFinanceSummaryRow(data = {}) {
     totalMonthlyRebateCents: data.totalMonthlyRebateCents ?? 0,
     paidRebateCents: data.paidRebateCents ?? 0,
     unpaidRebateCents: data.unpaidRebateCents ?? 0,
+    dailyRebatePaid: Boolean(data.dailyRebatePaid),
+    dailyRebatePaidById: data.dailyRebatePaidById ?? null,
+    dailyRebatePaidAt: asDate(data.dailyRebatePaidAt) || null,
+    monthlyRebatePaid: Boolean(data.monthlyRebatePaid),
+    monthlyRebatePaidById: data.monthlyRebatePaidById ?? null,
+    monthlyRebatePaidAt: asDate(data.monthlyRebatePaidAt) || null,
     notes: data.notes ?? null,
     guideInfoSent: Boolean(data.guideInfoSent),
     travelAgencyInfoSent: Boolean(data.travelAgencyInfoSent),
@@ -1670,16 +1837,35 @@ function matchesWhere(row, where = {}) {
     if (
       value &&
       typeof value === 'object' &&
-      (value.gte !== undefined || value.lte !== undefined)
+      (value.gt !== undefined ||
+        value.gte !== undefined ||
+        value.lt !== undefined ||
+        value.lte !== undefined)
     ) {
-      const rowTime = asDate(row[key])?.getTime();
-      if (rowTime === undefined || Number.isNaN(rowTime)) {
+      const dateComparison =
+        row[key] instanceof Date ||
+        value.gt instanceof Date ||
+        value.gte instanceof Date ||
+        value.lt instanceof Date ||
+        value.lte instanceof Date;
+      const comparable = dateComparison
+        ? asDate(row[key])?.getTime()
+        : Number(row[key]);
+      if (comparable === undefined || Number.isNaN(comparable)) {
         return false;
       }
-      if (value.gte !== undefined && rowTime < asDate(value.gte).getTime()) {
+      const boundary = (candidate) =>
+        dateComparison ? asDate(candidate)?.getTime() : Number(candidate);
+      if (value.gt !== undefined && comparable <= boundary(value.gt)) {
         return false;
       }
-      if (value.lte !== undefined && rowTime > asDate(value.lte).getTime()) {
+      if (value.gte !== undefined && comparable < boundary(value.gte)) {
+        return false;
+      }
+      if (value.lt !== undefined && comparable >= boundary(value.lt)) {
+        return false;
+      }
+      if (value.lte !== undefined && comparable > boundary(value.lte)) {
         return false;
       }
       return true;
@@ -1711,6 +1897,21 @@ function sortRows(rows, orderBy) {
 
 function copyRow(row) {
   return { ...row };
+}
+
+function applyPrismaUpdateData(row, data = {}) {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => {
+      if (
+        value &&
+        typeof value === 'object' &&
+        value.increment !== undefined
+      ) {
+        return [key, Number(row[key] || 0) + Number(value.increment)];
+      }
+      return [key, value];
+    }),
+  );
 }
 
 function selectRow(row, select) {
@@ -2005,6 +2206,8 @@ function getTravelGroupFinanceSummaryFilterInclude() {
   return {
     travelGroup: true,
     agencyDeductionConfirmedBy: true,
+    dailyRebatePaidBy: true,
+    monthlyRebatePaidBy: true,
     updatedBy: true,
   };
 }
@@ -2026,6 +2229,18 @@ function withTravelGroupFinanceSummaryIncludes(
       (item) => item.id === summary.agencyDeductionConfirmedById,
     );
     row.agencyDeductionConfirmedBy = user ? copyRow(user) : null;
+  }
+  if (include?.dailyRebatePaidBy) {
+    const user = (relations.users || []).find(
+      (item) => item.id === summary.dailyRebatePaidById,
+    );
+    row.dailyRebatePaidBy = user ? copyRow(user) : null;
+  }
+  if (include?.monthlyRebatePaidBy) {
+    const user = (relations.users || []).find(
+      (item) => item.id === summary.monthlyRebatePaidById,
+    );
+    row.monthlyRebatePaidBy = user ? copyRow(user) : null;
   }
   if (include?.updatedBy) {
     const user = (relations.users || []).find(
@@ -2344,14 +2559,22 @@ function assertOperationLogContract(log) {
 
 function assertErrorContract(result, statusCode, code) {
   assert.equal(result.response.status, statusCode);
-  assert.deepEqual(Object.keys(result.body).sort(), ['error']);
+  assert.deepEqual(
+    Object.keys(result.body).sort(),
+    statusCode >= 500 ? ['error', 'requestId'] : ['error'],
+  );
   assert.deepEqual(Object.keys(result.body.error).sort(), ['code', 'message']);
   assert.equal(result.body.error.code, code);
   assert.equal(typeof result.body.error.message, 'string');
+  if (statusCode >= 500) {
+    assert.equal(typeof result.body.requestId, 'string');
+    assert.equal(result.body.requestId.length > 0, true);
+  }
 }
 
 module.exports = {
   BOOTSTRAP_ADMIN_PASSWORD,
+  TEST_AUTH_TOKEN_SECRET,
   assertCurrentUserContract,
   assertErrorContract,
   assertOperationLogContract,

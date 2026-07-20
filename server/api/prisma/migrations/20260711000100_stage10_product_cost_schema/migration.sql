@@ -68,7 +68,7 @@ CREATE INDEX `sales_deduction_rules_product_id_idx` ON `sales_deduction_rules`(`
 CREATE INDEX `sales_deduction_rules_product_id_is_active_effective_from_idx`
   ON `sales_deduction_rules`(`product_id`, `is_active`, `effective_from`);
 CREATE INDEX `agency_deduction_rules_product_id_idx` ON `agency_deduction_rules`(`product_id`);
-CREATE INDEX `agency_deduction_rules_agency_id_product_id_is_active_effective_from_idx`
+CREATE INDEX `agency_deduction_rules_agency_product_id_active_from_idx`
   ON `agency_deduction_rules`(`agency_id`, `product_id`, `is_active`, `effective_from`);
 
 ALTER TABLE `products`

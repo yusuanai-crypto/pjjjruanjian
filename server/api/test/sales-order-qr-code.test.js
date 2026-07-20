@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const test = require('node:test');
 
 const {
@@ -12,6 +13,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 test('POST /api/sales-orders/:id/qr-code generates first QR code for admin and writes sanitized log', async (t) => {
   setPublicSalesSheetBaseUrl(t, 'https://qr.example.test/base/');
+  setPublicSalesSheetDefaultTtl(t, undefined);
 
   await withPhase1Server(
     async (baseUrl) => {
@@ -23,9 +25,7 @@ test('POST /api/sales-orders/:id/qr-code generates first QR code for admin and w
         {
           method: 'POST',
           token: admin.token,
-          body: {
-            expiresInDays: 7,
-          },
+          body: {},
         },
       );
 
@@ -38,10 +38,21 @@ test('POST /api/sales-orders/:id/qr-code generates first QR code for admin and w
         qrCode.url,
         `https://qr.example.test/base/api/public/sales-sheets/${qrCode.token}`,
       );
+      const publicPage = await fetch(
+        `${baseUrl}/api/public/sales-sheets/${qrCode.token}`,
+      );
+      const publicHtml = await publicPage.text();
+      assert.equal(publicPage.status, 200);
+      assert.match(
+        publicPage.headers.get('content-type') || '',
+        /text\/html/,
+      );
+      assert.match(publicHtml, /^<!doctype html>/i);
+      assert.match(publicHtml, /SO-QR-NEW/);
       assert.equal(
         new Date(qrCode.expiresAt).getTime() -
           new Date(qrCode.generatedAt).getTime(),
-        7 * DAY_MS,
+        30 * DAY_MS,
       );
 
       const preview = await requestJson(
@@ -52,7 +63,9 @@ test('POST /api/sales-orders/:id/qr-code generates first QR code for admin and w
         },
       );
       assert.equal(preview.response.status, 200);
-      assert.equal(preview.body.data.salesSheet.qrCode.token, qrCode.token);
+      assert.equal(preview.body.data.salesSheet.qrCode.active, true);
+      assert.equal(preview.body.data.salesSheet.qrCode.token, null);
+      assert.equal(preview.body.data.salesSheet.qrCode.url, null);
 
       const logs = await requestJson(
         baseUrl,
@@ -91,7 +104,69 @@ test('POST /api/sales-orders/:id/qr-code generates first QR code for admin and w
   );
 });
 
-test('POST /api/sales-orders/:id/qr-code reuses an existing unexpired QR code by default', async (t) => {
+test('POST /api/sales-orders/:id/qr-code rejects non-public scan base URLs', async () => {
+  const previous = process.env.PUBLIC_SALES_SHEET_BASE_URL;
+  try {
+    delete process.env.PUBLIC_SALES_SHEET_BASE_URL;
+    await withPhase1Server(
+      async (baseUrl) => {
+        const admin = await login(baseUrl);
+        const result = await requestJson(
+          baseUrl,
+          '/api/sales-orders/order_qr_new/qr-code',
+          {
+            method: 'POST',
+            token: admin.token,
+            headers: {
+              host: 'spoofed.example.test',
+              'x-forwarded-host': 'spoofed.example.test',
+              'x-forwarded-proto': 'https',
+            },
+          },
+        );
+        assertErrorContract(
+          result,
+          400,
+          'PUBLIC_SALES_SHEET_BASE_URL_UNSAFE',
+        );
+      },
+      {
+        prisma: buildQrCodePrismaOptions(),
+      },
+    );
+
+    process.env.PUBLIC_SALES_SHEET_BASE_URL = 'https://192.168.1.20';
+    await withPhase1Server(
+      async (baseUrl) => {
+        const admin = await login(baseUrl);
+        const result = await requestJson(
+          baseUrl,
+          '/api/sales-orders/order_qr_new/qr-code',
+          {
+            method: 'POST',
+            token: admin.token,
+          },
+        );
+        assertErrorContract(
+          result,
+          400,
+          'PUBLIC_SALES_SHEET_BASE_URL_UNSAFE',
+        );
+      },
+      {
+        prisma: buildQrCodePrismaOptions(),
+      },
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PUBLIC_SALES_SHEET_BASE_URL;
+    } else {
+      process.env.PUBLIC_SALES_SHEET_BASE_URL = previous;
+    }
+  }
+});
+
+test('POST /api/sales-orders/:id/qr-code requires explicit regeneration when a code is active', async (t) => {
   setPublicSalesSheetBaseUrl(t, 'https://qr.example.test');
 
   await withPhase1Server(
@@ -107,17 +182,7 @@ test('POST /api/sales-orders/:id/qr-code reuses an existing unexpired QR code by
         },
       );
 
-      assert.equal(result.response.status, 201);
-      assert.equal(result.body.data.qrCode.token, 'existing-qr-token');
-      assert.equal(
-        result.body.data.qrCode.generatedAt,
-        '2026-07-01T10:00:00.000Z',
-      );
-      assert.equal(result.body.data.qrCode.expiresAt, null);
-      assert.equal(
-        result.body.data.qrCode.url,
-        'https://qr.example.test/api/public/sales-sheets/existing-qr-token',
-      );
+      assertErrorContract(result, 409, 'QR_CODE_ALREADY_ACTIVE');
 
       const admin = await login(baseUrl);
       const generateLogs = await requestJson(
@@ -168,7 +233,7 @@ test('POST /api/sales-orders/:id/qr-code regenerates an existing QR code for sal
       assert.equal(result.response.status, 201);
       const qrCode = result.body.data.qrCode;
       assert.match(qrCode.token, /^[A-Za-z0-9_-]{32}$/);
-      assert.notEqual(qrCode.token, 'old-qr-token');
+      assert.notEqual(qrCode.token, 'old-qr-token-00000001');
       assert.equal(
         new Date(qrCode.expiresAt).getTime() -
           new Date(qrCode.generatedAt).getTime(),
@@ -193,6 +258,70 @@ test('POST /api/sales-orders/:id/qr-code regenerates an existing QR code for sal
         log.afterData.qrCode.tokenFingerprint,
       );
       assert.equal(JSON.stringify(log).includes(qrCode.token), false);
+
+      const oldPage = await fetch(
+        `${baseUrl}/api/public/sales-sheets/old-qr-token-00000001`,
+      );
+      assert.equal(oldPage.status, 404);
+      const newPage = await fetch(
+        `${baseUrl}/api/public/sales-sheets/${qrCode.token}`,
+      );
+      assert.equal(newPage.status, 200);
+    },
+    {
+      prisma: buildQrCodePrismaOptions(),
+    },
+  );
+});
+
+test('DELETE /api/sales-orders/:id/qr-code immediately revokes the bearer capability', async (t) => {
+  setPublicSalesSheetBaseUrl(t, 'https://qr.example.test');
+
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const generated = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order_qr_new/qr-code',
+        {
+          method: 'POST',
+          token: admin.token,
+        },
+      );
+      assert.equal(generated.response.status, 201);
+      const rawToken = generated.body.data.qrCode.token;
+
+      const before = await fetch(
+        `${baseUrl}/api/public/sales-sheets/${rawToken}`,
+      );
+      assert.equal(before.status, 200);
+
+      const revoked = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order_qr_new/qr-code',
+        {
+          method: 'DELETE',
+          token: admin.token,
+        },
+      );
+      assert.equal(revoked.response.status, 200);
+      assert.equal(revoked.body.data.qrCode.active, false);
+      assert.equal(revoked.body.data.qrCode.token, null);
+      assert.equal(revoked.body.data.qrCode.url, null);
+
+      const after = await fetch(
+        `${baseUrl}/api/public/sales-sheets/${rawToken}`,
+      );
+      assert.equal(after.status, 404);
+
+      const logs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=sales_orders.qr_code.revoke',
+        { token: admin.token },
+      );
+      assert.equal(logs.response.status, 200);
+      assert.equal(logs.body.data.logs.length, 1);
+      assert.equal(JSON.stringify(logs.body.data.logs[0]).includes(rawToken), false);
     },
     {
       prisma: buildQrCodePrismaOptions(),
@@ -213,7 +342,7 @@ test('POST /api/sales-orders/:id/qr-code rejects invalid expiration, sales overr
           method: 'POST',
           token: admin.token,
           body: {
-            expiresInDays: 3651,
+            expiresInDays: 91,
           },
         },
       );
@@ -269,6 +398,26 @@ function setPublicSalesSheetBaseUrl(t, value) {
   });
 }
 
+function setPublicSalesSheetDefaultTtl(t, value) {
+  const previous = process.env.PUBLIC_SALES_SHEET_DEFAULT_TTL_DAYS;
+  if (value === undefined) {
+    delete process.env.PUBLIC_SALES_SHEET_DEFAULT_TTL_DAYS;
+  } else {
+    process.env.PUBLIC_SALES_SHEET_DEFAULT_TTL_DAYS = value;
+  }
+  t.after(() => {
+    if (previous === undefined) {
+      delete process.env.PUBLIC_SALES_SHEET_DEFAULT_TTL_DAYS;
+    } else {
+      process.env.PUBLIC_SALES_SHEET_DEFAULT_TTL_DAYS = previous;
+    }
+  });
+}
+
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 function buildQrCodePrismaOptions() {
   return {
     users: [
@@ -311,14 +460,14 @@ function buildQrCodePrismaOptions() {
       buildQrCodeOrder({
         id: 'order_qr_reuse',
         orderNo: 'SO-QR-REUSE',
-        qrCodeToken: 'existing-qr-token',
+        qrCodeTokenHash: tokenHash('existing-qr-token-00001'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
-        qrCodeExpiresAt: null,
+        qrCodeExpiresAt: '2099-08-01T10:00:00.000Z',
       }),
       buildQrCodeOrder({
         id: 'order_qr_regenerate',
         orderNo: 'SO-QR-REGEN',
-        qrCodeToken: 'old-qr-token',
+        qrCodeTokenHash: tokenHash('old-qr-token-00000001'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
         qrCodeExpiresAt: '2026-08-01T10:00:00.000Z',
       }),

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
@@ -11,6 +12,7 @@ import '../../shared/widgets/mark_info_button.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../../shared/widgets/time_picker_field.dart';
 
 typedef TravelGroupFilePicker = Future<List<ApiMultipartFile>> Function();
 
@@ -19,11 +21,13 @@ class TravelGroupFormPage extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.token,
+    this.role = UserRole.frontDesk,
     this.filePicker,
   });
 
   final ApiClient apiClient;
   final String token;
+  final UserRole role;
   final TravelGroupFilePicker? filePicker;
 
   @override
@@ -234,7 +238,11 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     };
     _putNonEmpty(body, 'licensePlate', _licensePlateController.text);
     _putNonEmpty(body, 'tastingRoomNo', _tastingRoomNoController.text);
-    _putNonEmpty(body, 'arrivalTime', _arrivalTimeController.text);
+    _putNonEmpty(
+      body,
+      'arrivalTime',
+      normalizeTimeText(_arrivalTimeController.text),
+    );
     _putNonEmpty(body, 'sourceRegion', _sourceRegionController.text);
     _putNonEmpty(body, 'ageInfo', _ageInfoController.text);
     _putNonEmpty(
@@ -483,6 +491,9 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   }
 
   Future<void> _toggleGroupMark(TravelGroupRecord group) async {
+    if (!canViewFinanceMark(widget.role)) {
+      return;
+    }
     setState(() {
       _markingGroupIds.add(group.id);
       _errorMessage = null;
@@ -640,6 +651,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           value: _selectedTaster == null
                               ? null
                               : '${_selectedTaster!.name} · ${_selectedTaster!.username}',
+                          fieldKey: const ValueKey('taster-field'),
                           onTap: _selectTaster,
                           onClear: _selectedTaster == null
                               ? null
@@ -650,6 +662,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           value: _selectedLiaisonTaster == null
                               ? null
                               : '${_selectedLiaisonTaster!.name} · ${_selectedLiaisonTaster!.username}',
+                          fieldKey: const ValueKey('liaison-taster-field'),
                           onTap: _selectLiaisonTaster,
                           onClear: _selectedLiaisonTaster == null
                               ? null
@@ -657,10 +670,10 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                                     () => _selectedLiaisonTaster = null,
                                   ),
                         ),
-                        TextFormField(
+                        AppTimePickerField(
+                          key: const ValueKey('arrival-time-field'),
                           controller: _arrivalTimeController,
-                          decoration:
-                              const InputDecoration(labelText: '进店时间（选填）'),
+                          label: '进店时间（选填）',
                         ),
                         DropdownButtonFormField<String>(
                           initialValue: _groupType ?? '',
@@ -812,15 +825,16 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                               label: _groupStatusLabel(group.status),
                               tone: _groupStatusTone(group.status),
                             ),
-                            MarkInfoButton(
-                              marked: _isGroupMarked(group),
-                              label: '标记',
-                              compact: true,
-                              busy: _markingGroupIds.contains(group.id),
-                              onPressed: _markingGroupIds.contains(group.id)
-                                  ? null
-                                  : () => _toggleGroupMark(group),
-                            ),
+                            if (canViewFinanceMark(widget.role))
+                              MarkInfoButton(
+                                marked: _isGroupMarked(group),
+                                label: '标记',
+                                compact: true,
+                                busy: _markingGroupIds.contains(group.id),
+                                onPressed: _markingGroupIds.contains(group.id)
+                                    ? null
+                                    : () => _toggleGroupMark(group),
+                              ),
                           ],
                         ),
                       ),

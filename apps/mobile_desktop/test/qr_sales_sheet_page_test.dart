@@ -36,12 +36,14 @@ void main() {
     expect(find.text('生成二维码后显示'), findsWidgets);
     expect(find.text('酱香珍藏'), findsOneWidget);
     expect(find.textContaining('测试旅行社'), findsWidgets);
+    expect(find.textContaining('FORM-001'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('qr-sales-generate-button')));
     await tester.pumpAndSettle();
 
     expect(apiClient.qrCodePaths, ['/api/sales-orders/order-1/qr-code']);
     expect(apiClient.lastQrCodeBody?['regenerate'], isFalse);
+    expect(apiClient.lastQrCodeBody?['expiresInDays'], 30);
     expect(find.text('https://example.test/api/public/sales-sheets/token-1'),
         findsWidgets);
     expect(find.text('请客户拍照保存销售单和二维码。'), findsOneWidget);
@@ -54,6 +56,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('公开链接已复制。'), findsOneWidget);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('qr-sales-revoke-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('qr-sales-revoke-button')));
+    await tester.pumpAndSettle();
+
+    expect(apiClient.revokePaths, ['/api/sales-orders/order-1/qr-code']);
+    expect(find.text('二维码已吊销，旧链接立即失效。'), findsOneWidget);
+    expect(
+      find.text('https://example.test/api/public/sales-sheets/token-1'),
+      findsNothing,
+    );
   });
 
   testWidgets('shows clear search error', (tester) async {
@@ -98,6 +113,7 @@ class _FakeApiClient extends ApiClient {
   final List<String> salesOrderListPaths = <String>[];
   final List<String> salesSheetPaths = <String>[];
   final List<String> qrCodePaths = <String>[];
+  final List<String> revokePaths = <String>[];
   Map<String, dynamic>? lastQrCodeBody;
 
   @override
@@ -146,17 +162,48 @@ class _FakeApiClient extends ApiClient {
         'data': {
           'salesSheet': _salesSheetJson(
             qrCodeUrl: 'https://example.test/api/public/sales-sheets/token-1',
+            qrCodeActive: true,
           ),
           'qrCode': {
+            'active': true,
             'token': 'token-1',
             'url': 'https://example.test/api/public/sales-sheets/token-1',
             'generatedAt': '2026-07-01T08:00:00.000Z',
-            'expiresAt': null,
+            'expiresAt': '2026-07-31T08:00:00.000Z',
+            'revokedAt': null,
           },
         },
       };
     }
 
+    return <String, dynamic>{'data': <String, dynamic>{}};
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    if (path == '/api/sales-orders/order-1/qr-code') {
+      revokePaths.add(path);
+      return {
+        'data': {
+          'salesSheet': _salesSheetJson(
+            qrCodeUrl: null,
+            includeQrCode: true,
+          ),
+          'qrCode': {
+            'active': false,
+            'token': null,
+            'url': null,
+            'generatedAt': '2026-07-01T08:00:00.000Z',
+            'expiresAt': '2026-07-31T08:00:00.000Z',
+            'revokedAt': '2026-07-02T08:00:00.000Z',
+          },
+        },
+      };
+    }
     return <String, dynamic>{'data': <String, dynamic>{}};
   }
 }
@@ -184,7 +231,11 @@ Map<String, dynamic> _salesOrderJson() {
   };
 }
 
-Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
+Map<String, dynamic> _salesSheetJson({
+  required String? qrCodeUrl,
+  bool qrCodeActive = false,
+  bool includeQrCode = false,
+}) {
   return {
     'visibility': 'internal',
     'companyName': '贵州酱酒馆',
@@ -253,13 +304,16 @@ Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
       'issued': false,
       'issuedLabel': '未开票',
     },
-    'qrCode': qrCodeUrl == null
+    'qrCode': qrCodeUrl == null && !includeQrCode
         ? null
         : {
-            'token': 'token-1',
+            'active': qrCodeActive,
+            'token': qrCodeUrl == null ? null : 'token-1',
             'url': qrCodeUrl,
             'generatedAt': '2026-07-01T08:00:00.000Z',
-            'expiresAt': null,
+            'expiresAt': '2026-07-31T08:00:00.000Z',
+            'revokedAt':
+                qrCodeActive ? null : '2026-07-02T08:00:00.000Z',
           },
   };
 }

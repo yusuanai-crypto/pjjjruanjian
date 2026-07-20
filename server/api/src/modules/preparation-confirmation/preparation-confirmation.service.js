@@ -6,6 +6,7 @@ const {
 const {
   createPreparationConfirmationRepository,
 } = require('./preparation-confirmation.repository');
+const { createHttpError } = require('../../common/errors');
 
 function createPreparationConfirmationService(repository = createPreparationConfirmationRepository()) {
   return {
@@ -139,13 +140,6 @@ function pickStringOrNull(value, fallback) {
   }
   const text = String(value).trim();
   return text || null;
-}
-
-function createHttpError(statusCode, code, message) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  error.code = code;
-  return error;
 }
 
 module.exports = {

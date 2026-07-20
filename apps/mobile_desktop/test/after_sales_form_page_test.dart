@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
@@ -32,7 +34,7 @@ void main() {
     expect(find.textContaining('张女士'), findsWidgets);
     expect(find.textContaining('订单金额 ¥798.00'), findsOneWidget);
     expect(find.text('邮寄'), findsWidgets);
-    expect(find.text('客户未标记'), findsOneWidget);
+    expect(find.text('客户未标记'), findsNothing);
 
     await tester.tap(find.text('SO20260630001').first);
     await tester.pumpAndSettle();
@@ -43,6 +45,23 @@ void main() {
     expect(find.text('酱香珍藏 x2 · ¥798.00 · 邮寄'), findsOneWidget);
     expect(find.text('售后历史'), findsOneWidget);
     expect(find.text('AS20260630001'), findsOneWidget);
+  });
+
+  testWidgets('admin can see customer finance mark in order search results',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient, role: UserRole.admin);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-order-search-field')),
+      '13800001111',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('after-sales-order-search-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('客户未标记'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no orders match', (tester) async {
@@ -222,12 +241,115 @@ void main() {
     expect(apiClient.statusPatchPaths, isEmpty);
     expect(apiClient.afterSalesCreatePaths, isEmpty);
   });
+
+  testWidgets('finance role sees refund todo and uploads proof',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(
+      tester,
+      apiClient,
+      role: UserRole.finance,
+      filePicker: () async => [
+        ApiMultipartFile.fromBytes(
+          fileName: 'refund-proof.png',
+          bytes: Uint8List.fromList([1, 2, 3]),
+          contentType: 'image/png',
+        ),
+      ],
+    );
+
+    expect(find.text('财务退款待办'), findsOneWidget);
+    expect(find.text('AS20260630001'), findsOneWidget);
+    final confirmButton = find.byKey(
+        const ValueKey('after-sales-finance-refund-confirm-after-sales-1'));
+    expect(confirmButton, findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '已退款'), findsOneWidget);
+
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.financeRefundConfirmPaths,
+      contains('/api/after-sales-orders/after-sales-1/finance-refund-confirm'),
+    );
+    expect(apiClient.lastMultipartFiles?.single.fileName, 'refund-proof.png');
+    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+  });
+
+  testWidgets('warehouse role sees after-sales warehouse confirm buttons',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient, role: UserRole.warehouse);
+
+    expect(find.text('仓库售后待办'), findsOneWidget);
+    expect(find.text('AS20260630002'), findsOneWidget);
+    final confirmButton = find.byKey(
+        const ValueKey('after-sales-warehouse-confirm-after-sales-warehouse'));
+    expect(confirmButton, findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '已补发'), findsOneWidget);
+
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.warehouseConfirmPaths,
+      contains(
+          '/api/after-sales-orders/after-sales-warehouse/warehouse-confirm'),
+    );
+  });
+
+  testWidgets('after-sales can complete after finance refund confirmation',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    apiClient._afterSalesOrders[0] = _afterSalesJson(
+      id: 'after-sales-1',
+      afterSalesNo: 'AS20260630001',
+      description: 'smoke 已退款售后记录',
+      refundAmountCents: 500,
+      resolution: 'smoke 已完成退款',
+      status: 'waiting_refund',
+      actionType: 'refund',
+      financeConfirmed: true,
+      refundProofAttachments: [_refundProofJson()],
+    );
+    await _pumpAfterSalesForm(tester, apiClient);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-order-search-field')),
+      '13800001111',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('after-sales-order-search-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SO20260630001').first);
+    await tester.pumpAndSettle();
+    final historyItem = find.text('AS20260630001').first;
+    await tester.ensureVisible(historyItem);
+    await tester.pumpAndSettle();
+    await tester.tap(historyItem);
+    await tester.pumpAndSettle();
+
+    final completedButton =
+        find.byKey(const ValueKey('after-sales-status-button-completed'));
+    await tester.ensureVisible(completedButton);
+    expect(find.widgetWithText(OutlinedButton, '确认完成'), findsOneWidget);
+    await tester.tap(completedButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.statusPatchPaths,
+      contains('/api/after-sales-orders/after-sales-1/status'),
+    );
+    expect(apiClient.lastStatusBody?['status'], 'completed');
+  });
 }
 
 Future<void> _pumpAfterSalesForm(
   WidgetTester tester,
   _FakeApiClient apiClient, {
   UserRole role = UserRole.afterSales,
+  AfterSalesRefundProofFilePicker? filePicker,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -236,6 +358,7 @@ Future<void> _pumpAfterSalesForm(
           apiClient: apiClient,
           token: 'test-token',
           role: role,
+          filePicker: filePicker,
         ),
       ),
     ),
@@ -251,8 +374,12 @@ class _FakeApiClient extends ApiClient {
   final List<String> afterSalesListPaths = <String>[];
   final List<String> afterSalesCreatePaths = <String>[];
   final List<String> statusPatchPaths = <String>[];
+  final List<String> warehouseConfirmPaths = <String>[];
+  final List<String> financeRefundConfirmPaths = <String>[];
   Map<String, dynamic>? lastAfterSalesBody;
   Map<String, dynamic>? lastStatusBody;
+  List<ApiMultipartFile>? lastMultipartFiles;
+  int? lastMaxFileSizeBytes;
   String _orderStatus = 'valid';
   final List<Map<String, dynamic>> _afterSalesOrders = [
     _afterSalesJson(
@@ -261,6 +388,17 @@ class _FakeApiClient extends ApiClient {
       description: 'smoke 已有售后记录',
       refundAmountCents: 500,
       resolution: 'smoke 已协商退款',
+      status: 'waiting_refund',
+      actionType: 'refund',
+    ),
+    _afterSalesJson(
+      id: 'after-sales-warehouse',
+      afterSalesNo: 'AS20260630002',
+      description: 'smoke 仓库待补发记录',
+      refundAmountCents: 0,
+      resolution: 'smoke 补发缺失商品',
+      status: 'waiting_resend',
+      actionType: 'resend',
     ),
   ];
 
@@ -336,6 +474,26 @@ class _FakeApiClient extends ApiClient {
     Map<String, dynamic>? body,
     String? token,
   }) async {
+    if (path ==
+        '/api/after-sales-orders/after-sales-warehouse/warehouse-confirm') {
+      warehouseConfirmPaths.add(path);
+      final index = _afterSalesOrders
+          .indexWhere((item) => item['id'] == 'after-sales-warehouse');
+      final updated = <String, dynamic>{
+        ..._afterSalesOrders[index],
+        'status': 'waiting_refund',
+        'warehouseConfirmedById': 'warehouse-user',
+        'warehouseConfirmedAt': '2026-07-02T09:30:00.000Z',
+        'updatedAt': '2026-07-02T09:30:00.000Z',
+      };
+      _afterSalesOrders[index] = updated;
+      return {
+        'data': {
+          'afterSalesOrder': updated,
+        },
+      };
+    }
+
     if (path == '/api/after-sales-orders/after-sales-1/status') {
       statusPatchPaths.add(path);
       lastStatusBody = Map<String, dynamic>.from(body ?? {});
@@ -360,6 +518,41 @@ class _FakeApiClient extends ApiClient {
     }
 
     throw StateError('Unexpected PATCH $path');
+  }
+
+  @override
+  Future<Map<String, dynamic>> postMultipartFiles(
+    String path, {
+    required List<ApiMultipartFile> files,
+    String fieldName = 'files',
+    Map<String, String> fields = const <String, String>{},
+    int? maxFileSizeBytes,
+    String? token,
+  }) async {
+    if (path ==
+        '/api/after-sales-orders/after-sales-1/finance-refund-confirm') {
+      financeRefundConfirmPaths.add(path);
+      lastMultipartFiles = files;
+      lastMaxFileSizeBytes = maxFileSizeBytes;
+      final index =
+          _afterSalesOrders.indexWhere((item) => item['id'] == 'after-sales-1');
+      final updated = <String, dynamic>{
+        ..._afterSalesOrders[index],
+        'financeConfirmed': true,
+        'financeConfirmedById': 'finance-user',
+        'financeConfirmedAt': '2026-07-02T09:20:00.000Z',
+        'refundProofAttachments': [_refundProofJson()],
+        'updatedAt': '2026-07-02T09:20:00.000Z',
+      };
+      _afterSalesOrders[index] = updated;
+      return {
+        'data': {
+          'afterSalesOrder': updated,
+        },
+      };
+    }
+
+    throw StateError('Unexpected MULTIPART $path');
   }
 }
 
@@ -459,6 +652,11 @@ Map<String, dynamic> _afterSalesJson({
   required int refundAmountCents,
   String? resolution,
   String? notes,
+  String status = 'negotiating',
+  String actionType = 'record_only',
+  bool financeConfirmed = false,
+  List<Map<String, dynamic>> refundProofAttachments =
+      const <Map<String, dynamic>>[],
 }) {
   return {
     'id': id,
@@ -468,14 +666,18 @@ Map<String, dynamic> _afterSalesJson({
     'customerId': 'customer-1',
     'customer': _customerJson(),
     'issueType': 'quality_issue',
-    'actionType': 'record_only',
+    'actionType': actionType,
     'description': description,
     'resolution': resolution,
     'refundAmountCents': refundAmountCents,
-    'status': 'negotiating',
-    'financeConfirmed': false,
-    'financeConfirmedById': null,
-    'financeConfirmedAt': null,
+    'status': status,
+    'financeConfirmed': financeConfirmed,
+    'financeConfirmedById': financeConfirmed ? 'finance-user' : null,
+    'financeConfirmedAt': financeConfirmed ? '2026-07-02T09:00:00.000Z' : null,
+    'warehouseConfirmedById': null,
+    'warehouseConfirmedAt': null,
+    'warehouseConfirmNote': null,
+    'refundProofAttachments': refundProofAttachments,
     'handledById': 'after-sales-operator',
     'handledAt': '2026-07-02T08:00:00.000Z',
     'completedAt': null,
@@ -484,5 +686,17 @@ Map<String, dynamic> _afterSalesJson({
     'updatedById': 'after-sales-operator',
     'createdAt': '2026-07-02T08:00:00.000Z',
     'updatedAt': '2026-07-02T08:00:00.000Z',
+  };
+}
+
+Map<String, dynamic> _refundProofJson() {
+  return {
+    'id': 'proof-1',
+    'category': 'refund_proof',
+    'originalName': 'refund-proof.png',
+    'contentType': 'image/png',
+    'size': 3,
+    'uploadedById': 'finance-user',
+    'uploadedAt': '2026-07-02T09:00:00.000Z',
   };
 }

@@ -22,7 +22,6 @@ void main() {
     );
 
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.widgetWithText(OutlinedButton, '编辑'));
     await _openEditDialog(tester);
 
     expect(find.text('TG20260629001 编辑'), findsOneWidget);
@@ -94,6 +93,29 @@ void main() {
     expect(query.containsKey('liaisonTasterId'), isFalse);
   });
 
+  testWidgets('can switch travel group query to all dates', (tester) async {
+    final apiClient = _FakeApiClient();
+
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.sales,
+      currentUserId: 'sales-1',
+    );
+
+    var query = _travelGroupQuery(apiClient.travelGroupGetPaths.last);
+    expect(query.containsKey('dateFrom'), isTrue);
+    expect(query.containsKey('dateTo'), isTrue);
+
+    await tester.tap(find.text('全部日期').last);
+    await tester.pumpAndSettle();
+
+    query = _travelGroupQuery(apiClient.travelGroupGetPaths.last);
+    expect(query.containsKey('dateFrom'), isFalse);
+    expect(query.containsKey('dateTo'), isFalse);
+    expect(find.text('全部日期'), findsWidgets);
+  });
+
   testWidgets('unrelated taster can view all fields but cannot edit',
       (tester) async {
     final apiClient = _FakeApiClient(
@@ -107,6 +129,7 @@ void main() {
       role: UserRole.taster,
       currentUserId: 'actor-1',
     );
+    await _openDetailDialog(tester);
 
     expect(find.text('品鉴师只读'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
@@ -172,17 +195,17 @@ void main() {
     expect(_dialogText(dialog, '实际进店时间'), findsNothing);
     expect(_dialogText(dialog, '团型'), findsNothing);
 
-    await tester.enterText(
+    expect(
       find.descendant(
         of: dialog,
-        matching: find.widgetWithText(TextFormField, '预计进店时间'),
+        matching: find.byIcon(Icons.access_time_rounded),
       ),
-      '10:15',
+      findsWidgets,
     );
     await tester.tap(find.widgetWithText(FilledButton, '保存修改'));
     await tester.pumpAndSettle();
 
-    expect(apiClient.lastPatchBody?['expectedArrivalTime'], '10:15');
+    expect(apiClient.lastPatchBody?['expectedArrivalTime'], '09:10');
     expect(apiClient.lastPatchBody?.containsKey('travelAgency'), isFalse);
     expect(apiClient.lastPatchBody?.containsKey('groupNo'), isFalse);
     expect(apiClient.lastPatchBody?.containsKey('tastingRoomNo'), isFalse);
@@ -235,10 +258,21 @@ Finder _dialogText(Finder dialog, String text) {
 }
 
 Future<void> _openEditDialog(WidgetTester tester) async {
+  if (find.widgetWithText(OutlinedButton, '编辑').evaluate().isEmpty) {
+    await _openDetailDialog(tester);
+  }
   final editButton = find.widgetWithText(OutlinedButton, '编辑');
   await tester.ensureVisible(editButton);
   await tester.pumpAndSettle();
   await tester.tap(editButton);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openDetailDialog(WidgetTester tester) async {
+  final groupTile = find.text('TG20260629001').first;
+  await tester.ensureVisible(groupTile);
+  await tester.pumpAndSettle();
+  await tester.tap(groupTile);
   await tester.pumpAndSettle();
 }
 

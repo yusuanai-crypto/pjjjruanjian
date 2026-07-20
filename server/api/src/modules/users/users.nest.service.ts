@@ -2,23 +2,23 @@ import { Injectable } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { getRoleMenus, getRolePermissions, isValidRole } from '../auth/roles';
-import { TEMPORARY_PASSWORD, hashPassword, hashTemporaryPassword } from '../auth/password';
+import { hashPassword } from '../auth/password';
+import { getAuthTokenSecret } from '../auth/auth-token-secret';
 import { AliyunSmsNestService } from '../sms/aliyun-sms.nest.service';
 import { normalizeUsername } from './users.repository';
-import { toAppRole, toPrismaRole } from './user-role.mapper';
-
-const ORDINARY_EMPLOYEE_ROLES = [
-  'boss',
-  'front_desk',
-  'sales',
-  'finance',
-  'warehouse',
-  'after_sales',
-  'taster',
-];
+import {
+  ORDINARY_EMPLOYEE_ROLES,
+  canAssignRole,
+  canManageTargetRole,
+  isAdminRole as isMappedAdminRole,
+  isSuperAdminRole,
+  toAppRole,
+  toPrismaRole,
+} from './user-role.mapper';
 const SMS_RESET_PURPOSE = 'RESET_PASSWORD';
 const SMS_CODE_TTL_SECONDS = Number(process.env.SMS_CODE_TTL_SECONDS || 300);
 const SMS_CODE_MAX_ATTEMPTS = 5;
@@ -29,6 +29,7 @@ export class UsersNestService {
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
     private readonly smsService: AliyunSmsNestService,
+    private readonly rateLimitService: RateLimitService,
   ) {}
 
   async listUsers(actor: any, filters: any = {}) {
@@ -65,7 +66,16 @@ export class UsersNestService {
   }
 
   async listTasters(actor: any) {
-    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'finance']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+      'warehouse',
+      'after_sales',
+    ]);
     const tasters = await this.prisma.user.findMany({
       where: {
         role: toPrismaRole('taster'),
@@ -95,25 +105,30 @@ export class UsersNestService {
       await assertPhoneAvailable(this.prisma, identity.phone);
     }
 
-    const rawPassword = typeof payload?.password === 'string' && payload.password
-      ? payload.password
-      : TEMPORARY_PASSWORD;
-    const isTemporaryPassword = rawPassword === TEMPORARY_PASSWORD;
+    if (typeof payload?.password !== 'string' || !payload.password) {
+      throw createHttpError(
+        400,
+        'PASSWORD_REQUIRED',
+        'password is required when creating an account.',
+      );
+    }
+    const passwordHash = hashPassword(payload.password);
 
     const user = await this.prisma.user.create({
       data: {
         id: crypto.randomUUID(),
         name: validateName(payload?.name),
         username,
-        passwordHash: isTemporaryPassword ? hashTemporaryPassword() : hashPassword(rawPassword),
-        role: toPrismaRole(validateEmployeeRole(payload?.role)),
+        passwordHash,
+        role: toPrismaRole(validateAssignableRole(actor, payload?.role)),
         phone: identity.phone,
         leaderId: normalizeOptionalString(payload?.leaderId),
         isActive: payload?.isActive === undefined ? true : Boolean(payload.isActive),
         mustChangePassword:
           payload?.mustChangePassword === undefined
-            ? isTemporaryPassword
+            ? false
             : Boolean(payload.mustChangePassword),
+        tokenVersion: 0,
         createdAt: now,
         updatedAt: now,
       },
@@ -138,40 +153,67 @@ export class UsersNestService {
 
   async updateUser(actor: any, id: string, patch: any, metadata: any = {}) {
     requireAdmin(actor);
-    const current = await this.findUserOrThrow(id);
-    const data: any = {
-      updatedAt: new Date(),
-    };
+    const result = await this.runSerializableAccountMutation(
+      async (transaction: any) => {
+        const current = await this.findUserOrThrow(id, transaction);
+        assertCanManageTargetAccount(actor, current, 'update');
 
-    if (patch.name !== undefined) {
-      data.name = validateName(patch.name);
-    }
-    if (patch.role !== undefined) {
-      data.role = toPrismaRole(validateEmployeeRole(patch.role));
-    }
-    if (patch.phone !== undefined) {
-      const phone = normalizeOptionalPhone(patch.phone);
-      if (phone && phone !== current.phone) {
-        await assertPhoneAvailable(this.prisma, phone, id);
-      }
-      data.phone = phone;
-    }
-    if (patch.leaderId !== undefined) {
-      data.leaderId = normalizeOptionalString(patch.leaderId);
-    }
-    if (patch.isActive !== undefined) {
-      if (Boolean(patch.isActive) !== Boolean(current.isActive)) {
-        throw createHttpError(400, 'USE_ACCOUNT_STATUS_ENDPOINT', 'Use freeze or unfreeze endpoint to change account status.');
-      }
-      data.isActive = Boolean(patch.isActive);
-    }
+        const data: any = {
+          updatedAt: new Date(),
+        };
 
-    const nextUser = await this.prisma.user.update({
-      where: {
-        id,
+        if (patch.name !== undefined) {
+          data.name = validateName(patch.name);
+        }
+        if (patch.role !== undefined) {
+          const nextRole = validateAssignableRole(actor, patch.role);
+          await assertActiveSuperAdminRemains(
+            transaction,
+            current,
+            nextRole,
+            Boolean(current.isActive),
+          );
+          data.role = toPrismaRole(nextRole);
+          if (nextRole !== toAppRole(current.role)) {
+            data.tokenVersion = {
+              increment: 1,
+            };
+          }
+        }
+        if (patch.phone !== undefined) {
+          const phone = normalizeOptionalPhone(patch.phone);
+          if (phone && phone !== current.phone) {
+            await assertPhoneAvailable(transaction, phone, id);
+          }
+          data.phone = phone;
+        }
+        if (patch.leaderId !== undefined) {
+          data.leaderId = normalizeOptionalString(patch.leaderId);
+        }
+        if (patch.isActive !== undefined) {
+          if (Boolean(patch.isActive) !== Boolean(current.isActive)) {
+            throw createHttpError(
+              400,
+              'USE_ACCOUNT_STATUS_ENDPOINT',
+              'Use freeze or unfreeze endpoint to change account status.',
+            );
+          }
+          data.isActive = Boolean(patch.isActive);
+        }
+
+        const nextUser = await transaction.user.update({
+          where: {
+            id,
+          },
+          data,
+        });
+        return {
+          current,
+          nextUser,
+        };
       },
-      data,
-    });
+    );
+    const { current, nextUser } = result;
 
     await this.operationLogsService.appendLog({
       userId: actor.id,
@@ -188,26 +230,64 @@ export class UsersNestService {
 
   async setUserActive(actor: any, id: string, isActive: boolean, metadata: any = {}) {
     requireAdmin(actor);
-    const reason = validateReason(metadata.reason);
     const now = new Date();
-    if (actor.id === id && !isActive) {
-      throw createHttpError(400, 'CANNOT_DISABLE_SELF', 'Administrators cannot disable their own account.');
-    }
+    const result = await this.runSerializableAccountMutation(
+      async (transaction: any) => {
+        const current = await this.findUserOrThrow(id, transaction);
+        if (
+          actor.id === id &&
+          !isActive &&
+          !isSuperAdminRole(current.role)
+        ) {
+          throw createHttpError(
+            400,
+            'CANNOT_DISABLE_SELF',
+            'Administrators cannot disable their own account.',
+          );
+        }
+        assertCanManageTargetAccount(
+          actor,
+          current,
+          isActive ? 'enable' : 'disable',
+        );
+        await assertActiveSuperAdminRemains(
+          transaction,
+          current,
+          toAppRole(current.role),
+          isActive,
+        );
+        if (actor.id === id && !isActive) {
+          throw createHttpError(
+            400,
+            'CANNOT_DISABLE_SELF',
+            'Administrators cannot disable their own account.',
+          );
+        }
+        const reason = validateReason(metadata.reason);
 
-    const current = await this.findUserOrThrow(id);
-    assertCanManageTargetAccount(actor, current, isActive ? 'enable' : 'disable');
-    const nextUser = await this.prisma.user.update({
-      where: {
-        id,
+        const nextUser = await transaction.user.update({
+          where: {
+            id,
+          },
+          data: {
+            isActive,
+            statusReason: reason,
+            statusChangedAt: now,
+            statusChangedBy: actor.id,
+            ...(!isActive
+              ? { tokenVersion: { increment: 1 } }
+              : {}),
+            updatedAt: now,
+          },
+        });
+        return {
+          current,
+          nextUser,
+          reason,
+        };
       },
-      data: {
-        isActive,
-        statusReason: reason,
-        statusChangedAt: now,
-        statusChangedBy: actor.id,
-        updatedAt: now,
-      },
-    });
+    );
+    const { current, nextUser, reason } = result;
 
     await this.operationLogsService.appendLog({
       userId: actor.id,
@@ -231,24 +311,49 @@ export class UsersNestService {
       throw createHttpError(400, 'PHONE_REQUIRED', 'User phone is required for password reset.');
     }
 
-    const code = generateSmsCode();
+    await this.rateLimitService.enforceSmsCode({
+      actorId: actor.id,
+      targetUserId: target.id,
+      phone,
+    });
+
     const now = new Date();
-    const sent = await this.smsService.sendVerificationCode(phone, code);
-    const record = await this.prisma.smsVerificationCode.create({
+    const code = generateSmsCode();
+    const activeKey = buildSmsActiveKey(target.id, SMS_RESET_PURPOSE);
+    const record = await this.replaceActiveResetCode({
+      activeKey,
+      actorId: actor.id,
+      codeHash: hashSmsCode(phone, SMS_RESET_PURPOSE, code),
+      now,
+      phone,
+      targetUserId: target.id,
+    });
+    let sent: any;
+    try {
+      sent = await this.smsService.sendVerificationCode(phone, code);
+    } catch (error) {
+      await this.prisma.smsVerificationCode.updateMany({
+        where: {
+          id: record.id,
+          activeKey,
+          consumedAt: null,
+        },
+        data: {
+          activeKey: null,
+          consumedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      throw error;
+    }
+    await this.prisma.smsVerificationCode.update({
+      where: {
+        id: record.id,
+      },
       data: {
-        id: crypto.randomUUID(),
-        phone,
-        userId: target.id,
-        purpose: SMS_RESET_PURPOSE,
-        codeHash: hashSmsCode(phone, SMS_RESET_PURPOSE, code),
-        expiresAt: new Date(now.getTime() + SMS_CODE_TTL_SECONDS * 1000),
-        consumedAt: null,
-        attemptCount: 0,
-        createdById: actor.id,
         provider: sent.provider,
         providerRef: sent.providerRef,
-        createdAt: now,
-        updatedAt: now,
+        updatedAt: new Date(),
       },
     });
 
@@ -272,17 +377,24 @@ export class UsersNestService {
     requireAdmin(actor);
     const target = await this.findUserOrThrow(id);
     assertCanManageTargetAccount(actor, target, 'reset_password');
-    await this.consumeResetPasswordCode(target, patch?.verificationCode);
-    const nextUser = await this.prisma.user.update({
-      where: {
-        id: target.id,
-      },
-      data: {
-        passwordHash: hashTemporaryPassword(),
-        mustChangePassword: true,
-        updatedAt: new Date(),
-      },
+    await this.rateLimitService.enforcePasswordReset({
+      actorId: actor.id,
+      targetUserId: target.id,
     });
+    if (typeof patch?.newPassword !== 'string' || !patch.newPassword) {
+      throw createHttpError(
+        400,
+        'NEW_PASSWORD_REQUIRED',
+        'newPassword is required.',
+      );
+    }
+    const passwordHash = hashPassword(patch.newPassword);
+    const nextUser = await this.consumeResetPasswordCode(
+      actor,
+      target.id,
+      patch?.verificationCode,
+      passwordHash,
+    );
 
     await this.operationLogsService.appendLog({
       userId: actor.id,
@@ -292,7 +404,7 @@ export class UsersNestService {
       beforeData: { passwordReset: false },
       afterData: {
         passwordReset: true,
-        mustChangePassword: true,
+        mustChangePassword: false,
         reason: normalizeOptionalString(patch?.reason),
       },
       ipAddress: metadata.ipAddress || null,
@@ -329,65 +441,272 @@ export class UsersNestService {
         ...(options.mustChangePassword !== undefined
           ? { mustChangePassword: Boolean(options.mustChangePassword) }
           : {}),
+        tokenVersion: {
+          increment: 1,
+        },
         updatedAt: new Date(),
       },
     });
     return toAppUser(user);
   }
 
-  private async consumeResetPasswordCode(target: any, code: unknown) {
+  private async runSerializableAccountMutation<T>(
+    operation: (transaction: any) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(operation, {
+          isolationLevel: 'Serializable',
+        });
+      } catch (error) {
+        if (!isPrismaTransactionConflict(error)) {
+          throw error;
+        }
+        if (attempt === 2) {
+          throw createHttpError(
+            409,
+            'ACCOUNT_MANAGEMENT_CONFLICT',
+            'The account changed concurrently. Try again.',
+          );
+        }
+      }
+    }
+    throw createHttpError(
+      409,
+      'ACCOUNT_MANAGEMENT_CONFLICT',
+      'The account changed concurrently. Try again.',
+    );
+  }
+
+  private async replaceActiveResetCode(input: {
+    activeKey: string;
+    actorId: string;
+    codeHash: string;
+    now: Date;
+    phone: string;
+    targetUserId: string;
+  }) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (transaction: any) => {
+          await transaction.smsVerificationCode.updateMany({
+            where: {
+              activeKey: input.activeKey,
+              consumedAt: null,
+            },
+            data: {
+              activeKey: null,
+              consumedAt: input.now,
+              updatedAt: input.now,
+            },
+          });
+          return transaction.smsVerificationCode.create({
+            data: {
+              id: crypto.randomUUID(),
+              phone: input.phone,
+              userId: input.targetUserId,
+              purpose: SMS_RESET_PURPOSE,
+              codeHash: input.codeHash,
+              activeKey: input.activeKey,
+              expiresAt: new Date(
+                input.now.getTime() + SMS_CODE_TTL_SECONDS * 1000,
+              ),
+              consumedAt: null,
+              attemptCount: 0,
+              createdById: input.actorId,
+              provider: null,
+              providerRef: null,
+              createdAt: input.now,
+              updatedAt: input.now,
+            },
+          });
+        });
+      } catch (error) {
+        if (!isPrismaUniqueConstraintError(error) || attempt === 2) {
+          throw error;
+        }
+      }
+    }
+    throw createHttpError(
+      503,
+      'SMS_CODE_REPLACEMENT_FAILED',
+      'Unable to issue a new verification code.',
+    );
+  }
+
+  private async consumeResetPasswordCode(
+    actor: any,
+    targetUserId: string,
+    code: unknown,
+    passwordHash: string,
+  ) {
     const normalizedCode = String(code || '').trim();
     if (!/^\d{6}$/.test(normalizedCode)) {
       throw createHttpError(400, 'INVALID_SMS_CODE', 'SMS verification code is invalid.');
     }
-    const phone = normalizeOptionalPhone(target.phone || target.username);
     const now = new Date();
-    const rows = await this.prisma.smsVerificationCode.findMany({
-      where: {
-        phone,
-        userId: target.id,
-        purpose: SMS_RESET_PURPOSE,
-        consumedAt: null,
+    const outcome = await this.runSerializableAccountMutation(
+      async (transaction: any) => {
+        const target = await this.findUserOrThrow(
+          targetUserId,
+          transaction,
+        );
+        assertCanManageTargetAccount(actor, target, 'reset_password');
+        const phone = normalizeOptionalPhone(
+          target.phone || target.username,
+        );
+        const activeKey = buildSmsActiveKey(
+          target.id,
+          SMS_RESET_PURPOSE,
+        );
+        const submittedHash = hashSmsCode(
+          phone,
+          SMS_RESET_PURPOSE,
+          normalizedCode,
+        );
+        const record = await transaction.smsVerificationCode.findFirst({
+          where: {
+            activeKey,
+            userId: target.id,
+            purpose: SMS_RESET_PURPOSE,
+            consumedAt: null,
+          },
+        });
+        if (!record) {
+          const previous = await transaction.smsVerificationCode.findFirst({
+            where: {
+              userId: target.id,
+              purpose: SMS_RESET_PURPOSE,
+              codeHash: submittedHash,
+              activeKey: null,
+            },
+          });
+          return {
+            kind: previous ? 'not_current' : 'not_found',
+          };
+        }
+        if (
+          record.expiresAt &&
+          new Date(record.expiresAt).getTime() < now.getTime()
+        ) {
+          await invalidateVerificationCode(
+            transaction,
+            record.id,
+            activeKey,
+            now,
+          );
+          return { kind: 'expired' };
+        }
+        if (Number(record.attemptCount || 0) >= SMS_CODE_MAX_ATTEMPTS) {
+          await invalidateVerificationCode(
+            transaction,
+            record.id,
+            activeKey,
+            now,
+          );
+          return { kind: 'locked' };
+        }
+        if (record.codeHash !== submittedHash) {
+          const previous =
+            await transaction.smsVerificationCode.findFirst({
+              where: {
+                userId: target.id,
+                purpose: SMS_RESET_PURPOSE,
+                codeHash: submittedHash,
+                activeKey: null,
+              },
+            });
+          if (previous) {
+            return { kind: 'not_current' };
+          }
+          const incremented =
+            await transaction.smsVerificationCode.updateMany({
+              where: {
+                id: record.id,
+                activeKey,
+                consumedAt: null,
+                attemptCount: {
+                  lt: SMS_CODE_MAX_ATTEMPTS,
+                },
+              },
+              data: {
+                attemptCount: {
+                  increment: 1,
+                },
+                updatedAt: now,
+              },
+            });
+          return {
+            kind: incremented.count === 1 ? 'incorrect' : 'locked',
+          };
+        }
+
+        const consumed = await transaction.smsVerificationCode.updateMany({
+          where: {
+            id: record.id,
+            activeKey,
+            codeHash: submittedHash,
+            consumedAt: null,
+            expiresAt: {
+              gt: now,
+            },
+            attemptCount: {
+              lt: SMS_CODE_MAX_ATTEMPTS,
+            },
+          },
+          data: {
+            activeKey: null,
+            consumedAt: now,
+            updatedAt: now,
+          },
+        });
+        if (consumed.count !== 1) {
+          return { kind: 'not_current' };
+        }
+        const user = await transaction.user.update({
+          where: {
+            id: target.id,
+          },
+          data: {
+            passwordHash,
+            mustChangePassword: false,
+            tokenVersion: {
+              increment: 1,
+            },
+            updatedAt: now,
+          },
+        });
+        return {
+          kind: 'success',
+          user,
+        };
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-    const record = rows[0];
-    if (!record) {
-      throw createHttpError(400, 'SMS_CODE_NOT_FOUND', 'SMS verification code was not found.');
+    );
+
+    if (outcome.kind === 'success') {
+      return outcome.user;
     }
-    if (record.expiresAt && new Date(record.expiresAt).getTime() < now.getTime()) {
+    if (outcome.kind === 'expired') {
       throw createHttpError(400, 'SMS_CODE_EXPIRED', 'SMS verification code has expired.');
     }
-    if (Number(record.attemptCount || 0) >= SMS_CODE_MAX_ATTEMPTS) {
+    if (outcome.kind === 'locked') {
       throw createHttpError(400, 'SMS_CODE_LOCKED', 'SMS verification code has too many failed attempts.');
     }
-    if (record.codeHash !== hashSmsCode(phone, SMS_RESET_PURPOSE, normalizedCode)) {
-      await this.prisma.smsVerificationCode.update({
-        where: {
-          id: record.id,
-        },
-        data: {
-          attemptCount: Number(record.attemptCount || 0) + 1,
-          updatedAt: now,
-        },
-      });
+    if (outcome.kind === 'incorrect') {
       throw createHttpError(400, 'SMS_CODE_INCORRECT', 'SMS verification code is incorrect.');
     }
-    await this.prisma.smsVerificationCode.update({
-      where: {
-        id: record.id,
-      },
-      data: {
-        consumedAt: now,
-        updatedAt: now,
-      },
-    });
+    if (outcome.kind === 'not_current') {
+      throw createHttpError(
+        400,
+        'SMS_CODE_NOT_CURRENT',
+        'SMS verification code is no longer current.',
+      );
+    }
+    throw createHttpError(400, 'SMS_CODE_NOT_FOUND', 'SMS verification code was not found.');
   }
 
-  private async findUserOrThrow(id: string) {
-    const user = await this.prisma.user.findUnique({
+  private async findUserOrThrow(id: string, client: any = this.prisma) {
+    const user = await client.user.findUnique({
       where: {
         id,
       },
@@ -410,6 +729,7 @@ export function toAppUser(user: any) {
     leaderId: user.leaderId,
     isActive: Boolean(user.isActive),
     mustChangePassword: Boolean(user.mustChangePassword),
+    tokenVersion: Number(user.tokenVersion || 0),
     statusReason: user.statusReason || null,
     statusChangedAt: toIsoString(user.statusChangedAt),
     statusChangedBy: user.statusChangedBy || null,
@@ -458,7 +778,7 @@ function requireAnyRole(actor: any, roles: string[]) {
 }
 
 function isAdminRole(role: string) {
-  return role === 'super_admin' || role === 'admin';
+  return isSuperAdminRole(role) || isMappedAdminRole(role);
 }
 
 function isRoleAllowed(role: string, roles: string[]) {
@@ -512,8 +832,24 @@ function validateRole(role: string) {
 
 function validateEmployeeRole(role: string) {
   const normalized = validateRole(role);
-  if (!ORDINARY_EMPLOYEE_ROLES.includes(normalized)) {
+  if (
+    !ORDINARY_EMPLOYEE_ROLES.includes(
+      normalized as (typeof ORDINARY_EMPLOYEE_ROLES)[number],
+    )
+  ) {
     throw createHttpError(400, 'ADMIN_ROLE_CREATE_FORBIDDEN', 'Administrators can only create ordinary employee roles.');
+  }
+  return normalized;
+}
+
+function validateAssignableRole(actor: any, role: string) {
+  const normalized = validateRole(role);
+  if (!canAssignRole(actor?.role, normalized)) {
+    throw createHttpError(
+      403,
+      'ROLE_ASSIGNMENT_FORBIDDEN',
+      'The requested role cannot be assigned by this account.',
+    );
   }
   return normalized;
 }
@@ -556,16 +892,62 @@ async function assertPhoneAvailable(prisma: any, phone: string, exceptUserId?: s
 }
 
 function assertCanManageTargetAccount(actor: any, target: any, action: string) {
-  const role = toAppRole(target.role);
-  if (role === 'super_admin') {
-    throw createHttpError(403, 'SUPER_ADMIN_ACCOUNT_PROTECTED', 'Super administrator accounts cannot be managed here.');
+  const actorRole = toAppRole(actor?.role);
+  const targetRole = toAppRole(target.role);
+  if (canManageTargetRole(actorRole, targetRole)) {
+    return;
   }
-  if (role === 'admin' && actor.role !== 'super_admin') {
-    throw createHttpError(403, 'SUPER_ADMIN_REQUIRED', 'Super administrator permission is required.');
+  if (targetRole === 'super_admin') {
+    throw createHttpError(
+      403,
+      'SUPER_ADMIN_ACCOUNT_PROTECTED',
+      'Only a super administrator can manage a super administrator account.',
+    );
   }
-  if (action === 'disable' && actor.id === target.id) {
-    throw createHttpError(400, 'CANNOT_DISABLE_SELF', 'Administrators cannot disable their own account.');
+  if (targetRole === 'admin') {
+    throw createHttpError(
+      403,
+      'SUPER_ADMIN_REQUIRED',
+      'Super administrator permission is required.',
+    );
   }
+  throw createHttpError(
+    403,
+    'ACCOUNT_MANAGEMENT_FORBIDDEN',
+    'This account cannot manage the target account.',
+  );
+}
+
+async function assertActiveSuperAdminRemains(
+  transaction: any,
+  current: any,
+  nextRole: string,
+  nextIsActive: boolean,
+) {
+  if (
+    !isSuperAdminRole(current.role) ||
+    !Boolean(current.isActive) ||
+    (isSuperAdminRole(nextRole) && nextIsActive)
+  ) {
+    return;
+  }
+  const activeSuperAdminCount = await transaction.user.count({
+    where: {
+      role: toPrismaRole('super_admin'),
+      isActive: true,
+    },
+  });
+  if (activeSuperAdminCount <= 1) {
+    throw createHttpError(
+      409,
+      'LAST_ACTIVE_SUPER_ADMIN',
+      'The last active super administrator cannot be disabled or downgraded.',
+    );
+  }
+}
+
+function isPrismaTransactionConflict(error: any) {
+  return error?.code === 'P2034';
 }
 
 function matchesUserFilters(user: any, filters: any) {
@@ -597,8 +979,39 @@ function generateSmsCode() {
   return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
 
+function buildSmsActiveKey(userId: string, purpose: string) {
+  return `${userId}:${purpose}`;
+}
+
+async function invalidateVerificationCode(
+  transaction: any,
+  id: string,
+  activeKey: string,
+  now: Date,
+) {
+  await transaction.smsVerificationCode.updateMany({
+    where: {
+      id,
+      activeKey,
+      consumedAt: null,
+    },
+    data: {
+      activeKey: null,
+      consumedAt: now,
+      updatedAt: now,
+    },
+  });
+}
+
+function isPrismaUniqueConstraintError(error: any) {
+  return (
+    error?.code === 'P2002' &&
+    JSON.stringify(error?.meta?.target || '').includes('active_key')
+  );
+}
+
 function hashSmsCode(phone: string, purpose: string, code: string) {
-  const secret = process.env.AUTH_TOKEN_SECRET || 'jiangjiu-dev-token-secret-change-me';
+  const secret = getAuthTokenSecret();
   return crypto
     .createHmac('sha256', secret)
     .update(`${phone}:${purpose}:${code}`, 'utf8')

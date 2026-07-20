@@ -20,12 +20,12 @@ export class OperationLogNestController {
     const actor = await this.authService.authenticateRequest(request);
     this.authService.requireAdmin(actor);
 
-    return {
-      logs: await this.operationLogsService.listLogs({
-        action: query.action || undefined,
-        entityType: query.entityType || undefined,
-        userId: query.userId || undefined,
-      }),
-    };
+    return this.operationLogsService.listLogs({
+      action: query.action || undefined,
+      entityType: query.entityType || undefined,
+      userId: query.userId || undefined,
+      page: query.page || undefined,
+      pageSize: query.pageSize || undefined,
+    });
   }
 }

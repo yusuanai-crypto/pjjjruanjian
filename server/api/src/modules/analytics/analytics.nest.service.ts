@@ -18,7 +18,7 @@ import {
   buildAnalyticsTravelGroupWhere,
 } from './analytics-scope.helper';
 
-const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance'];
+const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
 const UNASSIGNED_TASTER_KEY = '__unassigned_taster__';
 const UNASSIGNED_TASTER_NAME = '\u672a\u5206\u914d\u54c1\u9274\u5e08';
 const GROSS_SALES_STATUS_VALUES = ['VALID', 'PARTIAL_REFUND', 'REFUNDED'];

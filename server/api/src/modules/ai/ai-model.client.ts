@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 
-import { createHttpError } from '../../common/errors';
+import {
+  createHttpError,
+  isExpectedHttpError,
+} from '../../common/errors';
 import { AiConfig, AiConfigService } from './ai-config';
 import { buildAiPromptMessages } from './ai-prompt.builder';
 import { formatAiResponse } from './ai-response.formatter';
@@ -154,13 +157,14 @@ export class AiModelClient {
           'AI provider request timed out.',
         );
       }
-      if (error?.code && error?.statusCode) {
+      if (isExpectedHttpError(error)) {
         throw error;
       }
       throw createHttpError(
         502,
         'AI_PROVIDER_REQUEST_FAILED',
         'AI provider request failed.',
+        { cause: error },
       );
     } finally {
       clearTimeout(timeoutHandle);

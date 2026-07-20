@@ -1,6 +1,10 @@
-function createPreparationConfirmationController(service) {
+const { createHttpError } = require('../../common/errors');
+
+function createPreparationConfirmationController(authService, service) {
   return async function preparationConfirmationController(request, response) {
     const url = new URL(request.url, 'http://localhost');
+    const actor = authService.authenticateRequest(request);
+    authService.requireAdmin(actor);
 
     if (request.method === 'GET' && url.pathname === '/api/preparation-confirmation/items') {
       const items = service.listItems({
@@ -58,10 +62,13 @@ function readJsonBody(request) {
       try {
         resolve(JSON.parse(body));
       } catch (error) {
-        const parseError = new Error('Request body must be valid JSON.');
-        parseError.statusCode = 400;
-        parseError.code = 'INVALID_JSON';
-        reject(parseError);
+        reject(
+          createHttpError(
+            400,
+            'INVALID_JSON',
+            'Request body must be valid JSON.',
+          ),
+        );
       }
     });
     request.on('error', reject);

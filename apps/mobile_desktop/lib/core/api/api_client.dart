@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -5,16 +6,22 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 
+import '../config/app_config.dart';
+
 const _contentDispositionHeader = 'content-disposition';
 
 class ApiClient {
-  ApiClient({required String baseUrl}) : _baseUrl = baseUrl;
+  ApiClient({
+    required String baseUrl,
+    this.onSessionRevoked,
+  }) : _baseUrl = AppConfig.normalizeApiBaseUrl(baseUrl);
 
   final HttpClient _httpClient = HttpClient();
   String _baseUrl;
+  FutureOr<void> Function(ApiException error)? onSessionRevoked;
 
   set baseUrl(String value) {
-    _baseUrl = value;
+    _baseUrl = AppConfig.normalizeApiBaseUrl(value);
   }
 
   Future<Map<String, dynamic>> getJson(
@@ -190,7 +197,9 @@ class ApiClient {
       final bytes = bytesBuilder.takeBytes();
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw apiExceptionFromResponseBytes(response.statusCode, bytes);
+        final error = apiExceptionFromResponseBytes(response.statusCode, bytes);
+        await _notifySessionRevoked(error);
+        throw error;
       }
 
       final contentDisposition =
@@ -282,10 +291,21 @@ class ApiClient {
         decoded is Map ? _stringKeyMap(decoded) : <String, dynamic>{};
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException.fromPayload(response.statusCode, payload);
+      final error = ApiException.fromPayload(response.statusCode, payload);
+      await _notifySessionRevoked(error);
+      throw error;
     }
 
     return payload;
+  }
+
+  Future<void> _notifySessionRevoked(ApiException error) async {
+    if (error.code == 'SESSION_REVOKED' ||
+        error.code == 'ACCOUNT_DISABLED' ||
+        error.code == 'ACCOUNT_FROZEN' ||
+        error.code == 'USER_DISABLED') {
+      await onSessionRevoked?.call(error);
+    }
   }
 }
 

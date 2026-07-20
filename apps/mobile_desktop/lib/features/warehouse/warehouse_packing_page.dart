@@ -38,7 +38,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   SalesOrderRecord? _selectedOrder;
   bool _loading = true;
-  bool _detailLoading = false;
   bool _saving = false;
   String? _errorMessage;
   String? _formErrorMessage;
@@ -127,30 +126,42 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   Future<void> _selectOrder(SalesOrderRecord order) async {
     setState(() {
       _selectedOrder = order;
-      _detailLoading = false;
       _formErrorMessage = null;
+      _fillDraft(order);
     });
-    _fillDraft(order);
+    await _showPackingEditor();
   }
 
-  Future<void> _savePacking({PackingStatus? overrideStatus}) async {
+  Future<bool> _savePacking({
+    PackingStatus? overrideStatus,
+    VoidCallback? closeEditor,
+    VoidCallback? refreshEditor,
+  }) async {
+    void updateFormState(VoidCallback fn) {
+      if (!mounted) {
+        return;
+      }
+      setState(fn);
+      refreshEditor?.call();
+    }
+
     final order = _selectedOrder;
     if (!_canEditPacking) {
-      setState(() => _formErrorMessage = '当前角色只能查看打包信息。');
-      return;
+      updateFormState(() => _formErrorMessage = '当前角色只能查看打包信息。');
+      return false;
     }
     if (order == null || _saving) {
-      return;
+      return false;
     }
 
     final packageCount = _packageCountOrNull(_packageCountController.text);
     if (packageCount == null) {
-      setState(() => _formErrorMessage = '打包件数必须是 0 或正整数。');
-      return;
+      updateFormState(() => _formErrorMessage = '打包件数必须是 0 或正整数。');
+      return false;
     }
 
     final nextStatus = overrideStatus ?? _packingStatus;
-    setState(() {
+    updateFormState(() {
       _saving = true;
       _packingStatus = nextStatus;
       _formErrorMessage = null;
@@ -167,31 +178,38 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         },
       );
       if (!mounted) {
-        return;
+        return false;
       }
 
-      _replaceOrder(updated);
+      closeEditor?.call();
       setState(() {
+        _replaceOrder(updated);
         _selectedOrder = updated;
+        _formErrorMessage = null;
       });
       _fillDraft(updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${updated.orderNo} 打包信息已保存。')),
-      );
       await _loadOrders(
         preserveSelectedId: updated.id,
         selectedFallback: updated,
       );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${updated.orderNo} 打包信息已保存。')),
+        );
+      }
+      return true;
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
-      setState(() {
+      updateFormState(() {
         _formErrorMessage = _messageForError(error);
       });
+      return false;
     } finally {
       if (mounted) {
         setState(() => _saving = false);
+        refreshEditor?.call();
       }
     }
   }
@@ -232,12 +250,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       maxWidth: 1360,
       children: [
         _buildWorkspaceHeader(),
-        ResponsiveTwoColumn(
-          primary: _buildListPane(),
-          secondary: _buildPackingPane(),
-          primaryFlex: 3,
-          secondaryFlex: 2,
-        ),
+        _buildListPane(),
       ],
     );
   }
@@ -415,7 +428,126 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     );
   }
 
-  Widget _buildPackingPane() {
+  Future<void> _showPackingEditor() async {
+    if (!mounted) {
+      return;
+    }
+
+    if (isDesktopWidth(MediaQuery.of(context).size.width)) {
+      await _showPackingDialog();
+    } else {
+      await _showPackingBottomSheet();
+    }
+  }
+
+  Future<void> _showPackingBottomSheet() async {
+    var editorOpen = true;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (editorContext, setEditorState) {
+            void refreshEditor() {
+              if (editorOpen) {
+                setEditorState(() {});
+              }
+            }
+
+            void closeEditor() {
+              if (!editorOpen) {
+                return;
+              }
+              editorOpen = false;
+              Navigator.of(editorContext).pop();
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(editorContext).viewInsets.bottom,
+                ),
+                child: SizedBox(
+                  height: MediaQuery.of(editorContext).size.height * 0.92,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                    child: _buildPackingEditorContent(
+                      showHeader: true,
+                      onCancel: _saving ? null : closeEditor,
+                      closeEditor: closeEditor,
+                      refreshEditor: refreshEditor,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      editorOpen = false;
+    });
+  }
+
+  Future<void> _showPackingDialog() async {
+    var editorOpen = true;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (editorContext, setEditorState) {
+            void refreshEditor() {
+              if (editorOpen) {
+                setEditorState(() {});
+              }
+            }
+
+            void closeEditor() {
+              if (!editorOpen) {
+                return;
+              }
+              editorOpen = false;
+              Navigator.of(editorContext).pop();
+            }
+
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Expanded(child: Text('订单核对/打包处理')),
+                  if (_selectedOrder != null)
+                    StatusTag(
+                      label: _packingStatusLabel(_selectedOrder!.packingStatus),
+                      tone: _packingTone(_selectedOrder!.packingStatus),
+                    ),
+                ],
+              ),
+              content: SizedBox(
+                width: 680,
+                child: SingleChildScrollView(
+                  child: _buildPackingEditorContent(
+                    onCancel: _saving ? null : closeEditor,
+                    closeEditor: closeEditor,
+                    refreshEditor: refreshEditor,
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      editorOpen = false;
+    });
+  }
+
+  Widget _buildPackingEditorContent({
+    required VoidCallback? onCancel,
+    required VoidCallback closeEditor,
+    required VoidCallback refreshEditor,
+    bool showHeader = false,
+  }) {
     final order = _selectedOrder;
     if (order == null) {
       return const FormSection(
@@ -429,9 +561,37 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       );
     }
 
+    void updateDraft(VoidCallback fn) {
+      setState(fn);
+      refreshEditor();
+    }
+
     return Column(
+      key: const ValueKey('warehouse-packing-editor'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
+        if (showHeader) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '订单核对/打包处理',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              IconButton(
+                tooltip: '取消',
+                onPressed: onCancel,
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         FormSection(
           title: '订单核对',
           trailing: StatusTag(
@@ -439,10 +599,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
             tone: _packingTone(order.packingStatus),
           ),
           children: [
-            if (_detailLoading) ...[
-              const LinearProgressIndicator(),
-              const SizedBox(height: 12),
-            ],
             _SelectedOrderSummary(order: order),
           ],
         ),
@@ -481,7 +637,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   onChanged: _canEditPacking
                       ? (value) {
                           if (value != null) {
-                            setState(() => _logisticsMethod = value);
+                            updateDraft(() => _logisticsMethod = value);
                           }
                         }
                       : null,
@@ -495,7 +651,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   onChanged: _canEditPacking
                       ? (value) {
                           if (value != null) {
-                            setState(() => _packingStatus = value);
+                            updateDraft(() => _packingStatus = value);
                           }
                         }
                       : null,
@@ -518,17 +674,25 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
               maxLines: 5,
               decoration: const InputDecoration(labelText: '库管备注'),
             ),
-            if (_canEditPacking) ...[
-              const SizedBox(height: 14),
-              _PackingActionBar(
-                saving: _saving,
-                onSave: _saving ? null : _savePacking,
-                onMarkAbnormal: _saving
-                    ? null
-                    : () =>
-                        _savePacking(overrideStatus: PackingStatus.abnormal),
-              ),
-            ],
+            const SizedBox(height: 14),
+            _PackingActionBar(
+              saving: _saving,
+              canEdit: _canEditPacking,
+              onCancel: onCancel,
+              onSave: _saving
+                  ? null
+                  : () => _savePacking(
+                        closeEditor: closeEditor,
+                        refreshEditor: refreshEditor,
+                      ),
+              onMarkAbnormal: _saving
+                  ? null
+                  : () => _savePacking(
+                        overrideStatus: PackingStatus.abnormal,
+                        closeEditor: closeEditor,
+                        refreshEditor: refreshEditor,
+                      ),
+            ),
           ],
         ),
       ],
@@ -665,11 +829,15 @@ class _WarehouseOrderList extends StatelessWidget {
 class _PackingActionBar extends StatelessWidget {
   const _PackingActionBar({
     required this.saving,
+    required this.canEdit,
+    required this.onCancel,
     required this.onSave,
     required this.onMarkAbnormal,
   });
 
   final bool saving;
+  final bool canEdit;
+  final VoidCallback? onCancel;
   final VoidCallback? onSave;
   final VoidCallback? onMarkAbnormal;
 
@@ -680,22 +848,28 @@ class _PackingActionBar extends StatelessWidget {
       spacing: 10,
       runSpacing: 10,
       children: [
-        OutlinedButton.icon(
-          onPressed: onMarkAbnormal,
-          icon: const Icon(Icons.report_problem_rounded),
-          label: const Text('标记异常'),
+        TextButton(
+          onPressed: onCancel,
+          child: const Text('取消'),
         ),
-        FilledButton.icon(
-          key: const ValueKey('warehouse-packing-save-button'),
-          onPressed: onSave,
-          icon: saving
-              ? const SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.save_rounded),
-          label: Text(saving ? '保存中' : '保存打包'),
-        ),
+        if (canEdit)
+          OutlinedButton.icon(
+            onPressed: onMarkAbnormal,
+            icon: const Icon(Icons.report_problem_rounded),
+            label: const Text('标记异常'),
+          ),
+        if (canEdit)
+          FilledButton.icon(
+            key: const ValueKey('warehouse-packing-save-button'),
+            onPressed: onSave,
+            icon: saving
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save_rounded),
+            label: Text(saving ? '保存中' : '保存打包'),
+          ),
       ],
     );
   }
@@ -754,12 +928,9 @@ class _SelectedOrderSummary extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _InfoRow(label: '当前订单', value: order.orderNo),
-            _InfoRow(
-              label: '客户',
-              value:
-                  '${_display(order.customerName)} · ${_display(order.customerPhone)}',
-            ),
+            _InfoRow(label: '订单号', value: order.orderNo),
+            _InfoRow(label: '客户', value: _display(order.customerName)),
+            _InfoRow(label: '电话', value: _display(order.customerPhone)),
             _InfoRow(label: '地址', value: _orderAddress(order)),
             _InfoRow(label: '明细', value: _itemSummary(order)),
             _InfoRow(

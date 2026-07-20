@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const test = require('node:test');
 
 const { withPhase1Server } = require('./helpers/phase1-api');
@@ -20,13 +21,24 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
       assert.equal(result.html.trim().startsWith('{'), false);
       assert.match(result.html, /销售单/);
       assert.match(result.html, /SO-PUBLIC-001/);
-      assert.match(result.html, /SF-PUBLIC-001/);
+      assert.equal(result.html.includes('SF-PUBLIC-001'), false);
       assert.match(result.html, /138\*\*\*\*0000/);
-      assert.match(result.html, /999\.00/);
-      assert.match(result.html, /200\.00/);
       assert.match(result.html, /Product A/);
-      assert.match(result.html, /Test Agency/);
-      assert.match(result.html, /Seller Alpha/);
+      assert.match(result.html, /G\*+ Z\*+ R\*+ T\*\*\*/);
+      for (const forbidden of [
+        '999.00',
+        '200.00',
+        'Test Agency',
+        'Seller Alpha',
+        'SF123456789',
+        'SF Express',
+        'Test Road 1',
+        'Customer visible note',
+      ]) {
+        assert.equal(result.html.includes(forbidden), false, forbidden);
+      }
+      assertSecurityHeaders(result.response);
+      assert.equal(/<(script|img|link)\b/i.test(result.html), false);
     },
     {
       prisma: buildPublicSalesSheetPrismaOptions(),
@@ -34,37 +46,29 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
   );
 });
 
-test('GET /api/public/sales-sheets/:token returns friendly page when token is missing', async () => {
+test('GET /api/public/sales-sheets/:token returns the same safe page for invalid, expired, and revoked tokens', async () => {
   await withPhase1Server(
     async (baseUrl) => {
-      const result = await requestHtml(
-        baseUrl,
-        '/api/public/sales-sheets/unknown-token',
-      );
-
-      assert.equal(result.response.status, 404);
-      assert.match(result.html, /^<!doctype html>/i);
-      assert.match(result.html, /销售单不存在/);
-      assert.equal(result.html.trim().startsWith('{'), false);
-    },
-    {
-      prisma: buildPublicSalesSheetPrismaOptions(),
-    },
-  );
-});
-
-test('GET /api/public/sales-sheets/:token returns friendly expired page', async () => {
-  await withPhase1Server(
-    async (baseUrl) => {
-      const result = await requestHtml(
-        baseUrl,
-        '/api/public/sales-sheets/public-token-expired',
-      );
-
-      assert.equal(result.response.status, 410);
-      assert.match(result.html, /^<!doctype html>/i);
-      assert.match(result.html, /二维码已过期/);
-      assert.equal(result.html.includes('SO-PUBLIC-EXPIRED'), false);
+      const results = [];
+      for (const token of [
+        'unknown-token',
+        'public-token-expired',
+        'public-token-revoked',
+      ]) {
+        const result = await requestHtml(
+          baseUrl,
+          `/api/public/sales-sheets/${token}`,
+        );
+        assert.equal(result.response.status, 404);
+        assert.match(result.html, /^<!doctype html>/i);
+        assert.match(result.html, /销售单暂不可用/);
+        assert.equal(result.html.trim().startsWith('{'), false);
+        assert.equal(result.html.includes('SO-PUBLIC-EXPIRED'), false);
+        assert.equal(result.html.includes('SO-PUBLIC-REVOKED'), false);
+        assertSecurityHeaders(result.response);
+        results.push(result.html);
+      }
+      assert.equal(new Set(results).size, 1);
     },
     {
       prisma: buildPublicSalesSheetPrismaOptions(),
@@ -77,7 +81,7 @@ test('GET /api/public/sales-sheets/:token escapes HTML and does not leak interna
     async (baseUrl) => {
       const result = await requestHtml(
         baseUrl,
-        '/api/public/sales-sheets/public-token-unsafe',
+        '/api/public/sales-sheets/public-token-unsafe-1',
       );
 
       assert.equal(result.response.status, 200);
@@ -85,9 +89,10 @@ test('GET /api/public/sales-sheets/:token escapes HTML and does not leak interna
       assert.equal(result.html.includes('<img src=x'), false);
       assert.equal(result.html.includes('<strong>'), false);
       assert.match(result.html, /Alice &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
-      assert.match(result.html, /Road &lt;b&gt;1&lt;\/b&gt; &amp; Lane/);
       assert.match(result.html, /Product &lt;script&gt;bad\(\)&lt;\/script&gt;/);
-      assert.match(result.html, /Please &lt;strong&gt;check&lt;\/strong&gt; &amp; keep/);
+      assert.equal(result.html.includes('Road &lt;b&gt;1'), false);
+      assert.equal(result.html.includes('Please &lt;strong&gt;check'), false);
+      assertSecurityHeaders(result.response);
 
       for (const forbidden of [
         'SECRET_FINANCE_REMARK',
@@ -118,6 +123,22 @@ async function requestHtml(baseUrl, pathName) {
     response,
     html: await response.text(),
   };
+}
+
+function assertSecurityHeaders(response) {
+  assert.equal(response.headers.get('cache-control'), 'no-store, private');
+  assert.equal(response.headers.get('pragma'), 'no-cache');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  const csp = response.headers.get('content-security-policy') || '';
+  assert.match(csp, /default-src 'none'/);
+  assert.match(csp, /script-src 'none'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+}
+
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 function buildPublicSalesSheetPrismaOptions() {
@@ -161,21 +182,30 @@ function buildPublicSalesSheetPrismaOptions() {
         id: 'order_public_success',
         orderNo: 'SO-PUBLIC-001',
         salesFormNo: 'SF-PUBLIC-001',
-        qrCodeToken: 'public-token-success',
+        qrCodeTokenHash: tokenHash('public-token-success'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
-        qrCodeExpiresAt: null,
+        qrCodeExpiresAt: '2099-07-01T10:00:00.000Z',
       }),
       buildPublicSalesSheetOrder({
         id: 'order_public_expired',
         orderNo: 'SO-PUBLIC-EXPIRED',
-        qrCodeToken: 'public-token-expired',
+        qrCodeTokenHash: tokenHash('public-token-expired'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
         qrCodeExpiresAt: '2000-01-01T00:00:00.000Z',
       }),
       buildPublicSalesSheetOrder({
+        id: 'order_public_revoked',
+        orderNo: 'SO-PUBLIC-REVOKED',
+        qrCodeTokenHash: tokenHash('public-token-revoked'),
+        qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
+        qrCodeExpiresAt: '2099-07-01T10:00:00.000Z',
+        qrCodeRevokedAt: '2026-07-02T00:00:00.000Z',
+      }),
+      buildPublicSalesSheetOrder({
         id: 'order_public_unsafe',
         orderNo: 'SO-PUBLIC-UNSAFE',
-        qrCodeToken: 'public-token-unsafe',
+        qrCodeTokenHash: tokenHash('public-token-unsafe-1'),
+        qrCodeExpiresAt: '2099-07-01T10:00:00.000Z',
         customerName: 'Alice <script>alert("x")</script>',
         address: 'Road <b>1</b> & Lane',
         remark: 'Please <strong>check</strong> & keep',
@@ -225,9 +255,10 @@ function buildPublicSalesSheetOrder(overrides = {}) {
     financeMark: true,
     salesUserId: 'usr_sales_public',
     createdById: 'usr_sales_public',
-    qrCodeToken: 'public-token-success',
+    qrCodeTokenHash: tokenHash('public-token-success'),
     qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
-    qrCodeExpiresAt: null,
+    qrCodeExpiresAt: '2099-07-01T10:00:00.000Z',
+    qrCodeRevokedAt: null,
     items: [
       {
         productName: 'Product A',

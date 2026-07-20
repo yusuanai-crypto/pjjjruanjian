@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const test = require('node:test');
 
 const {
@@ -54,7 +55,7 @@ test('GET /api/sales-orders/:id/sales-sheet returns no-token sales sheet for adm
   );
 });
 
-test('GET /api/sales-orders/:id/sales-sheet returns existing qrCode for sales with configured base URL', async (t) => {
+test('GET /api/sales-orders/:id/sales-sheet returns active QR metadata without exposing its bearer value', async (t) => {
   setPublicSalesSheetBaseUrl(t, 'https://sheet.example.test/root/');
 
   await withPhase1Server(
@@ -72,11 +73,9 @@ test('GET /api/sales-orders/:id/sales-sheet returns existing qrCode for sales wi
       assert.equal(result.response.status, 200);
       const salesSheet = result.body.data.salesSheet;
       assert.equal(salesSheet.order.id, 'order_sheet_alpha_token');
-      assert.equal(salesSheet.qrCode.token, 'sheet-token-123');
-      assert.equal(
-        salesSheet.qrCode.url,
-        'https://sheet.example.test/root/api/public/sales-sheets/sheet-token-123',
-      );
+      assert.equal(salesSheet.qrCode.active, true);
+      assert.equal(salesSheet.qrCode.token, null);
+      assert.equal(salesSheet.qrCode.url, null);
       assert.equal(
         salesSheet.qrCode.generatedAt,
         '2026-07-01T10:00:00.000Z',
@@ -96,7 +95,7 @@ test('GET /api/sales-orders/:id/sales-sheet returns existing qrCode for sales wi
   );
 });
 
-test('GET /api/sales-orders/:id/sales-sheet uses request host fallback and keeps sales data scope', async (t) => {
+test('GET /api/sales-orders/:id/sales-sheet never derives a public URL from request headers and keeps sales data scope', async (t) => {
   setPublicSalesSheetBaseUrl(t, undefined);
 
   await withPhase1Server(
@@ -116,10 +115,7 @@ test('GET /api/sales-orders/:id/sales-sheet uses request host fallback and keeps
       );
 
       assert.equal(fallback.response.status, 200);
-      assert.equal(
-        fallback.body.data.salesSheet.qrCode.url,
-        'https://scan.example.test/api/public/sales-sheets/sheet-token-123',
-      );
+      assert.equal(fallback.body.data.salesSheet.qrCode.url, null);
 
       const forbidden = await requestJson(
         baseUrl,
@@ -205,7 +201,7 @@ function buildSalesSheetPrismaOptions() {
         id: 'order_sheet_alpha_token',
         orderNo: 'SO-SHEET-TOKEN',
         salesFormNo: 'SF-TOKEN',
-        qrCodeToken: 'sheet-token-123',
+        qrCodeTokenHash: tokenHash('sheet-token-123'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
         qrCodeExpiresAt: '2026-08-01T10:00:00.000Z',
       }),
@@ -215,10 +211,15 @@ function buildSalesSheetPrismaOptions() {
         salesFormNo: 'SF-BETA',
         salesUserId: 'usr_sales_beta',
         createdById: 'usr_sales_beta',
-        qrCodeToken: 'sheet-token-beta',
+        qrCodeTokenHash: tokenHash('sheet-token-beta'),
+        qrCodeExpiresAt: '2026-08-01T10:00:00.000Z',
       }),
     ],
   };
+}
+
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 function buildSalesSheetOrder(overrides = {}) {

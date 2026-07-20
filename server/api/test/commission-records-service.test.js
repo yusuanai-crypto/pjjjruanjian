@@ -429,6 +429,7 @@ function buildSalesOrder() {
       tasterId: 'user-taster',
       tasterName: 'stage7 test taster',
       financeMark: true,
+      liquorCostDeductionCents: 120000,
     },
     items: [
       {

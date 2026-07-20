@@ -9,10 +9,39 @@ const {
 
 const prisma = new PrismaClient();
 
+type SeedConfig = {
+  adminPassword: string;
+  createDemoUsers: boolean;
+  demoPassword: string | null;
+};
+
+export function resolveSeedConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): SeedConfig {
+  const adminPassword = readRequiredSeedPassword(
+    env,
+    'SEED_ADMIN_PASSWORD',
+  );
+  const createDemoUsers = readSeedBoolean(
+    env,
+    'SEED_CREATE_DEMO_USERS',
+    false,
+  );
+  const demoPassword = createDemoUsers
+    ? readRequiredSeedPassword(env, 'SEED_DEMO_PASSWORD')
+    : null;
+
+  return {
+    adminPassword,
+    createDemoUsers,
+    demoPassword,
+  };
+}
+
 async function main() {
+  const seedConfig = resolveSeedConfig();
   const now = new Date();
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'Admin@123456';
-  const demoPassword = process.env.SEED_DEMO_PASSWORD || 'Admin@123456';
+  const adminPasswordHash = hashPassword(seedConfig.adminPassword);
 
   const admin = await prisma.user.upsert({
     where: {
@@ -22,19 +51,29 @@ async function main() {
       name: '系统管理员',
       role: 'SUPER_ADMIN',
       isActive: true,
+      passwordHash: adminPasswordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
       id: 'usr_admin',
       name: '系统管理员',
       username: 'admin',
-      passwordHash: hashPassword(adminPassword),
+      passwordHash: adminPasswordHash,
       role: 'SUPER_ADMIN',
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
   });
+
+  if (!seedConfig.createDemoUsers) {
+    return;
+  }
+  const demoPassword = seedConfig.demoPassword as string;
+  const demoPasswordHash = hashPassword(demoPassword);
 
   const demoUsers = [
     {
@@ -90,15 +129,19 @@ async function main() {
         name: user.name,
         role: user.role,
         isActive: true,
+        passwordHash: demoPasswordHash,
+        tokenVersion: { increment: 1 },
+        mustChangePassword: true,
         updatedAt: now,
       },
       create: {
         id: user.id,
         name: user.name,
         username: user.username,
-        passwordHash: hashPassword(demoPassword),
+        passwordHash: demoPasswordHash,
         role: user.role,
         isActive: true,
+        mustChangePassword: true,
         createdAt: now,
         updatedAt: now,
       },
@@ -1395,6 +1438,9 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
@@ -1405,6 +1451,7 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
@@ -1419,6 +1466,9 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
@@ -1429,6 +1479,7 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
@@ -1443,6 +1494,9 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
@@ -1453,6 +1507,7 @@ async function upsertStage7Users(
       role: 'SALES',
       leaderId: null,
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
@@ -3566,6 +3621,9 @@ async function upsertStage8Tasters(
       role: 'TASTER',
       leaderId: null,
       isActive: true,
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
@@ -3576,6 +3634,7 @@ async function upsertStage8Tasters(
       role: 'TASTER',
       leaderId: null,
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
@@ -3589,6 +3648,9 @@ async function upsertStage8Tasters(
       role: 'TASTER',
       leaderId: null,
       isActive: true,
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      mustChangePassword: true,
       updatedAt: now,
     },
     create: {
@@ -3599,6 +3661,7 @@ async function upsertStage8Tasters(
       role: 'TASTER',
       leaderId: null,
       isActive: true,
+      mustChangePassword: true,
       createdAt: now,
       updatedAt: now,
     },
@@ -3850,12 +3913,56 @@ function businessDate(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
 }
 
-main()
-  .then(async () => {
-    await prisma.$disconnect();
-  })
-  .catch(async (error) => {
-    console.error(error);
-    await prisma.$disconnect();
-    process.exit(1);
-  });
+function readRequiredSeedPassword(
+  env: NodeJS.ProcessEnv,
+  name: 'SEED_ADMIN_PASSWORD' | 'SEED_DEMO_PASSWORD',
+) {
+  const value = env[name];
+  if (typeof value !== 'string' || !value) {
+    throw new Error(`${name} must be configured before running the seed.`);
+  }
+  if (isSeedPlaceholder(value)) {
+    throw new Error(`${name} must not use a placeholder value.`);
+  }
+  return value;
+}
+
+function readSeedBoolean(
+  env: NodeJS.ProcessEnv,
+  name: 'SEED_CREATE_DEMO_USERS',
+  defaultValue: boolean,
+) {
+  const value = env[name];
+  if (value === undefined || value === '') {
+    return defaultValue;
+  }
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  throw new Error(`${name} must be either "true" or "false".`);
+}
+
+function isSeedPlaceholder(value: string) {
+  const normalizedValue = value.trim();
+  return (
+    /^<[^>]+>$/.test(normalizedValue) ||
+    /^(?:change|replace|example|sample|placeholder|your)(?:[-_\s]|$)/i.test(
+      normalizedValue,
+    )
+  );
+}
+
+if (require.main === module) {
+  main()
+    .then(async () => {
+      await prisma.$disconnect();
+    })
+    .catch(async (error) => {
+      console.error(error);
+      await prisma.$disconnect();
+      process.exit(1);
+    });
+}

@@ -7,7 +7,7 @@ function createAuthController(authService) {
     if (request.method === 'POST' && url.pathname === '/api/auth/login') {
       const body = await readJsonBody(request);
       sendJson(response, 200, {
-        data: authService.login(body, { ipAddress: getRequestIp(request) }),
+        data: await authService.login(body, { ipAddress: getRequestIp(request) }),
       });
       return;
     }

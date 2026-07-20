@@ -104,6 +104,23 @@ void main() {
     expect(find.textContaining('SERVER-TG-001'), findsWidgets);
   });
 
+  testWidgets('selected taster assignments are submitted by id',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await _selectTasterField(tester, const ValueKey('taster-field'));
+    await _selectTasterField(tester, const ValueKey('liaison-taster-field'));
+    await _submit(tester);
+
+    expect(apiClient.createCalls, 1);
+    expect(apiClient.lastCreateBody?['tasterId'], 'taster-1');
+    expect(apiClient.lastCreateBody?['liaisonTasterId'], 'taster-1');
+  });
+
   testWidgets('attachment failure retries upload without creating group again',
       (tester) async {
     final apiClient = _FakeApiClient()..failAttachmentUpload = true;
@@ -194,6 +211,15 @@ Future<void> _selectGuide(WidgetTester tester) async {
   await tester.tap(field);
   await tester.pumpAndSettle();
   await tester.tap(find.text('测试导游').last);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectTasterField(WidgetTester tester, Key key) async {
+  final field = find.byKey(key);
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byType(ListTile).last);
   await tester.pumpAndSettle();
 }
 

@@ -39,20 +39,25 @@ const COMMISSION_HEADERS = [
 ];
 
 const SUMMARY_HEADERS = [
-  '旅行团',
+  '团号',
   '日期',
   '旅行社',
   '导游',
-  '总销售额',
-  '已确认退款',
-  '有效销售额',
-  '总扣酒成本',
+  '车牌',
+  '人数',
+  '品鉴师',
+  '销售额',
+  '货到付款',
+  '已付定金',
+  '扣酒成本',
   '扣酒确认状态',
-  '总上单金额',
-  '日返',
-  '月返',
-  '已返',
-  '未返',
+  '上单金额',
+  '积分/日返积分',
+  '已返积分',
+  '未返积分',
+  '月返积分',
+  '已返月返积分',
+  '未返月返积分',
   '备注',
   '导游信息是否发送',
   '旅行社信息是否发送',
@@ -162,20 +167,25 @@ test('GET /api/travel-group-finance-summaries/export exports filtered stage7 reb
     assert.equal(worksheet.actualRowCount, 2);
 
     const row = readRowObject(worksheet, 2);
-    assert.equal(row['旅行团'], 'TG-STAGE7-SUMMARY-MARKED');
+    assert.equal(row['团号'], 'TG-STAGE7-SUMMARY-MARKED');
     assert.equal(row['日期'], '2026-07-01');
     assert.equal(row['旅行社'], 'Stage7 Export Agency');
     assert.equal(row['导游'], 'Stage7 Export Guide');
-    assert.equal(row['总销售额'], 1000);
-    assert.equal(row['已确认退款'], 100);
-    assert.equal(row['有效销售额'], 900);
-    assert.equal(row['总扣酒成本'], 120);
+    assert.equal(row['车牌'], '贵A-EXPORT');
+    assert.equal(row['人数'], 18);
+    assert.equal(row['品鉴师'], 'Stage7 Export Taster');
+    assert.equal(row['销售额'], 1000);
+    assert.equal(row['货到付款'], 200);
+    assert.equal(row['已付定金'], 800);
+    assert.equal(row['扣酒成本'], 120);
     assert.equal(row['扣酒确认状态'], '否');
-    assert.equal(row['总上单金额'], 780);
-    assert.equal(row['日返'], 23.4);
-    assert.equal(row['月返'], 15.6);
-    assert.equal(row['已返'], 5);
-    assert.equal(row['未返'], 34);
+    assert.equal(row['上单金额'], 880);
+    assert.equal(row['积分/日返积分'], 30);
+    assert.equal(row['已返积分'], '是');
+    assert.equal(row['未返积分'], 0);
+    assert.equal(row['月返积分'], 20);
+    assert.equal(row['已返月返积分'], '否');
+    assert.equal(row['未返月返积分'], 20);
     assert.equal(row['备注'], 'stage7 export summary smoke note');
     assert.equal(row['导游信息是否发送'], '是');
     assert.equal(row['旅行社信息是否发送'], '否');
@@ -352,7 +362,7 @@ test('stage7 export endpoints obey global mark filtering', async () => {
       await loadWorksheet(summaryDownload.buffer, '返积分汇总'),
     );
     assert.deepEqual(
-      summaryRows.map((row) => row['旅行团']).sort(),
+      summaryRows.map((row) => row['团号']).sort(),
       ['TG-STAGE7-SUMMARY-MARKED'],
     );
   }, {
@@ -603,6 +613,8 @@ function travelGroup(overrides = {}) {
   return {
     travelAgency: 'Stage7 Export Agency',
     guideName: 'Stage7 Export Guide',
+    licensePlate: '贵A-EXPORT',
+    guestCount: 18,
     tasterId: 'usr-stage7-export-taster',
     tasterName: 'Stage7 Export Taster',
     guideInfoSent: false,
@@ -647,15 +659,23 @@ function commissionRecord(overrides = {}) {
 function summaryRecord(overrides = {}) {
   return {
     totalSalesAmountCents: 100000,
+    totalCashOnDeliveryCents: 20000,
+    totalPaidDepositCents: 80000,
     confirmedRefundAmountCents: 10000,
     effectiveSalesAmountCents: 90000,
     totalAgencyDeductionCents: 12000,
     agencyDeductionConfirmed: false,
-    totalAgencyNetAmountCents: 78000,
-    totalDailyRebateCents: 2340,
-    totalMonthlyRebateCents: 1560,
-    paidRebateCents: 500,
-    unpaidRebateCents: 3400,
+    totalAgencyNetAmountCents: 88000,
+    totalDailyRebateCents: 3000,
+    totalMonthlyRebateCents: 2000,
+    paidRebateCents: 3000,
+    unpaidRebateCents: 2000,
+    dailyRebatePaid: true,
+    dailyRebatePaidById: 'usr-stage7-export-finance',
+    dailyRebatePaidAt: '2026-07-01T12:00:00.000Z',
+    monthlyRebatePaid: false,
+    monthlyRebatePaidById: null,
+    monthlyRebatePaidAt: null,
     notes: 'stage7 export summary smoke note',
     guideInfoSent: true,
     travelAgencyInfoSent: false,

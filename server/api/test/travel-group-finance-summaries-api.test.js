@@ -26,11 +26,19 @@ test('contract: stage7 travel group finance summaries list and detail expose saf
     ]);
     const listed = list.body.data.travelGroupFinanceSummaries[0];
     assert.equal(listed.travelGroup.groupNo, 'TG-STAGE7-SUMMARY-MARKED');
+    assert.equal(listed.travelGroup.licensePlate, '贵A-STAGE7');
+    assert.equal(listed.travelGroup.guestCount, 20);
     assert.equal(listed.totalSalesAmountCents, 100000);
+    assert.equal(listed.totalCashOnDeliveryCents, 20000);
+    assert.equal(listed.totalPaidDepositCents, 80000);
     assert.equal(listed.confirmedRefundAmountCents, 20000);
     assert.equal(listed.effectiveSalesAmountCents, 80000);
     assert.equal(listed.totalAgencyDeductionCents, 10000);
-    assert.equal(listed.totalAgencyNetAmountCents, 70000);
+    assert.equal(listed.totalAgencyNetAmountCents, 90000);
+    assert.equal(listed.paidDailyRebateCents, 0);
+    assert.equal(listed.unpaidDailyRebateCents, 3000);
+    assert.equal(listed.paidMonthlyRebateCents, 0);
+    assert.equal(listed.unpaidMonthlyRebateCents, 2000);
 
     const detail = await requestJson(
       baseUrl,
@@ -42,6 +50,10 @@ test('contract: stage7 travel group finance summaries list and detail expose saf
     assert.equal(detail.response.status, 200);
     const summary = detail.body.data.travelGroupFinanceSummary;
     assert.equal(summary.id, 'summary-stage7-marked');
+    assert.equal(summary.paidDailyRebateCents, 0);
+    assert.equal(summary.unpaidDailyRebateCents, 3000);
+    assert.equal(summary.paidMonthlyRebateCents, 0);
+    assert.equal(summary.unpaidMonthlyRebateCents, 2000);
     assert.equal(summary.sourceSnapshot.amounts.totalSalesAmountCents, 100000);
     assert.equal(summary.sourceSnapshot.orders[0].orderNo, 'SO-STAGE7-SUMMARY-MARKED');
     assert.equal(summary.sourceSnapshot.orders[0].itemCount, 1);
@@ -55,7 +67,7 @@ test('contract: stage7 travel group finance summaries list and detail expose saf
   });
 });
 
-test('contract: stage7 travel group finance summary updates paid rebate and writes logs', async () => {
+test('contract: stage7 travel group finance summary updates notes and rebate payment status', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const finance = await login(
@@ -77,6 +89,20 @@ test('contract: stage7 travel group finance summary updates paid rebate and writ
     );
     assertErrorContract(invalid, 400, 'VALIDATION_FAILED');
 
+    const invalidSplit = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          paidDailyRebateCents: 3000,
+          unpaidMonthlyRebateCents: 0,
+        },
+      },
+    );
+    assertErrorContract(invalidSplit, 400, 'VALIDATION_FAILED');
+
     const updated = await requestJson(
       baseUrl,
       '/api/travel-group-finance-summaries/tg-stage7-summary-marked',
@@ -84,7 +110,6 @@ test('contract: stage7 travel group finance summary updates paid rebate and writ
         method: 'PATCH',
         token: finance.token,
         body: {
-          paidRebateCents: 1500,
           notes: 'stage7 summary api update test',
           guideInfoSent: true,
           travelAgencyInfoSent: true,
@@ -93,8 +118,12 @@ test('contract: stage7 travel group finance summary updates paid rebate and writ
     );
     assert.equal(updated.response.status, 200);
     const summary = updated.body.data.travelGroupFinanceSummary;
-    assert.equal(summary.paidRebateCents, 1500);
-    assert.equal(summary.unpaidRebateCents, 2000);
+    assert.equal(summary.paidRebateCents, 0);
+    assert.equal(summary.unpaidRebateCents, 5000);
+    assert.equal(summary.paidDailyRebateCents, 0);
+    assert.equal(summary.unpaidDailyRebateCents, 3000);
+    assert.equal(summary.paidMonthlyRebateCents, 0);
+    assert.equal(summary.unpaidMonthlyRebateCents, 2000);
     assert.equal(summary.notes, 'stage7 summary api update test');
     assert.equal(summary.guideInfoSent, true);
     assert.equal(summary.travelAgencyInfoSent, true);
@@ -116,10 +145,138 @@ test('contract: stage7 travel group finance summary updates paid rebate and writ
       entityType: 'travel_group_finance_summary',
       userId: finance.user.id,
     });
-    assert.equal(log.beforeData.paidRebateCents, 500);
-    assert.equal(log.afterData.paidRebateCents, 1500);
-    assert.equal(log.afterData.unpaidRebateCents, 2000);
+    assert.equal(log.beforeData.notes, 'stage7 summary api smoke note');
+    assert.equal(log.afterData.notes, 'stage7 summary api update test');
     assert.equal('sourceSnapshot' in log.afterData, false);
+
+    const dailyPaid = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked/daily-rebate-paid',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          isPaid: true,
+        },
+      },
+    );
+    assert.equal(dailyPaid.response.status, 200);
+    const dailySummary = dailyPaid.body.data.travelGroupFinanceSummary;
+    assert.equal(dailySummary.dailyRebatePaid, true);
+    assert.equal(dailySummary.dailyRebatePaidById, finance.user.id);
+    assert.equal(typeof dailySummary.dailyRebatePaidAt, 'string');
+    assert.equal(dailySummary.paidRebateCents, 3000);
+    assert.equal(dailySummary.unpaidRebateCents, 2000);
+    assert.equal(dailySummary.paidDailyRebateCents, 3000);
+    assert.equal(dailySummary.unpaidDailyRebateCents, 0);
+    assert.equal(dailySummary.paidMonthlyRebateCents, 0);
+    assert.equal(dailySummary.unpaidMonthlyRebateCents, 2000);
+
+    const monthlyPaid = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked/monthly-rebate-paid',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          isPaid: true,
+        },
+      },
+    );
+    assert.equal(monthlyPaid.response.status, 200);
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.monthlyRebatePaid,
+      true,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.paidRebateCents,
+      5000,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.unpaidRebateCents,
+      0,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.paidDailyRebateCents,
+      3000,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.unpaidDailyRebateCents,
+      0,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.paidMonthlyRebateCents,
+      2000,
+    );
+    assert.equal(
+      monthlyPaid.body.data.travelGroupFinanceSummary.unpaidMonthlyRebateCents,
+      0,
+    );
+
+    const cancelled = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked/daily-rebate-paid',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          isPaid: false,
+        },
+      },
+    );
+    assert.equal(cancelled.response.status, 200);
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.dailyRebatePaid,
+      false,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.dailyRebatePaidById,
+      null,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.paidRebateCents,
+      2000,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.unpaidRebateCents,
+      3000,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.paidDailyRebateCents,
+      0,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.unpaidDailyRebateCents,
+      3000,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.paidMonthlyRebateCents,
+      2000,
+    );
+    assert.equal(
+      cancelled.body.data.travelGroupFinanceSummary.unpaidMonthlyRebateCents,
+      0,
+    );
+
+    const paymentLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=travel_group_finance_summaries.daily_rebate_payment.enable',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(paymentLogs.response.status, 200);
+    const paymentLog = paymentLogs.body.data.logs.find(
+      (item) => item.entityId === 'summary-stage7-marked',
+    );
+    assert.ok(paymentLog);
+    assertStage7ApiLog(paymentLog, {
+      action: 'travel_group_finance_summaries.daily_rebate_payment.enable',
+      entityType: 'travel_group_finance_summary',
+      userId: finance.user.id,
+    });
+    assert.equal(paymentLog.beforeData.dailyRebatePaid, false);
+    assert.equal(paymentLog.afterData.dailyRebatePaid, true);
   }, {
     prisma: buildTravelGroupFinanceSummaryApiPrisma(),
   });
@@ -250,13 +407,19 @@ test('contract: stage7 travel group finance summary refresh creates calculated s
     const summary = refreshed.body.data.travelGroupFinanceSummary;
     assert.equal(summary.travelGroupId, 'tg-stage7-summary-refresh');
     assert.equal(summary.totalSalesAmountCents, 100000);
+    assert.equal(summary.totalCashOnDeliveryCents, 0);
+    assert.equal(summary.totalPaidDepositCents, 100000);
     assert.equal(summary.confirmedRefundAmountCents, 20000);
     assert.equal(summary.effectiveSalesAmountCents, 80000);
     assert.equal(summary.totalAgencyDeductionCents, 10000);
-    assert.equal(summary.totalAgencyNetAmountCents, 70000);
-    assert.equal(summary.totalDailyRebateCents, 2100);
-    assert.equal(summary.totalMonthlyRebateCents, 1400);
-    assert.equal(summary.unpaidRebateCents, 3500);
+    assert.equal(summary.totalAgencyNetAmountCents, 90000);
+    assert.equal(summary.totalDailyRebateCents, 3000);
+    assert.equal(summary.totalMonthlyRebateCents, 3000);
+    assert.equal(summary.unpaidRebateCents, 6000);
+    assert.equal(summary.paidDailyRebateCents, 0);
+    assert.equal(summary.unpaidDailyRebateCents, 3000);
+    assert.equal(summary.paidMonthlyRebateCents, 0);
+    assert.equal(summary.unpaidMonthlyRebateCents, 3000);
   }, {
     prisma: buildTravelGroupFinanceSummaryApiPrisma(),
   });
@@ -297,7 +460,23 @@ test('contract: stage7 travel group finance summaries enforce permissions', asyn
         pathName: '/api/travel-group-finance-summaries/tg-stage7-summary-marked',
         method: 'PATCH',
         body: {
-          paidRebateCents: 100,
+          notes: 'boss should not edit',
+        },
+      },
+      {
+        pathName:
+          '/api/travel-group-finance-summaries/tg-stage7-summary-marked/daily-rebate-paid',
+        method: 'PATCH',
+        body: {
+          isPaid: true,
+        },
+      },
+      {
+        pathName:
+          '/api/travel-group-finance-summaries/tg-stage7-summary-marked/monthly-rebate-paid',
+        method: 'PATCH',
+        body: {
+          isPaid: true,
         },
       },
       {
@@ -581,6 +760,8 @@ function travelGroup(overrides) {
     travelAgency: 'Stage7 Summary Agency',
     guideName: 'Stage7 Summary Guide',
     guidePhone: '10000000009',
+    licensePlate: '贵A-STAGE7',
+    guestCount: 20,
     tasterName: 'Stage7 Summary Taster',
     guideInfoSent: false,
     travelAgencyInfoSent: false,
@@ -591,15 +772,23 @@ function travelGroup(overrides) {
 function summaryRecord(overrides = {}) {
   return {
     totalSalesAmountCents: 100000,
+    totalCashOnDeliveryCents: 20000,
+    totalPaidDepositCents: 80000,
     confirmedRefundAmountCents: 20000,
     effectiveSalesAmountCents: 80000,
     totalAgencyDeductionCents: 10000,
     agencyDeductionConfirmed: false,
-    totalAgencyNetAmountCents: 70000,
-    totalDailyRebateCents: 2100,
-    totalMonthlyRebateCents: 1400,
-    paidRebateCents: 500,
-    unpaidRebateCents: 3000,
+    totalAgencyNetAmountCents: 90000,
+    totalDailyRebateCents: 3000,
+    totalMonthlyRebateCents: 2000,
+    paidRebateCents: 0,
+    unpaidRebateCents: 5000,
+    dailyRebatePaid: false,
+    dailyRebatePaidById: null,
+    dailyRebatePaidAt: null,
+    monthlyRebatePaid: false,
+    monthlyRebatePaidById: null,
+    monthlyRebatePaidAt: null,
     notes: 'stage7 summary api smoke note',
     guideInfoSent: false,
     travelAgencyInfoSent: false,

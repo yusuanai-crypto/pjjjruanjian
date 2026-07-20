@@ -60,7 +60,8 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
       if (_statusFilter != 'all') {
         query['status'] = _statusFilter;
       }
-      final uri = Uri(path: '/api/users', queryParameters: query.isEmpty ? null : query);
+      final uri = Uri(
+          path: '/api/users', queryParameters: query.isEmpty ? null : query);
       final payload = await widget.apiClient.getJson(
         uri.toString(),
         token: widget.token,
@@ -91,7 +92,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
       ),
     );
     if (created == true) {
-      _showMessage('员工账号已创建，初始密码为 123456。');
+      _showMessage('员工账号已创建，请通过受控渠道交付初始密码。');
       await _loadUsers();
     }
   }
@@ -124,7 +125,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
       ),
     );
     if (reset == true) {
-      _showMessage('密码已重置为 123456，员工下次登录需要修改。');
+      _showMessage('验证码已核验，员工的新密码已生效。');
       await _loadUsers();
     }
   }
@@ -329,9 +330,8 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                                         : StatusTone.warning,
                                   ),
                                 ),
-                                DataCell(Text(user.mustChangePassword
-                                    ? '待修改'
-                                    : '已完成')),
+                                DataCell(Text(
+                                    user.mustChangePassword ? '待修改' : '已完成')),
                                 DataCell(SizedBox(
                                   width: 180,
                                   child: Text(
@@ -361,7 +361,8 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                                         onPressed: _canManage(user)
                                             ? () => _resetPassword(user)
                                             : null,
-                                        icon: const Icon(Icons.password_rounded),
+                                        icon:
+                                            const Icon(Icons.password_rounded),
                                       ),
                                     ],
                                   ),
@@ -395,6 +396,8 @@ class _CreateEmployeeDialog extends StatefulWidget {
 class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   UserRole _role = UserRole.frontDesk;
   bool _saving = false;
   String? _error;
@@ -403,14 +406,26 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
+    final password = _passwordController.text;
+    final confirmPassword = _confirmPasswordController.text;
     if (name.isEmpty || phone.isEmpty) {
       setState(() => _error = '请填写姓名和手机号。');
+      return;
+    }
+    if (password.length < 8) {
+      setState(() => _error = '初始密码至少需要 8 位。');
+      return;
+    }
+    if (password != confirmPassword) {
+      setState(() => _error = '两次输入的密码不一致。');
       return;
     }
     setState(() {
@@ -425,6 +440,8 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
           'name': name,
           'phone': phone,
           'role': _role.value,
+          'password': password,
+          'mustChangePassword': true,
         },
       );
       if (mounted) {
@@ -464,6 +481,26 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
               decoration: const InputDecoration(
                 labelText: '手机号',
                 prefixIcon: Icon(Icons.phone_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              enabled: !_saving,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '初始密码',
+                prefixIcon: Icon(Icons.password_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmPasswordController,
+              enabled: !_saving,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '确认初始密码',
+                prefixIcon: Icon(Icons.done_all_rounded),
               ),
             ),
             const SizedBox(height: 12),
@@ -531,15 +568,18 @@ class _ResetPasswordDialog extends StatefulWidget {
 
 class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
   final _codeController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   final _reasonController = TextEditingController();
   bool _sending = false;
   bool _saving = false;
   String? _message;
-  String? _debugCode;
 
   @override
   void dispose() {
     _codeController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
     _reasonController.dispose();
     super.dispose();
   }
@@ -556,7 +596,6 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
       );
       final verification = _stringKeyMap(_data(payload)['verification'] as Map);
       setState(() {
-        _debugCode = _nullableString(verification['debugCode']);
         _message = '验证码已发送至 ${verification['phoneMasked'] ?? '员工手机'}。';
       });
     } on ApiException catch (error) {
@@ -570,8 +609,18 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
 
   Future<void> _reset() async {
     final code = _codeController.text.trim();
+    final newPassword = _newPasswordController.text;
+    final confirmPassword = _confirmPasswordController.text;
     if (code.isEmpty) {
       setState(() => _message = '请填写短信验证码。');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setState(() => _message = '新密码至少需要 8 位。');
+      return;
+    }
+    if (newPassword != confirmPassword) {
+      setState(() => _message = '两次输入的新密码不一致。');
       return;
     }
     setState(() {
@@ -584,6 +633,7 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
         token: widget.token,
         body: {
           'verificationCode': code,
+          'newPassword': newPassword,
           'reason': _reasonController.text.trim(),
         },
       );
@@ -622,6 +672,26 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
             ),
             const SizedBox(height: 12),
             TextField(
+              controller: _newPasswordController,
+              enabled: !_saving,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '员工设置的新密码',
+                prefixIcon: Icon(Icons.password_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmPasswordController,
+              enabled: !_saving,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '确认新密码',
+                prefixIcon: Icon(Icons.done_all_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
               controller: _codeController,
               enabled: !_saving,
               keyboardType: TextInputType.number,
@@ -644,7 +714,6 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
               const SizedBox(height: 8),
               Text(_message!),
             ],
-            if (_debugCode != null) Text('测试验证码：$_debugCode'),
           ],
         ),
       ),
@@ -656,7 +725,7 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
         FilledButton.icon(
           onPressed: _saving ? null : _reset,
           icon: const Icon(Icons.lock_reset_rounded),
-          label: Text(_saving ? '重置中' : '重置为 123456'),
+          label: Text(_saving ? '重置中' : '确认新密码'),
         ),
       ],
     );

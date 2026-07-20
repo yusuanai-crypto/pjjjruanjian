@@ -41,6 +41,7 @@ class TravelGroupPickerDialog extends StatefulWidget {
     this.initialStart,
     this.initialEnd,
     this.limit = 30,
+    this.showFinanceMark = false,
   }) : assert(
           businessApi != null || loadTravelGroups != null,
           'businessApi or loadTravelGroups must be provided.',
@@ -52,6 +53,7 @@ class TravelGroupPickerDialog extends StatefulWidget {
   final DateTime? initialStart;
   final DateTime? initialEnd;
   final int limit;
+  final bool showFinanceMark;
 
   @override
   State<TravelGroupPickerDialog> createState() =>
@@ -280,6 +282,7 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
         final group = _groups[index];
         return _TravelGroupListTile(
           group: group,
+          showFinanceMark: widget.showFinanceMark,
           onTap: () => Navigator.of(context).pop(group),
         );
       },
@@ -300,10 +303,12 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
 class _TravelGroupListTile extends StatelessWidget {
   const _TravelGroupListTile({
     required this.group,
+    required this.showFinanceMark,
     required this.onTap,
   });
 
   final TravelGroupRecord group;
+  final bool showFinanceMark;
   final VoidCallback onTap;
 
   @override
@@ -329,10 +334,13 @@ class _TravelGroupListTile extends StatelessWidget {
                 .titleMedium
                 ?.copyWith(fontWeight: FontWeight.w700),
           ),
-          StatusTag(
-            label: group.financeMark ? '已标记' : '未标记',
-            tone: group.financeMark ? StatusTone.success : StatusTone.neutral,
-          ),
+          if (showFinanceMark)
+            StatusTag(
+              label: group.financeMark ? '已标记' : '未标记',
+              tone: group.financeMark
+                  ? StatusTone.success
+                  : StatusTone.neutral,
+            ),
         ],
       ),
       subtitle: Padding(

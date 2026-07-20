@@ -15,6 +15,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
     "seed:stage10-products": "node scripts/seed-stage10-products.js",
+    "retention:cleanup": "ts-node scripts/cleanup-retained-data.ts",
     "migrate:legacy-json": "node scripts/migrate-legacy-json.js",
     "backfill:sales-order-customers": "node scripts/backfill-sales-order-customers.js"
   },

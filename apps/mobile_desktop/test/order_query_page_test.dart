@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
+import 'package:jiangjiu_mobile_desktop/shared/widgets/mark_info_button.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -46,11 +47,53 @@ void main() {
     expect(uri.queryParameters.containsKey('dateTo'), isTrue);
   });
 
+  testWidgets('can switch sales order query to all dates', (tester) async {
+    final apiClient = _FakeApiClient();
+    final tempDirectory = Directory(
+      'build/order-all-date-export-${DateTime.now().microsecondsSinceEpoch}',
+    )..createSync(recursive: true);
+    addTearDown(() => _deleteDirectoryWithRetry(tempDirectory));
+    await _pumpOrderQuery(
+      tester,
+      apiClient,
+      role: UserRole.finance,
+      documentsDirectory: tempDirectory,
+    );
+
+    await tester.tap(find.text('全部日期').last);
+    await tester.pumpAndSettle();
+
+    final uri = Uri.parse(apiClient.salesOrderListPaths.last);
+    expect(uri.path, '/api/sales-orders');
+    expect(uri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(uri.queryParameters.containsKey('dateTo'), isFalse);
+    expect(find.text('全部日期'), findsWidgets);
+
+    await tester.tap(
+      find.byKey(const ValueKey('order-export-sales-orders-button')),
+    );
+    await tester.pump();
+    for (var index = 0;
+        index < 20 && apiClient.salesOrderDownloadPaths.isEmpty;
+        index += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+    }
+
+    final exportUri = Uri.parse(apiClient.salesOrderDownloadPaths.last);
+    expect(exportUri.path, '/api/sales-orders/export.xlsx');
+    expect(exportUri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(exportUri.queryParameters.containsKey('dateTo'), isFalse);
+  });
+
   testWidgets(
       'shows order list detail and lets finance mark customer and order',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
 
     expect(find.text('SO20260630001'), findsWidgets);
     expect(find.textContaining('张女士'), findsWidgets);
@@ -103,6 +146,7 @@ void main() {
 
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('order-basic-edit-button')),
@@ -149,8 +193,8 @@ void main() {
       '3',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('order-edit-item-unit-price-0')),
-      '288.80',
+      find.byKey(const ValueKey('order-edit-item-subtotal-0')),
+      '866.40',
     );
     await tester.ensureVisible(
       find.byKey(const ValueKey('order-edit-logistics-no-field')),
@@ -214,6 +258,10 @@ void main() {
       (apiClient.lastOrderUpdateBody?['items'] as List).first['unitPriceCents'],
       28880,
     );
+    expect(
+      (apiClient.lastOrderUpdateBody?['items'] as List).first['subtotalCents'],
+      86640,
+    );
     expect(apiClient.lastOrderFinanceBody?['logisticsNo'], 'YT999000111');
     expect(apiClient.lastOrderFinanceBody?['logisticsFeeCents'], 2550);
     expect(apiClient.lastOrderFinanceBody?['invoiceIssued'], isTrue);
@@ -225,6 +273,7 @@ void main() {
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.sales);
+    await _openOrderDetailDialog(tester);
 
     expect(
         find.byKey(const ValueKey('order-basic-edit-button')), findsOneWidget);
@@ -232,14 +281,24 @@ void main() {
         findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '客户标记 未标记'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '订单标记 未标记'), findsNothing);
+    expect(find.text('客户未标记'), findsNothing);
+    expect(find.text('订单未标记'), findsNothing);
     expect(find.text('上单金额'), findsNothing);
     expect(find.text('品鉴师提成'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('客户与收货'), findsOneWidget);
+    expect(find.text('酒品明细'), findsOneWidget);
+    expect(find.text('财务与物流'), findsOneWidget);
   });
 
   testWidgets('boss sees read-only details without edit or mark actions',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.boss);
+    await _openOrderDetailDialog(tester);
 
     expect(find.text('老板只读'), findsOneWidget);
     expect(find.byKey(const ValueKey('order-qr-sales-sheet-button')),
@@ -247,6 +306,8 @@ void main() {
     expect(find.byKey(const ValueKey('order-basic-edit-button')), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '客户标记 未标记'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '订单标记 未标记'), findsNothing);
+    expect(find.text('客户未标记'), findsNothing);
+    expect(find.text('订单未标记'), findsNothing);
     expect(find.text('上单金额'), findsNothing);
     expect(find.text('品鉴师提成'), findsNothing);
   });
@@ -255,12 +316,18 @@ void main() {
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.afterSales);
+    await _openOrderDetailDialog(tester);
 
     expect(find.text('售后查询定位'), findsOneWidget);
     expect(find.byKey(const ValueKey('order-qr-sales-sheet-button')),
         findsOneWidget);
     expect(find.byKey(const ValueKey('order-basic-edit-button')), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '客户标记 未标记'), findsNothing);
+    expect(find.text('客户未标记'), findsNothing);
+    expect(find.text('订单未标记'), findsNothing);
+
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
 
     await tester.enterText(
       find.byKey(const ValueKey('order-query-search-field')),
@@ -271,6 +338,24 @@ void main() {
 
     final uri = Uri.parse(apiClient.salesOrderListPaths.last);
     expect(uri.queryParameters['query'], '13800001111');
+  });
+
+  testWidgets('taster can view order management without sensitive actions',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.taster);
+    await _openOrderDetailDialog(tester);
+
+    expect(apiClient.salesOrderListPaths, isNotEmpty);
+    expect(find.text('SO20260630001'), findsWidgets);
+    expect(find.byKey(const ValueKey('order-basic-edit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('order-export-sales-orders-button')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('order-qr-sales-sheet-button')),
+        findsNothing);
+    expect(find.byType(MarkInfoButton), findsNothing);
+    expect(find.text(formatMoneyCents(76000)), findsNothing);
+    expect(find.text(formatMoneyCents(8800)), findsNothing);
   });
 
   testWidgets('shows sales order export for admin and finance only',
@@ -412,6 +497,7 @@ void main() {
 
     final apiClient = _FakeApiClient();
     await _pumpOrderQuery(tester, apiClient, role: UserRole.admin);
+    await _openOrderDetailDialog(tester);
 
     final qrButton = find.byKey(const ValueKey('order-qr-sales-sheet-button'));
     await tester.ensureVisible(qrButton);
@@ -450,6 +536,7 @@ void main() {
       salesSheetQrUrl: 'https://example.test/api/public/sales-sheets/existing',
     );
     await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
 
     final qrButton = find.byKey(const ValueKey('order-qr-sales-sheet-button'));
     await tester.ensureVisible(qrButton);
@@ -499,6 +586,14 @@ Future<void> _selectDropdownValue(
   await tester.tap(find.byKey(key));
   await tester.pumpAndSettle();
   await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openOrderDetailDialog(WidgetTester tester) async {
+  final orderTile = find.text('SO20260630001').first;
+  await tester.ensureVisible(orderTile);
+  await tester.pumpAndSettle();
+  await tester.tap(orderTile);
   await tester.pumpAndSettle();
 }
 
@@ -596,10 +691,12 @@ class _FakeApiClient extends ApiClient {
             qrCodeUrl: 'https://example.test/api/public/sales-sheets/token-1',
           ),
           'qrCode': {
+            'active': true,
             'token': 'token-1',
             'url': 'https://example.test/api/public/sales-sheets/token-1',
             'generatedAt': '2026-07-01T08:00:00.000Z',
-            'expiresAt': null,
+            'expiresAt': '2026-07-31T08:00:00.000Z',
+            'revokedAt': null,
           },
         },
       };
@@ -713,6 +810,10 @@ class _FakeApiClient extends ApiClient {
           (sum, item) {
             if (item is! Map) {
               return sum;
+            }
+            final subtotalCents = item['subtotalCents'];
+            if (subtotalCents is int) {
+              return sum + subtotalCents;
             }
             final quantity =
                 item['quantity'] is int ? item['quantity'] as int : 0;
@@ -908,10 +1009,12 @@ Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
     'qrCode': qrCodeUrl == null
         ? null
         : {
+            'active': true,
             'token': 'token-1',
             'url': qrCodeUrl,
             'generatedAt': '2026-07-01T08:00:00.000Z',
-            'expiresAt': null,
+            'expiresAt': '2026-07-31T08:00:00.000Z',
+            'revokedAt': null,
           },
   };
 }

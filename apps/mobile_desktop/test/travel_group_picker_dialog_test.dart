@@ -72,6 +72,27 @@ void main() {
     expect(selected?.travelAgency, '甲社');
   });
 
+  testWidgets('hides travel group finance mark by default', (tester) async {
+    await _openPicker(
+      tester,
+      loadTravelGroups: (_) async => _groups,
+    );
+
+    expect(find.text('已标记'), findsNothing);
+    expect(find.text('未标记'), findsNothing);
+  });
+
+  testWidgets('shows travel group finance mark when enabled', (tester) async {
+    await _openPicker(
+      tester,
+      loadTravelGroups: (_) async => _groups,
+      showFinanceMark: true,
+    );
+
+    expect(find.text('已标记'), findsOneWidget);
+    expect(find.text('未标记'), findsOneWidget);
+  });
+
   testWidgets('shows empty state when no travel groups match', (tester) async {
     await _openPicker(
       tester,
@@ -132,6 +153,7 @@ Future<void> _openPicker(
   DateTime? initialEnd,
   ValueChanged<TravelGroupRecord?>? onSelected,
   bool settle = true,
+  bool showFinanceMark = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -147,6 +169,7 @@ Future<void> _openPicker(
                       loadTravelGroups: loadTravelGroups,
                       initialStart: initialStart,
                       initialEnd: initialEnd,
+                      showFinanceMark: showFinanceMark,
                     ),
                   );
                   onSelected?.call(selected);

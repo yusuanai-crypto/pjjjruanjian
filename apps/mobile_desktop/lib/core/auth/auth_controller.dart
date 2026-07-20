@@ -7,13 +7,20 @@ import 'auth_service.dart';
 class AuthController {
   AuthController({
     required SessionStorage storage,
+    ApiClient? apiClient,
+    AuthService? authService,
+    void Function()? onSessionRevoked,
   })  : _storage = storage,
-        _apiClient = ApiClient(baseUrl: AppConfig.defaultApiBaseUrl) {
-    _authService = AuthService(apiClient: _apiClient);
+        _apiClient =
+            apiClient ?? ApiClient(baseUrl: AppConfig.defaultApiBaseUrl),
+        _onSessionRevoked = onSessionRevoked {
+    _authService = authService ?? AuthService(apiClient: _apiClient);
+    _apiClient.onSessionRevoked = _handleSessionRevoked;
   }
 
   final SessionStorage _storage;
   final ApiClient _apiClient;
+  final void Function()? _onSessionRevoked;
   late final AuthService _authService;
 
   String apiBaseUrl = AppConfig.defaultApiBaseUrl;
@@ -29,13 +36,22 @@ class AuthController {
         _storage.readApiBaseUrl() ?? AppConfig.defaultApiBaseUrl);
     _apiClient.baseUrl = apiBaseUrl;
 
-    final token = _storage.readToken();
+    final token = await _storage.readToken();
     if (token == null || token.isEmpty) {
       return;
     }
 
     try {
       session = await _authService.currentUser(token);
+    } on ApiException catch (error) {
+      if (_isTerminalSessionError(error)) {
+        await _storage.clearToken();
+        session = null;
+        restoreMessage = messageForAuthError(error);
+        return;
+      }
+      await _storage.clearToken();
+      restoreMessage = '登录已过期，请重新登录。';
     } catch (_) {
       await _storage.clearToken();
       restoreMessage = '登录已过期，请重新登录。';
@@ -47,10 +63,9 @@ class AuthController {
     required String username,
     required String password,
   }) async {
-    apiBaseUrl = AppConfig.normalizeApiBaseUrl(nextApiBaseUrl);
-    _apiClient.baseUrl = apiBaseUrl;
-
     try {
+      apiBaseUrl = AppConfig.normalizeApiBaseUrl(nextApiBaseUrl);
+      _apiClient.baseUrl = apiBaseUrl;
       final nextSession =
           await _authService.login(username: username, password: password);
       final token = nextSession.token;
@@ -93,11 +108,17 @@ class AuthController {
       throw const AuthFailure('登录已过期，请重新登录。');
     }
     try {
-      session = await _authService.changePassword(
+      final nextSession = await _authService.changePassword(
         token: currentToken,
         currentPassword: currentPassword,
         newPassword: newPassword,
       );
+      final replacementToken = nextSession.token;
+      if (replacementToken == null || replacementToken.isEmpty) {
+        throw const AuthFailure('服务器未返回新登录令牌。');
+      }
+      await _storage.saveToken(replacementToken);
+      session = nextSession;
       restoreMessage = null;
     } on AuthFailure {
       rethrow;
@@ -110,6 +131,20 @@ class AuthController {
     await _storage.clearToken();
     session = null;
   }
+
+  Future<void> _handleSessionRevoked(ApiException error) async {
+    await _storage.clearToken();
+    session = null;
+    restoreMessage = messageForAuthError(error);
+    _onSessionRevoked?.call();
+  }
+}
+
+bool _isTerminalSessionError(ApiException error) {
+  return error.code == 'SESSION_REVOKED' ||
+      error.code == 'ACCOUNT_DISABLED' ||
+      error.code == 'ACCOUNT_FROZEN' ||
+      error.code == 'USER_DISABLED';
 }
 
 class AuthFailure implements Exception {
@@ -136,8 +171,8 @@ String messageForAuthError(Object error) {
         return '账号已停用，请联系管理员。';
       case 'PASSWORD_CHANGE_REQUIRED':
         return '请先修改初始密码。';
-      case 'TEMPORARY_PASSWORD_NOT_ALLOWED':
-        return '新密码不能继续使用初始密码 123456。';
+      case 'SESSION_REVOKED':
+        return '会话已失效，请重新登录。';
       case 'CURRENT_PASSWORD_INCORRECT':
         return '当前密码不正确。';
       case 'WEAK_PASSWORD':

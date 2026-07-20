@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
+import { sanitizeAiText } from '../operation-logs/audit-data-sanitizer';
+
 export interface AiPromptToolResultInput {
   toolName?: string;
   data?: unknown;
@@ -117,7 +119,7 @@ export function sanitizeAiPromptInput(
   return {
     userRole: normalizeString(input.userRole) || '',
     intent: normalizeString(input.intent) || 'unknown',
-    question: truncateString(normalizeString(input.question) || ''),
+    question: sanitizePromptString(normalizeString(input.question) || ''),
     dateRange: sanitizeDateRange(input.dateRange),
     policy: sanitizePolicy(input.policy),
     toolResults: Array.isArray(input.toolResults)
@@ -191,7 +193,7 @@ export function sanitizeForPrompt(value: unknown, depth = 0): unknown {
     return null;
   }
   if (typeof value === 'string') {
-    return truncateString(value);
+    return sanitizePromptString(value);
   }
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -234,7 +236,7 @@ function sanitizeWarnings(value: unknown): string[] {
       value
         .map((item) => normalizeString(item))
         .filter((item): item is string => Boolean(item))
-        .map((item) => truncateString(item)),
+        .map((item) => sanitizePromptString(item)),
     ),
   );
 }
@@ -246,7 +248,7 @@ function assignString<T extends Record<string, unknown>>(
 ) {
   const normalized = normalizeString(value);
   if (normalized) {
-    target[key] = truncateString(normalized) as T[keyof T & string];
+    target[key] = sanitizePromptString(normalized) as T[keyof T & string];
   }
 }
 
@@ -289,6 +291,14 @@ function truncateString(value: string): string {
     return value;
   }
   return `${value.slice(0, MAX_PROMPT_STRING_LENGTH)}...`;
+}
+
+function sanitizePromptString(value: string): string {
+  return truncateString(
+    sanitizeAiText(value, {
+      maxLength: MAX_PROMPT_STRING_LENGTH,
+    }),
+  );
 }
 
 function normalizeString(value: unknown): string | null {

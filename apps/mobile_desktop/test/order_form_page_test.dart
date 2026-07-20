@@ -4,7 +4,8 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
 
 void main() {
-  testWidgets('removes deprecated order metadata controls', (tester) async {
+  testWidgets('keeps removed metadata hidden and shows travel group picker',
+      (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
@@ -20,18 +21,19 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('select-travel-group-button')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(find.text('订单类型'), findsNothing);
     expect(find.text('销售单号（可选）'), findsNothing);
     expect(find.text('客户需要开票'), findsNothing);
-    expect(find.text('选择旅行团'), findsNothing);
   });
 
-  testWidgets('saves an order without removed metadata fields', (tester) async {
+  testWidgets('defaults to travel group order and saves travelGroupId',
+      (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
+    await _selectTravelGroup(tester);
     await _selectExistingCustomer(tester);
     await _selectProductForItem(tester, 0, 'product-1');
     await tester.enterText(
@@ -39,8 +41,8 @@ void main() {
       '2',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('order-item-unit-price-0')),
-      '1299',
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '2598',
     );
     await tester
         .ensureVisible(find.byKey(const ValueKey('order-item-notes-0')));
@@ -57,8 +59,8 @@ void main() {
     expect(body.containsKey('orderNo'), isFalse);
     expect(body['customerId'], 'customer-1');
     expect(body.containsKey('customer'), isFalse);
-    expect(body['orderType'], 'external');
-    expect(body.containsKey('travelGroupId'), isFalse);
+    expect(body['orderType'], 'travel_group');
+    expect(body['travelGroupId'], 'group-1');
     expect(body.containsKey('salesFormNo'), isFalse);
     expect(body.containsKey('invoiceRequired'), isFalse);
 
@@ -68,6 +70,7 @@ void main() {
     expect(items.first.containsKey('unit'), isFalse);
     expect(items.first['quantity'], 2);
     expect(items.first['unitPriceCents'], 129900);
+    expect(items.first['subtotalCents'], 259800);
     expect(items.first['deliveryType'], 'shipping');
     expect(items.first['notes'], '礼盒装');
     expect(items.first['sortOrder'], 1);
@@ -114,6 +117,7 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
+    await _selectTravelGroup(tester);
     expect(find.text('¥0.00'), findsWidgets);
 
     await _selectProductForItem(tester, 0, 'product-1');
@@ -122,8 +126,8 @@ void main() {
       '2',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('order-item-unit-price-0')),
-      '1299',
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '2598',
     );
 
     final addButton = find.byKey(const ValueKey('order-item-add-button'));
@@ -139,8 +143,8 @@ void main() {
       '3',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('order-item-unit-price-1')),
-      '100',
+      find.byKey(const ValueKey('order-item-subtotal-1')),
+      '300',
     );
     await _selectDropdownValue(
       tester,
@@ -163,6 +167,7 @@ void main() {
     expect(items.last['productId'], 'product-2');
     expect(items.last['quantity'], 3);
     expect(items.last['unitPriceCents'], 10000);
+    expect(items.last['subtotalCents'], 30000);
     expect(items.last['deliveryType'], 'self_pickup');
     expect(items.last['sortOrder'], 2);
   });
@@ -172,12 +177,28 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
+    await _selectTravelGroup(tester);
     await _selectExistingCustomer(tester);
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
     await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
     await tester.pumpAndSettle();
 
     expect(find.text('第 1 条明细请选择启用商品。'), findsOneWidget);
+    expect(apiClient.lastSalesOrderBody, isNull);
+  });
+
+  testWidgets('requires travel group before submitting', (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('请选择旅行团。'), findsOneWidget);
     expect(apiClient.lastSalesOrderBody, isNull);
   });
 }
@@ -206,6 +227,16 @@ Future<void> _selectExistingCustomer(WidgetTester tester) async {
   await tester.tap(button);
   await tester.pumpAndSettle();
   await tester.tap(find.text('张女士').last);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectTravelGroup(WidgetTester tester) async {
+  final button = find.byKey(const ValueKey('select-travel-group-button'));
+  await tester.ensureVisible(button);
+  await tester.pumpAndSettle();
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('TG20260630001').last);
   await tester.pumpAndSettle();
 }
 
@@ -263,6 +294,13 @@ class _FakeApiClient extends ApiClient {
         },
       };
     }
+    if (path.startsWith('/api/travel-groups')) {
+      return {
+        'data': {
+          'travelGroups': [_travelGroupJson()],
+        },
+      };
+    }
     throw StateError('Unexpected GET $path');
   }
 
@@ -315,10 +353,15 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
       .toList();
   final totalAmountCents = items.fold<int>(
     0,
-    (sum, item) =>
-        sum +
-        ((item['quantity'] as int? ?? 0) *
-            (item['unitPriceCents'] as int? ?? 0)),
+    (sum, item) {
+      final subtotalCents = item['subtotalCents'];
+      if (subtotalCents is int) {
+        return sum + subtotalCents;
+      }
+      return sum +
+          ((item['quantity'] as int? ?? 0) *
+              (item['unitPriceCents'] as int? ?? 0));
+    },
   );
 
   return {
@@ -334,8 +377,8 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
     'city': customer['city'],
     'district': customer['district'],
     'address': customer['address'],
-    'travelGroupId': null,
-    'travelGroup': null,
+    'travelGroupId': body['travelGroupId'],
+    'travelGroup': body['travelGroupId'] == null ? null : _travelGroupJson(),
     'salesFormNo': body['salesFormNo'],
     'totalAmountCents': totalAmountCents,
     'cashOnDeliveryAmountCents': body['cashOnDeliveryAmountCents'] ?? 0,
@@ -355,6 +398,27 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
           ...items[index],
         },
     ],
+  };
+}
+
+Map<String, dynamic> _travelGroupJson() {
+  return {
+    'id': 'group-1',
+    'kind': 'travel',
+    'groupNo': 'TG20260630001',
+    'visitDate': '2026-06-30',
+    'travelAgency': '测试旅行社',
+    'guideName': '李导',
+    'guestCount': 20,
+    'status': 'unmarked',
+    'financeMark': false,
+    'tastingItems': const [],
+    'salesOrders': const [],
+    'orderSummary': const {
+      'orderCount': 0,
+      'totalAmountCents': 0,
+      'cashOnDeliveryAmountCents': 0,
+    },
   };
 }
 

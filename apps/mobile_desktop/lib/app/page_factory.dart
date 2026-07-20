@@ -49,7 +49,7 @@ Widget buildPageForDestination({
         onOpenDestination: onOpenDestination,
       );
     case 'travel_group_form':
-      return TravelGroupFormPage(apiClient: apiClient, token: token);
+      return TravelGroupFormPage(apiClient: apiClient, token: token, role: role);
     case 'travel_group_query':
       return TravelGroupQueryPage(
         apiClient: apiClient,
@@ -58,17 +58,25 @@ Widget buildPageForDestination({
         currentUserId: currentUserId,
       );
     case 'travel_group_finance_supplement':
-      return const TravelGroupFinanceSupplementPage();
+      return TravelGroupFinanceSupplementPage(
+        apiClient: apiClient,
+        token: token,
+      );
     case 'travel_group_order_notes':
       return TravelGroupOrderNotesPage(apiClient: apiClient, token: token);
     case 'order_form':
-      return OrderFormPage(apiClient: apiClient, token: token);
+      return OrderFormPage(apiClient: apiClient, token: token, role: role);
     case 'order_query':
       return OrderQueryPage(apiClient: apiClient, token: token, role: role);
     case 'qr_sales_sheet':
       return QrSalesSheetPage(apiClient: apiClient, token: token);
     case 'taster_summary':
-      return const TasterSummaryPage();
+      return TasterSummaryPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        currentUserId: currentUserId,
+      );
     case 'taster_commissions':
       return TasterCommissionPage(apiClient: apiClient, token: token);
     case 'finance_query':

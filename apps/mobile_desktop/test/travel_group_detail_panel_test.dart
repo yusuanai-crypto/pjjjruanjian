@@ -71,8 +71,10 @@ void main() {
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '总结'), findsNothing);
     expect(find.widgetWithText(TextButton, '删除'), findsNothing);
-    expect(find.text('财务标记'), findsOneWidget);
-    expect(find.text('未标记'), findsAtLeastNWidgets(1));
+    expect(find.text('财务标记'), findsNothing);
+    expect(find.text('未标记'), findsNothing);
+    expect(find.text('超过当日未标记'), findsNothing);
+    expect(find.text('超过当日待处理'), findsOneWidget);
   });
 }
 

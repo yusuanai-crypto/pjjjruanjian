@@ -296,6 +296,75 @@ test('unit: stage7 agency matching falls back to agencyName text rules with warn
   assert.equal(result.ruleSnapshot.agencyRebateRule.id, 'rebate-text-rule');
 });
 
+test('unit: agency deduction effective_sales_rate uses 30 percent of effective sales', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        travelGroup: {
+          ...buildOrder().travelGroup,
+          liquorCostDeductionCents: 999999,
+        },
+      },
+      agencyDeductionRules: [
+        agencyDeductionRule({
+          id: 'agency-effective-rate-rule',
+          calculationMode: 'effective_sales_rate',
+          productId: null,
+          productName: '',
+          deductionCostCents: 999999,
+          deductionRate: '0.3000',
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(result.agencyDeduction.calculationMode, 'effective_sales_rate');
+  assert.equal(result.amounts.effectiveAmountCents, 900000);
+  assert.equal(result.amounts.agencyDeductionAmountCents, 270000);
+  assert.equal(result.amounts.agencyBaseAmountCents, 630000);
+  assert.equal(result.ruleSnapshot.agencyDeductionRules[0].deductionRate, '0.3000');
+  assert.equal(result.ruleSnapshot.agencyDeductionRules[0].deductionAmountCents, 270000);
+});
+
+test('unit: agency deduction manual_product_reference reads manual liquor cost instead of summing products', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        travelGroup: {
+          ...buildOrder().travelGroup,
+          liquorCostDeductionCents: 12345,
+        },
+        items: [
+          {
+            id: 'item-manual-reference',
+            productName: 'stage7 test sauce A',
+            quantity: 10,
+            unitPriceCents: 100000,
+            subtotalCents: 1000000,
+          },
+        ],
+      },
+      agencyDeductionRules: [
+        agencyDeductionRule({
+          id: 'agency-manual-reference-rule',
+          productName: 'stage7 test sauce A',
+          deductionCostCents: 77777,
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(result.agencyDeduction.calculationMode, 'manual_product_reference');
+  assert.equal(result.agencyDeduction.items[0].referenceAmountCents, 777770);
+  assert.equal(result.agencyDeduction.items[0].deductionAmountCents, 0);
+  assert.equal(result.amounts.agencyDeductionAmountCents, 12345);
+  assert.equal(result.amounts.agencyBaseAmountCents, 887655);
+  assert.equal(
+    result.ruleSnapshot.agencyDeductionRules[0].manualInputDeductionCents,
+    12345,
+  );
+});
+
 test('unit: stage7 calculation uses rules effective on the order date', () => {
   const result = calculateStage7CommissionAndPoints(
     buildCalculationInput({
@@ -373,6 +442,10 @@ test('unit: stage7 percentage calculations round half up to cents', () => {
     buildCalculationInput({
       salesOrder: {
         totalAmountCents: 333,
+        travelGroup: {
+          ...buildOrder().travelGroup,
+          liquorCostDeductionCents: 0,
+        },
         items: [
           {
             id: 'item-rounding',
@@ -714,6 +787,7 @@ function buildOrder() {
       tasterId: 'user-taster',
       tasterName: 'stage7 test taster',
       financeMark: true,
+      liquorCostDeductionCents: 120000,
     },
     items: [
       {
@@ -780,6 +854,8 @@ function agencyDeductionRule(overrides = {}) {
       Object.prototype.hasOwnProperty.call(overrides, 'agencyName')
         ? overrides.agencyName
         : 'stage7 test agency',
+    calculationMode: overrides.calculationMode || 'manual_product_reference',
+    deductionRate: overrides.deductionRate || '0.3000',
   };
 }
 

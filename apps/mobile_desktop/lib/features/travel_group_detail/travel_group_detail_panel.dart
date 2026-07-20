@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
@@ -38,16 +39,20 @@ class TravelGroupDetailPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final markAction = onFinanceMark;
+    final showFinanceMark = canViewFinanceMark(role);
+    final markAction = showFinanceMark ? onFinanceMark : null;
     final summaryAction = onSummary;
     final editAction = onEdit;
 
     return FormSection(
       title: '旅行团详情',
-      trailing: StatusTag(
-        label: group.financeMark ? '已标记' : '未标记',
-        tone: group.financeMark ? StatusTone.success : StatusTone.warning,
-      ),
+      trailing: showFinanceMark
+          ? StatusTag(
+              label: group.financeMark ? '已标记' : '未标记',
+              tone:
+                  group.financeMark ? StatusTone.success : StatusTone.warning,
+            )
+          : null,
       children: [
         Wrap(
           alignment: WrapAlignment.end,
@@ -181,7 +186,10 @@ class TravelGroupDetailPanel extends StatelessWidget {
             children: [
               for (final reason in group.pendingReasons)
                 StatusTag(
-                  label: _pendingReasonLabel(reason),
+                  label: _pendingReasonLabel(
+                    reason,
+                    showFinanceMark: showFinanceMark,
+                  ),
                   tone: StatusTone.info,
                 ),
             ],
@@ -226,11 +234,13 @@ class TravelGroupDetailPanel extends StatelessWidget {
                 ],
               ),
             ),
-        const Divider(height: 24),
-        const _SectionTitle('财务标记'),
-        _InfoRow(label: '状态', value: group.financeMark ? '已标记' : '未标记'),
-        _InfoRow(label: '标记人', value: group.markedById),
-        _InfoRow(label: '标记时间', value: group.markedAt),
+        if (showFinanceMark) ...[
+          const Divider(height: 24),
+          const _SectionTitle('财务标记'),
+          _InfoRow(label: '状态', value: group.financeMark ? '已标记' : '未标记'),
+          _InfoRow(label: '标记人', value: group.markedById),
+          _InfoRow(label: '标记时间', value: group.markedAt),
+        ],
       ],
     );
   }
@@ -558,7 +568,7 @@ StatusTone _pendingStatusTone(String? status) {
   }
 }
 
-String _pendingReasonLabel(String reason) {
+String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
   switch (reason) {
     case 'missing_taster':
       return '缺少品鉴师';
@@ -575,7 +585,7 @@ String _pendingReasonLabel(String reason) {
     case 'no_order_and_missing_taster_summary':
       return '无订单且未总结';
     case 'finance_unmarked_after_day_end':
-      return '超过当日未标记';
+      return showFinanceMark ? '超过当日未标记' : '超过当日待处理';
     case 'duplicate_group_no':
       return '团号重复';
     case 'departure_before_arrival':

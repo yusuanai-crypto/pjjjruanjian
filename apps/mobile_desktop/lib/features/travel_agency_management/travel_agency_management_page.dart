@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -8,6 +10,10 @@ import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
+
+const _agencyDeductionModeEffectiveSalesRate = 'effective_sales_rate';
+const _agencyDeductionModeManualProductReference = 'manual_product_reference';
+const _defaultAgencyDeductionRate = '0.3000';
 
 class TravelAgencyManagementPage extends StatefulWidget {
   const TravelAgencyManagementPage({
@@ -217,6 +223,10 @@ class _TravelAgencyManagementPageState
     }
   }
 
+  Future<void> _openRebateBatchImportDialog() async {
+    await _openBatchImportDialog(_TravelAgencyRuleImportKind.rebate);
+  }
+
   Future<void> _openDeductionDialog({AgencyDeductionRuleRecord? rule}) async {
     final agency = _selectedAgency;
     if (agency == null) {
@@ -233,6 +243,39 @@ class _TravelAgencyManagementPageState
     if (saved == true) {
       await _loadRulesForAgency(agency);
     }
+  }
+
+  Future<void> _openDeductionBatchImportDialog() async {
+    await _openBatchImportDialog(_TravelAgencyRuleImportKind.deduction);
+  }
+
+  Future<void> _openBatchImportDialog(_TravelAgencyRuleImportKind kind) async {
+    final agency = _selectedAgency;
+    if (agency == null) {
+      return;
+    }
+    final result = await showDialog<Stage7RuleImportResult>(
+      context: context,
+      builder: (context) => _TravelAgencyRuleImportDialog(
+        businessApi: _businessApi,
+        agency: agency,
+        kind: kind,
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    await _loadRulesForAgency(agency);
+    if (!mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _TravelAgencyRuleImportResultDialog(
+        kind: kind,
+        result: result,
+      ),
+    );
   }
 
   Future<void> _disableRebateRule(AgencyRebateRuleRecord rule) async {
@@ -448,11 +491,23 @@ class _TravelAgencyManagementPageState
   Widget _buildRebateRulesSection() {
     return FormSection(
       title: '日返 / 月返规则',
-      trailing: FilledButton.icon(
-        key: const ValueKey('travel-agency-rebate-add-button'),
-        onPressed: _loadingRules ? null : () => _openRebateDialog(),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('新增返点规则'),
+      trailing: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            key: const ValueKey('travel-agency-rebate-batch-add-button'),
+            onPressed: _loadingRules ? null : _openRebateBatchImportDialog,
+            icon: const Icon(Icons.upload_file_rounded),
+            label: const Text('批量增加'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('travel-agency-rebate-add-button'),
+            onPressed: _loadingRules ? null : () => _openRebateDialog(),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('新增返点规则'),
+          ),
+        ],
       ),
       children: [
         if (_loadingRules && _rebateRules.isEmpty)
@@ -506,11 +561,23 @@ class _TravelAgencyManagementPageState
   Widget _buildDeductionRulesSection() {
     return FormSection(
       title: '扣酒成本规则',
-      trailing: FilledButton.icon(
-        key: const ValueKey('travel-agency-deduction-add-button'),
-        onPressed: _loadingRules ? null : () => _openDeductionDialog(),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('新增扣酒规则'),
+      trailing: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            key: const ValueKey('travel-agency-deduction-batch-add-button'),
+            onPressed: _loadingRules ? null : _openDeductionBatchImportDialog,
+            icon: const Icon(Icons.upload_file_rounded),
+            label: const Text('批量增加'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('travel-agency-deduction-add-button'),
+            onPressed: _loadingRules ? null : () => _openDeductionDialog(),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('新增扣酒规则'),
+          ),
+        ],
       ),
       children: [
         if (_loadingRules && _deductionRules.isEmpty)
@@ -522,8 +589,9 @@ class _TravelAgencyManagementPageState
             scrollDirection: Axis.horizontal,
             child: DataTable(
               columns: const [
+                DataColumn(label: Text('计算方式')),
                 DataColumn(label: Text('商品')),
-                DataColumn(label: Text('扣酒成本')),
+                DataColumn(label: Text('参考扣酒成本')),
                 DataColumn(label: Text('生效日期')),
                 DataColumn(label: Text('状态')),
                 DataColumn(label: Text('备注')),
@@ -533,8 +601,9 @@ class _TravelAgencyManagementPageState
                 for (final rule in _deductionRules)
                   DataRow(
                     cells: [
-                      DataCell(Text(rule.productName)),
-                      DataCell(MoneyText(cents: rule.deductionCostCents)),
+                      DataCell(Text(_agencyDeductionModeLabel(rule))),
+                      DataCell(Text(_deductionProductLabel(rule))),
+                      DataCell(_deductionCostCell(rule)),
                       DataCell(Text(_dateRangeLabel(
                         rule.effectiveFrom,
                         rule.effectiveTo,
@@ -934,6 +1003,7 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
   late final TextEditingController _effectiveFromController;
   late final TextEditingController _effectiveToController;
   late final TextEditingController _notesController;
+  late String _calculationMode;
   late bool _isActive;
   bool _saving = false;
   String? _errorMessage;
@@ -944,11 +1014,15 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
   String? _productOptionsError;
 
   bool get _editing => widget.rule != null;
+  bool get _isManualReferenceMode =>
+      _calculationMode == _agencyDeductionModeManualProductReference;
 
   @override
   void initState() {
     super.initState();
     final rule = widget.rule;
+    _calculationMode =
+        rule?.calculationMode ?? _agencyDeductionModeManualProductReference;
     _productId = rule?.productId;
     _productSnapshotName = rule?.productName;
     _costController = TextEditingController(
@@ -1011,40 +1085,64 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
               Text(widget.agency.name,
                   style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 12),
+              SegmentedButton<String>(
+                key: const ValueKey('travel-agency-deduction-mode-field'),
+                segments: const [
+                  ButtonSegment<String>(
+                    value: _agencyDeductionModeEffectiveSalesRate,
+                    icon: Icon(Icons.percent_rounded),
+                    label: Text('有效销售额 × 30%'),
+                  ),
+                  ButtonSegment<String>(
+                    value: _agencyDeductionModeManualProductReference,
+                    icon: Icon(Icons.inventory_2_rounded),
+                    label: Text('商品参考，人工录入'),
+                  ),
+                ],
+                selected: {_calculationMode},
+                onSelectionChanged: _saving
+                    ? null
+                    : (values) => setState(() {
+                          _calculationMode = values.first;
+                        }),
+              ),
+              const SizedBox(height: 12),
               ResponsiveFormGrid(
                 minItemWidth: 180,
                 children: [
-                  ProductOptionPickerField(
-                    key:
-                        const ValueKey('travel-agency-deduction-product-field'),
-                    options: _productOptions,
-                    loading: _loadingProductOptions,
-                    loadError: _productOptionsError,
-                    productId: _productId,
-                    snapshotName: _productSnapshotName,
-                    snapshotUnit: null,
-                    onRetry: _loadProductOptions,
-                    onChanged: (product) => setState(() {
-                      _productId = product.id;
-                      _productSnapshotName = product.name;
-                    }),
-                  ),
-                  TextFormField(
-                    key: const ValueKey('travel-agency-deduction-cost-field'),
-                    controller: _costController,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: '扣酒成本（元）',
-                      prefixText: '￥ ',
+                  if (_isManualReferenceMode) ...[
+                    ProductOptionPickerField(
+                      key: const ValueKey(
+                          'travel-agency-deduction-product-field'),
+                      options: _productOptions,
+                      loading: _loadingProductOptions,
+                      loadError: _productOptionsError,
+                      productId: _productId,
+                      snapshotName: _productSnapshotName,
+                      snapshotUnit: null,
+                      onRetry: _loadProductOptions,
+                      onChanged: (product) => setState(() {
+                        _productId = product.id;
+                        _productSnapshotName = product.name;
+                      }),
                     ),
-                    validator: (value) {
-                      if (_parseMoneyCents(value) == null) {
-                        return '请填写正确金额';
-                      }
-                      return null;
-                    },
-                  ),
+                    TextFormField(
+                      key: const ValueKey('travel-agency-deduction-cost-field'),
+                      controller: _costController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: '参考扣酒成本（元）',
+                        prefixText: '￥ ',
+                      ),
+                      validator: (value) {
+                        if (_parseMoneyCents(value) == null) {
+                          return '请填写正确金额';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
                   TextFormField(
                     key: const ValueKey('travel-agency-deduction-from-field'),
                     controller: _effectiveFromController,
@@ -1101,9 +1199,16 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
-    final costCents = _parseMoneyCents(_costController.text);
-    if (costCents == null) {
-      return;
+    final costCents =
+        _isManualReferenceMode ? _parseMoneyCents(_costController.text) : 0;
+    if (_isManualReferenceMode) {
+      if ((_productId ?? '').trim().isEmpty) {
+        setState(() => _errorMessage = '请选择商品');
+        return;
+      }
+      if (costCents == null) {
+        return;
+      }
     }
     setState(() {
       _saving = true;
@@ -1112,13 +1217,19 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
     try {
       final body = <String, dynamic>{
         'agencyId': widget.agency.id,
-        'productId': _productId,
-        'deductionCostCents': costCents,
+        'calculationMode': _calculationMode,
         'effectiveFrom': _effectiveFromController.text.trim(),
         'effectiveTo': _nullableText(_effectiveToController.text),
         'isActive': _isActive,
         'notes': _nullableText(_notesController.text),
       };
+      if (_isManualReferenceMode) {
+        body
+          ..['productId'] = _productId
+          ..['deductionCostCents'] = costCents;
+      } else {
+        body['deductionRate'] = _defaultAgencyDeductionRate;
+      }
       if (widget.rule == null) {
         await widget.businessApi.createAgencyDeductionRule(body);
       } else {
@@ -1138,6 +1249,244 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
         _errorMessage = _messageForError(error);
       });
     }
+  }
+}
+
+enum _TravelAgencyRuleImportKind {
+  rebate,
+  deduction;
+
+  String get label {
+    switch (this) {
+      case _TravelAgencyRuleImportKind.rebate:
+        return '日返 / 月返规则';
+      case _TravelAgencyRuleImportKind.deduction:
+        return '扣酒成本规则';
+    }
+  }
+}
+
+class _TravelAgencyRuleImportDialog extends StatefulWidget {
+  const _TravelAgencyRuleImportDialog({
+    required this.businessApi,
+    required this.agency,
+    required this.kind,
+  });
+
+  final BusinessApi businessApi;
+  final TravelAgencyRecord agency;
+  final _TravelAgencyRuleImportKind kind;
+
+  @override
+  State<_TravelAgencyRuleImportDialog> createState() =>
+      _TravelAgencyRuleImportDialogState();
+}
+
+class _TravelAgencyRuleImportDialogState
+    extends State<_TravelAgencyRuleImportDialog> {
+  final _jsonController = TextEditingController();
+  bool _importing = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _jsonController.text = _importExample(widget.kind);
+  }
+
+  @override
+  void dispose() {
+    _jsonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('批量增加${widget.kind.label}'),
+      content: SizedBox(
+        width: 680,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(widget.agency.name,
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            if (_errorMessage != null) ...[
+              _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              '粘贴 JSON 数组，或 { "rules": [...] }。系统会自动补当前旅行社。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('travel-agency-rule-import-json-field'),
+              controller: _jsonController,
+              minLines: 10,
+              maxLines: 16,
+              decoration: const InputDecoration(
+                labelText: 'JSON 规则数据',
+                alignLabelWithHint: true,
+              ),
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _importing ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('travel-agency-rule-import-submit-button'),
+          onPressed: _importing ? null : _submit,
+          icon: _importing
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.upload_file_rounded),
+          label: Text(_importing ? '导入中' : '导入'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submit() async {
+    final rules = _parseRules();
+    if (rules == null) {
+      return;
+    }
+    setState(() {
+      _importing = true;
+      _errorMessage = null;
+    });
+    try {
+      final result = widget.kind == _TravelAgencyRuleImportKind.rebate
+          ? await widget.businessApi.importAgencyRebateRules(rules)
+          : await widget.businessApi.importAgencyDeductionRules(rules);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(result);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _importing = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  List<Map<String, dynamic>>? _parseRules() {
+    try {
+      final decoded = jsonDecode(_jsonController.text.trim());
+      final rawRules = decoded is Map ? decoded['rules'] : decoded;
+      if (rawRules is! List) {
+        setState(() => _errorMessage = 'JSON 必须是数组，或包含 rules 数组。');
+        return null;
+      }
+      final rules = rawRules
+          .whereType<Map>()
+          .map((item) => item.map((key, value) => MapEntry('$key', value)))
+          .toList();
+      if (rules.length != rawRules.length || rules.isEmpty) {
+        setState(() => _errorMessage = '每一行规则都必须是对象，且至少包含一行。');
+        return null;
+      }
+      for (final rule in rules) {
+        rule
+          ..['agencyId'] = widget.agency.id
+          ..['agencyName'] = widget.agency.name;
+        if (widget.kind == _TravelAgencyRuleImportKind.deduction) {
+          final mode = _normalizeDeductionMode(rule['calculationMode']);
+          rule['calculationMode'] = mode;
+          if (mode == _agencyDeductionModeEffectiveSalesRate) {
+            rule
+              ..['deductionRate'] =
+                  '${rule['deductionRate'] ?? _defaultAgencyDeductionRate}'
+              ..remove('productId')
+              ..remove('productName')
+              ..remove('unit')
+              ..remove('deductionCostCents');
+          } else {
+            if ('${rule['productId'] ?? ''}'.trim().isEmpty) {
+              setState(() => _errorMessage = '商品参考模式必须提供 productId。');
+              return null;
+            }
+            rule
+              ..remove('productName')
+              ..remove('unit')
+              ..remove('actualUnitCostCents')
+              ..remove('actualCostSubtotalCents');
+          }
+        }
+      }
+      return rules;
+    } on FormatException catch (error) {
+      setState(() => _errorMessage = 'JSON 格式错误：${error.message}');
+      return null;
+    }
+  }
+}
+
+class _TravelAgencyRuleImportResultDialog extends StatelessWidget {
+  const _TravelAgencyRuleImportResultDialog({
+    required this.kind,
+    required this.result,
+  });
+
+  final _TravelAgencyRuleImportKind kind;
+  final Stage7RuleImportResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final failures = result.results.where((item) => !item.success).toList();
+    return AlertDialog(
+      title: Text('${kind.label}导入结果'),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            StatusTag(
+              label: '成功 ${result.successCount} / 失败 ${result.failureCount}',
+              tone: result.failureCount == 0
+                  ? StatusTone.success
+                  : StatusTone.warning,
+            ),
+            const SizedBox(height: 12),
+            Text('总行数：${result.totalCount}'),
+            if (failures.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              for (final failure in failures.take(6))
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.error_outline_rounded),
+                  title: Text(
+                      '第 ${failure.rowNumber} 行：${failure.errorCode ?? 'ERROR'}'),
+                  subtitle: Text(failure.errorMessage ?? '导入失败'),
+                ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          key: const ValueKey('travel-agency-rule-import-result-close-button'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('知道了'),
+        ),
+      ],
+    );
   }
 }
 
@@ -1219,6 +1568,27 @@ Widget _ruleStatusTag(dynamic rule) {
     return const StatusTag(label: '当前生效', tone: StatusTone.success);
   }
   return const StatusTag(label: '未生效', tone: StatusTone.warning);
+}
+
+String _agencyDeductionModeLabel(AgencyDeductionRuleRecord rule) {
+  if (rule.calculationMode == _agencyDeductionModeEffectiveSalesRate) {
+    return '有效销售额 × 30%';
+  }
+  return '商品参考，人工录入';
+}
+
+String _deductionProductLabel(AgencyDeductionRuleRecord rule) {
+  if (rule.calculationMode == _agencyDeductionModeEffectiveSalesRate) {
+    return '-';
+  }
+  return _display(rule.productName);
+}
+
+Widget _deductionCostCell(AgencyDeductionRuleRecord rule) {
+  if (rule.calculationMode == _agencyDeductionModeEffectiveSalesRate) {
+    return Text('有效销售额 × ${_ratePercent(rule.deductionRate)}');
+  }
+  return MoneyText(cents: rule.deductionCostCents);
 }
 
 class _InfoLine extends StatelessWidget {
@@ -1448,6 +1818,43 @@ String _moneyInputText(int cents) {
     return '${cents ~/ 100}';
   }
   return (cents / 100).toStringAsFixed(2);
+}
+
+String _normalizeDeductionMode(Object? value) {
+  final text = '${value ?? ''}'.trim();
+  if (text == _agencyDeductionModeEffectiveSalesRate) {
+    return _agencyDeductionModeEffectiveSalesRate;
+  }
+  return _agencyDeductionModeManualProductReference;
+}
+
+String _importExample(_TravelAgencyRuleImportKind kind) {
+  switch (kind) {
+    case _TravelAgencyRuleImportKind.rebate:
+      return const JsonEncoder.withIndent('  ').convert([
+        {
+          'dailyRebateRate': '0.0300',
+          'monthlyRebateRate': '0.0200',
+          'effectiveFrom': '2026-07-01',
+          'notes': 'batch import',
+        }
+      ]);
+    case _TravelAgencyRuleImportKind.deduction:
+      return const JsonEncoder.withIndent('  ').convert([
+        {
+          'calculationMode': 'effective_sales_rate',
+          'effectiveFrom': '2026-07-01',
+          'notes': 'effective sales amount * 30%',
+        },
+        {
+          'calculationMode': 'manual_product_reference',
+          'productId': 'replace-with-active-product-id',
+          'deductionCostCents': 800,
+          'effectiveFrom': '2026-07-01',
+          'notes': 'manual input reference',
+        }
+      ]);
+  }
 }
 
 String _messageForError(Object error) {

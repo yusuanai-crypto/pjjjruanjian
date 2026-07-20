@@ -60,7 +60,7 @@ void main() {
   test('normalizes API base URLs before they are stored on the client', () {
     expect(AppConfig.normalizeApiBaseUrl(''), AppConfig.defaultApiBaseUrl);
     expect(AppConfig.normalizeApiBaseUrl(' 127.0.0.1:3000/ '),
-        'http://127.0.0.1:3000');
+        'https://127.0.0.1:3000');
     expect(AppConfig.normalizeApiBaseUrl('https://api.example.com/v1/'),
         'https://api.example.com/v1');
   });
@@ -91,7 +91,7 @@ void main() {
     expect(
       adminIds,
       containsAll([
-        'role_menu',
+        'employee_accounts',
         'travel_group_form',
         'travel_group_query',
         'travel_agency_management',
@@ -116,6 +116,7 @@ void main() {
         'finance_workspace',
         'commissions',
         'commission_rules',
+        'after_sales_orders',
         'travel_agency_management',
         'product_management',
       ],
@@ -127,6 +128,7 @@ void main() {
         'order_query',
         'finance_query',
         'commission_rules',
+        'after_sales_form',
         'travel_agency_management',
         'product_management',
         'analytics',
@@ -152,10 +154,10 @@ void main() {
         'travel_group_order_notes',
         'order_form',
         'order_query',
-        'after_sales_form',
       ]),
     );
     expect(salesIds, isNot(contains('pending_travel_groups')));
+    expect(salesIds, isNot(contains('after_sales_form')));
 
     final bossIds = _destinationIds(
       [
@@ -172,14 +174,54 @@ void main() {
       bossIds,
       containsAll([
         'order_query',
-        'after_sales_form',
-        'finance_query',
-        'warehouse_packing',
         'analytics',
       ]),
     );
+    expect(bossIds, isNot(contains('after_sales_form')));
+    expect(bossIds, isNot(contains('finance_query')));
+    expect(bossIds, isNot(contains('reconciliation_table')));
+    expect(bossIds, isNot(contains('warehouse_packing')));
     expect(bossIds, isNot(contains('commission_rules')));
     expect(bossIds, isNot(contains('taster_commissions')));
+
+    final warehouseIds = _destinationIds(
+      [
+        'travel_group_query',
+        'order_query',
+        'warehouse_workspace',
+        'after_sales_orders',
+      ],
+      UserRole.warehouse,
+    );
+    expect(
+      warehouseIds,
+      containsAll([
+        'travel_group_query',
+        'order_query',
+        'warehouse_packing',
+        'after_sales_form',
+      ]),
+    );
+
+    final afterSalesIds = _destinationIds(
+      ['travel_group_query', 'order_query', 'after_sales_orders', 'analytics'],
+      UserRole.afterSales,
+    );
+    expect(
+      afterSalesIds,
+      containsAll([
+        'travel_group_query',
+        'order_query',
+        'after_sales_form',
+        'analytics',
+      ]),
+    );
+
+    final tasterIds = _destinationIds(
+      ['travel_group_query', 'order_query', 'own_taster_receptions'],
+      UserRole.taster,
+    );
+    expect(tasterIds, containsAll(['travel_group_query', 'order_query']));
 
     final financeRuleIds = _destinationIds(
       ['commission_rules'],
@@ -215,7 +257,6 @@ void main() {
     for (final role in [
       UserRole.sales,
       UserRole.warehouse,
-      UserRole.afterSales,
       UserRole.frontDesk,
     ]) {
       final ids = _destinationIds(
@@ -231,8 +272,11 @@ void main() {
 
   test('phase 6 and 7 role menus expose only allowed business entries', () {
     expect(_roleIds(UserRole.afterSales), contains('after_sales_form'));
+    expect(_roleIds(UserRole.afterSales), contains('travel_group_query'));
+    expect(_roleIds(UserRole.afterSales), contains('analytics'));
     expect(_roleIds(UserRole.afterSales), contains('order_query'));
     expect(_roleIds(UserRole.finance), contains('finance_query'));
+    expect(_roleIds(UserRole.finance), contains('after_sales_form'));
     expect(_roleIds(UserRole.finance), contains('commission_rules'));
     expect(_roleIds(UserRole.finance), contains('travel_agency_management'));
     expect(_roleIds(UserRole.finance), contains('product_management'));
@@ -241,22 +285,24 @@ void main() {
     expect(_roleIds(UserRole.admin), contains('travel_agency_management'));
     expect(_roleIds(UserRole.admin), contains('product_management'));
     expect(_roleIds(UserRole.admin), contains('analytics'));
-    expect(_roleIds(UserRole.boss), contains('finance_query'));
     expect(_roleIds(UserRole.boss), contains('analytics'));
+    expect(_roleIds(UserRole.boss), isNot(contains('after_sales_form')));
+    expect(_roleIds(UserRole.boss), isNot(contains('finance_query')));
+    expect(_roleIds(UserRole.boss), isNot(contains('reconciliation_table')));
+    expect(_roleIds(UserRole.boss), isNot(contains('warehouse_packing')));
     expect(_roleIds(UserRole.boss), isNot(contains('commission_rules')));
     expect(
         _roleIds(UserRole.boss), isNot(contains('travel_agency_management')));
     expect(_roleIds(UserRole.boss), isNot(contains('taster_commissions')));
     expect(_roleIds(UserRole.taster), contains('taster_commissions'));
     expect(_roleIds(UserRole.taster), contains('travel_group_query'));
+    expect(_roleIds(UserRole.taster), contains('order_query'));
     expect(_roleIds(UserRole.taster), contains('taster_summary'));
     expect(_roleIds(UserRole.finance), contains('analytics'));
     expect(_roleIds(UserRole.warehouse), contains('warehouse_packing'));
-    expect(
-        _roleIds(UserRole.boss),
-        containsAll(
-            ['after_sales_form', 'finance_query', 'warehouse_packing']));
-    expect(_roleIds(UserRole.sales), contains('after_sales_form'));
+    expect(_roleIds(UserRole.warehouse), contains('travel_group_query'));
+    expect(_roleIds(UserRole.warehouse), contains('after_sales_form'));
+    expect(_roleIds(UserRole.sales), isNot(contains('after_sales_form')));
 
     for (final role in [UserRole.frontDesk, UserRole.taster]) {
       expect(_roleIds(role), isNot(contains('after_sales_form')));
@@ -281,13 +327,15 @@ void main() {
     for (final role in [
       UserRole.sales,
       UserRole.warehouse,
-      UserRole.afterSales,
       UserRole.frontDesk,
     ]) {
       expect(_roleIds(role), isNot(contains('finance_query')));
       expect(_roleIds(role), isNot(contains('taster_commissions')));
       expect(_roleIds(role), isNot(contains('analytics')));
     }
+    expect(_roleIds(UserRole.afterSales), isNot(contains('finance_query')));
+    expect(
+        _roleIds(UserRole.afterSales), isNot(contains('taster_commissions')));
   });
 
   test('pending travel groups has no destination or role menu entry', () {
@@ -309,15 +357,22 @@ void main() {
       _roleIds(UserRole.taster),
       containsAll([
         'travel_group_query',
+        'order_query',
         'taster_summary',
         'taster_commissions',
       ]),
     );
   });
 
-  testWidgets('analytics menu is visible only to admin boss and finance',
+  testWidgets(
+      'analytics menu is visible only to admin boss finance and after sales',
       (_) async {
-    for (final role in [UserRole.admin, UserRole.boss, UserRole.finance]) {
+    for (final role in [
+      UserRole.admin,
+      UserRole.boss,
+      UserRole.finance,
+      UserRole.afterSales,
+    ]) {
       expect(_roleIds(role), contains('analytics'));
       expect(_destinationIds(['analytics'], role), contains('analytics'));
     }
@@ -325,7 +380,6 @@ void main() {
     for (final role in [
       UserRole.sales,
       UserRole.warehouse,
-      UserRole.afterSales,
       UserRole.frontDesk,
       UserRole.taster,
     ]) {

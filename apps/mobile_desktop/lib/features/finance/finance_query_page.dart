@@ -821,16 +821,23 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
             child: DataTable(
               columns: const [
                 DataColumn(label: Text('旅行团')),
+                DataColumn(label: Text('日期')),
                 DataColumn(label: Text('旅行社')),
-                DataColumn(label: Text('总销售额')),
-                DataColumn(label: Text('已确认退款')),
-                DataColumn(label: Text('有效销售额')),
-                DataColumn(label: Text('总扣酒成本')),
-                DataColumn(label: Text('总上单金额')),
-                DataColumn(label: Text('日返')),
-                DataColumn(label: Text('月返')),
-                DataColumn(label: Text('已返')),
-                DataColumn(label: Text('未返')),
+                DataColumn(label: Text('导游')),
+                DataColumn(label: Text('车牌')),
+                DataColumn(label: Text('人数')),
+                DataColumn(label: Text('品鉴师')),
+                DataColumn(label: Text('销售额')),
+                DataColumn(label: Text('货到付款')),
+                DataColumn(label: Text('已付定金')),
+                DataColumn(label: Text('扣酒成本')),
+                DataColumn(label: Text('上单金额')),
+                DataColumn(label: Text('积分/日返积分')),
+                DataColumn(label: Text('已返积分')),
+                DataColumn(label: Text('未返积分')),
+                DataColumn(label: Text('月返积分')),
+                DataColumn(label: Text('已返月返积分')),
+                DataColumn(label: Text('未返月返积分')),
                 DataColumn(label: Text('确认状态')),
                 DataColumn(label: Text('操作')),
               ],
@@ -847,21 +854,32 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
                           child: Text(_summaryTravelGroupNo(summary)),
                         ),
                       ),
+                      DataCell(
+                        Text(_fieldValue(summary.travelGroup?.visitDate)),
+                      ),
                       DataCell(Text(_summaryAgencyName(summary))),
+                      DataCell(Text(_summaryGuideName(summary))),
+                      DataCell(
+                        Text(_fieldValue(summary.travelGroup?.licensePlate)),
+                      ),
+                      DataCell(Text('${summary.travelGroup?.guestCount ?? 0}')),
+                      DataCell(
+                        Text(_fieldValue(summary.travelGroup?.tasterName)),
+                      ),
                       DataCell(
                         Text(formatMoneyCents(summary.totalSalesAmountCents)),
                       ),
                       DataCell(
                         Text(
                           formatMoneyCents(
-                            summary.confirmedRefundAmountCents,
+                            summary.totalCashOnDeliveryCents,
                           ),
                         ),
                       ),
                       DataCell(
                         Text(
                           formatMoneyCents(
-                            summary.effectiveSalesAmountCents,
+                            summary.totalPaidDepositCents,
                           ),
                         ),
                       ),
@@ -885,13 +903,33 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
                         ),
                       ),
                       DataCell(
+                        _rebatePaymentButton(
+                          summary,
+                          rebateType: 'daily',
+                          isPaid: summary.dailyRebatePaid,
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          formatMoneyCents(_dailyUnpaidRebateCents(summary)),
+                        ),
+                      ),
+                      DataCell(
                         Text(
                           formatMoneyCents(summary.totalMonthlyRebateCents),
                         ),
                       ),
-                      DataCell(Text(formatMoneyCents(summary.paidRebateCents))),
                       DataCell(
-                        Text(formatMoneyCents(summary.unpaidRebateCents)),
+                        _rebatePaymentButton(
+                          summary,
+                          rebateType: 'monthly',
+                          isPaid: summary.monthlyRebatePaid,
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          formatMoneyCents(_monthlyUnpaidRebateCents(summary)),
+                        ),
                       ),
                       DataCell(_summaryConfirmTag(summary)),
                       DataCell(_summaryActions(summary)),
@@ -901,6 +939,64 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _rebatePaymentButton(
+    TravelGroupFinanceSummaryRecord summary, {
+    required String rebateType,
+    required bool isPaid,
+  }) {
+    final updating = _updatingSummaryTravelGroupId == summary.travelGroupId;
+    if (!_canManageTravelGroupFinanceSummary) {
+      return StatusTag(
+        label: isPaid ? '已返' : '未返',
+        tone: isPaid ? StatusTone.success : StatusTone.warning,
+      );
+    }
+    final isDaily = rebateType == 'daily';
+    final keyPrefix = isDaily ? 'daily' : 'monthly';
+    final tooltip = isPaid
+        ? (isDaily ? '取消日返已返' : '取消月返已返')
+        : (isDaily ? '标记日返已返' : '标记月返已返');
+    final icon = isPaid ? Icons.undo_rounded : Icons.payments_rounded;
+    final label = isPaid ? '已返' : '标记已返';
+    return Tooltip(
+      message: tooltip,
+      child: SizedBox(
+        width: 124,
+        child: isPaid
+            ? FilledButton.icon(
+                key: ValueKey(
+                  'finance-summary-$keyPrefix-rebate-paid-'
+                  '${summary.travelGroupId}',
+                ),
+                onPressed: updating
+                    ? null
+                    : () => _setRebatePaymentStatus(
+                          summary,
+                          rebateType: rebateType,
+                          isPaid: false,
+                        ),
+                icon: Icon(icon, size: 16),
+                label: Text(label),
+              )
+            : OutlinedButton.icon(
+                key: ValueKey(
+                  'finance-summary-$keyPrefix-rebate-paid-'
+                  '${summary.travelGroupId}',
+                ),
+                onPressed: updating
+                    ? null
+                    : () => _setRebatePaymentStatus(
+                          summary,
+                          rebateType: rebateType,
+                          isPaid: true,
+                        ),
+                icon: Icon(icon, size: 16),
+                label: Text(label),
+              ),
+      ),
     );
   }
 
@@ -923,7 +1019,7 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
       children: [
         IconButton(
           key: ValueKey('finance-summary-edit-${summary.travelGroupId}'),
-          tooltip: '编辑返积分信息',
+          tooltip: '编辑备注和发送状态',
           onPressed: updating ? null : () => _openSummaryEditor(summary),
           icon: const Icon(Icons.edit_note_rounded),
         ),
@@ -1460,6 +1556,45 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     }
   }
 
+  Future<void> _setRebatePaymentStatus(
+    TravelGroupFinanceSummaryRecord summary, {
+    required String rebateType,
+    required bool isPaid,
+  }) async {
+    setState(() {
+      _updatingSummaryTravelGroupId = summary.travelGroupId;
+      _summaryErrorMessage = null;
+    });
+
+    try {
+      if (rebateType == 'daily') {
+        await _businessApi.setDailyRebatePaid(summary.travelGroupId, isPaid);
+      } else {
+        await _businessApi.setMonthlyRebatePaid(summary.travelGroupId, isPaid);
+      }
+      if (!mounted) {
+        return;
+      }
+      await _loadTravelGroupFinanceSummaries();
+      if (!mounted) {
+        return;
+      }
+      final label = rebateType == 'daily' ? '日返积分' : '月返积分';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(isPaid ? '$label已标记已返' : '$label已取消已返')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _summaryErrorMessage = _messageForError(error));
+    } finally {
+      if (mounted) {
+        setState(() => _updatingSummaryTravelGroupId = null);
+      }
+    }
+  }
+
   Future<void> _refreshTravelGroupSummary(
     TravelGroupFinanceSummaryRecord summary,
   ) async {
@@ -1937,7 +2072,6 @@ class _TravelGroupFinanceSummaryEditorDialog extends StatefulWidget {
 
 class _TravelGroupFinanceSummaryEditorDialogState
     extends State<_TravelGroupFinanceSummaryEditorDialog> {
-  late final TextEditingController _paidRebateController;
   late final TextEditingController _notesController;
   late bool _guideInfoSent;
   late bool _travelAgencyInfoSent;
@@ -1947,9 +2081,6 @@ class _TravelGroupFinanceSummaryEditorDialogState
   @override
   void initState() {
     super.initState();
-    _paidRebateController = TextEditingController(
-      text: _moneyInputText(widget.summary.paidRebateCents),
-    );
     _notesController = TextEditingController(text: widget.summary.notes ?? '');
     _guideInfoSent = widget.summary.guideInfoSent;
     _travelAgencyInfoSent = widget.summary.travelAgencyInfoSent;
@@ -1957,18 +2088,11 @@ class _TravelGroupFinanceSummaryEditorDialogState
 
   @override
   void dispose() {
-    _paidRebateController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    final paidRebateCents = _moneyCentsOrNull(_paidRebateController.text);
-    if (paidRebateCents == null || paidRebateCents < 0) {
-      setState(() => _errorMessage = '已返金额不能小于 0，且必须是有效金额');
-      return;
-    }
-
     setState(() {
       _saving = true;
       _errorMessage = null;
@@ -1978,7 +2102,6 @@ class _TravelGroupFinanceSummaryEditorDialogState
       await widget.businessApi.updateTravelGroupFinanceSummary(
         widget.summary.travelGroupId,
         {
-          'paidRebateCents': paidRebateCents,
           'notes': _notesController.text.trim(),
           'guideInfoSent': _guideInfoSent,
           'travelAgencyInfoSent': _travelAgencyInfoSent,
@@ -2002,7 +2125,7 @@ class _TravelGroupFinanceSummaryEditorDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('维护返积分 · ${_summaryTravelGroupNo(widget.summary)}'),
+      title: Text('维护返积分备注 · ${_summaryTravelGroupNo(widget.summary)}'),
       content: SingleChildScrollView(
         child: SizedBox(
           width: 460,
@@ -2019,17 +2142,6 @@ class _TravelGroupFinanceSummaryEditorDialogState
                 _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
                 const SizedBox(height: 12),
               ],
-              TextField(
-                key: const ValueKey('finance-summary-paid-rebate-field'),
-                controller: _paidRebateController,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: '已返金额（元）',
-                  prefixIcon: Icon(Icons.payments_rounded),
-                ),
-              ),
-              const SizedBox(height: 8),
               CheckboxListTile(
                 key: const ValueKey('finance-summary-guide-info-sent-checkbox'),
                 contentPadding: EdgeInsets.zero,
@@ -2118,54 +2230,83 @@ class _TravelGroupFinanceSummaryDetailDialog extends StatelessWidget {
             children: [
               _DetailLine(label: '旅行团', value: _summaryTravelGroupNo(summary)),
               _DetailLine(
-                  label: '日期',
-                  value: _fieldValue(summary.travelGroup?.visitDate)),
+                label: '日期',
+                value: _fieldValue(summary.travelGroup?.visitDate),
+              ),
               _DetailLine(label: '旅行社', value: _summaryAgencyName(summary)),
               _DetailLine(label: '导游', value: _summaryGuideName(summary)),
+              _DetailLine(
+                label: '车牌',
+                value: _fieldValue(summary.travelGroup?.licensePlate),
+              ),
+              _DetailLine(
+                label: '人数',
+                value: '${summary.travelGroup?.guestCount ?? 0}',
+              ),
+              _DetailLine(
+                label: '品鉴师',
+                value: _fieldValue(summary.travelGroup?.tasterName),
+              ),
               const Divider(height: 24),
               Wrap(
                 spacing: 18,
                 runSpacing: 8,
                 children: [
                   _SummaryAmountText(
-                    label: '总销售额',
+                    label: '销售额',
                     cents: summary.totalSalesAmountCents,
                   ),
                   _SummaryAmountText(
-                    label: '已确认退款',
-                    cents: summary.confirmedRefundAmountCents,
+                    label: '货到付款',
+                    cents: summary.totalCashOnDeliveryCents,
                   ),
                   _SummaryAmountText(
-                    label: '有效销售额',
-                    cents: summary.effectiveSalesAmountCents,
+                    label: '已付定金',
+                    cents: summary.totalPaidDepositCents,
                   ),
                   _SummaryAmountText(
-                    label: '总扣酒成本',
+                    label: '扣酒成本',
                     cents: summary.totalAgencyDeductionCents,
                   ),
                   _SummaryAmountText(
-                    label: '总上单金额',
+                    label: '上单金额',
                     cents: summary.totalAgencyNetAmountCents,
                   ),
                   _SummaryAmountText(
-                    label: '日返',
+                    label: '积分/日返积分',
                     cents: summary.totalDailyRebateCents,
                   ),
                   _SummaryAmountText(
-                    label: '月返',
+                    label: '未返积分',
+                    cents: _dailyUnpaidRebateCents(summary),
+                  ),
+                  _SummaryAmountText(
+                    label: '月返积分',
                     cents: summary.totalMonthlyRebateCents,
                   ),
                   _SummaryAmountText(
-                    label: '已返',
-                    cents: summary.paidRebateCents,
-                  ),
-                  _SummaryAmountText(
-                    label: '未返',
-                    cents: summary.unpaidRebateCents,
+                    label: '未返月返积分',
+                    cents: _monthlyUnpaidRebateCents(summary),
                   ),
                 ],
               ),
               const Divider(height: 24),
+              _DetailLine(
+                label: '已返积分',
+                value: _rebatePaymentDetail(
+                  paid: summary.dailyRebatePaid,
+                  paidBy: summary.dailyRebatePaidBy,
+                  paidAt: summary.dailyRebatePaidAt,
+                ),
+              ),
+              _DetailLine(
+                label: '已返月返积分',
+                value: _rebatePaymentDetail(
+                  paid: summary.monthlyRebatePaid,
+                  paidBy: summary.monthlyRebatePaidBy,
+                  paidAt: summary.monthlyRebatePaidAt,
+                ),
+              ),
               _DetailLine(
                 label: '扣酒确认',
                 value: summary.agencyDeductionConfirmed ? '已确认' : '待确认',
@@ -2698,6 +2839,30 @@ String _summaryAgencyName(TravelGroupFinanceSummaryRecord summary) {
 
 String _summaryGuideName(TravelGroupFinanceSummaryRecord summary) {
   return _fieldValue(summary.travelGroup?.guideName);
+}
+
+int _dailyUnpaidRebateCents(TravelGroupFinanceSummaryRecord summary) {
+  return summary.dailyRebatePaid ? 0 : summary.totalDailyRebateCents;
+}
+
+int _monthlyUnpaidRebateCents(TravelGroupFinanceSummaryRecord summary) {
+  return summary.monthlyRebatePaid ? 0 : summary.totalMonthlyRebateCents;
+}
+
+String _rebatePaymentDetail({
+  required bool paid,
+  required Stage7UserSummaryRecord? paidBy,
+  required String? paidAt,
+}) {
+  if (!paid) {
+    return '未返';
+  }
+  final operator = _userName(paidBy);
+  final time = _fieldValue(paidAt);
+  if (operator == '-' && time == '-') {
+    return '已返';
+  }
+  return '已返 · $operator · $time';
 }
 
 String _userName(Stage7UserSummaryRecord? user) {

@@ -5,16 +5,14 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
       <header class="sheet-header">
         <div class="company">${text(salesSheet?.companyName, '贵州酱酒馆')}</div>
         <h1>销售单</h1>
-        <p>请核对订单、收货和酒品明细信息</p>
+        <p>请核对订单、脱敏收货信息和酒品数量</p>
       </header>
       <main>
         <section>
           <h2>订单信息</h2>
           ${renderRows([
             ['系统单号', salesSheet?.order?.orderNo],
-            ['销售单号', salesSheet?.order?.salesFormNo],
             ['订单日期', salesSheet?.order?.orderDate],
-            ['订单类型', salesSheet?.order?.orderTypeLabel],
             ['订单状态', salesSheet?.status?.label],
           ])}
         </section>
@@ -23,41 +21,21 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
           ${renderRows([
             ['客户姓名', salesSheet?.customer?.name],
             ['客户电话', salesSheet?.customer?.phoneMasked],
-            ['收货地址', salesSheet?.customer?.fullAddress],
+            ['收货地址', salesSheet?.customer?.addressMasked],
           ])}
-        </section>
-        ${renderTravelGroup(salesSheet?.travelGroup)}
-        <section>
-          <h2>销售人员</h2>
-          ${renderRows([['姓名', salesSheet?.salesUser?.name]])}
         </section>
         <section>
           <h2>酒品明细</h2>
           ${renderItems(salesSheet?.items)}
         </section>
         <section>
-          <h2>金额</h2>
-          ${renderRows([
-            ['订单总额', formatYuan(salesSheet?.amounts?.totalAmountYuan)],
-            [
-              '货到付款金额',
-              formatYuan(salesSheet?.amounts?.cashOnDeliveryAmountYuan),
-            ],
-          ])}
-        </section>
-        <section>
-          <h2>配送和开票</h2>
+          <h2>配送</h2>
           ${renderRows([
             ['配送方式', salesSheet?.delivery?.summaryLabel],
-            ['物流方式', salesSheet?.logistics?.method],
-            ['物流单号', salesSheet?.logistics?.logisticsNo],
-            ['是否需要开票', salesSheet?.invoice?.requiredLabel],
-            ['是否已开票', salesSheet?.invoice?.issuedLabel],
           ])}
         </section>
-        ${renderRemark(salesSheet?.order?.remark)}
       </main>
-      <footer>请保存此页面或拍照留存。如信息有误，请联系销售人员处理。</footer>
+      <footer>此链接包含订单核对信息且会过期。如信息有误，请联系销售人员处理。</footer>
     `,
   });
 }
@@ -76,25 +54,6 @@ export function renderPublicSalesSheetErrorHtml(input: any) {
   });
 }
 
-function renderTravelGroup(group: any) {
-  if (!group) {
-    return '';
-  }
-  return `
-    <section>
-      <h2>旅行团概要</h2>
-      ${renderRows([
-        ['团号', group.groupNo],
-        ['到店日期', group.visitDate],
-        ['旅行社', group.travelAgency],
-        ['导游', group.guideName],
-        ['品鉴师', group.tasterName],
-        ['品鉴厅', group.tastingRoomNo],
-      ])}
-    </section>
-  `;
-}
-
 function renderItems(items: any[]) {
   if (!Array.isArray(items) || items.length === 0) {
     return '<p class="empty">暂无明细</p>';
@@ -108,8 +67,6 @@ function renderItems(items: any[]) {
               <div class="item-title">${text(item?.productName)}</div>
               ${renderRows([
                 ['数量', item?.quantity],
-                ['单价', formatYuan(item?.unitPriceYuan)],
-                ['小计', formatYuan(item?.subtotalYuan)],
                 ['配送选择', item?.deliveryTypeLabel],
               ])}
             </article>
@@ -117,18 +74,6 @@ function renderItems(items: any[]) {
         )
         .join('')}
     </div>
-  `;
-}
-
-function renderRemark(remark: unknown) {
-  if (!hasDisplayValue(remark)) {
-    return '';
-  }
-  return `
-    <section>
-      <h2>备注</h2>
-      <p class="remark">${text(remark)}</p>
-    </section>
   `;
 }
 
@@ -223,11 +168,6 @@ function renderDocument(input: any) {
       margin-bottom: 8px;
       overflow-wrap: anywhere;
     }
-    .remark {
-      color: #111827;
-      overflow-wrap: anywhere;
-      white-space: pre-wrap;
-    }
     footer {
       padding: 16px 18px 28px;
       text-align: center;
@@ -256,13 +196,6 @@ function renderDocument(input: any) {
 ${input.body}
 </body>
 </html>`;
-}
-
-function formatYuan(value: unknown) {
-  if (!hasDisplayValue(value)) {
-    return null;
-  }
-  return `¥${String(value).trim()}`;
 }
 
 function text(value: unknown, fallback = '-') {

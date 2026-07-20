@@ -2,9 +2,14 @@ import { Injectable } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
+import { assertSmsSecurityConfig } from './sms-security-config';
 
 @Injectable()
 export class AliyunSmsNestService {
+  constructor() {
+    assertSmsSecurityConfig();
+  }
+
   async sendVerificationCode(phone: string, code: string) {
     if (process.env.ALIYUN_SMS_MOCK === 'true') {
       return {
@@ -26,21 +31,26 @@ export class AliyunSmsNestService {
       TemplateParam: JSON.stringify({ [templateParamName]: code }),
     };
 
-    const response = await callAliyunRpc({
-      accessKeyId,
-      accessKeySecret,
-      host,
-      action: 'SendSms',
-      version: '2017-05-25',
-      query,
-    });
+    let response: any;
+    try {
+      response = await callAliyunRpc({
+        accessKeyId,
+        accessKeySecret,
+        host,
+        action: 'SendSms',
+        version: '2017-05-25',
+        query,
+      });
+    } catch (error) {
+      throw createSmsSendError(error);
+    }
 
     if (response.Code !== 'OK') {
-      throw createHttpError(
-        502,
-        'SMS_SEND_FAILED',
-        String(response.Message || response.Code || 'Failed to send SMS verification code.'),
-      );
+      throw createSmsSendError({
+        provider: 'aliyun',
+        providerCode: response.Code,
+        providerMessage: response.Message,
+      });
     }
 
     return {
@@ -111,13 +121,23 @@ async function callAliyunRpc(options: {
   }
 
   if (!response.ok) {
-    throw createHttpError(
-      502,
-      'SMS_SEND_FAILED',
-      String(payload.Message || payload.Code || `Aliyun SMS HTTP ${response.status}`),
-    );
+    throw createSmsSendError({
+      provider: 'aliyun',
+      httpStatus: response.status,
+      providerCode: payload.Code,
+      providerMessage: payload.Message,
+    });
   }
   return payload;
+}
+
+function createSmsSendError(cause: unknown) {
+  return createHttpError(
+    502,
+    'SMS_SEND_FAILED',
+    'SMS provider request failed.',
+    { cause },
+  );
 }
 
 function requiredEnv(name: string) {

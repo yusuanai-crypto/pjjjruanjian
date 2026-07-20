@@ -50,7 +50,7 @@ void main() {
     }
   });
 
-  testWidgets('shows selected order and saves packing fields', (tester) async {
+  testWidgets('opens packing editor and saves packing fields', (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpWarehousePacking(tester, apiClient);
 
@@ -60,9 +60,16 @@ void main() {
     expect(find.textContaining('酱香珍藏 x2'), findsWidgets);
     expect(find.text('物流单号已补'), findsWidgets);
     expect(find.text('待打包'), findsWidgets);
+    expect(
+        find.byKey(const ValueKey('warehouse-packing-editor')), findsNothing);
+    expect(find.byKey(const ValueKey('warehouse-package-count-field')),
+        findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('warehouse-order-order-1')));
-    await tester.pumpAndSettle();
+    await _openPackingEditor(tester);
+
+    expect(find.text('订单核对/打包处理'), findsOneWidget);
+    expect(find.text('订单号'), findsOneWidget);
+    expect(find.text('电话'), findsWidgets);
 
     final statusField =
         find.byKey(const ValueKey('warehouse-packing-status-field'));
@@ -102,7 +109,9 @@ void main() {
     expect(apiClient.lastPackingBody?['packingStatus'], 'packed');
     expect(apiClient.lastPackingBody?['packageCount'], 3);
     expect(apiClient.lastPackingBody?['warehouseRemark'], '外箱加固');
-    expect(find.text('已打包'), findsWidgets);
+    expect(
+        find.byKey(const ValueKey('warehouse-packing-editor')), findsNothing);
+    expect(apiClient.warehouseOrderListPaths.length, greaterThan(1));
   });
 
   testWidgets('highlights abnormal orders in the queue', (tester) async {
@@ -123,6 +132,7 @@ void main() {
   testWidgets('shows API error when packing save fails', (tester) async {
     final apiClient = _FakeApiClient(failPackingPatch: true);
     await _pumpWarehousePacking(tester, apiClient);
+    await _openPackingEditor(tester);
 
     final saveButton = find.widgetWithText(FilledButton, '保存打包');
     await tester.ensureVisible(saveButton);
@@ -131,6 +141,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('打包状态非法'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('warehouse-packing-editor')), findsOneWidget);
   });
 
   testWidgets('boss can inspect warehouse orders without packing buttons',
@@ -142,18 +154,52 @@ void main() {
     expect(find.text('只读'), findsWidgets);
     expect(find.widgetWithText(FilledButton, '保存打包'), findsNothing);
     expect(find.widgetWithText(OutlinedButton, '标记异常'), findsNothing);
+    expect(find.byKey(const ValueKey('warehouse-package-count-field')),
+        findsNothing);
 
-    await tester.ensureVisible(
+    await _openPackingEditor(tester);
+
+    expect(find.widgetWithText(FilledButton, '保存打包'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, '标记异常'), findsNothing);
+
+    final packageField = tester.widget<TextField>(
       find.byKey(const ValueKey('warehouse-package-count-field')),
     );
-    await tester.enterText(
-      find.byKey(const ValueKey('warehouse-package-count-field')),
-      '5',
+    final remarkField = tester.widget<TextField>(
+      find.byKey(const ValueKey('warehouse-remark-field')),
     );
-    await tester.pumpAndSettle();
+    expect(packageField.readOnly, isTrue);
+    expect(remarkField.readOnly, isTrue);
+
+    final statusDropdown = tester.widget<DropdownButton<PackingStatus>>(
+      find.descendant(
+        of: find.byKey(const ValueKey('warehouse-packing-status-field')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is DropdownButton<PackingStatus>,
+        ),
+      ),
+    );
+    final logisticsDropdown = tester.widget<DropdownButton<String>>(
+      find.descendant(
+        of: find.byKey(const ValueKey('warehouse-logistics-method-field')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is DropdownButton<String>,
+        ),
+      ),
+    );
+    expect(statusDropdown.onChanged, isNull);
+    expect(logisticsDropdown.onChanged, isNull);
 
     expect(apiClient.packingPatchPaths, isEmpty);
   });
+}
+
+Future<void> _openPackingEditor(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('warehouse-order-order-1')));
+  await tester.pumpAndSettle();
+
+  expect(
+      find.byKey(const ValueKey('warehouse-packing-editor')), findsOneWidget);
 }
 
 Future<void> _pumpWarehousePacking(

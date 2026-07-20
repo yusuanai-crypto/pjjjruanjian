@@ -1,8 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
-import { createHttpError } from '../../common/errors';
+import {
+  createHttpError,
+  isExpectedHttpError,
+} from '../../common/errors';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  sanitizeAiText,
+  sanitizeAuditData,
+} from '../operation-logs/audit-data-sanitizer';
 import { AiConfigService } from './ai-config';
 import { AiIntentService, type AiIntentParseResult } from './ai-intent.service';
 import {
@@ -178,19 +186,21 @@ export class AiChatService {
     private readonly modelClient: AiModelClient,
     private readonly responseFormatter: AiResponseFormatter,
     private readonly prisma: PrismaService,
+    private readonly rateLimitService: RateLimitService,
   ) {}
 
   async sendChat(actor: any, body: AiChatRequestBody): Promise<AiChatResponse> {
     try {
       return await this.executeChat(actor, body);
     } catch (error: any) {
-      if (isProjectHttpError(error)) {
+      if (isExpectedHttpError(error)) {
         throw error;
       }
       throw createHttpError(
         500,
         'AI_CHAT_FAILED',
         'AI chat request failed.',
+        { cause: error },
       );
     }
   }
@@ -339,6 +349,11 @@ export class AiChatService {
       );
     }
 
+    await this.rateLimitService.enforceAi({
+      userId: normalizeActorId(actor),
+      dailyLimit: config.dailyLimitPerUser,
+    });
+
     const parsed = this.intentService.parseQuestion(question);
     const policy = this.policyService.evaluateRequest(actor, {
       intent: parsed.intent,
@@ -439,7 +454,7 @@ export class AiChatService {
       {
         userRole: state.actor.role,
         intent,
-        question: state.question,
+        question: sanitizeAiHistoryText(state.question),
         dateRange: state.parsed.dateRange || undefined,
         policy: {
           globalMarkedFilterEnabled: false,
@@ -497,31 +512,42 @@ export class AiChatService {
     },
   ) {
     try {
+      const sanitizedQuestion = sanitizeAiHistoryText(state.question);
+      const sanitizedAnswer = sanitizeAiHistoryText(input.answer, 8000);
+      const sanitizedWarnings = input.warnings.map((warning) =>
+        sanitizeAiHistoryText(warning),
+      );
       await (this.prisma as any).aiChatMessage.create({
         data: {
           conversationId: state.conversationId,
           userId: state.actor.id,
           userRole: normalizeRoleForRecord(state.actor.role),
-          question: state.question,
-          answer: input.answer,
+          question: sanitizedQuestion,
+          answer: sanitizedAnswer,
           intent: state.parsed.intent,
-          dataScope: {
+          dataScope: sanitizeAuditData({
             range: state.parsed.dateRange,
             policy: {
               code: state.policy.code,
               scopeDescription: state.policy.scopeDescription,
             },
-          },
-          toolCalls: input.toolResults.map((result) => ({
-            toolName: result.toolName,
-            rowCount: result.sourceSummary?.rowCount ?? 0,
-            globalMarkedFilterEnabled: Boolean(
-              result.sourceSummary?.globalMarkedFilterEnabled,
-            ),
-            warnings: result.warnings || [],
-          })),
-          sourceSummary: buildSourceSummary(input.toolResults),
-          warnings: input.warnings,
+          }),
+          toolCalls: sanitizeAuditData(
+            input.toolResults.map((result) => ({
+              toolName: result.toolName,
+              rowCount: result.sourceSummary?.rowCount ?? 0,
+              globalMarkedFilterEnabled: Boolean(
+                result.sourceSummary?.globalMarkedFilterEnabled,
+              ),
+              warnings: (result.warnings || []).map((warning) =>
+                sanitizeAiHistoryText(warning),
+              ),
+            })),
+          ),
+          sourceSummary: sanitizeAuditData(
+            buildSourceSummary(input.toolResults),
+          ),
+          warnings: sanitizeAuditData(sanitizedWarnings),
           modelProvider: input.modelResult.modelProvider,
           modelName: input.modelResult.modelName,
           promptTokens: input.modelResult.promptTokens,
@@ -637,7 +663,7 @@ function buildModelInput(
   return {
     userRole: state.actor.role,
     intent: state.parsed.intent,
-    question: state.question,
+    question: sanitizeAiHistoryText(state.question),
     dateRange: state.parsed.dateRange || undefined,
     policy: {
       globalMarkedFilterEnabled: toolResults.some(
@@ -779,8 +805,8 @@ function toHistoryItem(row: any): AiChatHistoryItem {
   return {
     id: String(row?.id || ''),
     conversationId: String(row?.conversationId || ''),
-    question: String(row?.question || ''),
-    answer: String(row?.answer || ''),
+    question: sanitizeAiHistoryText(row?.question),
+    answer: sanitizeAiHistoryText(row?.answer, 8000),
     intent: String(row?.intent || ''),
     dataScope: sanitizeHistoryDataScope(row?.dataScope),
     toolCalls: sanitizeHistoryToolCalls(row?.toolCalls),
@@ -819,7 +845,7 @@ function sanitizeHistorySourceSummary(value: unknown): AiChatSourceSummary[] {
       ...(source.dateFrom ? { dateFrom: String(source.dateFrom) } : {}),
       ...(source.dateTo ? { dateTo: String(source.dateTo) } : {}),
       globalMarkedFilterEnabled: Boolean(source.globalMarkedFilterEnabled),
-      scopeDescription: String(source.scopeDescription || ''),
+      scopeDescription: sanitizeAiHistoryText(source.scopeDescription),
     };
   });
 }
@@ -841,7 +867,11 @@ function sanitizeHistoryDataScope(value: unknown): Record<string, unknown> | nul
     result.policy = {
       ...(value.policy.code ? { code: String(value.policy.code) } : {}),
       ...(value.policy.scopeDescription
-        ? { scopeDescription: String(value.policy.scopeDescription) }
+        ? {
+            scopeDescription: sanitizeAiHistoryText(
+              value.policy.scopeDescription,
+            ),
+          }
         : {}),
     };
   }
@@ -911,9 +941,20 @@ function normalizeOptionalQueryString(
 function normalizeStringList(value: unknown): string[] {
   return Array.isArray(value)
     ? uniqueStrings(
-        value.map((item) => (typeof item === 'string' ? item : String(item))),
+        value.map((item) =>
+          sanitizeAiHistoryText(
+            typeof item === 'string' ? item : String(item),
+          ),
+        ),
       )
     : [];
+}
+
+function sanitizeAiHistoryText(
+  value: unknown,
+  maxLength = 2048,
+): string {
+  return sanitizeAiText(String(value ?? ''), { maxLength });
 }
 
 function nullableString(value: unknown): string | null {
@@ -962,13 +1003,4 @@ function getRefusalReason(code: string): string {
     return '你当前角色不能使用第 9 阶段第一版 AI 助手。';
   }
   return '这个问题超出第 9 阶段 AI 数据助手的只读问数范围。';
-}
-
-function isProjectHttpError(error: any): boolean {
-  return (
-    error &&
-    Number.isInteger(error.statusCode) &&
-    typeof error.code === 'string' &&
-    typeof error.message === 'string'
-  );
 }

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
@@ -12,6 +13,7 @@ import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../../shared/widgets/time_picker_field.dart';
 import '../travel_group_detail/travel_group_detail_panel.dart';
 import '../travel_groups/tasting_items_editor.dart';
 
@@ -23,18 +25,24 @@ const _tasterScopeReception = 'reception';
 const _editableStatuses = <String>{'unmarked', 'pending_summary', 'ordered'};
 
 class TravelGroupQueryPage extends StatefulWidget {
+  static const tasterScopeAll = _tasterScopeAll;
+  static const tasterScopeLiaison = _tasterScopeLiaison;
+  static const tasterScopeReception = _tasterScopeReception;
+
   const TravelGroupQueryPage({
     super.key,
     required this.apiClient,
     required this.token,
     required this.role,
     required this.currentUserId,
+    this.initialTasterScope = tasterScopeAll,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
   final String currentUserId;
+  final String initialTasterScope;
 
   @override
   State<TravelGroupQueryPage> createState() => _TravelGroupQueryPageState();
@@ -46,15 +54,17 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
 
   DateTime _start = DateTime.now().subtract(const Duration(days: 30));
   DateTime _end = DateTime.now();
+  bool _dateRangeAll = false;
   String _keyword = '';
   String _groupTypeFilter = _allFilter;
   String _travelAgencyFilter = _allFilter;
   String _guideFilter = _allFilter;
   String _tasterFilter = _allFilter;
-  String _tasterScope = _tasterScopeAll;
+  late String _tasterScope;
   String? _selectedId;
 
   bool _loading = true;
+  bool _exporting = false;
   String? _errorMessage;
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
   List<GuideRecord> _guides = const <GuideRecord>[];
@@ -65,6 +75,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   @override
   void initState() {
     super.initState();
+    _tasterScope = _normalizedInitialTasterScope();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
     _keywordController = TextEditingController();
@@ -77,10 +88,11 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     if (oldWidget.apiClient != widget.apiClient ||
         oldWidget.token != widget.token ||
         oldWidget.currentUserId != widget.currentUserId ||
-        oldWidget.role != widget.role) {
+        oldWidget.role != widget.role ||
+        oldWidget.initialTasterScope != widget.initialTasterScope) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
-      _tasterScope = _tasterScopeAll;
+      _tasterScope = _normalizedInitialTasterScope();
       _loadData();
     }
   }
@@ -101,8 +113,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       final results = await Future.wait<Object>([
         _businessApi.listTravelGroups(
           limit: 200,
-          start: _start,
-          end: _end,
+          start: _dateRangeAll ? null : _start,
+          end: _dateRangeAll ? null : _end,
           keyword: _keyword,
           groupType: _optionalFilter(_groupTypeFilter),
           travelAgency: _optionalFilter(_travelAgencyFilter),
@@ -148,6 +160,16 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     }
   }
 
+  String _normalizedInitialTasterScope() {
+    if (widget.initialTasterScope == _tasterScopeLiaison) {
+      return _tasterScopeLiaison;
+    }
+    if (widget.initialTasterScope == _tasterScopeReception) {
+      return _tasterScopeReception;
+    }
+    return _tasterScopeAll;
+  }
+
   String? _selectedIdFor(List<TravelGroupRecord> groups) {
     if (groups.isEmpty) {
       return null;
@@ -188,6 +210,75 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       }
     }
     return _groups.first;
+  }
+
+  TravelGroupRecord? _recordById(String id) {
+    for (final group in _groups) {
+      if (group.id == id) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _openTravelGroupDetail(TravelGroupRecord group) async {
+    setState(() => _selectedId = group.id);
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final selected = _recordById(group.id) ?? group;
+            Future<void> runAction(Future<void> Function() action) async {
+              await action();
+              if (mounted) {
+                setDialogState(() {});
+              }
+            }
+
+            final size = MediaQuery.sizeOf(context);
+            return Dialog(
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: size.width < 1040 ? size.width - 32 : 980,
+                  maxHeight: size.height < 860 ? size.height - 48 : 820,
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: TravelGroupDetailPanel(
+                    group: selected,
+                    role: widget.role,
+                    marking: _markingIds.contains(selected.id),
+                    summarizing: _summarizingIds.contains(selected.id),
+                    onEdit: _canEditGroup(selected)
+                        ? () => runAction(() => _editTravelGroup(selected))
+                        : null,
+                    onFinanceMark: _canMark(widget.role)
+                        ? () => runAction(() => _toggleFinanceMark(selected))
+                        : null,
+                    onSummary: _canSubmitSummary(widget.role) &&
+                            (widget.role != UserRole.taster ||
+                                _isAssociatedTaster(selected))
+                        ? () => runAction(() => _submitSummary(selected))
+                        : null,
+                    onPreviewAttachment: (attachment) =>
+                        _previewAttachment(selected, attachment),
+                    onDownloadAttachment: (attachment) =>
+                        _downloadAttachment(selected, attachment),
+                    onDeleteAttachment: _canDeleteAttachments(selected)
+                        ? (attachment) => runAction(
+                              () => _deleteAttachment(selected, attachment),
+                            )
+                        : null,
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _toggleFinanceMark(TravelGroupRecord group) async {
@@ -439,15 +530,66 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     _loadData();
   }
 
+  bool get _canExportTravelGroups =>
+      widget.role == UserRole.admin || widget.role == UserRole.finance;
+
+  Future<void> _exportTravelGroups() async {
+    if (!_canExportTravelGroups || _exporting) {
+      return;
+    }
+    setState(() {
+      _exporting = true;
+      _errorMessage = null;
+    });
+    try {
+      final downloaded = await _businessApi.downloadTravelGroupsExcel(
+        start: _dateRangeAll ? null : _start,
+        end: _dateRangeAll ? null : _end,
+        keyword: _keyword,
+        groupType: _optionalFilter(_groupTypeFilter),
+        travelAgency: _optionalFilter(_travelAgencyFilter),
+        guideId: _optionalFilter(_guideFilter),
+        tasterId: _tasterIdFilter(),
+        liaisonTasterId: _liaisonTasterIdFilter(),
+      );
+      final path = await FilePicker.saveFile(
+        dialogTitle: '保存旅行团导出',
+        fileName: _safeFileName(downloaded.fileName),
+        bytes: downloaded.bytes,
+        lockParentWindow: true,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _exporting = false);
+      if (path != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('旅行团已导出。')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _messageForError(error);
+      setState(() {
+        _exporting = false;
+        _errorMessage = message;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final selected = _selectedRecord();
-
     return ResponsivePage(
       children: [
         _TravelGroupQueryFilters(
           start: _start,
           end: _end,
+          dateRangeAll: _dateRangeAll,
           keywordController: _keywordController,
           groupTypeFilter: _groupTypeFilter,
           travelAgencyFilter: _travelAgencyFilter,
@@ -455,6 +597,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           tasterFilter: _tasterFilter,
           tasterScope: _tasterScope,
           role: widget.role,
+          canExport: _canExportTravelGroups,
+          exporting: _exporting,
           hasCurrentUserId: widget.currentUserId.isNotEmpty,
           travelAgencyItems:
               _travelAgencyFilterItems(_groups, _guides, _travelAgencyFilter),
@@ -467,9 +611,11 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
             _loadData();
           },
           onDateRangeChanged: (range) => _setFilter(() {
+            _dateRangeAll = false;
             _start = range.start;
             _end = range.end;
           }),
+          onAllDatesSelected: () => _setFilter(() => _dateRangeAll = true),
           onGroupTypeChanged: (value) =>
               _setFilter(() => _groupTypeFilter = value),
           onTravelAgencyChanged: (value) =>
@@ -478,6 +624,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           onTasterChanged: (value) => _setFilter(() => _tasterFilter = value),
           onTasterScopeChanged: (value) =>
               _setFilter(() => _tasterScope = value),
+          onExport: _exportTravelGroups,
           onRefresh: _loadData,
         ),
         if (_loading)
@@ -507,11 +654,13 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                     '${_groups.fold<int>(0, (sum, item) => sum + item.guestCount)}',
                 icon: Icons.groups_rounded,
               ),
-              MetricData(
-                label: '已标记',
-                value: '${_groups.where((group) => group.financeMark).length}',
-                icon: Icons.bookmark_added_rounded,
-              ),
+              if (canViewFinanceMark(widget.role))
+                MetricData(
+                  label: '已标记',
+                  value:
+                      '${_groups.where((group) => group.financeMark).length}',
+                  icon: Icons.bookmark_added_rounded,
+                ),
               MetricData(
                 label: '待处理',
                 value:
@@ -520,39 +669,19 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
               ),
             ],
           ),
-          ResponsiveTwoColumn(
-            primary: _TravelGroupList(
-              groups: _groups,
-              selectedId: _selectedId,
-              onSelect: (group) => setState(() => _selectedId = group.id),
+          FormSection(
+            title: '旅行团列表',
+            trailing: StatusTag(
+              label: _selectedId == null ? '未选择' : '已选择',
+              tone: _selectedId == null ? StatusTone.neutral : StatusTone.info,
             ),
-            secondary: selected == null
-                ? const EmptyState(title: '请选择旅行团')
-                : TravelGroupDetailPanel(
-                    group: selected,
-                    role: widget.role,
-                    marking: _markingIds.contains(selected.id),
-                    summarizing: _summarizingIds.contains(selected.id),
-                    onEdit: _canEditGroup(selected)
-                        ? () => _editTravelGroup(selected)
-                        : null,
-                    onFinanceMark: _canMark(widget.role)
-                        ? () => _toggleFinanceMark(selected)
-                        : null,
-                    onSummary: _canSubmitSummary(widget.role) &&
-                            (widget.role != UserRole.taster ||
-                                _isAssociatedTaster(selected))
-                        ? () => _submitSummary(selected)
-                        : null,
-                    onPreviewAttachment: (attachment) =>
-                        _previewAttachment(selected, attachment),
-                    onDownloadAttachment: (attachment) =>
-                        _downloadAttachment(selected, attachment),
-                    onDeleteAttachment: _canDeleteAttachments(selected)
-                        ? (attachment) =>
-                            _deleteAttachment(selected, attachment)
-                        : null,
-                  ),
+            children: [
+              _TravelGroupList(
+                groups: _groups,
+                selectedId: _selectedId,
+                onSelect: _openTravelGroupDetail,
+              ),
+            ],
           ),
         ],
       ],
@@ -564,6 +693,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   const _TravelGroupQueryFilters({
     required this.start,
     required this.end,
+    required this.dateRangeAll,
     required this.keywordController,
     required this.groupTypeFilter,
     required this.travelAgencyFilter,
@@ -571,6 +701,8 @@ class _TravelGroupQueryFilters extends StatelessWidget {
     required this.tasterFilter,
     required this.tasterScope,
     required this.role,
+    required this.canExport,
+    required this.exporting,
     required this.hasCurrentUserId,
     required this.travelAgencyItems,
     required this.guides,
@@ -579,16 +711,19 @@ class _TravelGroupQueryFilters extends StatelessWidget {
     required this.onKeywordChanged,
     required this.onSearch,
     required this.onDateRangeChanged,
+    required this.onAllDatesSelected,
     required this.onGroupTypeChanged,
     required this.onTravelAgencyChanged,
     required this.onGuideChanged,
     required this.onTasterChanged,
     required this.onTasterScopeChanged,
+    required this.onExport,
     required this.onRefresh,
   });
 
   final DateTime start;
   final DateTime end;
+  final bool dateRangeAll;
   final TextEditingController keywordController;
   final String groupTypeFilter;
   final String travelAgencyFilter;
@@ -596,6 +731,8 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   final String tasterFilter;
   final String tasterScope;
   final UserRole role;
+  final bool canExport;
+  final bool exporting;
   final bool hasCurrentUserId;
   final List<MapEntry<String, String>> travelAgencyItems;
   final List<GuideRecord> guides;
@@ -604,11 +741,13 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   final ValueChanged<String> onKeywordChanged;
   final VoidCallback onSearch;
   final ValueChanged<DateTimeRange> onDateRangeChanged;
+  final VoidCallback onAllDatesSelected;
   final ValueChanged<String> onGroupTypeChanged;
   final ValueChanged<String> onTravelAgencyChanged;
   final ValueChanged<String> onGuideChanged;
   final ValueChanged<String> onTasterChanged;
   final ValueChanged<String> onTasterScopeChanged;
+  final VoidCallback onExport;
   final VoidCallback onRefresh;
 
   @override
@@ -627,6 +766,8 @@ class _TravelGroupQueryFilters extends StatelessWidget {
             AppDateRangeButton(
               start: start,
               end: end,
+              allSelected: dateRangeAll,
+              onAllSelected: onAllDatesSelected,
               onChanged: onDateRangeChanged,
             ),
             _StringDropdown(
@@ -705,6 +846,18 @@ class _TravelGroupQueryFilters extends StatelessWidget {
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('刷新'),
             ),
+            if (canExport)
+              OutlinedButton.icon(
+                key: const ValueKey('travel-group-export-button'),
+                onPressed: exporting ? null : onExport,
+                icon: exporting
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_rounded),
+                label: Text(exporting ? '导出中' : '导出 Excel'),
+              ),
             FilledButton.icon(
               onPressed: onSearch,
               icon: const Icon(Icons.search_rounded),
@@ -1007,11 +1160,12 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     _tastingRoomNoController =
         TextEditingController(text: group.tastingRoomNo ?? '');
     _arrivalTimeController =
-        TextEditingController(text: group.arrivalTime ?? '');
-    _expectedArrivalTimeController =
-        TextEditingController(text: group.expectedArrivalTime ?? '');
+        TextEditingController(text: normalizeTimeText(group.arrivalTime));
+    _expectedArrivalTimeController = TextEditingController(
+      text: normalizeTimeText(group.expectedArrivalTime),
+    );
     _departureTimeController =
-        TextEditingController(text: group.departureTime ?? '');
+        TextEditingController(text: normalizeTimeText(group.departureTime));
     _remarksController = TextEditingController(text: group.remarks ?? '');
     _wineDetailsController =
         TextEditingController(text: group.wineDetails ?? '');
@@ -1126,7 +1280,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     }
     if (_canEditFrontDeskOnlyFields) {
       payload['tastingRoomNo'] = _tastingRoomNoController.text.trim();
-      payload['arrivalTime'] = _arrivalTimeController.text.trim();
+      payload['arrivalTime'] = normalizeTimeText(_arrivalTimeController.text);
       if ((_groupType ?? '').trim().isNotEmpty) {
         payload['groupType'] = _groupType!.trim();
       }
@@ -1146,13 +1300,14 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     }
     if (_canEditExpectedArrivalTime) {
       payload['expectedArrivalTime'] =
-          _expectedArrivalTimeController.text.trim();
+          normalizeTimeText(_expectedArrivalTimeController.text);
     }
     if (_canEditGuestCount) {
       payload['guestCount'] = _intFromText(_guestCountController.text);
     }
     if (_canEditDepartureTime) {
-      payload['departureTime'] = _departureTimeController.text.trim();
+      payload['departureTime'] =
+          normalizeTimeText(_departureTimeController.text);
     }
     if (_canEditRemarks) {
       payload['remarks'] = _remarksController.text.trim();
@@ -1315,15 +1470,17 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       if (_canManageTasterAssignments) _tasterDropdown(),
       if (_canManageTasterAssignments) _liaisonTasterDropdown(),
       if (_canEditExpectedArrivalTime)
-        TextFormField(
+        AppTimePickerField(
+          key: const ValueKey('travel-group-edit-expected-arrival-time'),
           controller: _expectedArrivalTimeController,
-          decoration: const InputDecoration(labelText: '预计进店时间'),
+          label: '预计进店时间',
           validator: _optionalTimeValidator,
         ),
       if (_canEditFrontDeskOnlyFields)
-        TextFormField(
+        AppTimePickerField(
+          key: const ValueKey('travel-group-edit-arrival-time'),
           controller: _arrivalTimeController,
-          decoration: const InputDecoration(labelText: '实际进店时间'),
+          label: '实际进店时间',
         ),
       if (_canEditFrontDeskOnlyFields) _groupTypeDropdown(),
     ];
@@ -1332,9 +1489,10 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   List<Widget> _supplementFields() {
     return [
       if (_canEditDepartureTime)
-        TextFormField(
+        AppTimePickerField(
+          key: const ValueKey('travel-group-edit-departure-time'),
           controller: _departureTimeController,
-          decoration: const InputDecoration(labelText: '离店时间'),
+          label: '离店时间',
         ),
       if (_canEditTasterNotes)
         TextFormField(
@@ -1855,9 +2013,7 @@ bool _canEdit(UserRole role) {
 }
 
 bool _canMark(UserRole role) {
-  return role == UserRole.superAdmin ||
-      role == UserRole.admin ||
-      role == UserRole.finance;
+  return canViewFinanceMark(role);
 }
 
 bool _canSubmitSummary(UserRole role) {

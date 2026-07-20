@@ -13,6 +13,10 @@ const {
   withPhase1Server,
 } = require('./helpers/phase1-api');
 const {
+  AttachmentUploadConfigService,
+  ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE,
+  TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
+  assertAttachmentAggregateSize,
   isSafeAttachmentStorageKey,
   sanitizeAttachmentOriginalName,
   validateTravelGroupAttachmentFile,
@@ -40,7 +44,7 @@ test('travel group attachment type and path validation accepts supported documen
   ];
 
   for (const [originalname, mimetype] of supported) {
-    const buffer = Buffer.from('test');
+    const buffer = attachmentFixtureForType(mimetype);
     const validated = validateTravelGroupAttachmentFile({
       buffer,
       mimetype,
@@ -67,12 +71,111 @@ test('travel group attachment type and path validation accepts supported documen
       }),
     (error) => error?.code === 'UNSUPPORTED_ATTACHMENT_TYPE',
   );
+  assert.throws(
+    () =>
+      validateTravelGroupAttachmentFile({
+        buffer: Buffer.from('not-a-real-png'),
+        mimetype: 'image/png',
+        originalname: 'spoofed.png',
+        size: 14,
+      }),
+    (error) => error?.code === 'ATTACHMENT_CONTENT_MISMATCH',
+  );
+});
+
+test('attachment aggregate limit uses declared lengths without allocating large buffers', () => {
+  assert.throws(
+    () =>
+      validateTravelGroupAttachmentFile({
+        buffer: attachmentFixtureForType('image/png'),
+        mimetype: 'image/png',
+        originalname: 'declared-too-large.png',
+        size: TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE + 1,
+      }),
+    (error) => error?.code === 'FILE_TOO_LARGE',
+  );
+  assert.equal(
+    assertAttachmentAggregateSize(
+      [{ size: 17 }, { size: 23 }],
+      40,
+    ),
+    40,
+  );
+  assert.throws(
+    () =>
+      assertAttachmentAggregateSize(
+        [
+          { size: ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE },
+          { size: 1 },
+        ],
+      ),
+    (error) => error?.code === 'MULTIPART_REQUEST_TOO_LARGE',
+  );
+});
+
+test('attachment upload configuration rejects limits above the startup safety cap', () => {
+  const previous = process.env.ATTACHMENT_UPLOAD_MAX_FILES;
+  process.env.ATTACHMENT_UPLOAD_MAX_FILES = '6';
+  try {
+    assert.throws(
+      () => new AttachmentUploadConfigService(),
+      (error) => error?.code === 'ATTACHMENT_UPLOAD_CONFIG_INVALID',
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.ATTACHMENT_UPLOAD_MAX_FILES;
+    } else {
+      process.env.ATTACHMENT_UPLOAD_MAX_FILES = previous;
+    }
+  }
+});
+
+test('upload guards reject unauthenticated and unauthorized requests before multipart parsing', async () => {
+  await withPhase1Server(
+    async (baseUrl, { stores }) => {
+      const admin = await login(baseUrl);
+      const bossUser = await createUser(baseUrl, admin.token, {
+        name: 'Upload Guard Boss',
+        username: 'upload-guard-boss',
+        password: 'Password123',
+        role: 'boss',
+      });
+      const boss = await login(
+        baseUrl,
+        bossUser.username,
+        'Password123',
+      );
+      const pathName =
+        '/api/travel-groups/not-read/attachments/guest_info';
+
+      const unauthenticated = await requestMalformedMultipart(
+        baseUrl,
+        pathName,
+      );
+      assertErrorContract(
+        unauthenticated,
+        401,
+        'AUTH_TOKEN_REQUIRED',
+      );
+
+      const unauthorized = await requestMalformedMultipart(
+        baseUrl,
+        pathName,
+        boss.token,
+      );
+      assertErrorContract(unauthorized, 403, 'PERMISSION_DENIED');
+      assert.deepEqual(
+        await fs.readdir(stores.attachmentTempDir),
+        [],
+      );
+    },
+  );
 });
 
 test('travel group attachments upload, authorize download, delete, sanitize DTOs, and log mutations', async () => {
   await withTemporaryAttachmentStorage(async (storageRoot) => {
     await withPhase1Server(
-      async (baseUrl, { prisma }) => {
+      async (baseUrl, { prisma, stores }) => {
         const admin = await login(baseUrl);
         const frontDeskUser = await createUser(baseUrl, admin.token, {
           name: 'Attachment Front Desk',
@@ -194,13 +297,17 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           'key_customer_photo',
           [
             {
-              content: Buffer.from('admin-photo'),
+              content: attachmentFixtureForType('image/png'),
               name: 'admin-photo.png',
               type: 'image/png',
             },
           ],
         );
         assert.equal(adminUpload.response.status, 201);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
 
         const rawGroup = await prisma.travelGroup.findUnique({
           where: { id: group.id },
@@ -276,7 +383,8 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           group.id,
           downloadable.id,
         );
-        assert.equal(scopedSalesDownload.response.status, 404);
+        assert.equal(scopedSalesDownload.response.status, 200);
+        assert.deepEqual(scopedSalesDownload.buffer, Buffer.from('%PDF-test'));
 
         const unrelatedUpload = await uploadFiles(
           baseUrl,
@@ -292,6 +400,10 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           ],
         );
         assertErrorContract(unrelatedUpload, 403, 'PERMISSION_DENIED');
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
 
         const unrelatedDelete = await requestJson(
           baseUrl,
@@ -336,22 +448,54 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           'UNSUPPORTED_ATTACHMENT_TYPE',
         );
         assert.equal((await fs.readdir(storageRoot)).length, beforeRejectedUploads);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
 
-        const oversizedUpload = await uploadFiles(
+        const tooManyFiles = await uploadFiles(
+          baseUrl,
+          frontDesk.token,
+          group.id,
+          'guest_info',
+          Array.from({ length: 6 }, (_, index) => ({
+            content: Buffer.from(`tiny-${index}`),
+            name: `tiny-${index}.txt`,
+            type: 'text/plain',
+          })),
+        );
+        assertErrorContract(
+          tooManyFiles,
+          413,
+          'TOO_MANY_ATTACHMENT_FILES',
+        );
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
+
+        const spoofedImage = await uploadFiles(
           baseUrl,
           frontDesk.token,
           group.id,
           'guest_info',
           [
             {
-              content: Buffer.alloc(20 * 1024 * 1024 + 1, 1),
-              name: 'too-large.txt',
-              type: 'text/plain',
+              content: Buffer.from('not-a-real-png'),
+              name: 'spoofed.png',
+              type: 'image/png',
             },
           ],
         );
-        assertErrorContract(oversizedUpload, 413, 'FILE_TOO_LARGE');
-        assert.equal((await fs.readdir(storageRoot)).length, beforeRejectedUploads);
+        assertErrorContract(
+          spoofedImage,
+          400,
+          'ATTACHMENT_CONTENT_MISMATCH',
+        );
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
 
         const invalidCategory = await uploadFiles(
           baseUrl,
@@ -370,6 +514,10 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           invalidCategory,
           400,
           'INVALID_ATTACHMENT_CATEGORY',
+        );
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
         );
 
         const maliciousAttachmentId = crypto.randomUUID();
@@ -472,7 +620,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
 test('travel group attachment upload removes the physical file when metadata persistence fails', async () => {
   await withTemporaryAttachmentStorage(async (storageRoot) => {
     await withPhase1Server(
-      async (baseUrl) => {
+      async (baseUrl, { stores }) => {
         const admin = await login(baseUrl);
         const taster = await createUser(baseUrl, admin.token, {
           name: 'Attachment Failure Taster',
@@ -500,6 +648,10 @@ test('travel group attachment upload removes the physical file when metadata per
         );
         assertErrorContract(failedUpload, 500, 'INTERNAL_ERROR');
         assert.deepEqual(await fs.readdir(storageRoot), []);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
 
         const detail = await requestJson(
           baseUrl,
@@ -564,12 +716,53 @@ async function uploadFiles(baseUrl, token, groupId, category, files) {
   return { response, body: await response.json() };
 }
 
+async function requestMalformedMultipart(baseUrl, pathName, token) {
+  const headers = {
+    'Content-Type': 'multipart/form-data; boundary=security-test',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(`${baseUrl}${pathName}`, {
+    method: 'POST',
+    headers,
+    body: Buffer.from('--security-test\r\nbroken'),
+  });
+  return {
+    response,
+    body: await response.json(),
+  };
+}
+
 async function downloadFile(baseUrl, token, groupId, attachmentId) {
   const response = await fetch(
     `${baseUrl}/api/travel-groups/${groupId}/attachments/${attachmentId}/download`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
   return { response, buffer: Buffer.from(await response.arrayBuffer()) };
+}
+
+function attachmentFixtureForType(contentType) {
+  switch (contentType) {
+    case 'image/jpeg':
+      return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    case 'image/png':
+      return Buffer.from([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+        0x00,
+      ]);
+    case 'application/pdf':
+      return Buffer.from('%PDF-test');
+    default:
+      return Buffer.from('test');
+  }
 }
 
 function assertSafeAttachmentDto(attachment, expectedCategory) {

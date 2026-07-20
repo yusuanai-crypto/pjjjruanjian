@@ -753,6 +753,14 @@ class BusinessApi {
     return _salesSheetFromData(_data(payload));
   }
 
+  Future<SalesSheetRecord> revokeSalesOrderQrCode(String id) async {
+    final payload = await _apiClient.deleteJson(
+      '/api/sales-orders/$id/qr-code',
+      token: _token,
+    );
+    return _salesSheetFromData(_data(payload));
+  }
+
   SalesSheetRecord _salesSheetFromData(Map<String, dynamic> data) {
     final salesSheet = SalesSheetRecord.fromJson(_map(data['salesSheet']));
     if (data['qrCode'] is Map) {
@@ -951,6 +959,51 @@ class BusinessApi {
     );
     return AfterSalesOrderRecord.fromJson(
       _map(_data(payload)['afterSalesOrder']),
+    );
+  }
+
+  Future<AfterSalesOrderRecord> confirmAfterSalesWarehouse(
+    String id, {
+    String? note,
+  }) async {
+    final body = <String, dynamic>{};
+    if (note != null && note.trim().isNotEmpty) {
+      body['note'] = note.trim();
+    }
+    final payload = await _apiClient.patchJson(
+      '/api/after-sales-orders/$id/warehouse-confirm',
+      body: body,
+      token: _token,
+    );
+    return AfterSalesOrderRecord.fromJson(
+      _map(_data(payload)['afterSalesOrder']),
+    );
+  }
+
+  Future<AfterSalesOrderRecord> confirmAfterSalesFinanceRefund(
+    String id, {
+    required List<ApiMultipartFile> files,
+  }) async {
+    final payload = await _apiClient.postMultipartFiles(
+      '/api/after-sales-orders/$id/finance-refund-confirm',
+      files: files,
+      maxFileSizeBytes: 20 * 1024 * 1024,
+      token: _token,
+    );
+    return AfterSalesOrderRecord.fromJson(
+      _map(_data(payload)['afterSalesOrder']),
+    );
+  }
+
+  Future<DownloadedFile> downloadAfterSalesRefundProof(
+    String afterSalesOrderId,
+    AfterSalesRefundProofAttachmentRecord attachment,
+  ) {
+    return _apiClient.getBytes(
+      '/api/after-sales-orders/${Uri.encodeComponent(afterSalesOrderId)}'
+      '/refund-proofs/${Uri.encodeComponent(attachment.id)}/download',
+      token: _token,
+      defaultFileName: attachment.originalName,
     );
   }
 
@@ -1216,6 +1269,7 @@ class BusinessApi {
     String? productId,
     String? agencyId,
     String? agencyName,
+    String? calculationMode,
     String? productName,
     String? keyword,
     String? query,
@@ -1229,6 +1283,7 @@ class BusinessApi {
           productId: productId,
           agencyId: agencyId,
           agencyName: agencyName,
+          calculationMode: calculationMode,
           productName: productName,
           keyword: keyword,
           query: query,
@@ -1562,6 +1617,36 @@ class BusinessApi {
     );
   }
 
+  Future<TravelGroupFinanceSummaryRecord> setDailyRebatePaid(
+    String travelGroupId,
+    bool isPaid,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-group-finance-summaries/$travelGroupId/'
+      'daily-rebate-paid',
+      body: {'isPaid': isPaid},
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
+  Future<TravelGroupFinanceSummaryRecord> setMonthlyRebatePaid(
+    String travelGroupId,
+    bool isPaid,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-group-finance-summaries/$travelGroupId/'
+      'monthly-rebate-paid',
+      body: {'isPaid': isPaid},
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
   Future<TravelGroupFinanceSummaryRefreshResult>
       refreshTravelGroupFinanceSummary(String travelGroupId) async {
     final payload = await _apiClient.postJson(
@@ -1863,6 +1948,7 @@ class BusinessApi {
     String? targetType,
     String? agencyId,
     String? agencyName,
+    String? calculationMode,
     String? productName,
     String? productId,
     String? keyword,
@@ -1876,6 +1962,7 @@ class BusinessApi {
     _putNonEmpty(queryParameters, 'targetType', targetType);
     _putNonEmpty(queryParameters, 'agencyId', agencyId);
     _putNonEmpty(queryParameters, 'agencyName', agencyName);
+    _putNonEmpty(queryParameters, 'calculationMode', calculationMode);
     _putNonEmpty(queryParameters, 'productName', productName);
     _putNonEmpty(queryParameters, 'productId', productId);
     _putNonEmpty(queryParameters, 'keyword', keyword);
@@ -2790,6 +2877,10 @@ class AfterSalesOrderRecord {
     required this.financeConfirmed,
     required this.financeConfirmedById,
     required this.financeConfirmedAt,
+    required this.warehouseConfirmedById,
+    required this.warehouseConfirmedAt,
+    required this.warehouseConfirmNote,
+    required this.refundProofAttachments,
     required this.handledById,
     required this.handledAt,
     required this.completedAt,
@@ -2815,6 +2906,10 @@ class AfterSalesOrderRecord {
   final bool financeConfirmed;
   final String? financeConfirmedById;
   final String? financeConfirmedAt;
+  final String? warehouseConfirmedById;
+  final String? warehouseConfirmedAt;
+  final String? warehouseConfirmNote;
+  final List<AfterSalesRefundProofAttachmentRecord> refundProofAttachments;
   final String? handledById;
   final String? handledAt;
   final String? completedAt;
@@ -2845,6 +2940,13 @@ class AfterSalesOrderRecord {
       financeConfirmed: _boolValue(json['financeConfirmed']),
       financeConfirmedById: _stringOrNull(json['financeConfirmedById']),
       financeConfirmedAt: _stringOrNull(json['financeConfirmedAt']),
+      warehouseConfirmedById: _stringOrNull(json['warehouseConfirmedById']),
+      warehouseConfirmedAt: _stringOrNull(json['warehouseConfirmedAt']),
+      warehouseConfirmNote: _stringOrNull(json['warehouseConfirmNote']),
+      refundProofAttachments: _list(json['refundProofAttachments'])
+          .map((item) =>
+              AfterSalesRefundProofAttachmentRecord.fromJson(_map(item)))
+          .toList(),
       handledById: _stringOrNull(json['handledById']),
       handledAt: _stringOrNull(json['handledAt']),
       completedAt: _stringOrNull(json['completedAt']),
@@ -2853,6 +2955,40 @@ class AfterSalesOrderRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class AfterSalesRefundProofAttachmentRecord {
+  const AfterSalesRefundProofAttachmentRecord({
+    required this.id,
+    required this.category,
+    required this.originalName,
+    required this.contentType,
+    required this.size,
+    required this.uploadedById,
+    required this.uploadedAt,
+  });
+
+  final String id;
+  final String category;
+  final String originalName;
+  final String? contentType;
+  final int size;
+  final String? uploadedById;
+  final String? uploadedAt;
+
+  factory AfterSalesRefundProofAttachmentRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return AfterSalesRefundProofAttachmentRecord(
+      id: '${json['id'] ?? ''}',
+      category: '${json['category'] ?? ''}',
+      originalName: '${json['originalName'] ?? ''}',
+      contentType: _stringOrNull(json['contentType']),
+      size: _intValue(json['size']),
+      uploadedById: _stringOrNull(json['uploadedById']),
+      uploadedAt: _stringOrNull(json['uploadedAt']),
     );
   }
 }
@@ -3087,6 +3223,8 @@ class AgencyDeductionRuleRecord {
     required this.id,
     required this.agencyId,
     required this.agencyName,
+    required this.calculationMode,
+    required this.deductionRate,
     required this.productId,
     required this.productName,
     required this.deductionCostCents,
@@ -3103,6 +3241,8 @@ class AgencyDeductionRuleRecord {
   final String id;
   final String? agencyId;
   final String? agencyName;
+  final String calculationMode;
+  final String deductionRate;
   final String? productId;
   final String productName;
   final int deductionCostCents;
@@ -3120,6 +3260,9 @@ class AgencyDeductionRuleRecord {
       id: '${json['id'] ?? ''}',
       agencyId: _stringOrNull(json['agencyId']),
       agencyName: _stringOrNull(json['agencyName']),
+      calculationMode:
+          _stringOrNull(json['calculationMode']) ?? 'manual_product_reference',
+      deductionRate: '${json['deductionRate'] ?? '0.3000'}',
       productId: _stringOrNull(json['productId']),
       productName: '${json['productName'] ?? ''}',
       deductionCostCents: _intValue(json['deductionCostCents']),
@@ -3456,6 +3599,8 @@ class TravelGroupFinanceSummaryRecord {
     required this.travelGroupId,
     required this.travelGroup,
     required this.totalSalesAmountCents,
+    required this.totalCashOnDeliveryCents,
+    required this.totalPaidDepositCents,
     required this.confirmedRefundAmountCents,
     required this.effectiveSalesAmountCents,
     required this.totalAgencyDeductionCents,
@@ -3468,6 +3613,18 @@ class TravelGroupFinanceSummaryRecord {
     required this.totalMonthlyRebateCents,
     required this.paidRebateCents,
     required this.unpaidRebateCents,
+    required this.paidDailyRebateCents,
+    required this.unpaidDailyRebateCents,
+    required this.paidMonthlyRebateCents,
+    required this.unpaidMonthlyRebateCents,
+    required this.dailyRebatePaid,
+    required this.dailyRebatePaidById,
+    required this.dailyRebatePaidBy,
+    required this.dailyRebatePaidAt,
+    required this.monthlyRebatePaid,
+    required this.monthlyRebatePaidById,
+    required this.monthlyRebatePaidBy,
+    required this.monthlyRebatePaidAt,
     required this.notes,
     required this.guideInfoSent,
     required this.travelAgencyInfoSent,
@@ -3483,6 +3640,8 @@ class TravelGroupFinanceSummaryRecord {
   final String travelGroupId;
   final Stage7TravelGroupSummaryRecord? travelGroup;
   final int totalSalesAmountCents;
+  final int totalCashOnDeliveryCents;
+  final int totalPaidDepositCents;
   final int confirmedRefundAmountCents;
   final int effectiveSalesAmountCents;
   final int totalAgencyDeductionCents;
@@ -3495,6 +3654,18 @@ class TravelGroupFinanceSummaryRecord {
   final int totalMonthlyRebateCents;
   final int paidRebateCents;
   final int unpaidRebateCents;
+  final int paidDailyRebateCents;
+  final int unpaidDailyRebateCents;
+  final int paidMonthlyRebateCents;
+  final int unpaidMonthlyRebateCents;
+  final bool dailyRebatePaid;
+  final String? dailyRebatePaidById;
+  final Stage7UserSummaryRecord? dailyRebatePaidBy;
+  final String? dailyRebatePaidAt;
+  final bool monthlyRebatePaid;
+  final String? monthlyRebatePaidById;
+  final Stage7UserSummaryRecord? monthlyRebatePaidBy;
+  final String? monthlyRebatePaidAt;
   final String? notes;
   final bool guideInfoSent;
   final bool travelAgencyInfoSent;
@@ -3515,6 +3686,8 @@ class TravelGroupFinanceSummaryRecord {
           ? Stage7TravelGroupSummaryRecord.fromJson(_map(json['travelGroup']))
           : null,
       totalSalesAmountCents: _intValue(json['totalSalesAmountCents']),
+      totalCashOnDeliveryCents: _intValue(json['totalCashOnDeliveryCents']),
+      totalPaidDepositCents: _intValue(json['totalPaidDepositCents']),
       confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
       effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
       totalAgencyDeductionCents: _intValue(json['totalAgencyDeductionCents']),
@@ -3533,6 +3706,24 @@ class TravelGroupFinanceSummaryRecord {
       totalMonthlyRebateCents: _intValue(json['totalMonthlyRebateCents']),
       paidRebateCents: _intValue(json['paidRebateCents']),
       unpaidRebateCents: _intValue(json['unpaidRebateCents']),
+      paidDailyRebateCents: _intValue(json['paidDailyRebateCents']),
+      unpaidDailyRebateCents: _intValue(json['unpaidDailyRebateCents']),
+      paidMonthlyRebateCents: _intValue(json['paidMonthlyRebateCents']),
+      unpaidMonthlyRebateCents: _intValue(json['unpaidMonthlyRebateCents']),
+      dailyRebatePaid: _boolValue(json['dailyRebatePaid']),
+      dailyRebatePaidById: _stringOrNull(json['dailyRebatePaidById']),
+      dailyRebatePaidBy: json['dailyRebatePaidBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(_map(json['dailyRebatePaidBy']))
+          : null,
+      dailyRebatePaidAt: _stringOrNull(json['dailyRebatePaidAt']),
+      monthlyRebatePaid: _boolValue(json['monthlyRebatePaid']),
+      monthlyRebatePaidById: _stringOrNull(json['monthlyRebatePaidById']),
+      monthlyRebatePaidBy: json['monthlyRebatePaidBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(
+              _map(json['monthlyRebatePaidBy']),
+            )
+          : null,
+      monthlyRebatePaidAt: _stringOrNull(json['monthlyRebatePaidAt']),
       notes: _stringOrNull(json['notes']),
       guideInfoSent: _boolValue(json['guideInfoSent']),
       travelAgencyInfoSent: _boolValue(json['travelAgencyInfoSent']),
@@ -4136,6 +4327,8 @@ class Stage7TravelGroupSummaryRecord {
     required this.visitDate,
     required this.travelAgency,
     required this.guideName,
+    required this.licensePlate,
+    required this.guestCount,
     required this.tasterId,
     required this.tasterName,
     required this.financeMark,
@@ -4146,6 +4339,8 @@ class Stage7TravelGroupSummaryRecord {
   final String? visitDate;
   final String? travelAgency;
   final String? guideName;
+  final String? licensePlate;
+  final int guestCount;
   final String? tasterId;
   final String? tasterName;
   final bool? financeMark;
@@ -4159,6 +4354,8 @@ class Stage7TravelGroupSummaryRecord {
       visitDate: _stringOrNull(json['visitDate']),
       travelAgency: _stringOrNull(json['travelAgency']),
       guideName: _stringOrNull(json['guideName']),
+      licensePlate: _stringOrNull(json['licensePlate']),
+      guestCount: _intValue(json['guestCount']),
       tasterId: _stringOrNull(json['tasterId']),
       tasterName: _stringOrNull(json['tasterName']),
       financeMark: _boolOrNull(json['financeMark']),
@@ -4597,23 +4794,29 @@ class SalesSheetInvoiceRecord {
 
 class SalesSheetQrCode {
   const SalesSheetQrCode({
+    required this.active,
     required this.token,
     required this.url,
     required this.generatedAt,
     required this.expiresAt,
+    required this.revokedAt,
   });
 
+  final bool active;
   final String? token;
   final String? url;
   final String? generatedAt;
   final String? expiresAt;
+  final String? revokedAt;
 
   factory SalesSheetQrCode.fromJson(Map<String, dynamic> json) {
     return SalesSheetQrCode(
+      active: _boolValue(json['active']),
       token: _stringOrNull(json['token']),
       url: _stringOrNull(json['url']),
       generatedAt: _stringOrNull(json['generatedAt']),
       expiresAt: _stringOrNull(json['expiresAt']),
+      revokedAt: _stringOrNull(json['revokedAt']),
     );
   }
 }

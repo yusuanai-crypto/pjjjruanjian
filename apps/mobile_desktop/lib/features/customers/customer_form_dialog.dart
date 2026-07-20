@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/business/business_api.dart';
 
@@ -33,11 +34,12 @@ class _CustomerFormDialogState extends State<CustomerFormDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _phoneController;
-  final _provinceController = TextEditingController();
-  final _cityController = TextEditingController();
-  final _districtController = TextEditingController();
   late final TextEditingController _addressController;
   final _notesController = TextEditingController();
+  late final List<String> _provinceOptions;
+  String? _province;
+  String? _city;
+  String? _district;
   bool _saving = false;
   String? _errorMessage;
 
@@ -48,15 +50,13 @@ class _CustomerFormDialogState extends State<CustomerFormDialog> {
     _phoneController = TextEditingController(text: widget.initialPhone ?? '');
     _addressController =
         TextEditingController(text: widget.initialAddress ?? '');
+    _provinceOptions = administrativeProvinceNames();
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
-    _provinceController.dispose();
-    _cityController.dispose();
-    _districtController.dispose();
     _addressController.dispose();
     _notesController.dispose();
     super.dispose();
@@ -95,9 +95,9 @@ class _CustomerFormDialogState extends State<CustomerFormDialog> {
       'name': _nameController.text.trim(),
     };
     _putNonEmpty(body, 'phone', _phoneController.text);
-    _putNonEmpty(body, 'province', _provinceController.text);
-    _putNonEmpty(body, 'city', _cityController.text);
-    _putNonEmpty(body, 'district', _districtController.text);
+    _putNonEmpty(body, 'province', _province);
+    _putNonEmpty(body, 'city', _city);
+    _putNonEmpty(body, 'district', _district);
     _putNonEmpty(body, 'address', _addressController.text);
     _putNonEmpty(body, 'notes', _notesController.text);
     return body;
@@ -105,6 +105,16 @@ class _CustomerFormDialogState extends State<CustomerFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final provinceOptions = _optionsWithCurrent(_provinceOptions, _province);
+    final cityOptions = _optionsWithCurrent(
+      administrativeCitiesForProvince(_province),
+      _city,
+    );
+    final districtOptions = _optionsWithCurrent(
+      administrativeDistrictsForCity(_province, _city),
+      _district,
+    );
+
     return AlertDialog(
       title: const Text('新建客户'),
       content: SizedBox(
@@ -143,26 +153,67 @@ class _CustomerFormDialogState extends State<CustomerFormDialog> {
                   children: [
                     SizedBox(
                       width: 170,
-                      child: TextFormField(
-                        controller: _provinceController,
+                      child: DropdownButtonFormField<String>(
+                        key: const ValueKey('customer-province-field'),
+                        initialValue: _province,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: '省份'),
-                        textInputAction: TextInputAction.next,
+                        items: [
+                          for (final province in provinceOptions)
+                            DropdownMenuItem(
+                              value: province,
+                              child: Text(province),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            _province = value;
+                            _city = null;
+                            _district = null;
+                          });
+                        },
                       ),
                     ),
                     SizedBox(
                       width: 170,
-                      child: TextFormField(
-                        controller: _cityController,
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey('customer-city-${_province ?? ''}'),
+                        initialValue: _city,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: '城市'),
-                        textInputAction: TextInputAction.next,
+                        items: [
+                          for (final city in cityOptions)
+                            DropdownMenuItem(value: city, child: Text(city)),
+                        ],
+                        onChanged: cityOptions.isEmpty
+                            ? null
+                            : (value) {
+                                setState(() {
+                                  _city = value;
+                                  _district = null;
+                                });
+                              },
                       ),
                     ),
                     SizedBox(
                       width: 170,
-                      child: TextFormField(
-                        controller: _districtController,
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey(
+                          'customer-district-${_province ?? ''}-${_city ?? ''}',
+                        ),
+                        initialValue: _district,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: '区县'),
-                        textInputAction: TextInputAction.next,
+                        items: [
+                          for (final district in districtOptions)
+                            DropdownMenuItem(
+                              value: district,
+                              child: Text(district),
+                            ),
+                        ],
+                        onChanged: districtOptions.isEmpty
+                            ? null
+                            : (value) => setState(() => _district = value),
                       ),
                     ),
                   ],
@@ -235,8 +286,16 @@ class _DialogNotice extends StatelessWidget {
   }
 }
 
-void _putNonEmpty(Map<String, dynamic> body, String key, String value) {
-  final text = value.trim();
+List<String> _optionsWithCurrent(List<String> options, String? current) {
+  final text = current?.trim() ?? '';
+  if (text.isEmpty || options.contains(text)) {
+    return options;
+  }
+  return [text, ...options];
+}
+
+void _putNonEmpty(Map<String, dynamic> body, String key, String? value) {
+  final text = value?.trim() ?? '';
   if (text.isNotEmpty) {
     body[key] = text;
   }

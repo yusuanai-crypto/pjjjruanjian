@@ -98,7 +98,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.boss ||
-      widget.role == UserRole.finance;
+      widget.role == UserRole.finance ||
+      widget.role == UserRole.afterSales;
 
   bool get _canExportAnalytics => _canViewAnalytics;
 

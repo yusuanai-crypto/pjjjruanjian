@@ -1,24 +1,34 @@
 const { createHttpError } = require('../../common/errors');
 const { getBearerToken } = require('../../common/http');
+const {
+  createLegacyRateLimitService,
+} = require('../../common/rate-limit/rate-limit');
 const { createToken, verifyToken } = require('./token');
 const { getRoleCatalog, getRoleDataScope, getRoleMenus, getRolePermissions } = require('./roles');
-const { TEMPORARY_PASSWORD, hashPassword, verifyPassword } = require('./password');
+const { hashPassword, verifyPassword } = require('./password');
 const { createUserRepository, normalizeUsername } = require('../users/users.repository');
 const { createOperationLogRepository } = require('../operation-logs/operation-log.repository');
 
 function createAuthService(options = {}) {
   const userRepository = options.userRepository || createUserRepository();
   const operationLogRepository = options.operationLogRepository || createOperationLogRepository();
+  const rateLimitService =
+    options.rateLimitService || createLegacyRateLimitService();
   const tokenSecret = options.tokenSecret;
   const tokenExpiresInSeconds = options.tokenExpiresInSeconds;
 
   return {
-    login(credentials, metadata = {}) {
+    async login(credentials, metadata = {}) {
       const username = normalizeUsername(credentials?.username);
       const password = credentials?.password;
       if (!username || typeof password !== 'string') {
         throw createHttpError(400, 'LOGIN_FIELDS_REQUIRED', 'username and password are required.');
       }
+
+      await rateLimitService.enforceLogin({
+        ipAddress: metadata.ipAddress || null,
+        username,
+      });
 
       const user = userRepository.findByUsername(username);
       if (!user || !verifyPassword(password, user.passwordHash)) {
@@ -33,6 +43,7 @@ function createAuthService(options = {}) {
           sub: user.id,
           username: user.username,
           role: user.role,
+          tokenVersion: user.tokenVersion,
         },
         {
           secret: tokenSecret,
@@ -67,6 +78,16 @@ function createAuthService(options = {}) {
       if (!user) {
         throw createHttpError(401, 'AUTH_USER_NOT_FOUND', 'Authorization user no longer exists.');
       }
+      if (
+        !Number.isInteger(payload.tokenVersion) ||
+        payload.tokenVersion !== user.tokenVersion
+      ) {
+        throw createHttpError(
+          401,
+          'SESSION_REVOKED',
+          'The session has been revoked. Sign in again.',
+        );
+      }
       if (!user.isActive) {
         throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
       }
@@ -84,14 +105,12 @@ function createAuthService(options = {}) {
       if (!verifyPassword(patch?.currentPassword, user.passwordHash)) {
         throw createHttpError(400, 'CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
       }
-      if (patch?.newPassword === TEMPORARY_PASSWORD) {
-        throw createHttpError(400, 'TEMPORARY_PASSWORD_NOT_ALLOWED', 'New password cannot be the temporary password.');
-      }
 
       const nextUser = {
         ...user,
         passwordHash: hashPassword(patch.newPassword),
         mustChangePassword: false,
+        tokenVersion: Number(user.tokenVersion || 0) + 1,
         updatedAt: new Date().toISOString(),
       };
       userRepository.saveUser(nextUser);
@@ -106,7 +125,23 @@ function createAuthService(options = {}) {
         ipAddress: metadata.ipAddress || null,
       });
 
-      return buildSessionPayload(nextUser);
+      const tokenResult = createToken(
+        {
+          sub: nextUser.id,
+          username: nextUser.username,
+          role: nextUser.role,
+          tokenVersion: nextUser.tokenVersion,
+        },
+        {
+          secret: tokenSecret,
+          expiresInSeconds: tokenExpiresInSeconds,
+        },
+      );
+      return {
+        token: tokenResult.token,
+        expiresAt: tokenResult.expiresAt,
+        ...buildSessionPayload(nextUser),
+      };
     },
 
     getRoleCatalog() {

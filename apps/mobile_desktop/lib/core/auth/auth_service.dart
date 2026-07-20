@@ -38,7 +38,7 @@ class AuthService {
         'newPassword': newPassword,
       },
     );
-    return AuthSession.fromJson(_data(payload)).withToken(token);
+    return AuthSession.fromJson(_data(payload));
   }
 
   Map<String, dynamic> _data(Map<String, dynamic> payload) {

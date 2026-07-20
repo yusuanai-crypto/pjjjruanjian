@@ -74,11 +74,17 @@ class AppDateRangeButton extends StatelessWidget {
     required this.start,
     required this.end,
     required this.onChanged,
+    this.allSelected = false,
+    this.onAllSelected,
+    this.allLabel = '全部日期',
   });
 
   final DateTime start;
   final DateTime end;
   final ValueChanged<DateTimeRange> onChanged;
+  final bool allSelected;
+  final VoidCallback? onAllSelected;
+  final String allLabel;
 
   Future<void> _pickRange(BuildContext context) async {
     final result = await showDateRangePicker(
@@ -106,10 +112,27 @@ class AppDateRangeButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton.icon(
+    final rangeButton = OutlinedButton.icon(
       onPressed: () => _pickRange(context),
       icon: const Icon(Icons.date_range_rounded),
       label: Text('${formatDate(start)} 至 ${formatDate(end)}'),
+    );
+    final onAll = onAllSelected;
+    if (onAll == null) {
+      return rangeButton;
+    }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        rangeButton,
+        FilterChip(
+          selected: allSelected,
+          onSelected: (_) => onAll(),
+          label: Text(allLabel),
+        ),
+      ],
     );
   }
 }

@@ -8,6 +8,10 @@ import { OperationLogsNestService } from '../operation-logs/operation-log.nest.s
 const READ_RULE_ROLES = ['admin', 'finance', 'boss'];
 const WRITE_RULE_ROLES = ['admin', 'finance'];
 const MAX_OPEN_ENDED_DATE = new Date('9999-12-31T00:00:00.000Z');
+const AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE = 'effective_sales_rate';
+const AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE =
+  'manual_product_reference';
+const DEFAULT_AGENCY_DEDUCTION_RATE = '0.3000';
 
 const COMMISSION_TARGET_TYPE_TO_PRISMA: any = {
   sales_commission: 'SALES_COMMISSION',
@@ -85,6 +89,8 @@ const RULE_CONFIG: Record<string, any> = {
     allowedFields: [
       'agencyId',
       'agencyName',
+      'calculationMode',
+      'deductionRate',
       'productId',
       'deductionCostCents',
       'effectiveFrom',
@@ -95,7 +101,7 @@ const RULE_CONFIG: Record<string, any> = {
     toDto: toAgencyDeductionRuleDto,
     buildWhere: buildAgencyDeductionRuleWhere,
     buildData: buildAgencyDeductionRuleData,
-    dimensionKeys: (rule: any) => buildAgencyProductDimensionKeys(rule),
+    dimensionKeys: (rule: any) => buildAgencyDeductionDimensionKeys(rule),
   },
   agencyRebate: {
     delegate: 'agencyRebateRule',
@@ -499,7 +505,41 @@ export class CommissionRulesNestService {
     if (kind !== 'salesDeduction' && kind !== 'agencyDeduction') {
       return;
     }
-    const productId = normalizeRequiredString(data.productId, 'productId');
+
+    if (kind === 'agencyDeduction') {
+      const nextMode = normalizeAgencyDeductionCalculationMode(
+        data.calculationMode ?? current?.calculationMode,
+        AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+      );
+      if (nextMode === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE) {
+        data.calculationMode = nextMode;
+        data.productId = null;
+        data.productName = '';
+        data.deductionCostCents = 0;
+        if (data.deductionRate === undefined) {
+          data.deductionRate = DEFAULT_AGENCY_DEDUCTION_RATE;
+        }
+        return;
+      }
+    }
+
+    const productId =
+      kind === 'agencyDeduction'
+        ? normalizeOptionalString(data.productId) ||
+          normalizeOptionalString(current?.productId)
+        : normalizeRequiredString(data.productId, 'productId');
+    if (!productId) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'productId is required.',
+      );
+    }
+
+    if (kind === 'agencyDeduction' && data.productId === undefined && current) {
+      return;
+    }
+
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
     });
@@ -606,6 +646,11 @@ function buildAgencyDeductionRuleWhere(filters: any = {}) {
     where.agencyName = {
       contains: agencyName,
     };
+  }
+  const calculationMode = normalizeOptionalString(filters.calculationMode);
+  if (calculationMode) {
+    where.calculationMode =
+      normalizeAgencyDeductionCalculationMode(calculationMode);
   }
   const productId = normalizeOptionalString(filters.productId);
   if (productId) {
@@ -730,7 +775,11 @@ function buildAgencyDeductionRuleData(
   creating: boolean,
   actor: any,
 ) {
-  const data = buildSalesDeductionRuleData(payload, creating, actor);
+  const now = new Date();
+  const data: any = {
+    updatedAt: now,
+    updatedById: actor.id,
+  };
   assignNullableString(data, 'agencyId', payload?.agencyId, 'agencyId', 36);
   assignNullableString(
     data,
@@ -739,6 +788,58 @@ function buildAgencyDeductionRuleData(
     'agencyName',
     120,
   );
+  if (payload?.calculationMode !== undefined || creating) {
+    data.calculationMode = normalizeAgencyDeductionCalculationMode(
+      payload?.calculationMode,
+      AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+    );
+  }
+  assignDecimal(data, 'deductionRate', payload?.deductionRate, {
+    fieldName: 'deductionRate',
+  });
+  if (creating && data.deductionRate === undefined) {
+    data.deductionRate = DEFAULT_AGENCY_DEDUCTION_RATE;
+  }
+
+  if (data.calculationMode === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE) {
+    data.productId = null;
+    data.productName = '';
+    data.deductionCostCents = 0;
+  } else {
+    assignString(data, 'productId', payload?.productId, {
+      fieldName: 'productId',
+      maxLength: 36,
+      required: creating,
+    });
+    assignNonNegativeInteger(
+      data,
+      'deductionCostCents',
+      payload?.deductionCostCents,
+      {
+        fieldName: 'deductionCostCents',
+        required: creating,
+      },
+    );
+  }
+
+  assignDate(data, 'effectiveFrom', payload?.effectiveFrom, {
+    fieldName: 'effectiveFrom',
+    required: creating,
+  });
+  assignDate(data, 'effectiveTo', payload?.effectiveTo, {
+    fieldName: 'effectiveTo',
+    nullable: true,
+  });
+  assignBoolean(data, 'isActive', payload?.isActive, creating ? true : undefined);
+  assignNullableText(data, 'notes', payload?.notes);
+  assertEffectiveDateRange(data, payload, creating);
+
+  if (creating) {
+    data.id = crypto.randomUUID();
+    data.createdAt = now;
+    data.createdById = actor.id;
+    data.isActive = data.isActive ?? true;
+  }
   return data;
 }
 
@@ -829,8 +930,15 @@ function toAgencyDeductionRuleDto(rule: any) {
     id: rule.id,
     agencyId: rule.agencyId || null,
     agencyName: rule.agencyName || null,
+    calculationMode: normalizeAgencyDeductionCalculationMode(
+      rule.calculationMode,
+      AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+    ),
+    deductionRate: decimalToFixed(
+      rule.deductionRate ?? DEFAULT_AGENCY_DEDUCTION_RATE,
+    ),
     productId: rule.productId || null,
-    productName: rule.productName,
+    productName: rule.productName || '',
     deductionCostCents: Number(rule.deductionCostCents || 0),
     effectiveFrom: toDateOnly(rule.effectiveFrom),
     effectiveTo: toDateOnly(rule.effectiveTo),
@@ -900,6 +1008,20 @@ function buildAgencyProductDimensionKeys(rule: any) {
   );
 }
 
+function buildAgencyDeductionDimensionKeys(rule: any) {
+  const mode = normalizeAgencyDeductionCalculationMode(
+    rule.calculationMode,
+    AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+  );
+  if (mode === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE) {
+    return buildAgencyDimensionKeys(rule, `mode:${mode}`);
+  }
+  const productKeys = buildProductDimensionKeys(rule);
+  return productKeys.flatMap((productKey) =>
+    buildAgencyDimensionKeys(rule, `mode:${mode}|${productKey}`),
+  );
+}
+
 function rulesShareDimension(
   kind: RuleKind,
   left: any,
@@ -916,13 +1038,28 @@ function rulesShareDimension(
     );
   }
   if (kind === 'agencyDeduction') {
+    const leftMode = normalizeAgencyDeductionCalculationMode(
+      left.calculationMode,
+      AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+    );
+    const rightMode = normalizeAgencyDeductionCalculationMode(
+      right.calculationMode,
+      AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+    );
+    if (leftMode !== rightMode) {
+      return false;
+    }
+    const sameAgency = referencesMatch(
+      left.agencyId,
+      right.agencyId,
+      left.agencyName,
+      right.agencyName,
+    );
+    if (leftMode === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE) {
+      return sameAgency;
+    }
     return (
-      referencesMatch(
-        left.agencyId,
-        right.agencyId,
-        left.agencyName,
-        right.agencyName,
-      ) &&
+      sameAgency &&
       referencesMatch(
         left.productId,
         right.productId,
@@ -1160,6 +1297,34 @@ function normalizeCommissionRuleTargetType(value: unknown) {
     );
   }
   return targetType;
+}
+
+function normalizeAgencyDeductionCalculationMode(
+  value: unknown,
+  fallback?: string,
+) {
+  const text = normalizeOptionalString(value);
+  if (!text) {
+    if (fallback !== undefined) {
+      return fallback;
+    }
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'calculationMode is invalid.',
+    );
+  }
+  if (
+    text === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE ||
+    text === AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE
+  ) {
+    return text;
+  }
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    'calculationMode is invalid.',
+  );
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string) {

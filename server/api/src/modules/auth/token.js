@@ -1,4 +1,6 @@
 const crypto = require('node:crypto');
+const { createHttpError } = require('../../common/errors');
+const { getAuthTokenSecret } = require('./auth-token-secret');
 
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 8 * 60 * 60;
 
@@ -57,7 +59,9 @@ function verifyToken(token, options = {}) {
 }
 
 function getTokenSecret(options) {
-  return options.secret || process.env.AUTH_TOKEN_SECRET || 'jiangjiu-dev-token-secret-change-me';
+  return getAuthTokenSecret({
+    secret: options.secret,
+  });
 }
 
 function encodeJson(value) {
@@ -83,10 +87,7 @@ function timingSafeStringEqual(left, right) {
 }
 
 function createTokenError(code, message) {
-  const error = new Error(message);
-  error.statusCode = 401;
-  error.code = code;
-  return error;
+  return createHttpError(401, code, message);
 }
 
 module.exports = {

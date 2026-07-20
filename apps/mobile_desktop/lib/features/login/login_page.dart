@@ -28,7 +28,7 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _usernameController = TextEditingController(text: 'admin');
-  final _passwordController = TextEditingController(text: 'Admin@123456');
+  final _passwordController = TextEditingController();
   late final TextEditingController _apiHostController;
   bool _obscurePassword = true;
   bool _submitting = false;
@@ -204,7 +204,7 @@ class _LoginPageState extends State<LoginPage> {
                   : () => setState(() {
                         _apiHostController.text = AppConfig.defaultApiBaseUrl;
                         _usernameController.text = 'admin';
-                        _passwordController.text = 'Admin@123456';
+                        _passwordController.clear();
                         _message = null;
                       }),
               icon: const Icon(Icons.restore_rounded),

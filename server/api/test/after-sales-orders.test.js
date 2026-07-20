@@ -1,4 +1,7 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -8,8 +11,14 @@ const {
   requestJson,
   withNestApiServer,
 } = require('./helpers/phase1-api');
+const { getRoleMenus } = require('../src/modules/auth/roles');
 
 const TEST_PASSWORD = 'Password123';
+
+test('unit: finance role menu includes after-sales orders', () => {
+  const financeMenuIds = getRoleMenus('finance').map((menu) => menu.id);
+  assert.equal(financeMenuIds.includes('after_sales_orders'), true);
+});
 
 test('contract: after-sales order creation validates payload and writes an operation log', async () => {
   await withNestApiServer(async (baseUrl) => {
@@ -149,7 +158,7 @@ test('contract: after-sales order list supports documented filters', async () =>
     assert.equal(query.response.status, 200);
     assert.deepEqual(
       query.body.data.afterSalesOrders.map((order) => order.afterSalesNo),
-      ['AS20260702002'],
+      ['AS20260702002', 'AS20260702003'],
     );
 
     const byCustomer = await requestJson(
@@ -162,7 +171,7 @@ test('contract: after-sales order list supports documented filters', async () =>
     assert.equal(byCustomer.response.status, 200);
     assert.deepEqual(
       byCustomer.body.data.afterSalesOrders.map((order) => order.afterSalesNo),
-      ['AS20260701003', 'AS20260701001'],
+      ['AS20260701004', 'AS20260701003', 'AS20260701001'],
     );
   }, createAfterSalesTestOptions());
 });
@@ -181,7 +190,7 @@ test('contract: after-sales order detail enforces role and sales ownership permi
     assert.equal(salesList.response.status, 200);
     assert.deepEqual(
       salesList.body.data.afterSalesOrders.map((order) => order.afterSalesNo),
-      ['AS20260701003', 'AS20260701001'],
+      ['AS20260701004', 'AS20260701003', 'AS20260701001'],
     );
 
     const ownedDetail = await requestJson(
@@ -206,6 +215,11 @@ test('contract: after-sales order detail enforces role and sales ownership permi
     );
     assertErrorContract(otherDetail, 404, 'SALES_ORDER_NOT_FOUND');
 
+    const bossList = await requestJson(baseUrl, '/api/after-sales-orders', {
+      token: boss.token,
+    });
+    assertErrorContract(bossList, 403, 'PERMISSION_DENIED');
+
     const bossDetail = await requestJson(
       baseUrl,
       '/api/after-sales-orders/as_other_resend',
@@ -213,7 +227,38 @@ test('contract: after-sales order detail enforces role and sales ownership permi
         token: boss.token,
       },
     );
-    assert.equal(bossDetail.response.status, 200);
+    assertErrorContract(bossDetail, 403, 'PERMISSION_DENIED');
+
+    const warehouseList = await requestJson(baseUrl, '/api/after-sales-orders', {
+      token: warehouse.token,
+    });
+    assert.equal(warehouseList.response.status, 200);
+    assert.equal(warehouseList.body.data.afterSalesOrders.length > 0, true);
+
+    const warehouseDetail = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_owner_refund',
+      {
+        token: warehouse.token,
+      },
+    );
+    assert.equal(warehouseDetail.response.status, 200);
+    assert.equal(
+      warehouseDetail.body.data.afterSalesOrder.afterSalesNo,
+      'AS20260701001',
+    );
+
+    const warehouseCreate = await requestJson(baseUrl, '/api/after-sales-orders', {
+      method: 'POST',
+      token: warehouse.token,
+      body: {
+        salesOrderId: 'so_after_sales_owner',
+        issueType: 'quality_issue',
+        actionType: 'record_only',
+        description: 'smoke test warehouse cannot create after sales',
+      },
+    });
+    assertErrorContract(warehouseCreate, 403, 'PERMISSION_DENIED');
 
     const salesCreate = await requestJson(baseUrl, '/api/after-sales-orders', {
       method: 'POST',
@@ -227,7 +272,7 @@ test('contract: after-sales order detail enforces role and sales ownership permi
     });
     assertErrorContract(salesCreate, 403, 'PERMISSION_DENIED');
 
-    for (const token of [warehouse.token, frontDesk.token, taster.token]) {
+    for (const token of [frontDesk.token, taster.token]) {
       const list = await requestJson(baseUrl, '/api/after-sales-orders', {
         token,
       });
@@ -429,6 +474,32 @@ test('contract: PATCH /api/after-sales-orders/:id/status transitions status and 
     assert.equal(waitingReceiveOrder.completedAt, null);
     assert.equal(waitingReceiveOrder.salesOrder.status, 'valid');
 
+    const warehouseConfirmed = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_other_resend/warehouse-confirm',
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          note: 'smoke test warehouse received goods',
+        },
+      },
+    );
+    assert.equal(warehouseConfirmed.response.status, 200);
+    assert.equal(
+      warehouseConfirmed.body.data.afterSalesOrder.status,
+      'waiting_refund',
+    );
+    assert.equal(
+      warehouseConfirmed.body.data.afterSalesOrder.warehouseConfirmedById,
+      'usr_admin',
+    );
+    assert.ok(
+      Date.parse(
+        warehouseConfirmed.body.data.afterSalesOrder.warehouseConfirmedAt,
+      ),
+    );
+
     const completed = await requestJson(
       baseUrl,
       '/api/after-sales-orders/as_other_resend/status',
@@ -463,10 +534,13 @@ test('contract: PATCH /api/after-sales-orders/:id/status transitions status and 
     assert.equal(logs.response.status, 200);
     const statusLogs = logs.body.data.logs.filter(
       (log) =>
-        log.action === 'after_sales_orders.status.update' &&
+        [
+          'after_sales_orders.status.update',
+          'after_sales_orders.warehouse_confirm',
+        ].includes(log.action) &&
         log.entityId === 'as_other_resend',
     );
-    assert.equal(statusLogs.length, 2);
+    assert.equal(statusLogs.length, 3);
 
     const waitingReceiveLog = statusLogs.find(
       (log) => log.afterData.status === 'waiting_receive',
@@ -481,6 +555,20 @@ test('contract: PATCH /api/after-sales-orders/:id/status transitions status and 
     assert.equal(waitingReceiveLog.beforeData.status, 'waiting_resend');
     assert.equal(waitingReceiveLog.afterData.handledById, 'usr_after_sales');
 
+    const warehouseLog = statusLogs.find(
+      (log) => log.action === 'after_sales_orders.warehouse_confirm',
+    );
+    assert.ok(warehouseLog);
+    assertPhase6OperationLog(warehouseLog, {
+      action: 'after_sales_orders.warehouse_confirm',
+      entityType: 'after_sales_order',
+      entityId: 'as_other_resend',
+      userId: 'usr_admin',
+    });
+    assert.equal(warehouseLog.beforeData.status, 'waiting_receive');
+    assert.equal(warehouseLog.afterData.status, 'waiting_refund');
+    assert.equal(warehouseLog.afterData.warehouseConfirmedById, 'usr_admin');
+
     const completedLog = statusLogs.find(
       (log) => log.afterData.status === 'completed',
     );
@@ -491,7 +579,7 @@ test('contract: PATCH /api/after-sales-orders/:id/status transitions status and 
       entityId: 'as_other_resend',
       userId: 'usr_admin',
     });
-    assert.equal(completedLog.beforeData.status, 'waiting_receive');
+    assert.equal(completedLog.beforeData.status, 'waiting_refund');
     assert.equal(completedLog.afterData.handledById, 'usr_admin');
     assert.ok(completedLog.afterData.completedAt);
   }, createAfterSalesTestOptions());
@@ -552,6 +640,84 @@ test('contract: PATCH /api/after-sales-orders/:id/status validates status payloa
           body: {
             status: 'waiting_resend',
           },
+        },
+      );
+      assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+    }
+  }, createAfterSalesTestOptions());
+});
+
+test('contract: warehouse confirms waiting receive or waiting resend only', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const warehouse = await login(baseUrl, 'warehouse_user', TEST_PASSWORD);
+    const admin = await login(baseUrl, 'admin');
+    const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+    const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
+
+    const receive = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_waiting_receive/warehouse-confirm',
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          warehouseConfirmNote: 'received return goods',
+        },
+      },
+    );
+    assert.equal(receive.response.status, 200);
+    assert.equal(receive.body.data.afterSalesOrder.status, 'waiting_refund');
+    assert.equal(
+      receive.body.data.afterSalesOrder.warehouseConfirmedById,
+      'usr_warehouse',
+    );
+    assert.ok(
+      Date.parse(receive.body.data.afterSalesOrder.warehouseConfirmedAt),
+    );
+    assert.equal(
+      receive.body.data.afterSalesOrder.warehouseConfirmNote,
+      'received return goods',
+    );
+
+    const resend = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_other_resend/warehouse-confirm',
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          note: 'resent missing item',
+        },
+      },
+    );
+    assert.equal(resend.response.status, 200);
+    assert.equal(resend.body.data.afterSalesOrder.status, 'waiting_refund');
+    assert.equal(
+      resend.body.data.afterSalesOrder.warehouseConfirmedById,
+      'usr_admin',
+    );
+
+    const invalidStatus = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_owner_refund/warehouse-confirm',
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+      },
+    );
+    assertErrorContract(
+      invalidStatus,
+      400,
+      'AFTER_SALES_WAREHOUSE_CONFIRM_STATUS_INVALID',
+    );
+
+    for (const token of [finance.token, afterSales.token]) {
+      const denied = await requestJson(
+        baseUrl,
+        '/api/after-sales-orders/as_waiting_receive/warehouse-confirm',
+        {
+          method: 'PATCH',
+          token,
         },
       );
       assertErrorContract(denied, 403, 'PERMISSION_DENIED');
@@ -806,93 +972,154 @@ test('contract: after-sales status rejects cumulative refund above sales order t
   }, createAfterSalesTestOptions());
 });
 
-test('contract: PATCH /api/after-sales-orders/:id/finance-confirm confirms and cancels refund confirmation', async () => {
-  await withNestApiServer(async (baseUrl) => {
-    const admin = await login(baseUrl, 'admin');
-    const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+test('contract: finance refund confirmation requires and stores proof attachments', async () => {
+  await withTemporaryRefundProofStorage(async (storageRoot) => {
+    await withNestApiServer(
+      async (baseUrl) => {
+        const admin = await login(baseUrl, 'admin');
+        const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
 
-    const confirmed = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_owner_refund/finance-confirm',
+        const legacyNoProof = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund/finance-confirm',
+          {
+            method: 'PATCH',
+            token: finance.token,
+            body: {
+              financeConfirmed: true,
+            },
+          },
+        );
+        assertErrorContract(legacyNoProof, 400, 'REFUND_PROOF_FILE_REQUIRED');
+
+        const noProof = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [],
+        );
+        assertErrorContract(noProof, 400, 'REFUND_PROOF_FILE_REQUIRED');
+
+        const confirmed = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [
+            {
+              content: Buffer.from([
+                0x89,
+                0x50,
+                0x4e,
+                0x47,
+                0x0d,
+                0x0a,
+                0x1a,
+                0x0a,
+              ]),
+              name: 'refund-proof.png',
+              type: 'image/png',
+            },
+          ],
+        );
+        assert.equal(confirmed.response.status, 201);
+        const confirmedOrder = confirmed.body.data.afterSalesOrder;
+        assertAfterSalesOrderContract(confirmedOrder);
+        assert.equal(confirmedOrder.financeConfirmed, true);
+        assert.equal(confirmedOrder.financeConfirmedById, 'usr_finance');
+        assert.ok(Date.parse(confirmedOrder.financeConfirmedAt));
+        assert.equal(confirmedOrder.updatedById, 'usr_finance');
+        assert.equal(confirmedOrder.refundProofAttachments.length, 1);
+        assert.equal(
+          confirmedOrder.refundProofAttachments[0].originalName,
+          'refund-proof.png',
+        );
+        assert.equal(
+          confirmedOrder.refundProofAttachments[0].contentType,
+          'image/png',
+        );
+        assertNoStorageLocation(confirmedOrder);
+
+        const downloaded = await downloadRefundProof(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          confirmedOrder.refundProofAttachments[0].id,
+        );
+        assert.equal(downloaded.response.status, 200);
+        assert.equal(
+          downloaded.response.headers.get('content-type'),
+          'image/png',
+        );
+        assert.equal(downloaded.buffer[0], 0x89);
+
+        const cancelled = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund/finance-confirm',
+          {
+            method: 'PATCH',
+            token: admin.token,
+            body: {
+              financeConfirmed: false,
+            },
+          },
+        );
+        assert.equal(cancelled.response.status, 200);
+        const cancelledOrder = cancelled.body.data.afterSalesOrder;
+        assert.equal(cancelledOrder.financeConfirmed, false);
+        assert.equal(cancelledOrder.financeConfirmedById, null);
+        assert.equal(cancelledOrder.financeConfirmedAt, null);
+        assert.equal(cancelledOrder.refundProofAttachments.length, 0);
+        assert.equal(cancelledOrder.updatedById, 'usr_admin');
+
+        const logs = await requestJson(
+          baseUrl,
+          '/api/operation-logs?entityType=after_sales_order',
+          {
+            token: admin.token,
+          },
+        );
+        assert.equal(logs.response.status, 200);
+        const confirmLog = logs.body.data.logs.find(
+          (log) =>
+            log.action === 'after_sales_orders.finance_refund_confirm' &&
+            log.entityId === 'as_owner_refund',
+        );
+        assert.ok(confirmLog);
+        assertPhase6OperationLog(confirmLog, {
+          action: 'after_sales_orders.finance_refund_confirm',
+          entityType: 'after_sales_order',
+          entityId: 'as_owner_refund',
+          userId: 'usr_finance',
+        });
+        assert.equal(confirmLog.beforeData.financeConfirmed, false);
+        assert.equal(confirmLog.afterData.financeConfirmed, true);
+        assert.equal(confirmLog.afterData.financeConfirmedById, 'usr_finance');
+        assert.equal(confirmLog.afterData.refundProofAttachments.length, 1);
+        assertNoStorageLocation(confirmLog);
+
+        const cancelLog = logs.body.data.logs.find(
+          (log) =>
+            log.action === 'after_sales_orders.finance_confirm.disable' &&
+            log.entityId === 'as_owner_refund',
+        );
+        assert.ok(cancelLog);
+        assertPhase6OperationLog(cancelLog, {
+          action: 'after_sales_orders.finance_confirm.disable',
+          entityType: 'after_sales_order',
+          entityId: 'as_owner_refund',
+          userId: 'usr_admin',
+        });
+        assert.equal(cancelLog.beforeData.financeConfirmed, true);
+        assert.equal(cancelLog.afterData.financeConfirmed, false);
+        assert.equal(cancelLog.afterData.financeConfirmedById, null);
+        assert.equal(cancelLog.afterData.refundProofAttachments.length, 0);
+      },
       {
-        method: 'PATCH',
-        token: finance.token,
-        body: {
-          financeConfirmed: true,
-        },
+        ...createAfterSalesTestOptions(),
+        env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
       },
     );
-    assert.equal(confirmed.response.status, 200);
-    const confirmedOrder = confirmed.body.data.afterSalesOrder;
-    assertAfterSalesOrderContract(confirmedOrder);
-    assert.equal(confirmedOrder.financeConfirmed, true);
-    assert.equal(confirmedOrder.financeConfirmedById, 'usr_finance');
-    assert.ok(Date.parse(confirmedOrder.financeConfirmedAt));
-    assert.equal(confirmedOrder.updatedById, 'usr_finance');
-
-    const cancelled = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_owner_refund/finance-confirm',
-      {
-        method: 'PATCH',
-        token: admin.token,
-        body: {
-          financeConfirmed: false,
-        },
-      },
-    );
-    assert.equal(cancelled.response.status, 200);
-    const cancelledOrder = cancelled.body.data.afterSalesOrder;
-    assert.equal(cancelledOrder.financeConfirmed, false);
-    assert.equal(cancelledOrder.financeConfirmedById, null);
-    assert.equal(cancelledOrder.financeConfirmedAt, null);
-    assert.equal(cancelledOrder.updatedById, 'usr_admin');
-
-    const logs = await requestJson(
-      baseUrl,
-      '/api/operation-logs?entityType=after_sales_order',
-      {
-        token: admin.token,
-      },
-    );
-    assert.equal(logs.response.status, 200);
-    const financeLogs = logs.body.data.logs.filter(
-      (log) =>
-        [
-          'after_sales_orders.finance_confirm.enable',
-          'after_sales_orders.finance_confirm.disable',
-        ].includes(log.action) &&
-        log.entityId === 'as_owner_refund',
-    );
-    assert.equal(financeLogs.length, 2);
-    const confirmLog = financeLogs.find(
-      (log) => log.action === 'after_sales_orders.finance_confirm.enable',
-    );
-    assert.ok(confirmLog);
-    assertPhase6OperationLog(confirmLog, {
-      action: 'after_sales_orders.finance_confirm.enable',
-      entityType: 'after_sales_order',
-      entityId: 'as_owner_refund',
-      userId: 'usr_finance',
-    });
-    assert.equal(confirmLog.beforeData.financeConfirmed, false);
-    assert.equal(confirmLog.afterData.financeConfirmed, true);
-    assert.equal(confirmLog.afterData.financeConfirmedById, 'usr_finance');
-
-    const cancelLog = financeLogs.find(
-      (log) => log.action === 'after_sales_orders.finance_confirm.disable',
-    );
-    assert.ok(cancelLog);
-    assertPhase6OperationLog(cancelLog, {
-      action: 'after_sales_orders.finance_confirm.disable',
-      entityType: 'after_sales_order',
-      entityId: 'as_owner_refund',
-      userId: 'usr_admin',
-    });
-    assert.equal(cancelLog.beforeData.financeConfirmed, true);
-    assert.equal(cancelLog.afterData.financeConfirmed, false);
-    assert.equal(cancelLog.afterData.financeConfirmedById, null);
-  }, createAfterSalesTestOptions());
+  });
 });
 
 test('contract: PATCH /api/after-sales-orders/:id/finance-confirm validates roles and refund amount', async () => {
@@ -940,6 +1167,159 @@ test('contract: PATCH /api/after-sales-orders/:id/finance-confirm validates role
     );
     assertErrorContract(noRefund, 400, 'AFTER_SALES_REFUND_NOT_REQUIRED');
   }, createAfterSalesTestOptions());
+});
+
+test('contract: refund proof upload guards reject before multipart parsing', async () => {
+  await withNestApiServer(
+    async (baseUrl, { stores }) => {
+      const sales = await login(
+        baseUrl,
+        'sales_owner',
+        TEST_PASSWORD,
+      );
+      const pathName =
+        '/api/after-sales-orders/not-read/finance-refund-confirm';
+
+      const unauthenticated = await requestMalformedRefundMultipart(
+        baseUrl,
+        pathName,
+      );
+      assertErrorContract(
+        unauthenticated,
+        401,
+        'AUTH_TOKEN_REQUIRED',
+      );
+
+      const unauthorized = await requestMalformedRefundMultipart(
+        baseUrl,
+        pathName,
+        sales.token,
+      );
+      assertErrorContract(unauthorized, 403, 'PERMISSION_DENIED');
+      assert.deepEqual(
+        await fs.readdir(stores.attachmentTempDir),
+        [],
+      );
+    },
+    createAfterSalesTestOptions(),
+  );
+});
+
+test('contract: completed status requires warehouse and finance proof prerequisites', async () => {
+  await withTemporaryRefundProofStorage(async (storageRoot) => {
+    await withNestApiServer(
+      async (baseUrl, { stores }) => {
+        const afterSales = await login(
+          baseUrl,
+          'after_sales_user',
+          TEST_PASSWORD,
+        );
+        const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+
+        const noWarehouse = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_other_resend/status',
+          {
+            method: 'PATCH',
+            token: afterSales.token,
+            body: {
+              status: 'completed',
+              notes: 'attempt direct completion without warehouse confirm',
+            },
+          },
+        );
+        assertErrorContract(
+          noWarehouse,
+          400,
+          'AFTER_SALES_WAREHOUSE_CONFIRM_REQUIRED',
+        );
+
+        const noFinance = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund/status',
+          {
+            method: 'PATCH',
+            token: afterSales.token,
+            body: {
+              status: 'completed',
+              notes: 'attempt completion without finance confirm',
+            },
+          },
+        );
+        assertErrorContract(
+          noFinance,
+          400,
+          'AFTER_SALES_FINANCE_CONFIRM_REQUIRED',
+        );
+
+        const noProof = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_finance_confirmed_no_proof/status',
+          {
+            method: 'PATCH',
+            token: afterSales.token,
+            body: {
+              status: 'completed',
+              notes: 'attempt completion without refund proof',
+            },
+          },
+        );
+        assertErrorContract(
+          noProof,
+          400,
+          'AFTER_SALES_FINANCE_CONFIRM_REQUIRED',
+        );
+
+        const confirmed = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [
+            {
+              content: Buffer.from('%PDF-smoke'),
+              name: 'refund-proof.pdf',
+              type: 'application/pdf',
+            },
+          ],
+        );
+        assert.equal(confirmed.response.status, 201);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
+
+        const completed = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund/status',
+          {
+            method: 'PATCH',
+            token: afterSales.token,
+            body: {
+              status: 'completed',
+              notes: 'finance refund proof confirmed',
+            },
+          },
+        );
+        assert.equal(completed.response.status, 200);
+        assert.equal(
+          completed.body.data.afterSalesOrder.status,
+          'completed',
+        );
+        assert.equal(
+          completed.body.data.afterSalesOrder.financeConfirmed,
+          true,
+        );
+        assert.equal(
+          completed.body.data.afterSalesOrder.refundProofAttachments.length,
+          1,
+        );
+      },
+      {
+        ...createAfterSalesTestOptions(),
+        env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
+      },
+    );
+  });
 });
 
 test('contract: PATCH /api/after-sales-orders/:id enforces field and role permissions', async () => {
@@ -1209,6 +1589,18 @@ function createAfterSalesTestOptions() {
           createdAt: '2026-07-02T00:00:00.000Z',
         }),
         createAfterSalesSeed({
+          id: 'as_waiting_receive',
+          afterSalesNo: 'AS20260702003',
+          salesOrderId: 'so_after_sales_other',
+          customerId: 'cust_after_sales_other',
+          issueType: 'CUSTOMER_RETURN',
+          actionType: 'RETURN_REFUND',
+          description: 'smoke test waiting receive return',
+          refundAmountCents: 500,
+          status: 'WAITING_RECEIVE',
+          createdAt: '2026-07-02T00:00:00.000Z',
+        }),
+        createAfterSalesSeed({
           id: 'as_owner_completed',
           afterSalesNo: 'AS20260701003',
           salesOrderId: 'so_after_sales_owner',
@@ -1219,8 +1611,26 @@ function createAfterSalesTestOptions() {
           refundAmountCents: 2000,
           status: 'COMPLETED',
           financeConfirmed: true,
+          financeConfirmedById: 'usr_finance',
+          financeConfirmedAt: '2026-07-01T01:00:00.000Z',
+          refundProofAttachments: [refundProofSeed('11111111-1111-4111-8111-111111111111')],
           completedAt: '2026-07-01T00:00:00.000Z',
           createdAt: '2026-07-01T00:00:00.001Z',
+        }),
+        createAfterSalesSeed({
+          id: 'as_finance_confirmed_no_proof',
+          afterSalesNo: 'AS20260701004',
+          salesOrderId: 'so_after_sales_owner',
+          customerId: 'cust_after_sales_marked',
+          issueType: 'QUALITY_ISSUE',
+          actionType: 'REFUND',
+          description: 'smoke test finance confirmed without proof',
+          refundAmountCents: 600,
+          status: 'WAITING_REFUND',
+          financeConfirmed: true,
+          financeConfirmedById: 'usr_finance',
+          financeConfirmedAt: '2026-07-01T01:10:00.000Z',
+          createdAt: '2026-07-01T00:00:00.002Z',
         }),
         createAfterSalesSeed({
           id: 'as_partial_refund',
@@ -1244,6 +1654,10 @@ function createAfterSalesTestOptions() {
           description: 'smoke test full refund linkage',
           refundAmountCents: 3000,
           status: 'NEGOTIATING',
+          financeConfirmed: true,
+          financeConfirmedById: 'usr_finance',
+          financeConfirmedAt: '2026-07-03T01:00:00.000Z',
+          refundProofAttachments: [refundProofSeed('22222222-2222-4222-8222-222222222222')],
           createdAt: '2026-07-03T00:00:00.001Z',
         }),
         createAfterSalesSeed({
@@ -1268,6 +1682,9 @@ function createAfterSalesTestOptions() {
           description: 'smoke test resend no refund linkage',
           refundAmountCents: 0,
           status: 'WAITING_RESEND',
+          warehouseConfirmedById: 'usr_warehouse',
+          warehouseConfirmedAt: '2026-07-03T01:10:00.000Z',
+          warehouseConfirmNote: 'seed warehouse confirmed resend',
           createdAt: '2026-07-03T00:00:00.003Z',
         }),
         createAfterSalesSeed({
@@ -1280,6 +1697,10 @@ function createAfterSalesTestOptions() {
           description: 'smoke test existing refund before over refund',
           refundAmountCents: 800,
           status: 'COMPLETED',
+          financeConfirmed: true,
+          financeConfirmedById: 'usr_finance',
+          financeConfirmedAt: '2026-07-03T01:20:00.000Z',
+          refundProofAttachments: [refundProofSeed('33333333-3333-4333-8333-333333333333')],
           completedAt: '2026-07-03T00:00:00.004Z',
           createdAt: '2026-07-03T00:00:00.004Z',
         }),
@@ -1395,6 +1816,72 @@ function createAfterSalesGlobalMarkTestOptions() {
   };
 }
 
+async function withTemporaryRefundProofStorage(run) {
+  const storageRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'jiangjiu-refund-proofs-'),
+  );
+  try {
+    await run(storageRoot);
+  } finally {
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  }
+}
+
+async function uploadRefundProofs(baseUrl, token, afterSalesOrderId, files) {
+  const form = new FormData();
+  for (const file of files) {
+    form.append(
+      'files',
+      new Blob([file.content], { type: file.type }),
+      file.name,
+    );
+  }
+  const response = await fetch(
+    `${baseUrl}/api/after-sales-orders/${afterSalesOrderId}/finance-refund-confirm`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    },
+  );
+  return { response, body: await response.json() };
+}
+
+async function requestMalformedRefundMultipart(
+  baseUrl,
+  pathName,
+  token,
+) {
+  const headers = {
+    'Content-Type': 'multipart/form-data; boundary=security-test',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(`${baseUrl}${pathName}`, {
+    method: 'POST',
+    headers,
+    body: Buffer.from('--security-test\r\nbroken'),
+  });
+  return {
+    response,
+    body: await response.json(),
+  };
+}
+
+async function downloadRefundProof(
+  baseUrl,
+  token,
+  afterSalesOrderId,
+  attachmentId,
+) {
+  const response = await fetch(
+    `${baseUrl}/api/after-sales-orders/${afterSalesOrderId}/refund-proofs/${attachmentId}/download`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return { response, buffer: Buffer.from(await response.arrayBuffer()) };
+}
+
 function createUserSeed(id, username, role) {
   return {
     id,
@@ -1436,6 +1923,19 @@ function createAfterSalesSeed(overrides) {
   };
 }
 
+function refundProofSeed(id) {
+  return {
+    id,
+    category: 'refund_proof',
+    originalName: 'seed-refund-proof.png',
+    contentType: 'image/png',
+    size: 4,
+    storageKey: id,
+    uploadedById: 'usr_finance',
+    uploadedAt: '2026-07-01T01:00:00.000Z',
+  };
+}
+
 function assertPhase6OperationLog(log, expected) {
   assertOperationLogContract(log);
   assert.equal(log.action, expected.action);
@@ -1456,6 +1956,11 @@ function assertPhase6OperationLog(log, expected) {
 function assertNoSensitiveLogData(value) {
   const serialized = JSON.stringify(value);
   assert.equal(/password|token/i.test(serialized), false);
+}
+
+function assertNoStorageLocation(value) {
+  const serialized = JSON.stringify(value);
+  assert.equal(/storageKey|storage_key|refund-proof-attachments|\.private/i.test(serialized), false);
 }
 
 function assertNoShippedFields(value) {
@@ -1482,12 +1987,16 @@ function assertAfterSalesOrderContract(order) {
     'issueType',
     'notes',
     'refundAmountCents',
+    'refundProofAttachments',
     'resolution',
     'salesOrder',
     'salesOrderId',
     'status',
     'updatedAt',
     'updatedById',
+    'warehouseConfirmNote',
+    'warehouseConfirmedAt',
+    'warehouseConfirmedById',
   ]);
   assert.equal(typeof order.id, 'string');
   assert.equal(typeof order.afterSalesNo, 'string');
@@ -1498,7 +2007,9 @@ function assertAfterSalesOrderContract(order) {
   assert.equal(typeof order.refundAmountCents, 'number');
   assert.equal(typeof order.status, 'string');
   assert.equal(typeof order.financeConfirmed, 'boolean');
+  assert.equal(Array.isArray(order.refundProofAttachments), true);
   assert.equal(typeof order.createdAt, 'string');
   assert.equal(typeof order.updatedAt, 'string');
   assertNoShippedFields(order);
+  assertNoStorageLocation(order);
 }

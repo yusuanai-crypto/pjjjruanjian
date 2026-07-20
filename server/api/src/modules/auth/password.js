@@ -1,25 +1,19 @@
 const crypto = require('node:crypto');
+const { createHttpError } = require('../../common/errors');
 
 const PASSWORD_HASH_VERSION = 'pbkdf2_sha256';
 const PASSWORD_ITERATIONS = 120000;
 const PASSWORD_KEY_LENGTH = 32;
 const PASSWORD_DIGEST = 'sha256';
 const MIN_PASSWORD_LENGTH = 8;
-const TEMPORARY_PASSWORD = '123456';
 
-function hashPassword(password, options = {}) {
-  if (!options.allowTemporary) {
-    assertPasswordPolicy(password);
-  }
+function hashPassword(password) {
+  assertPasswordPolicy(password);
   const salt = crypto.randomBytes(16).toString('base64url');
   const hash = crypto
     .pbkdf2Sync(password, salt, PASSWORD_ITERATIONS, PASSWORD_KEY_LENGTH, PASSWORD_DIGEST)
     .toString('base64url');
   return `${PASSWORD_HASH_VERSION}$${PASSWORD_ITERATIONS}$${salt}$${hash}`;
-}
-
-function hashTemporaryPassword() {
-  return hashPassword(TEMPORARY_PASSWORD, { allowTemporary: true });
 }
 
 function verifyPassword(password, passwordHash) {
@@ -53,16 +47,15 @@ function assertPasswordPolicy(password) {
 }
 
 function createPasswordPolicyError() {
-  const error = new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-  error.statusCode = 400;
-  error.code = 'WEAK_PASSWORD';
-  return error;
+  return createHttpError(
+    400,
+    'WEAK_PASSWORD',
+    `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+  );
 }
 
 module.exports = {
-  TEMPORARY_PASSWORD,
   assertPasswordPolicy,
   hashPassword,
-  hashTemporaryPassword,
   verifyPassword,
 };

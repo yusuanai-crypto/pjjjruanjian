@@ -175,6 +175,32 @@ test('contract: agency deduction overlap dimension is agency plus product plus d
     });
     assert.equal(otherProduct.response.status, 201);
 
+    const effectiveRate = await createAgencyRule(baseUrl, admin.token, {
+      agencyId: agency.id,
+      agencyName: agency.name,
+      calculationMode: 'effective_sales_rate',
+      productId: null,
+      effectiveFrom: '2026-06-01',
+    });
+    assert.equal(effectiveRate.response.status, 201);
+    assert.equal(
+      effectiveRate.body.data.agencyDeductionRule.calculationMode,
+      'effective_sales_rate',
+    );
+
+    const overlapEffectiveRate = await createAgencyRule(baseUrl, admin.token, {
+      agencyId: agency.id,
+      agencyName: agency.name,
+      calculationMode: 'effective_sales_rate',
+      productId: null,
+      effectiveFrom: '2026-07-01',
+    });
+    assertErrorContract(
+      overlapEffectiveRate,
+      400,
+      'RULE_EFFECTIVE_RANGE_OVERLAP',
+    );
+
     const adjacent = await createAgencyRule(baseUrl, admin.token, {
       agencyId: agency.id,
       agencyName: agency.name,
@@ -202,8 +228,11 @@ function createAgencyRule(baseUrl, token, overrides) {
     body: {
       agencyId: overrides.agencyId,
       agencyName: overrides.agencyName,
-      productId: overrides.productId,
-      deductionCostCents: 2500,
+      calculationMode: overrides.calculationMode || 'manual_product_reference',
+      ...(overrides.productId ? { productId: overrides.productId } : {}),
+      ...(overrides.calculationMode === 'effective_sales_rate'
+        ? {}
+        : { deductionCostCents: 2500 }),
       effectiveFrom: overrides.effectiveFrom,
       ...(overrides.effectiveTo ? { effectiveTo: overrides.effectiveTo } : {}),
     },

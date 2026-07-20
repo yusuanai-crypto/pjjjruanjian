@@ -27,6 +27,7 @@ test('contract: analytics taster rankings enforces role permissions', async () =
       'admin',
       'stage8-ranking-boss',
       'stage8-ranking-finance',
+      'stage8-ranking-after-sales',
     ]) {
       const session =
         username === 'admin'
@@ -46,7 +47,6 @@ test('contract: analytics taster rankings enforces role permissions', async () =
     for (const username of [
       'stage8-ranking-sales',
       'stage8-ranking-front-desk',
-      'stage8-ranking-after-sales',
       'stage8-ranking-warehouse',
       'stage8-ranking-taster',
     ]) {
@@ -461,6 +461,7 @@ test('contract: analytics company API role matrix covers every endpoint', async 
       'admin',
       'stage8-ranking-boss',
       'stage8-ranking-finance',
+      'stage8-ranking-after-sales',
     ];
     for (const username of allowedUsers) {
       const session =
@@ -485,7 +486,6 @@ test('contract: analytics company API role matrix covers every endpoint', async 
       'stage8-ranking-taster',
       'stage8-ranking-sales',
       'stage8-ranking-warehouse',
-      'stage8-ranking-after-sales',
       'stage8-ranking-front-desk',
     ];
     for (const username of deniedUsers) {
@@ -1082,6 +1082,11 @@ test('contract: analytics export endpoints enforce read roles', async () => {
   await withPhase1Server(async (baseUrl) => {
     const finance = await login(baseUrl, 'stage8-ranking-finance', 'Password123');
     const boss = await login(baseUrl, 'stage8-ranking-boss', 'Password123');
+    const afterSales = await login(
+      baseUrl,
+      'stage8-ranking-after-sales',
+      'Password123',
+    );
     const sales = await login(baseUrl, 'stage8-ranking-sales', 'Password123');
 
     const financeDownload = await requestBinary(
@@ -1101,6 +1106,15 @@ test('contract: analytics export endpoints enforce read roles', async () => {
       },
     );
     assert.equal(bossDownload.response.status, 200);
+
+    const afterSalesDownload = await requestBinary(
+      baseUrl,
+      '/api/analytics/overview/export?preset=custom&dateFrom=2026-07-01&dateTo=2026-07-04',
+      {
+        token: afterSales.token,
+      },
+    );
+    assert.equal(afterSalesDownload.response.status, 200);
 
     for (const pathName of [
       '/api/analytics/overview/export',

@@ -5,6 +5,15 @@ const {
   createPreparationConfirmationService,
 } = require('./modules/preparation-confirmation/preparation-confirmation.service');
 const { sendJson } = require('./common/http');
+const { mapErrorToPublicResponse } = require('./common/errors');
+const {
+  logSanitizedError,
+  resolveCorrelationId,
+  safeRequestPath,
+} = require('./common/logging/safe-logging');
+const {
+  createLegacyRateLimitService,
+} = require('./common/rate-limit/rate-limit');
 const { createAuthController } = require('./modules/auth/auth.controller');
 const { createAuthService } = require('./modules/auth/auth.service');
 const { createOperationLogController } = require('./modules/operation-logs/operation-log.controller');
@@ -17,6 +26,8 @@ const { createUsersController } = require('./modules/users/users.controller');
 const { createUsersService } = require('./modules/users/users.service');
 
 function createApp(options = {}) {
+  const rateLimitService =
+    options.rateLimitService || createLegacyRateLimitService();
   const userRepository = options.userRepository || createUserRepository(options.userStorePath);
   const operationLogRepository =
     options.operationLogRepository || createOperationLogRepository(options.operationLogStorePath);
@@ -26,6 +37,7 @@ function createApp(options = {}) {
     createAuthService({
       userRepository,
       operationLogRepository,
+      rateLimitService,
       tokenSecret: options.tokenSecret,
       tokenExpiresInSeconds: options.tokenExpiresInSeconds,
     });
@@ -42,13 +54,20 @@ function createApp(options = {}) {
       operationLogRepository,
     });
   const authController = createAuthController(authService);
-  const usersController = createUsersController(authService, usersService);
+  const usersController = createUsersController(
+    authService,
+    usersService,
+    rateLimitService,
+  );
   const settingsController = createSettingsController(authService, settingsService);
   const operationLogController = createOperationLogController(authService, operationLogRepository);
   const service =
     options.preparationConfirmationService ||
     createPreparationConfirmationService(options.preparationConfirmationRepository);
-  const preparationConfirmationController = createPreparationConfirmationController(service);
+  const preparationConfirmationController = createPreparationConfirmationController(
+    authService,
+    service,
+  );
 
   return async function app(request, response) {
     try {
@@ -84,13 +103,45 @@ function createApp(options = {}) {
         },
       });
     } catch (error) {
-      const statusCode = error.statusCode || 500;
-      sendJson(response, statusCode, {
-        error: {
-          code: error.code || 'INTERNAL_ERROR',
-          message: error.message || 'Unexpected server error.',
+      const publicError = mapErrorToPublicResponse(error);
+      const correlationId = resolveCorrelationId(request.headers);
+      if (publicError.shouldLog) {
+        try {
+          logSanitizedError(options.logger, {
+            event: 'legacy_api_request_failed',
+            correlationId,
+            statusCode: publicError.statusCode,
+            errorCode: publicError.code,
+            method: String(request.method || ''),
+            path: safeRequestPath(request),
+            exception: error,
+          });
+        } catch (_loggingError) {
+          // Error reporting must never replace the stable API error response.
+        }
+      }
+      sendJson(
+        response,
+        publicError.statusCode,
+        {
+          error: {
+            code: publicError.code,
+            message: publicError.message,
+          },
+          ...(publicError.includeRequestId
+            ? { requestId: correlationId }
+            : {}),
         },
-      });
+        {
+          'X-Correlation-ID': correlationId,
+          ...(publicError.statusCode === 429 &&
+          publicError.retryAfterSeconds !== null
+            ? {
+                'Retry-After': String(publicError.retryAfterSeconds),
+              }
+            : {}),
+        },
+      );
     }
   };
 }

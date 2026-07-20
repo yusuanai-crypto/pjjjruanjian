@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
@@ -257,6 +258,7 @@ class _PendingTravelGroupTablePageState
                   _PendingGroupList(
                     groups: _groups,
                     selectedId: _selectedId,
+                    showFinanceMark: canViewFinanceMark(widget.role),
                     onSelect: _selectRecord,
                     onOpen: _openHandlingEntry,
                   ),
@@ -269,6 +271,7 @@ class _PendingTravelGroupTablePageState
                     children: [
                       _HandlingEntryCard(
                         record: selected,
+                        showFinanceMark: canViewFinanceMark(widget.role),
                         onOpen: () => _openHandlingEntry(selected),
                       ),
                       const SizedBox(height: 12),
@@ -298,12 +301,14 @@ class _PendingGroupList extends StatelessWidget {
   const _PendingGroupList({
     required this.groups,
     required this.selectedId,
+    required this.showFinanceMark,
     required this.onSelect,
     required this.onOpen,
   });
 
   final List<TravelGroupRecord> groups;
   final String? selectedId;
+  final bool showFinanceMark;
   final ValueChanged<TravelGroupRecord> onSelect;
   final ValueChanged<TravelGroupRecord> onOpen;
 
@@ -321,7 +326,10 @@ class _PendingGroupList extends StatelessWidget {
               if (_display(record.tasterName) != '-')
                 _display(record.tasterName),
               if (record.pendingReasons.isNotEmpty)
-                _pendingReasonsText(record.pendingReasons),
+                _pendingReasonsText(
+                  record.pendingReasons,
+                  showFinanceMark: showFinanceMark,
+                ),
             ],
             icon: selectedId == record.id
                 ? Icons.radio_button_checked_rounded
@@ -335,7 +343,10 @@ class _PendingGroupList extends StatelessWidget {
                   tone: _pendingStatusTone(record.pendingStatus),
                 ),
                 IconButton(
-                  tooltip: _handlingLabel(record.pendingStatus),
+                  tooltip: _handlingLabel(
+                    record.pendingStatus,
+                    showFinanceMark: showFinanceMark,
+                  ),
                   onPressed: () => onOpen(record),
                   icon: const Icon(Icons.open_in_new_rounded),
                 ),
@@ -351,10 +362,12 @@ class _PendingGroupList extends StatelessWidget {
 class _HandlingEntryCard extends StatelessWidget {
   const _HandlingEntryCard({
     required this.record,
+    required this.showFinanceMark,
     required this.onOpen,
   });
 
   final TravelGroupRecord record;
+  final bool showFinanceMark;
   final VoidCallback onOpen;
 
   @override
@@ -366,7 +379,12 @@ class _HandlingEntryCard extends StatelessWidget {
         tone: _pendingStatusTone(record.pendingStatus),
       ),
       children: [
-        Text(_handlingDescription(record.pendingStatus)),
+        Text(
+          _handlingDescription(
+            record.pendingStatus,
+            showFinanceMark: showFinanceMark,
+          ),
+        ),
         if (record.pendingReasons.isNotEmpty) ...[
           const SizedBox(height: 10),
           Wrap(
@@ -375,7 +393,10 @@ class _HandlingEntryCard extends StatelessWidget {
             children: [
               for (final reason in record.pendingReasons)
                 StatusTag(
-                  label: _pendingReasonLabel(reason),
+                  label: _pendingReasonLabel(
+                    reason,
+                    showFinanceMark: showFinanceMark,
+                  ),
                   tone: StatusTone.info,
                 ),
             ],
@@ -387,7 +408,12 @@ class _HandlingEntryCard extends StatelessWidget {
           child: FilledButton.icon(
             onPressed: onOpen,
             icon: const Icon(Icons.open_in_new_rounded),
-            label: Text(_handlingLabel(record.pendingStatus)),
+            label: Text(
+              _handlingLabel(
+                record.pendingStatus,
+                showFinanceMark: showFinanceMark,
+              ),
+            ),
           ),
         ),
       ],
@@ -425,11 +451,19 @@ StatusTone _pendingStatusTone(String? status) {
   }
 }
 
-String _pendingReasonsText(List<String> reasons) {
-  return reasons.map(_pendingReasonLabel).join('、');
+String _pendingReasonsText(
+  List<String> reasons, {
+  bool showFinanceMark = true,
+}) {
+  return reasons
+      .map((reason) => _pendingReasonLabel(
+            reason,
+            showFinanceMark: showFinanceMark,
+          ))
+      .join('、');
 }
 
-String _pendingReasonLabel(String reason) {
+String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
   switch (reason) {
     case 'missing_taster':
       return '缺少品鉴师';
@@ -446,7 +480,7 @@ String _pendingReasonLabel(String reason) {
     case 'no_order_and_missing_taster_summary':
       return '无订单且未总结';
     case 'finance_unmarked_after_day_end':
-      return '超过当日未标记';
+      return showFinanceMark ? '超过当日未标记' : '超过当日待处理';
     case 'duplicate_group_no':
       return '团号重复';
     case 'departure_before_arrival':
@@ -456,28 +490,28 @@ String _pendingReasonLabel(String reason) {
   }
 }
 
-String _handlingLabel(String? status) {
+String _handlingLabel(String? status, {bool showFinanceMark = true}) {
   switch (status) {
     case 'pending_front_desk':
       return '基础信息编辑';
     case 'pending_taster':
       return '填写总结';
     case 'pending_finance':
-      return '财务标记';
+      return showFinanceMark ? '财务标记' : '查看详情';
     case 'abnormal':
     default:
       return '查看详情';
   }
 }
 
-String _handlingDescription(String? status) {
+String _handlingDescription(String? status, {bool showFinanceMark = true}) {
   switch (status) {
     case 'pending_front_desk':
       return '补齐导游、旅行社、人数、品鉴师等基础信息。';
     case 'pending_taster':
       return '进入品鉴师总结表单，补充本团接待总结。';
     case 'pending_finance':
-      return '进入旅行团详情，完成财务标记。';
+      return showFinanceMark ? '进入旅行团详情，完成财务标记。' : '进入旅行团详情查看待处理信息。';
     case 'abnormal':
     default:
       return '进入旅行团详情查看异常原因。';
@@ -511,9 +545,7 @@ bool _canEdit(UserRole role) {
 }
 
 bool _canMark(UserRole role) {
-  return role == UserRole.superAdmin ||
-      role == UserRole.admin ||
-      role == UserRole.finance;
+  return canViewFinanceMark(role);
 }
 
 bool _canSubmitSummary(UserRole role) {

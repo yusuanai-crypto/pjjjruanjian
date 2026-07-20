@@ -1,6 +1,6 @@
 const { getRequestIp, readJsonBody, sendJson } = require('../../common/http');
 
-function createUsersController(authService, usersService) {
+function createUsersController(authService, usersService, rateLimitService) {
   return async function usersController(request, response) {
     const url = new URL(request.url, 'http://localhost');
     const actor = authService.authenticateRequest(request);
@@ -65,6 +65,10 @@ function createUsersController(authService, usersService) {
     const resetPasswordMatch = url.pathname.match(/^\/api\/users\/([a-zA-Z0-9_-]+)\/reset-password$/);
     if (request.method === 'POST' && resetPasswordMatch) {
       const body = await readJsonBody(request);
+      await rateLimitService.enforcePasswordReset({
+        actorId: actor.id,
+        targetUserId: resetPasswordMatch[1],
+      });
       sendJson(response, 200, {
         data: {
           user: usersService.resetPassword(actor, resetPasswordMatch[1], body, { ipAddress: getRequestIp(request) }),

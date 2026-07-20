@@ -1,8 +1,10 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
@@ -11,17 +13,22 @@ import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 
+typedef AfterSalesRefundProofFilePicker = Future<List<ApiMultipartFile>>
+    Function();
+
 class AfterSalesFormPage extends StatefulWidget {
   const AfterSalesFormPage({
     super.key,
     required this.apiClient,
     required this.token,
     required this.role,
+    this.filePicker,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
+  final AfterSalesRefundProofFilePicker? filePicker;
 
   @override
   State<AfterSalesFormPage> createState() => _AfterSalesFormPageState();
@@ -42,14 +49,19 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   bool _historyLoading = false;
   bool _savingAfterSales = false;
   bool _statusUpdating = false;
+  bool _todoLoading = false;
   String? _errorMessage;
   String? _historyErrorMessage;
   String? _formErrorMessage;
   String? _statusErrorMessage;
+  String? _todoErrorMessage;
   String? _createdAfterSalesNo;
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   List<AfterSalesOrderRecord> _afterSalesHistory =
       const <AfterSalesOrderRecord>[];
+  List<AfterSalesOrderRecord> _roleTodos = const <AfterSalesOrderRecord>[];
+  final Set<String> _warehouseConfirmingIds = <String>{};
+  final Set<String> _financeUploadingIds = <String>{};
   SalesOrderRecord? _selectedOrder;
   AfterSalesOrderRecord? _selectedAfterSales;
   String _issueType = _issueTypeOptions.first.value;
@@ -61,11 +73,20 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       widget.role == UserRole.admin ||
       widget.role == UserRole.afterSales;
 
+  bool get _isWarehouseWorkflow => widget.role == UserRole.warehouse;
+
+  bool get _isFinanceWorkflow => widget.role == UserRole.finance;
+
+  bool get _usesTodoWorkflow => _isWarehouseWorkflow || _isFinanceWorkflow;
+
   @override
   void initState() {
     super.initState();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    if (_usesTodoWorkflow) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadRoleTodos());
+    }
   }
 
   @override
@@ -75,6 +96,9 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         oldWidget.token != widget.token) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    }
+    if (oldWidget.role != widget.role && _usesTodoWorkflow) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadRoleTodos());
     }
   }
 
@@ -363,8 +387,156 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     }
   }
 
+  Future<void> _loadRoleTodos() async {
+    if (!_usesTodoWorkflow) {
+      return;
+    }
+    setState(() {
+      _todoLoading = true;
+      _todoErrorMessage = null;
+    });
+    try {
+      final records = await _businessApi.listAfterSalesOrders(
+        status: _isFinanceWorkflow ? 'waiting_refund' : null,
+        financeConfirmed: _isFinanceWorkflow ? false : null,
+        limit: 100,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _roleTodos = records.where((record) {
+          if (_isWarehouseWorkflow) {
+            return record.status == 'waiting_receive' ||
+                record.status == 'waiting_resend';
+          }
+          return record.status == 'waiting_refund' &&
+              !record.financeConfirmed &&
+              record.refundAmountCents > 0;
+        }).toList();
+        _todoLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _roleTodos = const <AfterSalesOrderRecord>[];
+        _todoLoading = false;
+        _todoErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _confirmWarehouseTodo(AfterSalesOrderRecord record) async {
+    if (_warehouseConfirmingIds.contains(record.id)) {
+      return;
+    }
+    setState(() {
+      _warehouseConfirmingIds.add(record.id);
+      _todoErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.confirmAfterSalesWarehouse(record.id);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.afterSalesNo} 仓库已确认')),
+      );
+      await _loadRoleTodos();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _todoErrorMessage = _messageForError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _warehouseConfirmingIds.remove(record.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _confirmFinanceRefundTodo(AfterSalesOrderRecord record) async {
+    if (_financeUploadingIds.contains(record.id)) {
+      return;
+    }
+    try {
+      final picker = widget.filePicker;
+      final files = picker == null
+          ? await _pickRefundProofFilesFromDevice()
+          : await picker();
+      if (!mounted || files.isEmpty) {
+        return;
+      }
+      setState(() {
+        _financeUploadingIds.add(record.id);
+        _todoErrorMessage = null;
+      });
+      final updated = await _businessApi.confirmAfterSalesFinanceRefund(
+        record.id,
+        files: files,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.afterSalesNo} 已退款')),
+      );
+      await _loadRoleTodos();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _todoErrorMessage = _messageForError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _financeUploadingIds.remove(record.id);
+        });
+      }
+    }
+  }
+
+  Future<List<ApiMultipartFile>> _pickRefundProofFilesFromDevice() async {
+    final result = await FilePicker.pickFiles(
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: const [
+        'jpg',
+        'jpeg',
+        'png',
+        'gif',
+        'webp',
+        'bmp',
+        'tif',
+        'tiff',
+        'avif',
+        'pdf',
+      ],
+    );
+    return result?.files.map(ApiMultipartFile.fromPlatformFile).toList() ??
+        const <ApiMultipartFile>[];
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isWarehouseWorkflow) {
+      return _buildWarehouseWorkflow();
+    }
+    if (_isFinanceWorkflow) {
+      return _buildFinanceWorkflow();
+    }
+    return _buildAfterSalesWorkflow();
+  }
+
+  Widget _buildAfterSalesWorkflow() {
     return ResponsivePage(
       children: [
         ResponsiveTwoColumn(
@@ -469,6 +641,94 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     );
   }
 
+  Widget _buildWarehouseWorkflow() {
+    return ResponsivePage(
+      children: [
+        FormSection(
+          title: '仓库售后待办',
+          trailing: StatusTag(
+            label: _todoLoading ? '刷新中' : '${_roleTodos.length} 笔',
+            tone: _todoLoading ? StatusTone.warning : StatusTone.info,
+          ),
+          children: [
+            _buildRoleTodoList(),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFinanceWorkflow() {
+    return ResponsivePage(
+      children: [
+        FormSection(
+          title: '财务退款待办',
+          trailing: StatusTag(
+            label: _todoLoading ? '刷新中' : '${_roleTodos.length} 笔',
+            tone: _todoLoading ? StatusTone.warning : StatusTone.info,
+          ),
+          children: [
+            _buildRoleTodoList(),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRoleTodoList() {
+    if (_todoLoading) {
+      return LoadingState(
+          title: _isWarehouseWorkflow ? '正在加载仓库待办' : '正在加载退款待办');
+    }
+    if (_todoErrorMessage != null) {
+      return ErrorState(title: _todoErrorMessage!, onRetry: _loadRoleTodos);
+    }
+    if (_roleTodos.isEmpty) {
+      return EmptyState(title: _isWarehouseWorkflow ? '暂无待确认售后单' : '暂无待退款售后单');
+    }
+
+    return AppRecordList(
+      items: [
+        for (final record in _roleTodos)
+          AppRecordItem(
+            title: record.afterSalesNo,
+            subtitle: record.salesOrder?.orderNo ?? record.description,
+            meta: [
+              _issueTypeLabel(record.issueType),
+              _actionTypeLabel(record.actionType),
+              _afterSalesStatusLabel(record.status),
+              '退款 ${formatMoneyCents(record.refundAmountCents)}',
+              if (record.salesOrder?.customerName.trim().isNotEmpty == true)
+                record.salesOrder!.customerName,
+            ],
+            icon: _isWarehouseWorkflow
+                ? Icons.inventory_2_rounded
+                : Icons.account_balance_wallet_rounded,
+            trailing: _isWarehouseWorkflow
+                ? FilledButton.icon(
+                    key: ValueKey('after-sales-warehouse-confirm-${record.id}'),
+                    onPressed: _warehouseConfirmingIds.contains(record.id)
+                        ? null
+                        : () => _confirmWarehouseTodo(record),
+                    icon: const Icon(Icons.check_rounded),
+                    label: Text(
+                        record.status == 'waiting_receive' ? '已收货' : '已补发'),
+                  )
+                : FilledButton.icon(
+                    key: ValueKey(
+                        'after-sales-finance-refund-confirm-${record.id}'),
+                    onPressed: _financeUploadingIds.contains(record.id)
+                        ? null
+                        : () => _confirmFinanceRefundTodo(record),
+                    icon: const Icon(Icons.upload_file_rounded),
+                    label: const Text('已退款'),
+                  ),
+            onTap: () => _selectAfterSales(record),
+          ),
+      ],
+    );
+  }
+
   Widget _buildSearchResults() {
     if (_loading) {
       return const LoadingState(title: '正在搜索订单');
@@ -493,7 +753,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
             meta: [
               '订单金额 ${formatMoneyCents(order.totalAmountCents)}',
               _deliverySummaryLabel(order.deliverySummary),
-              _customerMarkLabel(order),
+              if (canViewFinanceMark(widget.role)) _customerMarkLabel(order),
               if (order.travelGroup?.groupNo != null)
                 '旅行团 ${order.travelGroup!.groupNo}',
             ],
@@ -744,6 +1004,24 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
           label: '退款金额',
           value: formatMoneyCents(record.refundAmountCents),
         ),
+        _InfoLine(
+          label: '财务确认',
+          value: record.financeConfirmed
+              ? '已确认 ${_dateTimeLabel(record.financeConfirmedAt)}'
+              : '未确认',
+        ),
+        _InfoLine(
+          label: '退款截图',
+          value: record.refundProofAttachments.isEmpty
+              ? '未上传'
+              : '${record.refundProofAttachments.length} 张',
+        ),
+        _InfoLine(
+          label: '仓库确认',
+          value: record.warehouseConfirmedAt == null
+              ? '未确认'
+              : '已确认 ${_dateTimeLabel(record.warehouseConfirmedAt)}',
+        ),
         _InfoLine(label: '创建时间', value: _dateTimeLabel(record.createdAt)),
         _InfoLine(label: '问题描述', value: record.description),
         _InfoLine(label: '处理方案', value: _fieldValue(record.resolution)),
@@ -765,10 +1043,13 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
               for (final option in _afterSalesStatusOptions)
                 _AfterSalesStatusButton(
                   key: ValueKey('after-sales-status-button-${option.value}'),
-                  label: option.label,
+                  label: option.value == 'completed' ? '确认完成' : option.label,
                   selected: record.status == option.value,
                   updating: _statusUpdating,
-                  onPressed: () => _updateAfterSalesStatus(option.value),
+                  onPressed: option.value == 'completed' &&
+                          !_canCompleteAfterSales(record)
+                      ? null
+                      : () => _updateAfterSalesStatus(option.value),
                 ),
             ],
           ),
@@ -859,7 +1140,7 @@ class _AfterSalesStatusButton extends StatelessWidget {
   final String label;
   final bool selected;
   final bool updating;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1037,6 +1318,18 @@ String _actionTypeLabel(String actionType) {
 
 String _afterSalesStatusLabel(String status) {
   return _labelFor(_afterSalesStatusOptions, status);
+}
+
+bool _canCompleteAfterSales(AfterSalesOrderRecord record) {
+  if ((record.status == 'waiting_receive' ||
+          record.status == 'waiting_resend') &&
+      record.warehouseConfirmedAt == null) {
+    return false;
+  }
+  if (record.refundAmountCents > 0) {
+    return record.financeConfirmed && record.refundProofAttachments.isNotEmpty;
+  }
+  return true;
 }
 
 StatusTone _afterSalesStatusTone(String status) {

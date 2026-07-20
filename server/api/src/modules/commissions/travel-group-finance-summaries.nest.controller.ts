@@ -88,6 +88,48 @@ export class TravelGroupFinanceSummariesNestController {
     };
   }
 
+  @Patch(':travelGroupId/daily-rebate-paid')
+  async setDailyRebatePaid(
+    @Param('travelGroupId') travelGroupId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelGroupFinanceSummary:
+        await this.summaryService.setRebatePaymentStatus(
+          actor,
+          travelGroupId,
+          'daily',
+          body,
+          {
+            ipAddress: getRequestIp(request),
+          },
+        ),
+    };
+  }
+
+  @Patch(':travelGroupId/monthly-rebate-paid')
+  async setMonthlyRebatePaid(
+    @Param('travelGroupId') travelGroupId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelGroupFinanceSummary:
+        await this.summaryService.setRebatePaymentStatus(
+          actor,
+          travelGroupId,
+          'monthly',
+          body,
+          {
+            ipAddress: getRequestIp(request),
+          },
+        ),
+    };
+  }
+
   @Post(':travelGroupId/refresh')
   async refresh(
     @Param('travelGroupId') travelGroupId: string,

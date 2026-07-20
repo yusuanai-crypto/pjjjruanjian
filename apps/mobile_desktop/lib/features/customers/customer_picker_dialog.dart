@@ -18,6 +18,7 @@ class CustomerPickerDialog extends StatefulWidget {
     this.createCustomer,
     this.initialQuery,
     this.limit = 30,
+    this.showFinanceMark = false,
   }) : assert(
           businessApi != null || loadCustomers != null,
           'businessApi or loadCustomers must be provided.',
@@ -28,6 +29,7 @@ class CustomerPickerDialog extends StatefulWidget {
   final CustomerCreator? createCustomer;
   final String? initialQuery;
   final int limit;
+  final bool showFinanceMark;
 
   @override
   State<CustomerPickerDialog> createState() => _CustomerPickerDialogState();
@@ -192,6 +194,7 @@ class _CustomerPickerDialogState extends State<CustomerPickerDialog> {
         final customer = _customers[index];
         return _CustomerListTile(
           customer: customer,
+          showFinanceMark: widget.showFinanceMark,
           onTap: () => Navigator.of(context).pop(customer),
         );
       },
@@ -202,10 +205,12 @@ class _CustomerPickerDialogState extends State<CustomerPickerDialog> {
 class _CustomerListTile extends StatelessWidget {
   const _CustomerListTile({
     required this.customer,
+    required this.showFinanceMark,
     required this.onTap,
   });
 
   final CustomerRecord customer;
+  final bool showFinanceMark;
   final VoidCallback onTap;
 
   @override
@@ -228,11 +233,13 @@ class _CustomerListTile extends StatelessWidget {
                 .titleMedium
                 ?.copyWith(fontWeight: FontWeight.w700),
           ),
-          StatusTag(
-            label: customer.financeMark ? '已标记' : '未标记',
-            tone:
-                customer.financeMark ? StatusTone.success : StatusTone.neutral,
-          ),
+          if (showFinanceMark)
+            StatusTag(
+              label: customer.financeMark ? '已标记' : '未标记',
+              tone: customer.financeMark
+                  ? StatusTone.success
+                  : StatusTone.neutral,
+            ),
         ],
       ),
       subtitle: Padding(

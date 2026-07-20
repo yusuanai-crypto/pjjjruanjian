@@ -161,6 +161,7 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ..remove('travel_group_form')
         ..remove('travel_group_finance_supplement')
         ..remove('travel_agency_management')
+        ..remove('after_sales_form')
         ..remove('analytics')
         ..add('travel_group_order_notes');
       _removeStage7Destinations(ids);
@@ -179,6 +180,10 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ids.add('finance_query');
       }
       ids
+        ..remove('finance_query')
+        ..remove('reconciliation_table')
+        ..remove('warehouse_packing')
+        ..remove('after_sales_form')
         ..remove('commission_rules')
         ..remove('taster_commissions')
         ..remove('travel_agency_management');
@@ -206,11 +211,19 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       }
       break;
     case UserRole.frontDesk:
-    case UserRole.afterSales:
       ids
         ..remove('travel_agency_management')
         ..remove('analytics');
       _removeStage7Destinations(ids);
+      break;
+    case UserRole.afterSales:
+      ids
+        ..remove('travel_group_form')
+        ..remove('travel_agency_management');
+      _removeStage7Destinations(ids);
+      if (requestedAnalytics) {
+        ids.add('analytics');
+      }
       break;
     case UserRole.taster:
       ids

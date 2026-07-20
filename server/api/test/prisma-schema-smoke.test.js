@@ -86,9 +86,10 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
     'subtotalCents',
     'notes',
     'sortOrder',
-    'qrCodeToken',
+    'qrCodeTokenHash',
     'qrCodeGeneratedAt',
     'qrCodeExpiresAt',
+    'qrCodeRevokedAt',
     'afterSalesNo',
     'issueType',
     'actionType',
@@ -105,7 +106,7 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
 
   assert.match(
     schema,
-    /qrCodeToken\s+String\?\s+@unique\s+@map\("qr_code_token"\)\s+@db\.VarChar\(80\)/,
+    /qrCodeTokenHash\s+String\?\s+@unique\s+@map\("qr_code_token_hash"\)\s+@db\.Char\(64\)/,
   );
   assert.match(
     schema,
@@ -114,6 +115,10 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
   assert.match(
     schema,
     /qrCodeExpiresAt\s+DateTime\?\s+@map\("qr_code_expires_at"\)\s+@db\.DateTime\(0\)/,
+  );
+  assert.match(
+    schema,
+    /qrCodeRevokedAt\s+DateTime\?\s+@map\("qr_code_revoked_at"\)\s+@db\.DateTime\(0\)/,
   );
   assert.match(schema, /@@index\(\[qrCodeExpiresAt\]\)/);
 
@@ -191,6 +196,16 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
       path.join(
         migrationsDir,
         '20260702000100_after_sales_orders',
+        'migration.sql',
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(
+        migrationsDir,
+        '20260717000200_after_sales_warehouse_refund_proofs',
         'migration.sql',
       ),
     ),
@@ -401,6 +416,27 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     /INDEX `sales_orders_qr_code_expires_at_idx`/,
   );
 
+  const securePublicSalesSheetMigration = readMigration(
+    '20260720000300_public_sales_sheet_capabilities',
+  );
+  assert.match(
+    securePublicSalesSheetMigration,
+    /ADD COLUMN `qr_code_token_hash` CHAR\(64\) NULL/,
+  );
+  assert.match(
+    securePublicSalesSheetMigration,
+    /ADD COLUMN `qr_code_revoked_at` DATETIME\(0\) NULL/,
+  );
+  assert.match(securePublicSalesSheetMigration, /SHA2\(`qr_code_token`, 256\)/);
+  assert.match(
+    securePublicSalesSheetMigration,
+    /DROP COLUMN `qr_code_token`/,
+  );
+  assert.match(
+    securePublicSalesSheetMigration,
+    /sales_orders_qr_code_token_hash_key/,
+  );
+
   const afterSalesOrdersMigration = readMigration(
     '20260702000100_after_sales_orders',
   );
@@ -453,6 +489,28 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
   assert.match(
     afterSalesOrdersMigration,
     /after_sales_orders_updated_by_id_fkey/,
+  );
+  const afterSalesProofMigration = readMigration(
+    '20260717000200_after_sales_warehouse_refund_proofs',
+  );
+  for (const columnName of [
+    'warehouse_confirmed_by_id',
+    'warehouse_confirmed_at',
+    'warehouse_confirm_note',
+    'refund_proof_attachments',
+  ]) {
+    assert.match(afterSalesProofMigration, new RegExp(columnName));
+  }
+  for (const indexName of [
+    'after_sales_orders_warehouse_confirmed_by_id_idx',
+    'after_sales_orders_warehouse_confirmed_at_idx',
+    'after_sales_orders_status_warehouse_confirmed_at_idx',
+  ]) {
+    assert.match(afterSalesProofMigration, new RegExp(indexName));
+  }
+  assert.match(
+    afterSalesProofMigration,
+    /after_sales_orders_warehouse_confirmed_by_id_fkey/,
   );
   assert.doesNotMatch(readAllMigrationSql(), /shipped_at|shipped_by_id/i);
 });
@@ -585,6 +643,8 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
   assertBlockHasFields(agencyDeductionRule, [
     'agencyId',
     'agencyName',
+    'calculationMode',
+    'deductionRate',
     'productName',
     'deductionCostCents',
     'effectiveFrom',
@@ -604,6 +664,14 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
   assert.match(
     agencyDeductionRule,
     /@@index\(\[agencyName, productName, isActive, effectiveFrom\]/,
+  );
+  assert.match(
+    agencyDeductionRule,
+    /@@index\(\[agencyId, calculationMode, isActive, effectiveFrom\]/,
+  );
+  assert.match(
+    agencyDeductionRule,
+    /@@index\(\[agencyName, calculationMode, isActive, effectiveFrom\]/,
   );
   assert.match(agencyDeductionRule, /@@map\("agency_deduction_rules"\)/);
 
@@ -734,6 +802,8 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
   assertBlockHasFields(summary, [
     'travelGroupId',
     'totalSalesAmountCents',
+    'totalCashOnDeliveryCents',
+    'totalPaidDepositCents',
     'confirmedRefundAmountCents',
     'effectiveSalesAmountCents',
     'totalAgencyDeductionCents',
@@ -745,6 +815,12 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
     'totalMonthlyRebateCents',
     'paidRebateCents',
     'unpaidRebateCents',
+    'dailyRebatePaid',
+    'dailyRebatePaidById',
+    'dailyRebatePaidAt',
+    'monthlyRebatePaid',
+    'monthlyRebatePaidById',
+    'monthlyRebatePaidAt',
     'guideInfoSent',
     'travelAgencyInfoSent',
     'calculationVersion',
@@ -757,7 +833,11 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
   );
   assert.match(summary, /travelGroupId\s+String\s+@unique/);
   assert.match(summary, /sourceSnapshot\s+Json\?\s+@map\("source_snapshot"\)/);
+  assert.match(summary, /dailyRebatePaidBy\s+User\?\s+@relation/);
+  assert.match(summary, /monthlyRebatePaidBy\s+User\?\s+@relation/);
   assert.match(summary, /@@index\(\[agencyDeductionConfirmed\]\)/);
+  assert.match(summary, /@@index\(\[dailyRebatePaid\]\)/);
+  assert.match(summary, /@@index\(\[monthlyRebatePaid\]\)/);
   assert.match(summary, /@@map\("travel_group_finance_summaries"\)/);
 });
 
@@ -891,6 +971,30 @@ test('smoke: phase 7 Prisma migration creates commission tables and traceability
     migration,
     /FOREIGN KEY \(`after_sales_order_id`\) REFERENCES `after_sales_orders`\(`id`\) ON DELETE SET NULL ON UPDATE CASCADE/,
   );
+});
+
+test('smoke: agency deduction calculation mode migration preserves old product rules', () => {
+  const migrationName = '20260717000100_agency_deduction_calculation_mode';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+  const migration = readMigration(migrationName);
+
+  assert.match(
+    migration,
+    /ADD COLUMN `calculation_mode` VARCHAR\(40\) NOT NULL DEFAULT 'manual_product_reference'/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `deduction_rate` DECIMAL\(10, 4\) NOT NULL DEFAULT 0\.3000/,
+  );
+  assert.match(
+    migration,
+    /SET `calculation_mode` = 'manual_product_reference'/,
+  );
+  assert.match(migration, /agency_deduction_rules_agency_mode_active_from_idx/);
+  assert.match(migration, /agency_deduction_rules_name_mode_active_from_idx/);
 });
 
 test('smoke: TravelGroup exposes optional intake fields and liaison taster relation', () => {

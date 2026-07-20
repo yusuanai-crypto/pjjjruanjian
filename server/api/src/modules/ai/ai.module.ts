@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { RateLimitModule } from '../../common/rate-limit/rate-limit.module';
 import { AuthModule } from '../auth/auth.module';
 import { AnalyticsModule } from '../analytics/analytics.module';
 import { BusinessDataModule } from '../business-data/business-data.module';
@@ -19,6 +20,7 @@ import { AiToolsService } from './ai-tools.service';
 
 @Module({
   imports: [
+    RateLimitModule,
     AuthModule,
     AnalyticsModule,
     BusinessDataModule,

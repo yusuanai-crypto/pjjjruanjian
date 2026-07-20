@@ -7,23 +7,10 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 void main() {
   testWidgets('agency deduction rule selects agency product and sends ids only',
       (tester) async {
-    tester.view.physicalSize = const Size(1400, 1000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    await _setWideSurface(tester);
 
     final client = _FakeAgencyRuleApiClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TravelAgencyManagementPage(
-            apiClient: client,
-            token: 'finance-token',
-            role: UserRole.finance,
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_page(client));
     await tester.pumpAndSettle();
 
     await tester.tap(
@@ -49,19 +36,124 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(client.lastPath, '/api/agency-deduction-rules');
     expect(client.lastBody?['agencyId'], 'agency-1');
+    expect(client.lastBody?['calculationMode'], 'manual_product_reference');
     expect(client.lastBody?['productId'], 'product-1');
     expect(client.lastBody?['deductionCostCents'], 888);
     expect(client.lastBody?.containsKey('agencyName'), isFalse);
     expect(client.lastBody?.containsKey('productName'), isFalse);
     expect(client.lastBody?.containsKey('unit'), isFalse);
   });
+
+  testWidgets('agency deduction effective rate mode does not require product',
+      (tester) async {
+    await _setWideSurface(tester);
+
+    final client = _FakeAgencyRuleApiClient();
+    await tester.pumpWidget(_page(client));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-deduction-add-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('有效销售额 × 30%'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('travel-agency-deduction-product-field')),
+      findsNothing,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('travel-agency-deduction-from-field')),
+      '2026-07-01',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-deduction-save-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.lastPath, '/api/agency-deduction-rules');
+    expect(client.lastBody?['agencyId'], 'agency-1');
+    expect(client.lastBody?['calculationMode'], 'effective_sales_rate');
+    expect(client.lastBody?['deductionRate'], '0.3000');
+    expect(client.lastBody?.containsKey('productId'), isFalse);
+    expect(client.lastBody?.containsKey('deductionCostCents'), isFalse);
+  });
+
+  testWidgets('agency page batch add buttons import current agency rules',
+      (tester) async {
+    await _setWideSurface(tester);
+
+    final client = _FakeAgencyRuleApiClient();
+    await tester.pumpWidget(_page(client));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-rebate-batch-add-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-rule-import-submit-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.lastPath, '/api/agency-rebate-rules/batch-import');
+    var rules = client.lastBody?['rules'] as List;
+    expect(rules.single['agencyId'], 'agency-1');
+    expect(rules.single['agencyName'], '测试旅行社');
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey('travel-agency-rule-import-result-close-button'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-deduction-batch-add-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-agency-rule-import-submit-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.lastPath, '/api/agency-deduction-rules/batch-import');
+    rules = client.lastBody?['rules'] as List;
+    expect(rules.first['agencyId'], 'agency-1');
+    expect(rules.first['agencyName'], '测试旅行社');
+    expect(rules.first['calculationMode'], 'effective_sales_rate');
+    expect(rules.first.containsKey('productId'), isFalse);
+    expect(rules[1]['calculationMode'], 'manual_product_reference');
+    expect(rules[1]['productId'], 'replace-with-active-product-id');
+  });
+}
+
+Widget _page(ApiClient client) {
+  return MaterialApp(
+    home: Scaffold(
+      body: TravelAgencyManagementPage(
+        apiClient: client,
+        token: 'finance-token',
+        role: UserRole.finance,
+      ),
+    ),
+  );
+}
+
+Future<void> _setWideSurface(WidgetTester tester) async {
+  tester.view.physicalSize = const Size(1400, 1000);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
 }
 
 class _FakeAgencyRuleApiClient extends ApiClient {
   _FakeAgencyRuleApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
 
   Map<String, dynamic>? lastBody;
+  String? lastPath;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -102,19 +194,52 @@ class _FakeAgencyRuleApiClient extends ApiClient {
     Map<String, dynamic>? body,
     String? token,
   }) async {
+    lastPath = path;
+    lastBody = Map<String, dynamic>.from(body ?? const {});
+    if (path == '/api/agency-deduction-rules/batch-import' ||
+        path == '/api/agency-rebate-rules/batch-import') {
+      final rules = body?['rules'] as List? ?? const [];
+      return {
+        'data': {
+          'importResult': {
+            'totalCount': rules.length,
+            'successCount': rules.length,
+            'failureCount': 0,
+            'createdIdsSample': const ['rule-imported'],
+            'failureSamples': const [],
+            'results': [
+              for (var i = 0; i < rules.length; i++)
+                {
+                  'index': i,
+                  'rowNumber': i + 1,
+                  'success': true,
+                  'rule': rules[i],
+                },
+            ],
+          },
+        },
+      };
+    }
     if (path != '/api/agency-deduction-rules') {
       throw StateError('Unexpected POST $path');
     }
-    lastBody = Map<String, dynamic>.from(body ?? const {});
     return {
       'data': {
         'agencyDeductionRule': {
           'id': 'rule-1',
           'agencyId': 'agency-1',
           'agencyName': '测试旅行社',
-          'productId': 'product-1',
-          'productName': '测试酱酒',
-          ...?body,
+          'calculationMode':
+              body?['calculationMode'] ?? 'manual_product_reference',
+          'deductionRate': body?['deductionRate'] ?? '0.3000',
+          'productId': body?['productId'],
+          'productName':
+              body?['calculationMode'] == 'effective_sales_rate' ? '' : '测试酱酒',
+          'deductionCostCents': body?['deductionCostCents'] ?? 0,
+          'effectiveFrom': body?['effectiveFrom'] ?? '2026-07-01',
+          'effectiveTo': body?['effectiveTo'],
+          'isActive': body?['isActive'] ?? true,
+          'notes': body?['notes'],
         },
       },
     };

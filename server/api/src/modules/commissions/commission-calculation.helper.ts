@@ -5,6 +5,10 @@ const OUTREACH_COMMISSION = 'OUTREACH_COMMISSION';
 const LEADER_COMMISSION = 'LEADER_COMMISSION';
 const AGENCY_DAILY_REBATE = 'AGENCY_DAILY_REBATE';
 const AGENCY_MONTHLY_REBATE = 'AGENCY_MONTHLY_REBATE';
+const AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE = 'effective_sales_rate';
+const AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE =
+  'manual_product_reference';
+const DEFAULT_AGENCY_DEDUCTION_RATE = '0.3000';
 
 const TARGET_TYPE_TO_PRISMA: any = {
   sales_commission: SALES_COMMISSION,
@@ -90,10 +94,12 @@ export function calculateStage7CommissionAndPoints(
     warnings,
   );
   const agencyDeduction = calculateAgencyDeduction(
+    salesOrder,
     items,
     input?.agencyDeductionRules || [],
     agencyMatch,
     calculationDate,
+    effectiveAmountCents,
     warnings,
   );
   const employeeBaseAmountCents = Math.max(
@@ -195,6 +201,7 @@ export function calculateStage7CommissionAndPoints(
     salesDeductionAmountCents: salesDeduction.totalAmountCents,
     employeeBaseAmountCents,
     agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
+    agencyDeductionCalculationMode: agencyDeduction.calculationMode,
     agencyBaseAmountCents,
     dailyRebateCents,
     monthlyRebateCents,
@@ -301,15 +308,60 @@ function calculateSalesDeduction(
 }
 
 function calculateAgencyDeduction(
+  salesOrder: any,
   items: any[],
   rules: any[],
   agencyMatch: any,
   calculationDate: Date,
+  effectiveAmountCents: number,
   warnings: Stage7CalculationWarning[],
 ) {
+  const effectiveRateRule = matchAgencyRule(
+    rules.filter(
+      (rule: any) =>
+        normalizeAgencyDeductionMode(rule.calculationMode) ===
+        AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE,
+    ),
+    agencyMatch,
+    null,
+    calculationDate,
+  );
+  if (effectiveRateRule.rule) {
+    const deductionRate = normalizeRate(
+      effectiveRateRule.rule.deductionRate ?? DEFAULT_AGENCY_DEDUCTION_RATE,
+    );
+    const deductionAmountCents = multiplyCentsByRate(
+      effectiveAmountCents,
+      deductionRate,
+    );
+    return {
+      calculationMode: AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE,
+      deductionRate,
+      totalAmountCents: deductionAmountCents,
+      items: [],
+      ruleSnapshots: [
+        {
+          ruleId: normalizeOptionalString(effectiveRateRule.rule.id),
+          matchMode: effectiveRateRule.matchMode,
+          agencyId: agencyMatch.agencyId,
+          agencyName: agencyMatch.agencyName,
+          calculationMode: AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE,
+          deductionRate,
+          effectiveSalesAmountCents: effectiveAmountCents,
+          deductionAmountCents,
+        },
+      ],
+    };
+  }
+
+  const manualRules = rules.filter(
+    (rule: any) =>
+      normalizeAgencyDeductionMode(rule.calculationMode) ===
+      AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+  );
   const itemResults = items.map((item: any) => {
     const matched = matchAgencyRule(
-      rules,
+      manualRules,
       agencyMatch,
       item,
       calculationDate,
@@ -338,16 +390,22 @@ function calculateAgencyDeduction(
       quantity: item.quantity,
       ruleId: matched.rule?.id || null,
       matchMode: matched.matchMode,
+      calculationMode: AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
       deductionCostCents,
-      deductionAmountCents: deductionCostCents * item.quantity,
+      referenceAmountCents: deductionCostCents * item.quantity,
+      deductionAmountCents: 0,
       matched: Boolean(matched.rule),
     };
   });
+  const hasReferenceRule = itemResults.some((item: any) => item.matched);
+  const manualInputDeductionCents = hasReferenceRule
+    ? readManualAgencyDeductionCents(salesOrder)
+    : 0;
+
   return {
-    totalAmountCents: sumBy(
-      itemResults,
-      (item: any) => item.deductionAmountCents,
-    ),
+    calculationMode: AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
+    deductionRate: null,
+    totalAmountCents: manualInputDeductionCents,
     items: itemResults,
     ruleSnapshots: itemResults
       .filter((item: any) => item.matched)
@@ -356,11 +414,14 @@ function calculateAgencyDeduction(
         matchMode: item.matchMode,
         agencyId: agencyMatch.agencyId,
         agencyName: agencyMatch.agencyName,
+        calculationMode: AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE,
         productId: item.productId,
         productName: item.productName,
         quantity: item.quantity,
         deductionCostCents: item.deductionCostCents,
-        deductionAmountCents: item.deductionAmountCents,
+        referenceAmountCents: item.referenceAmountCents,
+        deductionAmountCents: 0,
+        manualInputDeductionCents,
       })),
   };
 }
@@ -717,6 +778,25 @@ function normalizeRate(value: unknown) {
   return Number(trimmed).toFixed(4);
 }
 
+function normalizeAgencyDeductionMode(value: unknown) {
+  const text = normalizeOptionalString(value);
+  if (text === AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE) {
+    return AGENCY_DEDUCTION_MODE_EFFECTIVE_SALES_RATE;
+  }
+  return AGENCY_DEDUCTION_MODE_MANUAL_PRODUCT_REFERENCE;
+}
+
+function readManualAgencyDeductionCents(salesOrder: any) {
+  return Math.max(
+    0,
+    toCents(
+      salesOrder?.travelGroup?.liquorCostDeductionCents ??
+        salesOrder?.liquorCostDeductionCents ??
+        0,
+    ),
+  );
+}
+
 function normalizeOrderItems(items: any[]) {
   return (Array.isArray(items) ? items : []).map((item: any, index: number) => {
     const quantity = Math.max(0, Math.trunc(Number(item?.quantity || 0)));
@@ -848,6 +928,7 @@ function buildCalculationNote(note: any) {
     `confirmedRefund=${note.confirmedRefundAmountCents}`,
     `effective=${note.effectiveAmountCents}`,
     `employeeBase=${note.employeeBaseAmountCents}`,
+    `agencyDeductionMode=${note.agencyDeductionCalculationMode}`,
     `agencyBase=${note.agencyBaseAmountCents}`,
     warnings,
   ].join('; ');

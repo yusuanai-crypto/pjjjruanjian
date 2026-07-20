@@ -9,6 +9,7 @@ import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../../shared/widgets/time_picker_field.dart';
 import '../travel_groups/tasting_items_editor.dart';
 
 class TravelGroupOrderNotesPage extends StatefulWidget {
@@ -159,7 +160,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     }
     return _selectedOrderIdsByGroup.putIfAbsent(group.id, () {
       return _orders
-          .where((order) => order.travelGroup?.id == group.id)
+          .where((order) => _isOrderBoundToGroup(order, group.id))
           .map((order) => order.id)
           .toSet();
     });
@@ -182,7 +183,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
 
   void _syncSelectedGroupFields() {
     final group = _selectedGroup;
-    _departureTimeController.text = group?.departureTime ?? '';
+    _departureTimeController.text = normalizeTimeText(group?.departureTime);
     _remarksController.text = group?.remarks ?? '';
     _tastingItemDrafts = _tastingDraftsFromGroup(group);
     _tastingItems = _tastingPayloadFromGroup(group);
@@ -220,8 +221,13 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     });
 
     try {
+      final selectedOrderIds = Set<String>.from(_selectedOrderIds);
+      final updatedOrders = await _persistOrderBindings(
+        group,
+        selectedOrderIds,
+      );
       final updated = await _businessApi.updateTravelGroup(group.id, {
-        'departureTime': _departureTimeController.text.trim(),
+        'departureTime': normalizeTimeText(_departureTimeController.text),
         'remarks': _remarksController.text.trim(),
         'tastingItems': _tastingItems,
       });
@@ -232,10 +238,12 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _groups = [
           for (final item in _groups) item.id == updated.id ? updated : item,
         ];
+        _orders = _ordersWithUpdates(updatedOrders);
+        _selectedOrderIdsByGroup[group.id] = selectedOrderIds;
         _tastingItemDrafts = _tastingDraftsFromGroup(updated);
         _tastingItems = _tastingPayloadFromGroup(updated);
         _saving = false;
-        _successMessage = '品酒明细与离店备注已保存。';
+        _successMessage = '明细与备注已成功保存。';
       });
     } catch (error) {
       if (!mounted) {
@@ -251,10 +259,55 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   bool _needsSupplement(TravelGroupRecord group) {
     final selectedIds = _selectedOrderIdsByGroup[group.id];
     final hasBoundOrder = (selectedIds != null && selectedIds.isNotEmpty) ||
-        _orders.any((order) => order.travelGroup?.id == group.id);
+        _orders.any((order) => _isOrderBoundToGroup(order, group.id));
     return (group.departureTime ?? '').isEmpty &&
         (group.remarks ?? '').isEmpty &&
         !hasBoundOrder;
+  }
+
+  Future<List<SalesOrderRecord>> _persistOrderBindings(
+    TravelGroupRecord group,
+    Set<String> selectedOrderIds,
+  ) {
+    final currentOrderIds = _orders
+        .where((order) => _isOrderBoundToGroup(order, group.id))
+        .map((order) => order.id)
+        .toSet();
+    final updates = <Future<SalesOrderRecord>>[];
+    for (final order in _orders) {
+      final shouldBind = selectedOrderIds.contains(order.id);
+      final isBound = currentOrderIds.contains(order.id);
+      if (shouldBind == isBound) {
+        continue;
+      }
+      updates.add(
+        _businessApi.updateSalesOrder(
+          order.id,
+          shouldBind
+              ? {
+                  'orderType': 'travel_group',
+                  'travelGroupId': group.id,
+                }
+              : {
+                  'orderType': order.orderType == 'travel_group'
+                      ? 'external'
+                      : order.orderType,
+                  'travelGroupId': null,
+                },
+        ),
+      );
+    }
+    return Future.wait(updates);
+  }
+
+  List<SalesOrderRecord> _ordersWithUpdates(List<SalesOrderRecord> updates) {
+    if (updates.isEmpty) {
+      return _orders;
+    }
+    final updatedById = {for (final order in updates) order.id: order};
+    return [
+      for (final order in _orders) updatedById[order.id] ?? order,
+    ];
   }
 
   @override
@@ -497,9 +550,10 @@ class _BindingPanel extends StatelessWidget {
         const SizedBox(height: 12),
         ResponsiveFormGrid(
           children: [
-            TextField(
+            AppTimePickerField(
+              key: const ValueKey('departure-time-field'),
               controller: departureTimeController,
-              decoration: const InputDecoration(labelText: '离店时间'),
+              label: '离店时间',
             ),
             TextField(
               controller: remarksController,
@@ -692,6 +746,10 @@ String _messageForError(Object error) {
     return error.message;
   }
   return '操作失败，请稍后重试。';
+}
+
+bool _isOrderBoundToGroup(SalesOrderRecord order, String groupId) {
+  return order.travelGroup?.id == groupId || order.travelGroupId == groupId;
 }
 
 String _groupStatusLabel(String status) {

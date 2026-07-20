@@ -37,6 +37,7 @@ model User {
   leaderId           String?   @map("leader_id") @db.Char(36)
   isActive           Boolean   @default(true) @map("is_active")
   mustChangePassword Boolean   @default(false) @map("must_change_password")
+  tokenVersion       Int       @default(0) @map("token_version")
   statusReason       String?   @map("status_reason") @db.VarChar(255)
   statusChangedAt    DateTime? @map("status_changed_at") @db.DateTime(0)
   statusChangedBy    String?   @map("status_changed_by") @db.Char(36)
@@ -58,6 +59,7 @@ model User {
   markedSalesOrders                SalesOrder[]                @relation("SalesOrderMarkedBy")
   markedCustomers                  Customer[]                  @relation("CustomerMarkedBy")
   financeConfirmedAfterSalesOrders AfterSalesOrder[]           @relation("AfterSalesOrderFinanceConfirmedBy")
+  warehouseConfirmedAfterSalesOrders AfterSalesOrder[]           @relation("AfterSalesOrderWarehouseConfirmedBy")
   handledAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderHandledBy")
   createdAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderCreatedBy")
   updatedAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderUpdatedBy")
@@ -75,6 +77,8 @@ model User {
   createdCommissionRecords         CommissionRecord[]          @relation("CommissionRecordCreatedBy")
   updatedCommissionRecords         CommissionRecord[]          @relation("CommissionRecordUpdatedBy")
   confirmedTravelGroupSummaries    TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
+  dailyRebatePaidTravelSummaries   TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryDailyRebatePaidBy")
+  monthlyRebatePaidTravelSummaries TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryMonthlyRebatePaidBy")
   updatedTravelGroupSummaries      TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryUpdatedBy")
   reviewedDailyReconciliations     DailyReconciliation[]       @relation("DailyReconciliationReviewedBy")
   aiChatMessages                   AiChatMessage[]             @relation("AiChatMessageUser")
@@ -101,6 +105,7 @@ model SmsVerificationCode {
   userId       String?                @map("user_id") @db.Char(36)
   purpose      SmsVerificationPurpose
   codeHash     String                 @map("code_hash") @db.VarChar(255)
+  activeKey    String?                @unique @map("active_key") @db.VarChar(191)
   expiresAt    DateTime               @map("expires_at") @db.DateTime(0)
   consumedAt   DateTime?              @map("consumed_at") @db.DateTime(0)
   attemptCount Int                    @default(0) @map("attempt_count")
@@ -114,6 +119,18 @@ model SmsVerificationCode {
   @@index([userId])
   @@index([expiresAt])
   @@map("sms_verification_codes")
+}
+
+model RateLimitCounter {
+  keyFingerprint String   @id @map("key_fingerprint") @db.Char(64)
+  scope          String   @db.VarChar(64)
+  windowStartAt  DateTime @map("window_start_at") @db.DateTime(3)
+  windowEndAt    DateTime @map("window_end_at") @db.DateTime(3)
+  requestCount   Int      @default(0) @map("request_count")
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@index([windowEndAt], map: "rate_limit_counters_window_end_idx")
+  @@map("rate_limit_counters")
 }
 
 model SystemSetting {
@@ -137,6 +154,7 @@ model OperationLog {
   entityId   String?  @map("entity_id") @db.Char(36)
   beforeData Json?    @map("before_data")
   afterData  Json?    @map("after_data")
+  sanitizationSummary Json? @map("sanitization_summary")
   ipAddress  String?  @map("ip_address") @db.VarChar(45)
   createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(0)
 
@@ -608,9 +626,10 @@ model SalesOrder {
   address                   String?                 @db.VarChar(255)
   orderDate                 DateTime                @map("order_date") @db.Date
   salesFormNo               String?                 @map("sales_form_no") @db.VarChar(80)
-  qrCodeToken               String?                 @unique @map("qr_code_token") @db.VarChar(80)
+  qrCodeTokenHash           String?                 @unique @map("qr_code_token_hash") @db.Char(64)
   qrCodeGeneratedAt         DateTime?               @map("qr_code_generated_at") @db.DateTime(0)
   qrCodeExpiresAt           DateTime?               @map("qr_code_expires_at") @db.DateTime(0)
+  qrCodeRevokedAt           DateTime?               @map("qr_code_revoked_at") @db.DateTime(0)
   totalAmountCents          Int                     @default(0) @map("total_amount_cents")
   cashOnDeliveryAmountCents Int                     @default(0) @map("cash_on_delivery_amount_cents")
   logisticsMethod           String?                 @map("logistics_method") @db.VarChar(80)
@@ -702,6 +721,10 @@ model AfterSalesOrder {
   financeConfirmed     Boolean              @default(false) @map("finance_confirmed")
   financeConfirmedById String?              @map("finance_confirmed_by_id") @db.Char(36)
   financeConfirmedAt   DateTime?            @map("finance_confirmed_at") @db.DateTime(0)
+  warehouseConfirmedById String?            @map("warehouse_confirmed_by_id") @db.Char(36)
+  warehouseConfirmedAt DateTime?            @map("warehouse_confirmed_at") @db.DateTime(0)
+  warehouseConfirmNote String?              @map("warehouse_confirm_note") @db.Text
+  refundProofAttachments Json?              @map("refund_proof_attachments")
   handledById          String?              @map("handled_by_id") @db.Char(36)
   handledAt            DateTime?            @map("handled_at") @db.DateTime(0)
   completedAt          DateTime?            @map("completed_at") @db.DateTime(0)
@@ -714,6 +737,7 @@ model AfterSalesOrder {
   salesOrder         SalesOrder         @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
   customer           Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
   financeConfirmedBy User?              @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
+  warehouseConfirmedBy User?            @relation("AfterSalesOrderWarehouseConfirmedBy", fields: [warehouseConfirmedById], references: [id], onDelete: SetNull)
   handledBy          User?              @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
   createdBy          User?              @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy          User?              @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
@@ -730,6 +754,9 @@ model AfterSalesOrder {
   @@index([status, createdAt])
   @@index([financeConfirmed, createdAt])
   @@index([financeConfirmedById])
+  @@index([warehouseConfirmedById])
+  @@index([warehouseConfirmedAt])
+  @@index([status, warehouseConfirmedAt])
   @@index([createdById])
   @@index([updatedById])
   @@index([salesOrderId, financeConfirmed])
@@ -740,8 +767,10 @@ model AgencyDeductionRule {
   id                 String    @id @default(uuid()) @db.Char(36)
   agencyId           String?   @map("agency_id") @db.Char(36)
   agencyName         String?   @map("agency_name") @db.VarChar(120)
+  calculationMode    String    @default("manual_product_reference") @map("calculation_mode") @db.VarChar(40)
+  deductionRate      Decimal   @default(0.3000) @map("deduction_rate") @db.Decimal(10, 4)
   productId          String?   @map("product_id") @db.Char(36)
-  productName        String    @map("product_name") @db.VarChar(160)
+  productName        String    @default("") @map("product_name") @db.VarChar(160)
   deductionCostCents Int       @default(0) @map("deduction_cost_cents")
   effectiveFrom      DateTime  @map("effective_from") @db.Date
   effectiveTo        DateTime? @map("effective_to") @db.Date
@@ -760,6 +789,7 @@ model AgencyDeductionRule {
   @@index([agencyId])
   @@index([productId])
   @@index([agencyName])
+  @@index([calculationMode])
   @@index([productName])
   @@index([isActive])
   @@index([effectiveFrom])
@@ -768,6 +798,8 @@ model AgencyDeductionRule {
   @@index([updatedById])
   @@index([agencyId, productName, isActive, effectiveFrom], map: "agency_deduction_rules_agency_product_active_from_idx")
   @@index([agencyId, productId, isActive, effectiveFrom], map: "agency_deduction_rules_agency_product_id_active_from_idx")
+  @@index([agencyId, calculationMode, isActive, effectiveFrom], map: "agency_deduction_rules_agency_mode_active_from_idx")
+  @@index([agencyName, calculationMode, isActive, effectiveFrom], map: "agency_deduction_rules_name_mode_active_from_idx")
   @@index([agencyName, productName, isActive, effectiveFrom], map: "agency_deduction_rules_name_product_active_from_idx")
   @@map("agency_deduction_rules")
 }
@@ -929,6 +961,8 @@ model TravelGroupFinanceSummary {
   id                           String    @id @default(uuid()) @db.Char(36)
   travelGroupId                String    @unique @map("travel_group_id") @db.Char(36)
   totalSalesAmountCents        Int       @default(0) @map("total_sales_amount_cents")
+  totalCashOnDeliveryCents      Int       @default(0) @map("total_cash_on_delivery_cents")
+  totalPaidDepositCents         Int       @default(0) @map("total_paid_deposit_cents")
   confirmedRefundAmountCents   Int       @default(0) @map("confirmed_refund_amount_cents")
   effectiveSalesAmountCents    Int       @default(0) @map("effective_sales_amount_cents")
   totalAgencyDeductionCents    Int       @default(0) @map("total_agency_deduction_cents")
@@ -940,6 +974,12 @@ model TravelGroupFinanceSummary {
   totalMonthlyRebateCents      Int       @default(0) @map("total_monthly_rebate_cents")
   paidRebateCents              Int       @default(0) @map("paid_rebate_cents")
   unpaidRebateCents            Int       @default(0) @map("unpaid_rebate_cents")
+  dailyRebatePaid              Boolean   @default(false) @map("daily_rebate_paid")
+  dailyRebatePaidById          String?   @map("daily_rebate_paid_by_id") @db.Char(36)
+  dailyRebatePaidAt            DateTime? @map("daily_rebate_paid_at") @db.DateTime(0)
+  monthlyRebatePaid            Boolean   @default(false) @map("monthly_rebate_paid")
+  monthlyRebatePaidById        String?   @map("monthly_rebate_paid_by_id") @db.Char(36)
+  monthlyRebatePaidAt          DateTime? @map("monthly_rebate_paid_at") @db.DateTime(0)
   notes                        String?   @db.Text
   guideInfoSent                Boolean   @default(false) @map("guide_info_sent")
   travelAgencyInfoSent         Boolean   @default(false) @map("travel_agency_info_sent")
@@ -951,10 +991,16 @@ model TravelGroupFinanceSummary {
 
   travelGroup                TravelGroup @relation(fields: [travelGroupId], references: [id], onDelete: Cascade)
   agencyDeductionConfirmedBy User?       @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy", fields: [agencyDeductionConfirmedById], references: [id], onDelete: SetNull, map: "tg_fin_summaries_confirmed_by_id_fkey")
+  dailyRebatePaidBy          User?       @relation("TravelGroupFinanceSummaryDailyRebatePaidBy", fields: [dailyRebatePaidById], references: [id], onDelete: SetNull, map: "tg_fin_summaries_daily_paid_by_id_fkey")
+  monthlyRebatePaidBy        User?       @relation("TravelGroupFinanceSummaryMonthlyRebatePaidBy", fields: [monthlyRebatePaidById], references: [id], onDelete: SetNull, map: "tg_fin_summaries_monthly_paid_by_id_fkey")
   updatedBy                  User?       @relation("TravelGroupFinanceSummaryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([agencyDeductionConfirmed])
   @@index([agencyDeductionConfirmedById], map: "tg_fin_summaries_confirmed_by_id_idx")
+  @@index([dailyRebatePaid])
+  @@index([dailyRebatePaidById], map: "tg_fin_summaries_daily_paid_by_id_idx")
+  @@index([monthlyRebatePaid])
+  @@index([monthlyRebatePaidById], map: "tg_fin_summaries_monthly_paid_by_id_idx")
   @@index([updatedById])
   @@index([updatedAt])
   @@map("travel_group_finance_summaries")

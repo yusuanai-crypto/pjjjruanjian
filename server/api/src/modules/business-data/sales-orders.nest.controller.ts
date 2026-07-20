@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -13,6 +14,7 @@ import {
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
 import { BusinessDataNestService } from './business-data.nest.service';
+import { getConfiguredPublicSalesSheetBaseUrl } from './qr-code-token.helper';
 
 @Controller('sales-orders')
 export class SalesOrdersNestController {
@@ -65,9 +67,6 @@ export class SalesOrdersNestController {
       salesSheet: await this.businessDataService.getSalesOrderSalesSheet(
         actor,
         id,
-        {
-          publicSalesSheetBaseUrl: getPublicSalesSheetBaseUrl(request),
-        },
       ),
     };
   }
@@ -81,9 +80,19 @@ export class SalesOrdersNestController {
       body,
       {
         ipAddress: getRequestIp(request),
-        publicSalesSheetBaseUrl: getPublicSalesSheetBaseUrl(request),
+        publicSalesSheetBaseUrl: getConfiguredPublicSalesSheetBaseUrl({
+          required: true,
+        }),
       },
     );
+  }
+
+  @Delete(':id/qr-code')
+  async revokeQrCode(@Param('id') id: string, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return await this.businessDataService.revokeSalesOrderQrCode(actor, id, {
+      ipAddress: getRequestIp(request),
+    });
   }
 
   @Get(':id')
@@ -143,46 +152,4 @@ export class SalesOrdersNestController {
       }),
     };
   }
-}
-
-function getPublicSalesSheetBaseUrl(request: any) {
-  const configuredBaseUrl = normalizeBaseUrl(
-    process.env.PUBLIC_SALES_SHEET_BASE_URL,
-  );
-  return configuredBaseUrl || getRequestBaseUrl(request);
-}
-
-function getRequestBaseUrl(request: any) {
-  const forwardedProto = getFirstHeaderValue(
-    request?.headers?.['x-forwarded-proto'],
-  );
-  const forwardedHost = getFirstHeaderValue(
-    request?.headers?.['x-forwarded-host'],
-  );
-  const protocol =
-    forwardedProto ||
-    request?.protocol ||
-    (request?.socket?.encrypted ? 'https' : 'http');
-  const host =
-    forwardedHost ||
-    getFirstHeaderValue(request?.headers?.host) ||
-    'localhost';
-  return normalizeBaseUrl(`${protocol}://${host}`) || 'http://localhost';
-}
-
-function getFirstHeaderValue(value: unknown) {
-  const raw = Array.isArray(value) ? value[0] : value;
-  if (typeof raw !== 'string') {
-    return null;
-  }
-  const text = raw.split(',')[0]?.trim();
-  return text || null;
-}
-
-function normalizeBaseUrl(value: unknown) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const text = String(value).trim().replace(/\/+$/, '');
-  return text || null;
 }

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/customers/customer_form_dialog.dart';
 import 'package:jiangjiu_mobile_desktop/features/customers/customer_picker_dialog.dart';
+import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
   testWidgets('searches customers by name phone or address', (tester) async {
@@ -43,6 +44,27 @@ void main() {
 
     expect(selected?.id, 'customer-zhang');
     expect(selected?.phone, '13900001111');
+  });
+
+  testWidgets('hides customer finance mark by default', (tester) async {
+    await _openPicker(
+      tester,
+      loadCustomers: (_, __) async => _customers,
+    );
+
+    expect(find.text('已标记'), findsNothing);
+    expect(find.text('未标记'), findsNothing);
+  });
+
+  testWidgets('shows customer finance mark when enabled', (tester) async {
+    await _openPicker(
+      tester,
+      loadCustomers: (_, __) async => _customers,
+      showFinanceMark: true,
+    );
+
+    expect(find.text('已标记'), findsOneWidget);
+    expect(find.text('未标记'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no customers match', (tester) async {
@@ -95,6 +117,24 @@ void main() {
       find.byKey(const ValueKey('customer-phone-field')),
       '13700002222',
     );
+    final province = administrativeProvinceNames().first;
+    final city = administrativeCitiesForProvince(province).first;
+    final district = administrativeDistrictsForCity(province, city).first;
+    await _selectDropdownValue(
+      tester,
+      key: const ValueKey('customer-province-field'),
+      label: province,
+    );
+    await _selectDropdownValue(
+      tester,
+      key: ValueKey('customer-city-$province'),
+      label: city,
+    );
+    await _selectDropdownValue(
+      tester,
+      key: ValueKey('customer-district-$province-$city'),
+      label: district,
+    );
     await tester.enterText(
       find.byKey(const ValueKey('customer-address-field')),
       '测试路 1 号',
@@ -104,6 +144,9 @@ void main() {
 
     expect(createdBody?['name'], '新客户');
     expect(createdBody?['phone'], '13700002222');
+    expect(createdBody?['province'], province);
+    expect(createdBody?['city'], city);
+    expect(createdBody?['district'], district);
     expect(selected?.id, 'customer-created');
     expect(selected?.address, '测试路 1 号');
   });
@@ -114,6 +157,7 @@ Future<void> _openPicker(
   required CustomerListLoader loadCustomers,
   CustomerCreator? createCustomer,
   ValueChanged<CustomerRecord?>? onSelected,
+  bool showFinanceMark = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -128,6 +172,7 @@ Future<void> _openPicker(
                     builder: (context) => CustomerPickerDialog(
                       loadCustomers: loadCustomers,
                       createCustomer: createCustomer,
+                      showFinanceMark: showFinanceMark,
                     ),
                   );
                   onSelected?.call(selected);
@@ -142,6 +187,19 @@ Future<void> _openPicker(
   );
 
   await tester.tap(find.text('打开客户选择'));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectDropdownValue(
+  WidgetTester tester, {
+  required Key key,
+  required String label,
+}) async {
+  final field = find.byKey(key);
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
   await tester.pumpAndSettle();
 }
 

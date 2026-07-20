@@ -55,6 +55,7 @@ test('contract: sales order items snapshot active products and date-effective ac
           unit: 'client unit',
           quantity: 2,
           unitPriceCents: 10000,
+          subtotalCents: 25000,
           deliveryType: 'shipping',
         },
       ],
@@ -64,11 +65,13 @@ test('contract: sales order items snapshot active products and date-effective ac
     assert.equal(order.items[0].productId, product.id);
     assert.equal(order.items[0].productName, 'Snapshot Product');
     assert.equal(order.items[0].unit, 'case');
+    assert.equal(order.totalAmountCents, 25000);
+    assert.equal(order.items[0].subtotalCents, 25000);
     let storedItem = findStoredOrderItem(stores, order.id);
     assert.deepEqual(costSnapshot(storedItem), {
       actualUnitCostCents: 1000,
       actualCostSubtotalCents: 2000,
-      grossProfitCents: 18000,
+      grossProfitCents: 23000,
     });
 
     const changedCost = await requestJson(

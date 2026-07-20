@@ -394,6 +394,33 @@ test('contract: stage7 rule CRUD validates fields', async () => {
     );
     assertErrorContract(blankProduct, 400, 'VALIDATION_FAILED');
 
+    const effectiveRateWithoutProduct = await requestJson(
+      baseUrl,
+      '/api/agency-deduction-rules',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          agencyName: 'Stage7 Test Effective Rate Agency',
+          calculationMode: 'effective_sales_rate',
+          effectiveFrom: '2026-07-01',
+        },
+      },
+    );
+    assert.equal(effectiveRateWithoutProduct.response.status, 201);
+    assert.equal(
+      effectiveRateWithoutProduct.body.data.agencyDeductionRule.calculationMode,
+      'effective_sales_rate',
+    );
+    assert.equal(
+      effectiveRateWithoutProduct.body.data.agencyDeductionRule.deductionRate,
+      '0.3000',
+    );
+    assert.equal(
+      effectiveRateWithoutProduct.body.data.agencyDeductionRule.productId,
+      null,
+    );
+
     const trimmedProduct = await requestJson(
       baseUrl,
       '/api/sales-deduction-rules',
@@ -840,6 +867,12 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
               effectiveFrom: '2026-07-01',
               notes: 'stage7 smoke agency deduction batch import b',
             },
+            {
+              agencyName: 'Stage7 Smoke Batch Agency Rate',
+              calculationMode: 'effective_sales_rate',
+              effectiveFrom: '2026-07-01',
+              notes: 'stage7 smoke agency deduction effective rate import',
+            },
           ],
         },
       },
@@ -847,8 +880,13 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
     assert.equal(agencyDeductionImport.response.status, 201);
     assertImportResultContract(
       agencyDeductionImport.body.data.importResult,
-      2,
+      3,
       0,
+    );
+    assert.equal(
+      agencyDeductionImport.body.data.importResult.results[2].rule
+        .calculationMode,
+      'effective_sales_rate',
     );
 
     const agencyRebateImport = await requestJson(

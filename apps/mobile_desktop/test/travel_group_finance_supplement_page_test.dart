@@ -1,8 +1,9 @@
-import 'package:flutter/gestures.dart';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_finance/travel_group_finance_supplement_page.dart';
 
 void main() {
@@ -10,286 +11,381 @@ void main() {
     TestWidgetsFlutterBinding.ensureInitialized();
   });
 
-  testWidgets('applies every finance table filter to the visible rows',
+  testWidgets('loads real summaries without showing group number column',
       (tester) async {
-    await _pumpPage(tester);
+    final apiClient = _FakeFinanceApiClient();
+    final tempDirectory = _createTestDirectory();
+    addTearDown(() => _deleteTestDirectory(tempDirectory));
 
-    expect(_returnedAmountFilterFields(), findsNothing);
-    expect(find.byKey(const ValueKey('finance-filter-date')), findsOneWidget);
-    expect(find.byKey(const ValueKey('finance-filter-taster')), findsOneWidget);
+    await _pumpPage(
+      tester,
+      apiClient: apiClient,
+      documentsDirectory: tempDirectory,
+    );
+
     expect(
-      find.byKey(const ValueKey('finance-filter-unreturned-points')),
+      apiClient.getPaths.single,
+      startsWith('/api/travel-group-finance-summaries'),
+    );
+    expect(find.text('TG-HIDDEN-001'), findsNothing);
+    expect(find.text('团号'), findsNothing);
+    expect(find.byKey(const ValueKey('finance-select-all')), findsOneWidget);
+    expect(find.byKey(const ValueKey('group-1:select')), findsOneWidget);
+    expect(find.text('月返积分'), findsOneWidget);
+    expect(find.text('已返月返积分'), findsOneWidget);
+    expect(find.text('未返月返积分'), findsOneWidget);
+    expect(find.byKey(const ValueKey('group-1:guideImage')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('group-1:travelAgencyImage')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('finance-filter-guide-info-sent')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('finance-filter-agency-info-sent')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('finance-filter-status')), findsOneWidget);
 
-    await tester.enterText(
-      find.byKey(const ValueKey('finance-filter-agency')),
-      '山水',
+    final checkbox = tester.widget<Checkbox>(
+      find.byKey(const ValueKey('group-1:select')),
     );
+    expect(checkbox.value, isFalse);
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
     await tester.pump();
-    _expectRows(visible: ['GZ-0622-016']);
-
-    await _clearFilters(tester);
-    await tester.enterText(
-      find.byKey(const ValueKey('finance-filter-guide')),
-      '赵',
-    );
-    await tester.pump();
-    _expectRows(visible: ['GZ-0622-011']);
-
-    await _clearFilters(tester);
-    await _selectDropdown(tester, 'finance-filter-taster', '陈品鉴');
-    _expectRows(visible: ['GZ-0622-018']);
-
-    await _clearFilters(tester);
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('finance-filter-date')),
-    );
-    await tester.tap(find.byKey(const ValueKey('finance-filter-date')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(TextButton, '确定'));
-    await tester.pumpAndSettle();
-    _expectRows(visible: ['GZ-0622-018', 'GZ-0622-016']);
-  });
-
-  testWidgets('filters zero, send flags and existing statuses correctly',
-      (tester) async {
-    await _pumpPage(tester);
-
-    final unreturnedPoints =
-        find.byKey(const ValueKey('finance-filter-unreturned-points'));
-    await tester.enterText(unreturnedPoints, '-1');
-    await tester.pump();
-    expect(tester.widget<TextField>(unreturnedPoints).controller!.text, '');
-    _expectRows(
-      visible: ['GZ-0622-018', 'GZ-0622-016', 'GZ-0622-011'],
-    );
-
-    await tester.enterText(unreturnedPoints, '0');
-    await tester.pump();
-    _expectRows(visible: ['GZ-0622-011']);
-    expect(find.text('当前显示 1/3 行'), findsOneWidget);
-    expect(find.text('待补充 0 行'), findsOneWidget);
-    expect(find.text('¥0.00'), findsNWidgets(2));
-
-    await _clearFilters(tester);
-    await _selectDropdown(
-      tester,
-      'finance-filter-guide-info-sent',
-      '未发送',
-    );
-    _expectRows(visible: ['GZ-0622-016']);
-
-    await _clearFilters(tester);
-    await _selectDropdown(
-      tester,
-      'finance-filter-agency-info-sent',
-      '未发送',
-    );
-    _expectRows(visible: ['GZ-0622-018', 'GZ-0622-016']);
-
-    await _clearFilters(tester);
-    await _selectDropdown(tester, 'finance-filter-status', '待复核');
-    _expectRows(visible: ['GZ-0622-016']);
-  });
-
-  testWidgets('combines filters with AND and clear restores rows and totals',
-      (tester) async {
-    await _pumpPage(tester);
-
-    await tester.enterText(
-      find.byKey(const ValueKey('finance-filter-agency')),
-      '黔',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('finance-filter-guide')),
-      '李',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('finance-filter-unreturned-points')),
-      '340',
-    );
-    await _selectDropdown(tester, 'finance-filter-taster', '陈品鉴');
-    await _selectDropdown(tester, 'finance-filter-guide-info-sent', '已发送');
-    await _selectDropdown(
-      tester,
-      'finance-filter-agency-info-sent',
-      '未发送',
-    );
-    await _selectDropdown(tester, 'finance-filter-status', '待补充');
-
-    _expectRows(visible: ['GZ-0622-018']);
-    expect(find.text('当前显示 1/3 行'), findsOneWidget);
-    expect(find.text('待补充 1 行'), findsOneWidget);
-    expect(find.text('¥6478.00'), findsOneWidget);
-    expect(find.text('¥300.00'), findsOneWidget);
-
-    await _clearFilters(tester);
-    _expectRows(
-      visible: ['GZ-0622-018', 'GZ-0622-016', 'GZ-0622-011'],
-    );
-    expect(find.text('当前显示 3/3 行'), findsOneWidget);
-    expect(find.text('待补充 1 行'), findsOneWidget);
-    expect(find.text('¥10358.00'), findsOneWidget);
-    expect(find.text('¥300.00'), findsOneWidget);
-  });
-
-  testWidgets('uses one controller for smooth horizontal desktop scrolling',
-      (tester) async {
-    await _pumpPage(tester);
-
-    final scrollbar = tester.widget<Scrollbar>(
-      find.byKey(const ValueKey('finance-table-scrollbar')),
-    );
-    final scrollView = tester.widget<SingleChildScrollView>(
-      find.byKey(const ValueKey('finance-table-horizontal-scroll-view')),
-    );
-    expect(scrollbar.controller, same(scrollView.controller));
-    expect(scrollbar.thumbVisibility, isTrue);
-    final controller = scrollView.controller!;
-    expect(controller.position.maxScrollExtent, greaterThan(0));
-    final wideViewportExtent = controller.position.maxScrollExtent;
-
-    final tablePosition = tester.getCenter(
-      find.byKey(const ValueKey('finance-table-horizontal-scroll-view')),
-    );
-    GestureBinding.instance.handlePointerEvent(
-      PointerScrollEvent(
-        position: tablePosition,
-        kind: PointerDeviceKind.trackpad,
-        scrollDelta: const Offset(180, 0),
-      ),
-    );
-    await tester.pump();
-    expect(controller.offset, greaterThan(0));
-
-    controller.jumpTo(0);
-    await tester.pump();
-    await simulateKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-    GestureBinding.instance.handlePointerEvent(
-      PointerScrollEvent(
-        position: tablePosition,
-        kind: PointerDeviceKind.mouse,
-        scrollDelta: const Offset(0, 180),
-      ),
-    );
-    await tester.pump();
-    await simulateKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-    expect(controller.offset, greaterThan(0));
-
-    controller.jumpTo(0);
-    await tester.pump();
-    final scrollbarFinder =
-        find.byKey(const ValueKey('finance-table-scrollbar'));
-    final dragStart =
-        tester.getBottomLeft(scrollbarFinder) + const Offset(30, -5);
-    await tester.dragFrom(dragStart, const Offset(260, 0));
-    await tester.pumpAndSettle();
-    expect(controller.offset, greaterThan(0));
-    await tester.dragFrom(
-      dragStart + const Offset(260, 0),
-      const Offset(-180, 0),
-    );
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-
-    tester.view.physicalSize = const Size(1100, 900);
-    await tester.pumpAndSettle();
-    expect(
-      controller.position.maxScrollExtent,
-      greaterThan(wideViewportExtent),
-    );
-  });
-
-  testWidgets('keeps row editors switches statuses and actions usable',
-      (tester) async {
-    await _pumpPage(tester);
-
-    final orderAmount = find.byKey(const ValueKey('GZ-0622-018:orderAmount'));
-    await tester.ensureVisible(orderAmount);
-    await tester.enterText(orderAmount, '7000');
-    await tester.pump();
-    expect(find.text('¥10880.00'), findsOneWidget);
-
-    final guideSent = find.byKey(const ValueKey('GZ-0622-018:guideInfoSent'));
-    await tester.ensureVisible(guideSent);
-    await tester.tap(guideSent);
-    await tester.pump();
-    expect(tester.widget<Switch>(guideSent).value, isFalse);
-
-    await _selectDropdown(tester, 'GZ-0622-018:status', '已完成');
     expect(
       tester
-          .widget<DropdownButton<String>>(
-            find.byKey(const ValueKey('GZ-0622-018:status')),
-          )
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
           .value,
-      '已完成',
+      isTrue,
     );
-    expect(find.widgetWithText(FilledButton, '保存积分表'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, '标记待复核'), findsOneWidget);
-    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('enables and saves guide send state after guide image export',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient();
+    final tempDirectory = _createTestDirectory();
+    addTearDown(() => _deleteTestDirectory(tempDirectory));
+
+    await _pumpPage(
+      tester,
+      apiClient: apiClient,
+      documentsDirectory: tempDirectory,
+    );
+
+    final guideSwitchFinder =
+        find.byKey(const ValueKey('group-1:guideInfoSent'));
+    expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('finance-export-guide-images-button')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-guide-images-button')),
+    );
+    await _pumpUntil(
+      tester,
+      () =>
+          _exportedPngs(tempDirectory).isNotEmpty &&
+          tester.widget<Switch>(guideSwitchFinder).onChanged != null,
+    );
+
+    expect(_exportedPngs(tempDirectory).single.path, contains('导游图片'));
+    expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNotNull);
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('group-1:travelAgencyInfoSent')),
+          )
+          .onChanged,
+      isNull,
+    );
+
+    tester.widget<Switch>(guideSwitchFinder).onChanged!(true);
+    await _pumpUntil(
+      tester,
+      () => apiClient.patchBodies.isNotEmpty,
+    );
+
+    expect(
+      apiClient.patchPaths.last,
+      '/api/travel-group-finance-summaries/group-1',
+    );
+    expect(apiClient.patchBodies.last, {'guideInfoSent': true});
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('group-1:guideInfoSent')))
+          .value,
+      isTrue,
+    );
+  });
+
+  testWidgets('exports selected agency images and enables only agency send',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient();
+    final tempDirectory = _createTestDirectory();
+    addTearDown(() => _deleteTestDirectory(tempDirectory));
+
+    await _pumpPage(
+      tester,
+      apiClient: apiClient,
+      documentsDirectory: tempDirectory,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('finance-export-agency-images-button')),
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('finance-export-agency-images-button')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-agency-images-button')),
+    );
+    await _pumpUntil(
+      tester,
+      () =>
+          _exportedPngs(tempDirectory).isNotEmpty &&
+          tester
+                  .widget<Switch>(
+                    find.byKey(
+                      const ValueKey('group-1:travelAgencyInfoSent'),
+                    ),
+                  )
+                  .onChanged !=
+              null,
+    );
+
+    expect(_exportedPngs(tempDirectory).single.path, contains('旅行社图片'));
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('group-1:travelAgencyInfoSent')),
+          )
+          .onChanged,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('group-1:guideInfoSent')))
+          .onChanged,
+      isNull,
+    );
   });
 }
 
-Finder _returnedAmountFilterFields() {
-  return find.byWidgetPredicate(
-    (widget) => widget is TextField && widget.decoration?.labelText == '已返金额',
+Future<void> _pumpPage(
+  WidgetTester tester, {
+  required _FakeFinanceApiClient apiClient,
+  required Directory documentsDirectory,
+}) async {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(2200, 1200);
+  addTearDown(() => apiClient.close(force: true));
+  addTearDown(tester.view.reset);
+
+  await tester.pumpWidget(
+    MaterialApp(
+      locale: const Locale('zh', 'CN'),
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      supportedLocales: const [Locale('zh', 'CN')],
+      home: Scaffold(
+        body: TravelGroupFinanceSupplementPage(
+          apiClient: apiClient,
+          token: 'test-token',
+          documentsDirectoryProvider: () async => documentsDirectory,
+        ),
+      ),
+    ),
   );
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.pump();
 }
 
-Finder _row(String groupNo) => find.byKey(ValueKey('$groupNo:groupNo'));
-
-void _expectRows({required List<String> visible}) {
-  const allRows = ['GZ-0622-018', 'GZ-0622-016', 'GZ-0622-011'];
-  for (final groupNo in allRows) {
-    expect(
-      _row(groupNo),
-      visible.contains(groupNo) ? findsOneWidget : findsNothing,
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  bool Function() predicate,
+) async {
+  for (var attempt = 0; attempt < 30; attempt += 1) {
+    if (predicate()) {
+      await tester.pump();
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
     );
+  }
+  final texts = tester
+      .widgetList<Text>(find.byType(Text))
+      .map((widget) => widget.data)
+      .whereType<String>()
+      .where((text) => text.trim().isNotEmpty)
+      .take(90)
+      .join(' | ');
+  fail('Timed out waiting for condition. Visible text: $texts');
+}
+
+List<File> _exportedPngs(Directory root) {
+  final directory = Directory(
+    '${root.path}${Platform.pathSeparator}exports'
+    '${Platform.pathSeparator}finance-images',
+  );
+  if (!directory.existsSync()) {
+    return const <File>[];
+  }
+  return directory
+      .listSync()
+      .whereType<File>()
+      .where((file) => file.path.endsWith('.png'))
+      .toList();
+}
+
+Directory _createTestDirectory() {
+  final directory = Directory(
+    'C:\\tmp\\finance_supplement_test_${DateTime.now().microsecondsSinceEpoch}',
+  );
+  directory.createSync(recursive: true);
+  return directory;
+}
+
+Future<void> _deleteTestDirectory(Directory directory) async {
+  for (var attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      if (directory.existsSync()) {
+        directory.deleteSync(recursive: true);
+      }
+      return;
+    } on FileSystemException {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
   }
 }
 
-Future<void> _clearFilters(WidgetTester tester) async {
-  final clear = find.byKey(const ValueKey('finance-filter-clear'));
-  await tester.ensureVisible(clear);
-  await tester.tap(clear);
-  await tester.pumpAndSettle();
+class _FakeFinanceApiClient extends ApiClient {
+  _FakeFinanceApiClient() : super(baseUrl: 'http://127.0.0.1:3000') {
+    _summaries = [_summaryJson()];
+  }
+
+  late List<Map<String, dynamic>> _summaries;
+  final getPaths = <String>[];
+  final patchPaths = <String>[];
+  final patchBodies = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    getPaths.add(path);
+    return {
+      'data': {'travelGroupFinanceSummaries': _summaries},
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    patchPaths.add(path);
+    patchBodies.add(Map<String, dynamic>.from(body ?? <String, dynamic>{}));
+    final id = path.split('/')[3];
+    final updated = Map<String, dynamic>.from(
+      _summaries.singleWhere((summary) => summary['travelGroupId'] == id),
+    );
+    updated.addAll(body ?? <String, dynamic>{});
+    if (path.endsWith('/daily-rebate-paid')) {
+      final isPaid = body?['isPaid'] == true;
+      updated['dailyRebatePaid'] = isPaid;
+      updated['paidDailyRebateCents'] =
+          isPaid ? updated['totalDailyRebateCents'] : 0;
+      updated['unpaidDailyRebateCents'] =
+          isPaid ? 0 : updated['totalDailyRebateCents'];
+    }
+    if (path.endsWith('/monthly-rebate-paid')) {
+      final isPaid = body?['isPaid'] == true;
+      updated['monthlyRebatePaid'] = isPaid;
+      updated['paidMonthlyRebateCents'] =
+          isPaid ? updated['totalMonthlyRebateCents'] : 0;
+      updated['unpaidMonthlyRebateCents'] =
+          isPaid ? 0 : updated['totalMonthlyRebateCents'];
+    }
+    _summaries = [
+      for (final summary in _summaries)
+        summary['travelGroupId'] == id ? updated : summary,
+    ];
+    return {
+      'data': {'travelGroupFinanceSummary': updated},
+    };
+  }
 }
 
-Future<void> _selectDropdown(
-  WidgetTester tester,
-  String key,
-  String label,
-) async {
-  final dropdown = find.byKey(ValueKey(key));
-  await tester.ensureVisible(dropdown);
-  await tester.tap(dropdown);
-  await tester.pumpAndSettle();
-  await tester.tap(find.text(label).last);
-  await tester.pumpAndSettle();
-}
-
-Future<void> _pumpPage(WidgetTester tester) async {
-  tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(1600, 1100);
-  addTearDown(tester.view.reset);
-  await tester.pumpWidget(
-    const MaterialApp(
-      locale: Locale('zh', 'CN'),
-      localizationsDelegates: GlobalMaterialLocalizations.delegates,
-      supportedLocales: [Locale('zh', 'CN')],
-      home: Scaffold(body: TravelGroupFinanceSupplementPage()),
-    ),
-  );
-  await tester.pumpAndSettle();
+Map<String, dynamic> _summaryJson() {
+  return {
+    'id': 'summary-1',
+    'travelGroupId': 'group-1',
+    'travelGroup': {
+      'id': 'group-1',
+      'groupNo': 'TG-HIDDEN-001',
+      'visitDate': '2026-07-03',
+      'travelAgency': '山水旅行社',
+      'guideName': '赵导',
+      'licensePlate': '贵A12345',
+      'guestCount': 18,
+      'tasterName': '陈品鉴',
+      'financeMark': false,
+    },
+    'totalSalesAmountCents': 100000,
+    'totalCashOnDeliveryCents': 20000,
+    'totalPaidDepositCents': 80000,
+    'confirmedRefundAmountCents': 0,
+    'effectiveSalesAmountCents': 100000,
+    'totalAgencyDeductionCents': 8000,
+    'agencyDeductionConfirmed': true,
+    'agencyDeductionConfirmedById': 'usr_finance',
+    'agencyDeductionConfirmedBy': {
+      'id': 'usr_finance',
+      'name': '财务',
+      'username': 'finance',
+      'role': 'finance',
+    },
+    'agencyDeductionConfirmedAt': '2026-07-03T09:10:00.000Z',
+    'totalAgencyNetAmountCents': 92000,
+    'totalDailyRebateCents': 3000,
+    'totalMonthlyRebateCents': 1000,
+    'paidRebateCents': 0,
+    'unpaidRebateCents': 4000,
+    'paidDailyRebateCents': 0,
+    'unpaidDailyRebateCents': 3000,
+    'paidMonthlyRebateCents': 0,
+    'unpaidMonthlyRebateCents': 1000,
+    'dailyRebatePaid': false,
+    'dailyRebatePaidById': null,
+    'dailyRebatePaidBy': null,
+    'dailyRebatePaidAt': null,
+    'monthlyRebatePaid': false,
+    'monthlyRebatePaidById': null,
+    'monthlyRebatePaidBy': null,
+    'monthlyRebatePaidAt': null,
+    'notes': null,
+    'guideInfoSent': false,
+    'travelAgencyInfoSent': false,
+    'calculationVersion': 'stage7-v1',
+    'sourceSnapshot': {'orders': []},
+    'updatedById': 'usr_finance',
+    'updatedBy': {
+      'id': 'usr_finance',
+      'name': '财务',
+      'username': 'finance',
+      'role': 'finance',
+    },
+    'createdAt': '2026-07-03T09:00:00.000Z',
+    'updatedAt': '2026-07-03T09:00:00.000Z',
+  };
 }

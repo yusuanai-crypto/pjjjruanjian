@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
+import {
+  DEFAULT_AI_HISTORY_RETENTION_DAYS,
+  MAX_AI_HISTORY_RETENTION_DAYS,
+  MIN_AI_HISTORY_RETENTION_DAYS,
+  parseRetentionInteger,
+} from '../../common/data-retention/retention-policy';
 import { createHttpError } from '../../common/errors';
 
 export interface AiConfig {
@@ -31,7 +37,6 @@ export interface SafeAiConfig {
 const DEFAULT_AI_TIMEOUT_MS = 20_000;
 const DEFAULT_AI_MAX_QUESTION_LENGTH = 500;
 const DEFAULT_AI_DAILY_LIMIT_PER_USER = 100;
-const DEFAULT_AI_HISTORY_RETENTION_DAYS = 180;
 
 export function readAiConfig(
   env: Record<string, string | undefined> = process.env,
@@ -58,9 +63,11 @@ export function readAiConfig(
       DEFAULT_AI_DAILY_LIMIT_PER_USER,
       'AI_DAILY_LIMIT_PER_USER',
     ),
-    historyRetentionDays: parsePositiveIntegerEnv(
+    historyRetentionDays: parseRetentionInteger(
       env.AI_HISTORY_RETENTION_DAYS,
       DEFAULT_AI_HISTORY_RETENTION_DAYS,
+      MIN_AI_HISTORY_RETENTION_DAYS,
+      MAX_AI_HISTORY_RETENTION_DAYS,
       'AI_HISTORY_RETENTION_DAYS',
     ),
   };

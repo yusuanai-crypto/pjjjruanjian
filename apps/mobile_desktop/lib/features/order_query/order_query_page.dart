@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/mark_info_button.dart';
@@ -41,6 +42,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   late final TextEditingController _queryController;
   late DateTime _start;
   late DateTime _end;
+  bool _dateRangeAll = false;
 
   String? _statusFilter;
   String? _deliveryFilter;
@@ -56,9 +58,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   final Set<String> _busyCustomerIds = <String>{};
 
   bool get _canMark =>
-      widget.role == UserRole.superAdmin ||
-      widget.role == UserRole.admin ||
-      widget.role == UserRole.finance;
+      canViewFinanceMark(widget.role);
 
   bool get _canEditBasics =>
       widget.role == UserRole.superAdmin ||
@@ -69,6 +69,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   bool get _canEditFullOrder =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
+      widget.role == UserRole.sales ||
       widget.role == UserRole.finance;
 
   bool get _canGenerateQrSalesSheet =>
@@ -120,8 +121,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     try {
       final orders = await _businessApi.listSalesOrders(
         limit: 100,
-        start: _start,
-        end: _end,
+        start: _dateRangeAll ? null : _start,
+        end: _dateRangeAll ? null : _end,
         query: _queryController.text.trim(),
         status: _statusFilter,
         deliveryType: _deliveryFilter,
@@ -149,7 +150,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     }
   }
 
-  Future<void> _selectOrder(SalesOrderRecord order) async {
+  Future<SalesOrderRecord?> _loadOrderDetail(SalesOrderRecord order) async {
     setState(() {
       _selectedOrder = order;
       _detailLoading = true;
@@ -159,22 +160,94 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     try {
       final detail = await _businessApi.getSalesOrder(order.id);
       if (!mounted) {
-        return;
+        return null;
       }
       _replaceOrder(detail);
       setState(() {
         _selectedOrder = detail;
         _detailLoading = false;
       });
+      return detail;
     } catch (error) {
       if (!mounted) {
-        return;
+        return null;
       }
       setState(() {
         _detailLoading = false;
         _detailErrorMessage = _messageForError(error);
       });
+      return null;
     }
+  }
+
+  Future<void> _selectOrder(SalesOrderRecord order) async {
+    final detail = await _loadOrderDetail(order);
+    if (detail != null && mounted) {
+      await _openOrderDetailDialog(detail);
+    }
+  }
+
+  SalesOrderRecord? _orderById(String id) {
+    for (final order in _orders) {
+      if (order.id == id) {
+        return order;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _openOrderDetailDialog(SalesOrderRecord order) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final selected =
+                _selectedOrder?.id == order.id ? _selectedOrder! : _orderById(order.id) ?? order;
+            Future<void> runAction(Future<void> Function() action) async {
+              await action();
+              if (mounted) {
+                setDialogState(() {});
+              }
+            }
+
+            final size = MediaQuery.sizeOf(context);
+            return Dialog(
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: size.width < 1100 ? size.width - 32 : 1040,
+                  maxHeight: size.height < 880 ? size.height - 48 : 840,
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: _OrderDetailPanel(
+                    order: selected,
+                    role: widget.role,
+                    loading: _detailLoading,
+                    errorMessage: _detailErrorMessage,
+                    canMark: _canMark,
+                    canEditBasics: _canEditBasics,
+                    orderBusy: _busyOrderIds.contains(selected.id),
+                    customerBusy: _busyCustomerIds.contains(
+                      selected.customerId ?? selected.customer?.id ?? '',
+                    ),
+                    onToggleOrderMark: () =>
+                        runAction(() => _toggleOrderMark(selected)),
+                    onToggleCustomerMark: () =>
+                        runAction(() => _toggleCustomerMark(selected)),
+                    onEditBasics: () =>
+                        runAction(() => _openBasicEditDialog(selected)),
+                    onOpenQrSalesSheet: () =>
+                        runAction(() => _openQrSalesSheetDialog(selected)),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _toggleOrderMark(SalesOrderRecord order) async {
@@ -247,6 +320,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       builder: (context) => _OrderEditDialog(
         businessApi: _businessApi,
         order: order,
+        role: widget.role,
         fullEdit: _canEditFullOrder,
       ),
     );
@@ -304,7 +378,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       ),
     );
     if (generated == true && mounted) {
-      await _selectOrder(order);
+      await _loadOrderDetail(order);
     }
   }
 
@@ -320,8 +394,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
 
     try {
       final downloadedFile = await _businessApi.downloadSalesOrdersExcel(
-        start: _start,
-        end: _end,
+        start: _dateRangeAll ? null : _start,
+        end: _dateRangeAll ? null : _end,
         query: _queryController.text.trim(),
         status: _statusFilter,
         deliveryType: _deliveryFilter,
@@ -436,8 +510,14 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                 AppDateRangeButton(
                   start: _start,
                   end: _end,
+                  allSelected: _dateRangeAll,
+                  onAllSelected: () {
+                    setState(() => _dateRangeAll = true);
+                    _loadOrders();
+                  },
                   onChanged: (range) {
                     setState(() {
+                      _dateRangeAll = false;
                       _start = range.start;
                       _end = range.end;
                     });
@@ -529,62 +609,32 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                   '${_orders.where((item) => item.packingStatus == PackingStatus.pending.value).length}',
               icon: Icons.inventory_2_rounded,
             ),
-            MetricData(
-              label: '订单已标记',
-              value: '${_orders.where((item) => item.financeMark).length}',
-              icon: Icons.bookmark_added_rounded,
-            ),
+            if (canViewFinanceMark(widget.role))
+              MetricData(
+                label: '订单已标记',
+                value: '${_orders.where((item) => item.financeMark).length}',
+                icon: Icons.bookmark_added_rounded,
+              ),
           ],
         ),
-        ResponsiveTwoColumn(
-          primaryFlex: 3,
-          secondaryFlex: 2,
-          primary: FormSection(
-            title: '订单列表',
-            trailing: StatusTag(
-              label:
-                  selectedOrder == null ? '未选择' : '已选 ${selectedOrder.orderNo}',
-              tone:
-                  selectedOrder == null ? StatusTone.neutral : StatusTone.info,
-            ),
-            children: [
-              _OrderList(
-                orders: _orders,
-                selectedId: selectedOrder?.id,
-                loading: _loading,
-                showFinancialMetrics: _canViewOrderFinancialMetrics(
-                  widget.role,
-                ),
-                onSelect: _selectOrder,
+        FormSection(
+          title: '订单列表',
+          trailing: StatusTag(
+            label: selectedOrder == null ? '未选择' : '已选 ${selectedOrder.orderNo}',
+            tone: selectedOrder == null ? StatusTone.neutral : StatusTone.info,
+          ),
+          children: [
+            _OrderList(
+              orders: _orders,
+              selectedId: selectedOrder?.id,
+              loading: _loading,
+              showFinanceMarks: canViewFinanceMark(widget.role),
+              showFinancialMetrics: _canViewOrderFinancialMetrics(
+                widget.role,
               ),
-            ],
-          ),
-          secondary: _OrderDetailPanel(
-            order: selectedOrder,
-            role: widget.role,
-            loading: _detailLoading,
-            errorMessage: _detailErrorMessage,
-            canMark: _canMark,
-            canEditBasics: _canEditBasics,
-            orderBusy: selectedOrder == null ||
-                _busyOrderIds.contains(selectedOrder.id),
-            customerBusy: selectedOrder == null ||
-                _busyCustomerIds.contains(
-                  selectedOrder.customerId ?? selectedOrder.customer?.id ?? '',
-                ),
-            onToggleOrderMark: selectedOrder == null
-                ? null
-                : () => _toggleOrderMark(selectedOrder),
-            onToggleCustomerMark: selectedOrder == null
-                ? null
-                : () => _toggleCustomerMark(selectedOrder),
-            onEditBasics: selectedOrder == null
-                ? null
-                : () => _openBasicEditDialog(selectedOrder),
-            onOpenQrSalesSheet: selectedOrder == null
-                ? null
-                : () => _openQrSalesSheetDialog(selectedOrder),
-          ),
+              onSelect: _selectOrder,
+            ),
+          ],
         ),
       ],
     );
@@ -596,6 +646,7 @@ class _OrderList extends StatelessWidget {
     required this.orders,
     required this.selectedId,
     required this.loading,
+    required this.showFinanceMarks,
     required this.showFinancialMetrics,
     required this.onSelect,
   });
@@ -603,6 +654,7 @@ class _OrderList extends StatelessWidget {
   final List<SalesOrderRecord> orders;
   final String? selectedId;
   final bool loading;
+  final bool showFinanceMarks;
   final bool showFinancialMetrics;
   final ValueChanged<SalesOrderRecord> onSelect;
 
@@ -673,18 +725,20 @@ class _OrderList extends StatelessWidget {
                 Text(
                     '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
                 Text(_travelGroupLabel(order)),
-                StatusTag(
-                  label: _customerMarked(order) ? '客户已标记' : '客户未标记',
-                  tone: _customerMarked(order)
-                      ? StatusTone.success
-                      : StatusTone.neutral,
-                ),
-                StatusTag(
-                  label: order.financeMark ? '订单已标记' : '订单未标记',
-                  tone: order.financeMark
-                      ? StatusTone.success
-                      : StatusTone.neutral,
-                ),
+                if (showFinanceMarks) ...[
+                  StatusTag(
+                    label: _customerMarked(order) ? '客户已标记' : '客户未标记',
+                    tone: _customerMarked(order)
+                        ? StatusTone.success
+                        : StatusTone.neutral,
+                  ),
+                  StatusTag(
+                    label: order.financeMark ? '订单已标记' : '订单未标记',
+                    tone: order.financeMark
+                        ? StatusTone.success
+                        : StatusTone.neutral,
+                  ),
+                ],
                 if (showFinancialMetrics) ...[
                   Text('上单 ${formatMoneyCents(order.entryAmountCents)}'),
                   Text('品鉴师 ${_display(order.tasterName)}'),
@@ -738,6 +792,7 @@ class _OrderDetailPanel extends StatelessWidget {
     if (order == null) {
       return const EmptyState(title: '请选择订单');
     }
+    final showFinanceMark = canViewFinanceMark(role);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -773,16 +828,19 @@ class _OrderDetailPanel extends StatelessWidget {
         const SizedBox(height: 16),
         FormSection(
           title: '订单详情',
-          trailing: StatusTag(
-            label: order.financeMark ? '订单已标记' : '订单未标记',
-            tone: order.financeMark ? StatusTone.success : StatusTone.neutral,
-          ),
+          trailing: showFinanceMark
+              ? StatusTag(
+                  label: order.financeMark ? '订单已标记' : '订单未标记',
+                  tone: order.financeMark
+                      ? StatusTone.success
+                      : StatusTone.neutral,
+                )
+              : null,
           children: [
             const _SectionTitle('基础信息'),
             _InfoRow(label: '系统单号', value: order.orderNo),
             _InfoRow(label: '订单日期', value: order.orderDate),
             _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
-            _InfoRow(label: '销售单号', value: _display(order.salesFormNo)),
             _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
             _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
             const Divider(height: 24),
@@ -790,14 +848,15 @@ class _OrderDetailPanel extends StatelessWidget {
             _InfoRow(label: '客户姓名', value: _display(order.customerName)),
             _InfoRow(label: '客户电话', value: _display(order.customerPhone)),
             _InfoRow(label: '收货地址', value: _orderAddress(order)),
-            _InfoRow(
-              label: '客户标记',
-              value: order.customer == null
-                  ? '旧订单未关联客户'
-                  : order.customer!.financeMark
-                      ? '已标记'
-                      : '未标记',
-            ),
+            if (showFinanceMark)
+              _InfoRow(
+                label: '客户标记',
+                value: order.customer == null
+                    ? '旧订单未关联客户'
+                    : order.customer!.financeMark
+                        ? '已标记'
+                        : '未标记',
+              ),
             const Divider(height: 24),
             const _SectionTitle('订单明细'),
             if (order.items.isEmpty)
@@ -836,8 +895,13 @@ class _OrderDetailPanel extends StatelessWidget {
             _InfoMoneyRow(label: '物流运费', cents: order.logisticsFeeCents),
             _InfoRow(label: '打包件数', value: '${order.packageCount}'),
             _InfoRow(label: '库管备注', value: _display(order.warehouseRemark)),
-            const Divider(height: 24),
-            _InfoRow(label: '订单标记', value: order.financeMark ? '已标记' : '未标记'),
+            if (showFinanceMark) ...[
+              const Divider(height: 24),
+              _InfoRow(
+                label: '订单标记',
+                value: order.financeMark ? '已标记' : '未标记',
+              ),
+            ],
           ],
         ),
       ],
@@ -1057,7 +1121,7 @@ class _ActionStrip extends StatelessWidget {
             key: const ValueKey('order-basic-edit-button'),
             onPressed: orderBusy ? null : onEditBasics,
             icon: const Icon(Icons.edit_rounded),
-            label: Text(role == UserRole.sales ? '编辑基础字段' : '编辑订单信息'),
+            label: const Text('编辑订单信息'),
           ),
         if (_canViewQrSalesSheet(role))
           OutlinedButton.icon(
@@ -1143,6 +1207,7 @@ class _QrSalesSheetDialogState extends State<_QrSalesSheetDialog> {
     try {
       final salesSheet = await widget.businessApi.generateSalesOrderQrCode(
         widget.order.id,
+        regenerate: _salesSheet?.qrCode?.active ?? false,
       );
       if (!mounted) {
         return;
@@ -1233,7 +1298,13 @@ class _QrSalesSheetDialogState extends State<_QrSalesSheetDialog> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.qr_code_2_rounded),
-            label: Text(_generating ? '生成中' : '生成二维码'),
+            label: Text(
+              _generating
+                  ? '生成中'
+                  : (qrCode?.active ?? false)
+                      ? '重新生成二维码'
+                      : '生成二维码',
+            ),
           ),
       ],
     );
@@ -1252,7 +1323,6 @@ class _SalesSheetDialogDetails extends StatelessWidget {
       children: [
         const _SectionTitle('销售单预览'),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
-        _InfoRow(label: '销售单号', value: _display(sheet.order.salesFormNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
         _InfoRow(
           label: '客户',
@@ -1311,6 +1381,7 @@ class _SalesSheetQrPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = qrCode?.url;
     final hasUrl = url != null && url.trim().isNotEmpty;
+    final localUrl = hasUrl && _isLocalhostUrl(url);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1346,6 +1417,13 @@ class _SalesSheetQrPreview extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         _InfoRow(label: '公开链接', value: hasUrl ? url : '尚未生成二维码'),
+        if (localUrl) ...[
+          const SizedBox(height: 8),
+          const StatusTag(
+            label: '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
+            tone: StatusTone.warning,
+          ),
+        ],
         _InfoRow(label: '有效期', value: _qrExpiresLabel(qrCode)),
         Text(
           hasUrl ? '请客户拍照保存销售单和二维码。' : '生成后将显示公开扫码链接。',
@@ -1455,11 +1533,13 @@ class _OrderEditDialog extends StatefulWidget {
   const _OrderEditDialog({
     required this.businessApi,
     required this.order,
+    required this.role,
     required this.fullEdit,
   });
 
   final BusinessApi businessApi;
   final SalesOrderRecord order;
+  final UserRole role;
   final bool fullEdit;
 
   @override
@@ -1619,6 +1699,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         businessApi: widget.businessApi,
         initialQuery: widget.order.travelGroup?.groupNo ??
             _travelGroupIdController.text.trim(),
+        showFinanceMark: canViewFinanceMark(widget.role),
       ),
     );
     if (selected == null) {
@@ -1748,15 +1829,16 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         setState(() => _errorMessage = '第 ${index + 1} 条明细数量必须大于 0。');
         return null;
       }
-      final unitPriceCents = item.unitPriceCentsOrNull;
-      if (unitPriceCents == null) {
-        setState(() => _errorMessage = '第 ${index + 1} 条明细单价格式不正确。');
+      final subtotalCents = item.subtotalCentsOrNull;
+      if (subtotalCents == null) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细总价格式不正确。');
         return null;
       }
       payloads.add({
         'productId': item.productId,
         'quantity': item.quantity,
-        'unitPriceCents': unitPriceCents,
+        'unitPriceCents': item.unitPriceCentsForPayload,
+        'subtotalCents': subtotalCents,
         'deliveryType': item.deliveryType.value,
         'notes': item.notes,
         'sortOrder': index + 1,
@@ -2285,13 +2367,13 @@ class _OrderItemEditRow extends StatelessWidget {
                   decoration: const InputDecoration(labelText: '数量'),
                 ),
                 TextField(
-                  key: ValueKey('order-edit-item-unit-price-$index'),
-                  controller: item.unitPriceController,
+                  key: ValueKey('order-edit-item-subtotal-$index'),
+                  controller: item.subtotalController,
                   onChanged: (_) => onChanged(),
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(
-                    labelText: '单价',
+                    labelText: '总价格',
                     prefixText: '¥ ',
                   ),
                 ),
@@ -2331,14 +2413,14 @@ class _EditableOrderItemDraft {
     required this.snapshotName,
     required this.snapshotUnit,
     required int quantity,
-    required int unitPriceCents,
+    required int subtotalCents,
     required this.deliveryType,
     String? notes,
   })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
         ),
-        unitPriceController = TextEditingController(
-          text: _moneyInputText(unitPriceCents),
+        subtotalController = TextEditingController(
+          text: _moneyInputText(subtotalCents),
         ),
         notesController = TextEditingController(text: notes ?? '');
 
@@ -2348,7 +2430,7 @@ class _EditableOrderItemDraft {
       snapshotName: item.productName,
       snapshotUnit: item.unit,
       quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
+      subtotalCents: item.subtotalCents,
       deliveryType: _deliveryTypeFromValue(item.deliveryType),
       notes: item.notes,
     );
@@ -2360,7 +2442,7 @@ class _EditableOrderItemDraft {
       snapshotName: null,
       snapshotUnit: null,
       quantity: 1,
-      unitPriceCents: 0,
+      subtotalCents: 0,
       deliveryType: DeliveryType.shipping,
     );
   }
@@ -2369,7 +2451,7 @@ class _EditableOrderItemDraft {
   String? snapshotName;
   String? snapshotUnit;
   final TextEditingController quantityController;
-  final TextEditingController unitPriceController;
+  final TextEditingController subtotalController;
   final TextEditingController notesController;
   DeliveryType deliveryType;
 
@@ -2381,15 +2463,24 @@ class _EditableOrderItemDraft {
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
 
-  int? get unitPriceCentsOrNull => _moneyCentsOrNull(unitPriceController.text);
+  int? get subtotalCentsOrNull => _moneyCentsOrNull(subtotalController.text);
 
-  int get subtotalCents => quantity * (unitPriceCentsOrNull ?? 0);
+  int get subtotalCents => subtotalCentsOrNull ?? 0;
+
+  int get unitPriceCentsForPayload {
+    final subtotal = subtotalCents;
+    final quantityValue = quantity;
+    if (subtotal <= 0 || quantityValue <= 0) {
+      return 0;
+    }
+    return (subtotal / quantityValue).round();
+  }
 
   String get notes => notesController.text.trim();
 
   void dispose() {
     quantityController.dispose();
-    unitPriceController.dispose();
+    subtotalController.dispose();
     notesController.dispose();
   }
 }
@@ -2642,9 +2733,12 @@ String _qrExpiresLabel(SalesSheetQrCode? qrCode) {
   if (qrCode == null) {
     return '未生成';
   }
+  if (qrCode.revokedAt?.trim().isNotEmpty ?? false) {
+    return '已吊销';
+  }
   final expiresAt = qrCode.expiresAt?.trim();
   if (expiresAt == null || expiresAt.isEmpty) {
-    return '长期有效';
+    return '有效期配置异常';
   }
   return expiresAt;
 }
@@ -2654,9 +2748,7 @@ bool _customerMarked(SalesOrderRecord order) {
 }
 
 bool _canViewOrderFinancialMetrics(UserRole role) {
-  return role == UserRole.superAdmin ||
-      role == UserRole.admin ||
-      role == UserRole.finance;
+  return canViewFinanceMark(role);
 }
 
 String _deliverySummaryLabel(SalesOrderRecord order) {
@@ -2743,6 +2835,34 @@ String _orderTypeLabel(String value) {
 String _display(String? value) {
   final text = value?.trim() ?? '';
   return text.isEmpty ? '未填写' : text;
+}
+
+bool _isLocalhostUrl(String value) {
+  final uri = Uri.tryParse(value.trim());
+  final host = uri?.host.toLowerCase() ?? '';
+  if (host == 'localhost' ||
+      host == '::1' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local')) {
+    return true;
+  }
+  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+    return true;
+  }
+  final octets = host.split('.').map(int.tryParse).toList();
+  if (octets.length != 4 || octets.any((part) => part == null)) {
+    return false;
+  }
+  final a = octets[0]!;
+  final b = octets[1]!;
+  return a == 0 ||
+      a == 10 ||
+      a == 127 ||
+      (a == 169 && b == 254) ||
+      (a == 172 && b >= 16 && b <= 31) ||
+      (a == 192 && b == 168) ||
+      (a == 100 && b >= 64 && b <= 127) ||
+      (a == 198 && (b == 18 || b == 19));
 }
 
 String _safeExportFileName(String? value) {

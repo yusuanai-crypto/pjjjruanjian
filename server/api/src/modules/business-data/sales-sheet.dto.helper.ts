@@ -56,6 +56,7 @@ const PACKING_STATUS_LABELS: any = {
 };
 
 export interface BuildSalesSheetOptions {
+  publicToken?: string | null;
   publicUrl?: string | null;
 }
 
@@ -179,57 +180,26 @@ export function buildPublicSalesSheetDto(source: any) {
     companyName: salesSheet.companyName,
     order: {
       orderNo: salesSheet.order.orderNo,
-      orderType: salesSheet.order.orderType,
-      orderTypeLabel: salesSheet.order.orderTypeLabel,
-      salesFormNo: salesSheet.order.salesFormNo,
       orderDate: salesSheet.order.orderDate,
-      remark: salesSheet.order.remark,
     },
     customer: {
       name: salesSheet.customer.name,
       phoneMasked: salesSheet.customer.phoneMasked,
-      fullAddress: salesSheet.customer.fullAddress,
+      addressMasked: maskCustomerAddress({
+        province: salesSheet.customer.province,
+        city: salesSheet.customer.city,
+        district: salesSheet.customer.district,
+        address: salesSheet.customer.address,
+      }),
     },
-    travelGroup: salesSheet.travelGroup
-      ? {
-          groupNo: salesSheet.travelGroup.groupNo,
-          visitDate: salesSheet.travelGroup.visitDate,
-          travelAgency: salesSheet.travelGroup.travelAgency,
-          guideName: salesSheet.travelGroup.guideName,
-          tasterName: salesSheet.travelGroup.tasterName,
-          tastingRoomNo: salesSheet.travelGroup.tastingRoomNo,
-        }
-      : null,
-    salesUser: salesSheet.salesUser
-      ? {
-          name: salesSheet.salesUser.name,
-        }
-      : null,
     items: salesSheet.items.map((item: any) => ({
       productName: item.productName,
       quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-      unitPriceYuan: item.unitPriceYuan,
-      subtotalCents: item.subtotalCents,
-      subtotalYuan: item.subtotalYuan,
       deliveryType: item.deliveryType,
       deliveryTypeLabel: item.deliveryTypeLabel,
     })),
-    amounts: {
-      totalAmountCents: salesSheet.amounts.totalAmountCents,
-      totalAmountYuan: salesSheet.amounts.totalAmountYuan,
-      cashOnDeliveryAmountCents:
-        salesSheet.amounts.cashOnDeliveryAmountCents,
-      cashOnDeliveryAmountYuan:
-        salesSheet.amounts.cashOnDeliveryAmountYuan,
-    },
     status: salesSheet.status,
     delivery: salesSheet.delivery,
-    logistics: {
-      method: salesSheet.logistics.method,
-      logisticsNo: salesSheet.logistics.logisticsNo,
-    },
-    invoice: salesSheet.invoice,
     qrCode: salesSheet.qrCode
       ? {
           generatedAt: salesSheet.qrCode.generatedAt,
@@ -251,7 +221,21 @@ export function maskCustomerPhone(value: unknown) {
   if (digits.length >= 7) {
     return `${digits.slice(0, 3)}****${digits.slice(-2)}`;
   }
-  return text;
+  const visible = digits || text;
+  if (visible.length <= 2) {
+    return '*'.repeat(visible.length);
+  }
+  return `${visible.slice(0, 1)}${'*'.repeat(Math.max(2, visible.length - 2))}${visible.slice(-1)}`;
+}
+
+export function maskCustomerAddress(parts: any) {
+  const masked = [
+    maskAddressSegment(parts?.province),
+    maskAddressSegment(parts?.city),
+    maskAddressSegment(parts?.district),
+    maskDetailedAddress(parts?.address),
+  ].filter(Boolean);
+  return masked.length > 0 ? masked.join(' ') : null;
 }
 
 export function formatCentsAsYuan(value: unknown) {
@@ -293,15 +277,47 @@ function buildInternalTravelGroup(group: any, order: any) {
 }
 
 function buildInternalQrCode(order: any, options: BuildSalesSheetOptions) {
-  if (!order?.qrCodeToken && !options.publicUrl) {
+  if (
+    !order?.qrCodeTokenHash &&
+    !order?.qrCodeGeneratedAt &&
+    !order?.qrCodeRevokedAt &&
+    !options.publicToken &&
+    !options.publicUrl
+  ) {
     return null;
   }
+  const expiresAt = toIsoString(order?.qrCodeExpiresAt);
+  const expiresAtTime = expiresAt ? new Date(expiresAt).getTime() : Number.NaN;
   return {
-    token: order?.qrCodeToken || null,
+    active:
+      Boolean(order?.qrCodeTokenHash) &&
+      !order?.qrCodeRevokedAt &&
+      Number.isFinite(expiresAtTime) &&
+      expiresAtTime > Date.now(),
+    token: options.publicToken || null,
     url: options.publicUrl || null,
     generatedAt: toIsoString(order?.qrCodeGeneratedAt),
-    expiresAt: toIsoString(order?.qrCodeExpiresAt),
+    expiresAt,
+    revokedAt: toIsoString(order?.qrCodeRevokedAt),
   };
+}
+
+function maskAddressSegment(value: unknown) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+  return text.length === 1
+    ? '*'
+    : `${text.slice(0, 1)}${'*'.repeat(text.length - 1)}`;
+}
+
+function maskDetailedAddress(value: unknown) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+  return `${text.slice(0, 1)}***`;
 }
 
 function normalizeItems(items: any[]) {

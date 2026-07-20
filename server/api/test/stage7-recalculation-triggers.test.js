@@ -1,4 +1,7 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -183,129 +186,139 @@ test('contract: attribution and travel group changes zero stale automatic record
 });
 
 test('contract: after-sales finance confirm and cancel recalculate stage7 amounts', async () => {
-  await withPhase1Server(async (baseUrl) => {
-    const admin = await login(baseUrl);
-    const afterSales = await login(
-      baseUrl,
-      'stage7-recalc-after-sales',
-      TEST_PASSWORD,
-    );
-    const finance = await login(
-      baseUrl,
-      'stage7-recalc-finance',
-      TEST_PASSWORD,
-    );
-    const createdOrder = await createStage7Order(baseUrl, admin.token);
+  await withTemporaryRefundProofStorage(async (storageRoot) => {
+    await withPhase1Server(async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const afterSales = await login(
+        baseUrl,
+        'stage7-recalc-after-sales',
+        TEST_PASSWORD,
+      );
+      const finance = await login(
+        baseUrl,
+        'stage7-recalc-finance',
+        TEST_PASSWORD,
+      );
+      const createdOrder = await createStage7Order(baseUrl, admin.token);
 
-    const createdAfterSales = await requestJson(baseUrl, '/api/after-sales-orders', {
-      method: 'POST',
-      token: afterSales.token,
-      body: {
-        salesOrderId: createdOrder.id,
-        issueType: 'quality_issue',
-        actionType: 'refund',
-        description: 'stage7 smoke unconfirmed refund',
-        refundAmountCents: 50000,
-        status: 'waiting_refund',
-        notes: 'stage7 smoke pending finance confirm',
-      },
+      const createdAfterSales = await requestJson(
+        baseUrl,
+        '/api/after-sales-orders',
+        {
+          method: 'POST',
+          token: afterSales.token,
+          body: {
+            salesOrderId: createdOrder.id,
+            issueType: 'quality_issue',
+            actionType: 'refund',
+            description: 'stage7 smoke unconfirmed refund',
+            refundAmountCents: 50000,
+            status: 'waiting_refund',
+            notes: 'stage7 smoke pending finance confirm',
+          },
+        },
+      );
+      assert.equal(createdAfterSales.response.status, 201);
+      const afterSalesOrder = createdAfterSales.body.data.afterSalesOrder;
+
+      let triggerLogs = await operationLogs(
+        baseUrl,
+        admin.token,
+        'commission_records.recalculate.trigger',
+      );
+      const unconfirmedTrigger = triggerLogs.find(
+        (log) =>
+          log.afterData.afterSalesOrderId === afterSalesOrder.id &&
+          log.afterData.trigger === 'after_sales_order_status_sync',
+      );
+      assert.ok(unconfirmedTrigger);
+      assert.ok(
+        unconfirmedTrigger.afterData.warningCodes.includes(
+          'unconfirmed_after_sales_refund',
+        ),
+      );
+
+      const confirmed = await uploadRefundProofs(
+        baseUrl,
+        finance.token,
+        afterSalesOrder.id,
+        [
+          {
+            content: Buffer.from([
+              0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            ]),
+            name: 'stage7-refund-proof.png',
+            type: 'image/png',
+          },
+        ],
+      );
+      assert.equal(confirmed.response.status, 201);
+
+      let recalcLogs = await operationLogs(
+        baseUrl,
+        admin.token,
+        'commission_records.recalculate',
+      );
+      const confirmedSalesRecalc = recalcLogs.find(
+        (log) =>
+          log.afterData.salesOrderId === createdOrder.id &&
+          log.afterData.targetType === 'SALES_COMMISSION' &&
+          log.afterData.confirmedRefundAmountCents === 50000 &&
+          log.afterData.amountCents === 2600,
+      );
+      assert.ok(confirmedSalesRecalc);
+
+      const cancelled = await requestJson(
+        baseUrl,
+        `/api/after-sales-orders/${afterSalesOrder.id}/finance-confirm`,
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            financeConfirmed: false,
+          },
+        },
+      );
+      assert.equal(cancelled.response.status, 200);
+
+      recalcLogs = await operationLogs(
+        baseUrl,
+        admin.token,
+        'commission_records.recalculate',
+      );
+      const restoredSalesRecalc = recalcLogs.find(
+        (log) =>
+          log.afterData.salesOrderId === createdOrder.id &&
+          log.afterData.targetType === 'SALES_COMMISSION' &&
+          log.beforeData.confirmedRefundAmountCents === 50000 &&
+          log.afterData.confirmedRefundAmountCents === 0 &&
+          log.afterData.amountCents === 3600,
+      );
+      assert.ok(restoredSalesRecalc);
+
+      triggerLogs = await operationLogs(
+        baseUrl,
+        admin.token,
+        'commission_records.recalculate.trigger',
+      );
+      assert.ok(
+        triggerLogs.some(
+          (log) =>
+            log.entityId === afterSalesOrder.id &&
+            log.afterData.trigger === 'after_sales_finance_refund_confirm',
+        ),
+      );
+      assert.ok(
+        triggerLogs.some(
+          (log) =>
+            log.entityId === afterSalesOrder.id &&
+            log.afterData.trigger === 'after_sales_finance_unconfirm',
+        ),
+      );
+    }, {
+      env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
+      prisma: buildStage7RecalculationPrisma(),
     });
-    assert.equal(createdAfterSales.response.status, 201);
-    const afterSalesOrder = createdAfterSales.body.data.afterSalesOrder;
-
-    let triggerLogs = await operationLogs(
-      baseUrl,
-      admin.token,
-      'commission_records.recalculate.trigger',
-    );
-    const unconfirmedTrigger = triggerLogs.find(
-      (log) =>
-        log.afterData.afterSalesOrderId === afterSalesOrder.id &&
-        log.afterData.trigger === 'after_sales_order_status_sync',
-    );
-    assert.ok(unconfirmedTrigger);
-    assert.ok(
-      unconfirmedTrigger.afterData.warningCodes.includes(
-        'unconfirmed_after_sales_refund',
-      ),
-    );
-
-    const confirmed = await requestJson(
-      baseUrl,
-      `/api/after-sales-orders/${afterSalesOrder.id}/finance-confirm`,
-      {
-        method: 'PATCH',
-        token: finance.token,
-        body: {
-          financeConfirmed: true,
-        },
-      },
-    );
-    assert.equal(confirmed.response.status, 200);
-
-    let recalcLogs = await operationLogs(
-      baseUrl,
-      admin.token,
-      'commission_records.recalculate',
-    );
-    const confirmedSalesRecalc = recalcLogs.find(
-      (log) =>
-        log.afterData.salesOrderId === createdOrder.id &&
-        log.afterData.targetType === 'SALES_COMMISSION' &&
-        log.afterData.confirmedRefundAmountCents === 50000 &&
-        log.afterData.amountCents === 2600,
-    );
-    assert.ok(confirmedSalesRecalc);
-
-    const cancelled = await requestJson(
-      baseUrl,
-      `/api/after-sales-orders/${afterSalesOrder.id}/finance-confirm`,
-      {
-        method: 'PATCH',
-        token: admin.token,
-        body: {
-          financeConfirmed: false,
-        },
-      },
-    );
-    assert.equal(cancelled.response.status, 200);
-
-    recalcLogs = await operationLogs(
-      baseUrl,
-      admin.token,
-      'commission_records.recalculate',
-    );
-    const restoredSalesRecalc = recalcLogs.find(
-      (log) =>
-        log.afterData.salesOrderId === createdOrder.id &&
-        log.afterData.targetType === 'SALES_COMMISSION' &&
-        log.beforeData.confirmedRefundAmountCents === 50000 &&
-        log.afterData.confirmedRefundAmountCents === 0 &&
-        log.afterData.amountCents === 3600,
-    );
-    assert.ok(restoredSalesRecalc);
-
-    triggerLogs = await operationLogs(
-      baseUrl,
-      admin.token,
-      'commission_records.recalculate.trigger',
-    );
-    assert.ok(
-      triggerLogs.some(
-        (log) =>
-          log.entityId === afterSalesOrder.id &&
-          log.afterData.trigger === 'after_sales_finance_confirm',
-      ),
-    );
-    assert.ok(
-      triggerLogs.some(
-        (log) =>
-          log.entityId === afterSalesOrder.id &&
-          log.afterData.trigger === 'after_sales_finance_unconfirm',
-      ),
-    );
-  }, {
-    prisma: buildStage7RecalculationPrisma(),
   });
 });
 
@@ -390,6 +403,37 @@ test('contract: cancelled orders zero automatic records and remind manual taster
   });
 });
 
+async function withTemporaryRefundProofStorage(run) {
+  const storageRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'jiangjiu-stage7-refund-proofs-'),
+  );
+  try {
+    await run(storageRoot);
+  } finally {
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  }
+}
+
+async function uploadRefundProofs(baseUrl, token, afterSalesOrderId, files) {
+  const form = new FormData();
+  for (const file of files) {
+    form.append(
+      'files',
+      new Blob([file.content], { type: file.type }),
+      file.name,
+    );
+  }
+  const response = await fetch(
+    `${baseUrl}/api/after-sales-orders/${afterSalesOrderId}/finance-refund-confirm`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    },
+  );
+  return { response, body: await response.json() };
+}
+
 async function createStage7Order(baseUrl, token, overrides = {}) {
   const result = await requestJson(baseUrl, '/api/sales-orders', {
     method: 'POST',
@@ -456,6 +500,7 @@ function buildStage7RecalculationPrisma() {
         travelAgency: 'stage7 smoke agency',
         tasterId: TASTER_USER_ID,
         tasterName: 'stage7 smoke taster',
+        liquorCostDeductionCents: 30000,
         status: 'UNMARKED',
       },
       {
@@ -465,6 +510,7 @@ function buildStage7RecalculationPrisma() {
         travelAgency: 'stage7 smoke agency',
         tasterId: TASTER_USER_ID,
         tasterName: 'stage7 smoke taster',
+        liquorCostDeductionCents: 30000,
         status: 'UNMARKED',
       },
     ],

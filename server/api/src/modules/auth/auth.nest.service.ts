@@ -2,11 +2,13 @@ import { Injectable } from '@nestjs/common';
 
 import { createHttpError } from '../../common/errors';
 import { getBearerToken } from '../../common/http';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { UsersNestService, toPublicUser } from '../users/users.nest.service';
+import { getAuthTokenSecret } from './auth-token-secret';
 import { createToken, verifyToken } from './token';
 import { getRoleCatalog, getRoleDataScope, getRoleMenus, getRolePermissions } from './roles';
-import { TEMPORARY_PASSWORD, hashPassword, verifyPassword } from './password';
+import { hashPassword, verifyPassword } from './password';
 import { normalizeUsername } from '../users/users.repository';
 
 @Injectable()
@@ -14,7 +16,10 @@ export class AuthNestService {
   constructor(
     private readonly usersService: UsersNestService,
     private readonly operationLogsService: OperationLogsNestService,
-  ) {}
+    private readonly rateLimitService: RateLimitService,
+  ) {
+    getAuthTokenSecret();
+  }
 
   async login(credentials: any, metadata: any = {}) {
     const username = normalizeUsername(credentials?.username);
@@ -22,6 +27,11 @@ export class AuthNestService {
     if (!username || typeof password !== 'string') {
       throw createHttpError(400, 'LOGIN_FIELDS_REQUIRED', 'username and password are required.');
     }
+
+    await this.rateLimitService.enforceLogin({
+      ipAddress: metadata.ipAddress || null,
+      username,
+    });
 
     const user = await this.usersService.findUserByUsername(username);
     if (!user || !verifyPassword(password, user.passwordHash)) {
@@ -31,19 +41,7 @@ export class AuthNestService {
       throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
     }
 
-    const tokenResult = createToken(
-      {
-        sub: user.id,
-        username: user.username,
-        role: user.role,
-      },
-      {
-        secret: getTokenSecret(),
-        expiresInSeconds: process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS
-          ? Number(process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS)
-          : undefined,
-      },
-    );
+    const tokenResult = this.issueToken(user);
 
     await this.operationLogsService.appendLog({
       userId: user.id,
@@ -67,10 +65,20 @@ export class AuthNestService {
       throw createHttpError(401, 'AUTH_TOKEN_REQUIRED', 'Authorization token is required.');
     }
 
-    const payload = verifyToken(token, { secret: getTokenSecret() });
+    const payload = verifyToken(token);
     const user = await this.usersService.findUserById(payload.sub);
     if (!user) {
       throw createHttpError(401, 'AUTH_USER_NOT_FOUND', 'Authorization user no longer exists.');
+    }
+    if (
+      !Number.isInteger(payload.tokenVersion) ||
+      payload.tokenVersion !== user.tokenVersion
+    ) {
+      throw createHttpError(
+        401,
+        'SESSION_REVOKED',
+        'The session has been revoked. Sign in again.',
+      );
     }
     if (!user.isActive) {
       throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
@@ -89,9 +97,6 @@ export class AuthNestService {
     if (!verifyPassword(patch?.currentPassword, user.passwordHash)) {
       throw createHttpError(400, 'CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
     }
-    if (patch?.newPassword === TEMPORARY_PASSWORD) {
-      throw createHttpError(400, 'TEMPORARY_PASSWORD_NOT_ALLOWED', 'New password cannot be the temporary password.');
-    }
 
     const nextUser = await this.usersService.updatePassword(user.id, hashPassword(patch.newPassword), {
       mustChangePassword: false,
@@ -107,7 +112,12 @@ export class AuthNestService {
       ipAddress: metadata.ipAddress || null,
     });
 
-    return this.buildSessionPayload(nextUser);
+    const tokenResult = this.issueToken(nextUser);
+    return {
+      token: tokenResult.token,
+      expiresAt: tokenResult.expiresAt,
+      ...this.buildSessionPayload(nextUser),
+    };
   }
 
   getRoleCatalog() {
@@ -128,10 +138,22 @@ export class AuthNestService {
       dataScope: getRoleDataScope(user.role),
     };
   }
-}
 
-function getTokenSecret() {
-  return process.env.AUTH_TOKEN_SECRET || 'jiangjiu-dev-token-secret-change-me';
+  private issueToken(user: any) {
+    return createToken(
+      {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        tokenVersion: user.tokenVersion,
+      },
+      {
+        expiresInSeconds: process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS
+          ? Number(process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS)
+          : undefined,
+      },
+    );
+  }
 }
 
 function isAdminRole(role: string) {

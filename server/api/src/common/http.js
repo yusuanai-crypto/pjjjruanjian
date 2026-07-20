@@ -1,10 +1,12 @@
 const { createHttpError } = require('./errors');
+const { getRequestIp } = require('./request-ip');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
-function sendJson(response, statusCode, body) {
+function sendJson(response, statusCode, body, headers = {}) {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
+    ...headers,
   });
   response.end(JSON.stringify(body));
 }
@@ -45,14 +47,6 @@ function getBearerToken(request) {
   const header = request.headers.authorization || '';
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
-}
-
-function getRequestIp(request) {
-  const forwardedFor = request.headers['x-forwarded-for'];
-  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return forwardedFor.split(',')[0].trim();
-  }
-  return request.socket?.remoteAddress || null;
 }
 
 module.exports = {

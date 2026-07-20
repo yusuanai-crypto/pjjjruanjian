@@ -405,9 +405,14 @@ void main() {
     expect(find.text('测试错误：无法读取统计概览。'), findsOneWidget);
   });
 
-  testWidgets('allows admin boss and finance to use analytics and export',
+  testWidgets('allows admin boss finance and after sales to use analytics and export',
       (tester) async {
-    for (final role in [UserRole.admin, UserRole.boss, UserRole.finance]) {
+    for (final role in [
+      UserRole.admin,
+      UserRole.boss,
+      UserRole.finance,
+      UserRole.afterSales,
+    ]) {
       final apiClient = _FakeAnalyticsApiClient();
 
       await tester.pumpWidget(_page(apiClient, role: role));
@@ -465,7 +470,6 @@ void main() {
       UserRole.taster,
       UserRole.sales,
       UserRole.warehouse,
-      UserRole.afterSales,
       UserRole.frontDesk,
     ]) {
       final apiClient = _FakeAnalyticsApiClient();

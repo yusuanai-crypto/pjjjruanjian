@@ -47,7 +47,7 @@ flutter run -d windows --dart-define=JIANGJIU_API_BASE_URL=http://127.0.0.1:3000
 | 字段 | 值 |
 | --- | --- |
 | 账号 | `admin` |
-| 密码 | `Admin@123456` |
+| 密码 | 部署人员通过 `SEED_ADMIN_PASSWORD` 设置的管理员密码 |
 | 服务器地址 | `http://127.0.0.1:3000` |
 
 登录页可以手动修改服务器地址；修改后登录成功会保存该地址。
@@ -65,13 +65,13 @@ flutter pub get
 Android 模拟器访问宿主机后端通常使用：
 
 ```powershell
-flutter run -d android --dart-define=JIANGJIU_API_BASE_URL=http://10.0.2.2:3000
+flutter run -d android --dart-define=JIANGJIU_API_BASE_URL=https://10.0.2.2:3000
 ```
 
 真机调试应把服务器地址改为电脑或服务器在同一局域网内可访问的 IP，例如：
 
 ```text
-http://192.168.1.20:3000
+https://192.168.1.20:3000
 ```
 
 ## 常用检查
@@ -81,6 +81,24 @@ cd D:\jiangjiu\apps\mobile_desktop
 flutter analyze
 flutter test
 ```
+
+## Transport and secure session storage
+
+- Release and profile builds accept only HTTPS API base URLs. Debug/test builds
+  may use HTTP only with `localhost`, `127.0.0.0/8`, or `::1`; emulator aliases
+  and LAN addresses still require HTTPS.
+- API addresses without a scheme are normalized to `https://`.
+- Bearer tokens are stored with `flutter_secure_storage` (Android Keystore,
+  iOS Keychain, and Windows Credential Manager/DPAPI-backed storage).
+  `SharedPreferences` retains only non-secret settings such as the API base
+  URL.
+- Android requires API 23 or newer for the selected secure-storage version.
+  Auto Backup is disabled so encrypted values are not restored without their
+  Keystore key. Release cleartext traffic is disabled in the manifest.
+- iOS Runner configurations include the Keychain entitlement and retain ATS
+  without arbitrary-load exceptions.
+- Windows builds require the C++ ATL optional component in Visual Studio Build
+  Tools for `flutter_secure_storage`.
 
 ## 范围说明
 

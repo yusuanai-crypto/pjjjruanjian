@@ -255,6 +255,20 @@ void main() {
       'financeConfirmed': 'false',
       'financeConfirmedById': null,
       'financeConfirmedAt': null,
+      'warehouseConfirmedById': 'usr_warehouse',
+      'warehouseConfirmedAt': '2026-07-02T08:20:00.000Z',
+      'warehouseConfirmNote': 'received return goods',
+      'refundProofAttachments': [
+        {
+          'id': 'proof-1',
+          'category': 'refund_proof',
+          'originalName': 'refund-proof.png',
+          'contentType': 'image/png',
+          'size': '128',
+          'uploadedById': 'usr_finance',
+          'uploadedAt': '2026-07-02T08:30:00.000Z',
+        },
+      ],
       'handledById': 'usr_after_sales',
       'handledAt': '2026-07-02T08:10:00.000Z',
       'completedAt': null,
@@ -276,6 +290,13 @@ void main() {
     expect(record.notes, 'smoke note');
     expect(record.financeConfirmedById, isNull);
     expect(record.financeConfirmedAt, isNull);
+    expect(record.warehouseConfirmedById, 'usr_warehouse');
+    expect(record.warehouseConfirmedAt, '2026-07-02T08:20:00.000Z');
+    expect(record.warehouseConfirmNote, 'received return goods');
+    expect(record.refundProofAttachments.single.id, 'proof-1');
+    expect(
+        record.refundProofAttachments.single.originalName, 'refund-proof.png');
+    expect(record.refundProofAttachments.single.size, 128);
     expect(record.handledById, 'usr_after_sales');
     expect(record.handledAt, '2026-07-02T08:10:00.000Z');
     expect(record.completedAt, isNull);
@@ -298,6 +319,10 @@ void main() {
       'financeConfirmed': true,
       'financeConfirmedById': 'usr_finance',
       'financeConfirmedAt': '2026-07-02T09:00:00.000Z',
+      'warehouseConfirmedById': null,
+      'warehouseConfirmedAt': null,
+      'warehouseConfirmNote': null,
+      'refundProofAttachments': const [],
       'handledById': 'usr_after_sales',
       'handledAt': '2026-07-02T09:05:00.000Z',
       'completedAt': '2026-07-02T09:10:00.000Z',
@@ -313,6 +338,7 @@ void main() {
     expect(completed.financeConfirmed, isTrue);
     expect(completed.financeConfirmedById, 'usr_finance');
     expect(completed.financeConfirmedAt, '2026-07-02T09:00:00.000Z');
+    expect(completed.refundProofAttachments, isEmpty);
     expect(completed.completedAt, '2026-07-02T09:10:00.000Z');
   });
 
@@ -349,12 +375,16 @@ void main() {
       'id': 'rule-agency-deduction-1',
       'agencyId': 'agency-1',
       'agencyName': 'test agency',
+      'calculationMode': 'effective_sales_rate',
+      'deductionRate': '0.3000',
       'productName': 'test liquor',
       'deductionCostCents': 800,
       'effectiveFrom': '2026-07-01',
       'isActive': true,
     });
     expect(agencyDeductionRule.agencyId, 'agency-1');
+    expect(agencyDeductionRule.calculationMode, 'effective_sales_rate');
+    expect(agencyDeductionRule.deductionRate, '0.3000');
     expect(agencyDeductionRule.productName, 'test liquor');
 
     final agencyRebateRule = AgencyRebateRuleRecord.fromJson({
@@ -494,9 +524,13 @@ void main() {
         'visitDate': '2026-07-03',
         'travelAgency': 'test agency',
         'guideName': 'test guide',
+        'licensePlate': '贵A·12345',
+        'guestCount': 18,
         'financeMark': true,
       },
       'totalSalesAmountCents': 100000,
+      'totalCashOnDeliveryCents': 20000,
+      'totalPaidDepositCents': 80000,
       'confirmedRefundAmountCents': 10000,
       'effectiveSalesAmountCents': 90000,
       'totalAgencyDeductionCents': 800,
@@ -514,6 +548,23 @@ void main() {
       'totalMonthlyRebateCents': 892,
       'paidRebateCents': 1000,
       'unpaidRebateCents': 2568,
+      'paidDailyRebateCents': 2676,
+      'unpaidDailyRebateCents': 0,
+      'paidMonthlyRebateCents': 0,
+      'unpaidMonthlyRebateCents': 892,
+      'dailyRebatePaid': true,
+      'dailyRebatePaidById': 'usr_finance',
+      'dailyRebatePaidBy': {
+        'id': 'usr_finance',
+        'name': 'Smoke Finance',
+        'username': 'finance',
+        'role': 'finance',
+      },
+      'dailyRebatePaidAt': '2026-07-03T09:20:00.000Z',
+      'monthlyRebatePaid': false,
+      'monthlyRebatePaidById': null,
+      'monthlyRebatePaidBy': null,
+      'monthlyRebatePaidAt': null,
       'notes': 'test summary note',
       'guideInfoSent': true,
       'travelAgencyInfoSent': false,
@@ -528,9 +579,20 @@ void main() {
     };
     final summary = TravelGroupFinanceSummaryRecord.fromJson(summaryJson);
     expect(summary.travelGroup?.guideName, 'test guide');
+    expect(summary.travelGroup?.licensePlate, '贵A·12345');
+    expect(summary.travelGroup?.guestCount, 18);
+    expect(summary.totalCashOnDeliveryCents, 20000);
+    expect(summary.totalPaidDepositCents, 80000);
     expect(summary.effectiveSalesAmountCents, 90000);
     expect(summary.totalAgencyNetAmountCents, 89200);
     expect(summary.agencyDeductionConfirmedBy?.role, 'finance');
+    expect(summary.paidDailyRebateCents, 2676);
+    expect(summary.unpaidDailyRebateCents, 0);
+    expect(summary.paidMonthlyRebateCents, 0);
+    expect(summary.unpaidMonthlyRebateCents, 892);
+    expect(summary.dailyRebatePaid, isTrue);
+    expect(summary.dailyRebatePaidBy?.username, 'finance');
+    expect(summary.monthlyRebatePaid, isFalse);
     expect(summary.sourceSnapshot?['orders'], const []);
 
     final refresh = TravelGroupFinanceSummaryRefreshResult.fromJson({
@@ -622,10 +684,12 @@ void main() {
         'issuedLabel': '未开票',
       },
       'qrCode': {
+        'active': true,
         'token': 'token-1',
         'url': 'https://example.test/public/sales-sheets/token-1',
         'generatedAt': '2026-07-01T08:00:00.000Z',
-        'expiresAt': null,
+        'expiresAt': '2026-07-31T08:00:00.000Z',
+        'revokedAt': null,
       },
       'internalFields': {
         'financeRemark': '内部财务备注',
@@ -655,7 +719,7 @@ void main() {
         ],
         'qrCode': {
           'generatedAt': '2026-07-01T08:00:00.000Z',
-          'expiresAt': null,
+          'expiresAt': '2026-07-31T08:00:00.000Z',
         },
       },
     });
@@ -673,6 +737,7 @@ void main() {
     expect(sheet.logistics.packageCount, 2);
     expect(sheet.invoice.required, isTrue);
     expect(sheet.qrCode?.token, 'token-1');
+    expect(sheet.qrCode?.active, isTrue);
     expect(sheet.internalFields['financeRemark'], '内部财务备注');
     expect(sheet.public?.visibility, 'public');
     expect(sheet.public?.customer.phone, isNull);
@@ -732,6 +797,23 @@ void main() {
       generated.qrCode?.url,
       'https://example.test/public/sales-sheets/new-token',
     );
+
+    apiClient.nextJson = {
+      'data': {
+        'salesSheet': {
+          'order': {'id': 'order-1', 'orderNo': 'SO20260701001'},
+          'qrCode': {
+            'active': false,
+            'revokedAt': '2026-07-02T08:00:00.000Z',
+          },
+        },
+      },
+    };
+    final revoked = await api.revokeSalesOrderQrCode('order-1');
+    expect(apiClient.lastMethod, 'DELETE');
+    expect(apiClient.lastPath, '/api/sales-orders/order-1/qr-code');
+    expect(apiClient.lastToken, 'token-1');
+    expect(revoked.qrCode?.active, isFalse);
   });
 
   test('business API builds Excel download paths with filters', () async {
@@ -1212,6 +1294,8 @@ void main() {
       'id': 'rule-agency-deduction-1',
       'agencyId': 'agency-1',
       'agencyName': 'test agency',
+      'calculationMode': 'manual_product_reference',
+      'deductionRate': '0.3000',
       'productName': 'test liquor',
       'deductionCostCents': 800,
       'effectiveFrom': '2026-07-01',
@@ -1247,6 +1331,8 @@ void main() {
       'id': 'summary-1',
       'travelGroupId': 'group-1',
       'totalSalesAmountCents': 100000,
+      'totalCashOnDeliveryCents': 20000,
+      'totalPaidDepositCents': 80000,
       'confirmedRefundAmountCents': 10000,
       'effectiveSalesAmountCents': 90000,
       'totalAgencyDeductionCents': 800,
@@ -1256,6 +1342,13 @@ void main() {
       'totalMonthlyRebateCents': 892,
       'paidRebateCents': 1000,
       'unpaidRebateCents': 2568,
+      'paidDailyRebateCents': 2676,
+      'unpaidDailyRebateCents': 0,
+      'paidMonthlyRebateCents': 0,
+      'unpaidMonthlyRebateCents': 892,
+      'dailyRebatePaid': true,
+      'dailyRebatePaidAt': '2026-07-03T09:20:00.000Z',
+      'monthlyRebatePaid': false,
       'guideInfoSent': false,
       'travelAgencyInfoSent': false,
     };
@@ -1371,6 +1464,7 @@ void main() {
     await api.listAgencyDeductionRules(
       agencyId: 'agency-1',
       agencyName: 'test agency',
+      calculationMode: 'manual_product_reference',
       productName: 'liquor',
       isActive: true,
     );
@@ -1378,6 +1472,10 @@ void main() {
     expect(uri.path, '/api/agency-deduction-rules');
     expect(uri.queryParameters['agencyId'], 'agency-1');
     expect(uri.queryParameters['agencyName'], 'test agency');
+    expect(
+      uri.queryParameters['calculationMode'],
+      'manual_product_reference',
+    );
 
     apiClient.nextJson = {
       'data': {'agencyDeductionRule': agencyDeductionRuleJson},
@@ -1591,10 +1689,22 @@ void main() {
     expect(apiClient.lastPath, '/api/travel-group-finance-summaries/group-1');
     await api.updateTravelGroupFinanceSummary(
       'group-1',
-      {'paidRebateCents': 2000},
+      {'notes': 'updated note'},
     );
     expect(apiClient.lastPath, '/api/travel-group-finance-summaries/group-1');
-    expect(apiClient.lastBody?['paidRebateCents'], 2000);
+    expect(apiClient.lastBody?['notes'], 'updated note');
+    await api.setDailyRebatePaid('group-1', true);
+    expect(
+      apiClient.lastPath,
+      '/api/travel-group-finance-summaries/group-1/daily-rebate-paid',
+    );
+    expect(apiClient.lastBody?['isPaid'], isTrue);
+    await api.setMonthlyRebatePaid('group-1', false);
+    expect(
+      apiClient.lastPath,
+      '/api/travel-group-finance-summaries/group-1/monthly-rebate-paid',
+    );
+    expect(apiClient.lastBody?['isPaid'], isFalse);
     await api.confirmAgencyDeduction('group-1', true);
     expect(
       apiClient.lastPath,
@@ -2009,6 +2119,44 @@ void main() {
     });
     expect(apiClient.lastPath, '/api/after-sales-orders/as-1/status');
     expect(apiClient.lastBody?['status'], 'completed');
+
+    await api.confirmAfterSalesWarehouse('as-1', note: 'received');
+    expect(apiClient.lastMethod, 'PATCH');
+    expect(
+        apiClient.lastPath, '/api/after-sales-orders/as-1/warehouse-confirm');
+    expect(apiClient.lastBody?['note'], 'received');
+
+    final proofFiles = <ApiMultipartFile>[
+      ApiMultipartFile.fromBytes(
+        fileName: 'refund-proof.png',
+        bytes: Uint8List.fromList([1, 2, 3]),
+        contentType: 'image/png',
+      ),
+    ];
+    await api.confirmAfterSalesFinanceRefund('as-1', files: proofFiles);
+    expect(apiClient.lastMethod, 'MULTIPART');
+    expect(
+      apiClient.lastPath,
+      '/api/after-sales-orders/as-1/finance-refund-confirm',
+    );
+    expect(apiClient.lastFiles, same(proofFiles));
+    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+
+    final downloadedRefundProof = await api.downloadAfterSalesRefundProof(
+      'as-1',
+      AfterSalesRefundProofAttachmentRecord.fromJson({
+        'id': 'proof-1',
+        'category': 'refund_proof',
+        'originalName': 'refund-proof.png',
+      }),
+    );
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(
+      apiClient.lastPath,
+      '/api/after-sales-orders/as-1/refund-proofs/proof-1/download',
+    );
+    expect(apiClient.lastDefaultFileName, 'refund-proof.png');
+    expect(downloadedRefundProof.fileName, 'export.xlsx');
 
     await api.confirmAfterSalesFinance('as-1', true);
     expect(apiClient.lastPath, '/api/after-sales-orders/as-1/finance-confirm');

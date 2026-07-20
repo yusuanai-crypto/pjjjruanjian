@@ -40,6 +40,11 @@ function createUsersService(options = {}) {
         phone: normalizeOptionalString(payload?.phone),
         leaderId: normalizeOptionalString(payload?.leaderId),
         isActive: payload?.isActive === undefined ? true : Boolean(payload.isActive),
+        mustChangePassword:
+          payload?.mustChangePassword === undefined
+            ? false
+            : Boolean(payload.mustChangePassword),
+        tokenVersion: 0,
         createdAt: now,
         updatedAt: now,
       };
@@ -98,6 +103,9 @@ function createUsersService(options = {}) {
       const nextUser = {
         ...current,
         isActive,
+        tokenVersion: !isActive
+          ? Number(current.tokenVersion || 0) + 1
+          : Number(current.tokenVersion || 0),
         updatedAt: new Date().toISOString(),
       };
       userRepository.saveUser(nextUser);
@@ -121,6 +129,8 @@ function createUsersService(options = {}) {
       const nextUser = {
         ...current,
         passwordHash: hashPassword(patch?.newPassword),
+        mustChangePassword: false,
+        tokenVersion: Number(current.tokenVersion || 0) + 1,
         updatedAt: new Date().toISOString(),
       };
       userRepository.saveUser(nextUser);

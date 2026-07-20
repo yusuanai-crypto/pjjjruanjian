@@ -391,7 +391,7 @@ test('contract: finance workbench enforces roles and returns scoped pending buck
         'Password123',
       );
 
-      for (const token of [admin.token, boss.token, finance.token]) {
+      for (const token of [admin.token, finance.token]) {
         const allowed = await requestJson(
           baseUrl,
           '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01',
@@ -403,7 +403,48 @@ test('contract: finance workbench enforces roles and returns scoped pending buck
         assert.equal(typeof allowed.body.data.workbench.metrics, 'object');
       }
 
-      for (const token of [sales.token, warehouse.token, afterSales.token]) {
+      const bossOverview = await requestJson(
+        baseUrl,
+        '/api/finance/overview?dateFrom=2026-07-01&dateTo=2026-07-01',
+        {
+          token: boss.token,
+        },
+      );
+      assertErrorContract(bossOverview, 403, 'PERMISSION_DENIED');
+
+      const bossReconciliationList = await requestJson(
+        baseUrl,
+        '/api/reconciliations?dateFrom=2026-07-01&dateTo=2026-07-01',
+        {
+          token: boss.token,
+        },
+      );
+      assertErrorContract(bossReconciliationList, 403, 'PERMISSION_DENIED');
+
+      const bossReconciliationDetail = await requestJson(
+        baseUrl,
+        '/api/reconciliations/2026-07-01',
+        {
+          token: boss.token,
+        },
+      );
+      assertErrorContract(bossReconciliationDetail, 403, 'PERMISSION_DENIED');
+
+      const bossStrikeBonusList = await requestJson(
+        baseUrl,
+        '/api/strike-bonus-awards?dateFrom=2026-07-01&dateTo=2026-07-01',
+        {
+          token: boss.token,
+        },
+      );
+      assertErrorContract(bossStrikeBonusList, 403, 'PERMISSION_DENIED');
+
+      for (const token of [
+        boss.token,
+        sales.token,
+        warehouse.token,
+        afterSales.token,
+      ]) {
         const denied = await requestJson(
           baseUrl,
           '/api/finance/workbench?dateFrom=2026-07-01&dateTo=2026-07-01',
@@ -604,7 +645,7 @@ test('contract: warehouse order wrapper lists shipping orders and saves packing 
           token: boss.token,
         },
       );
-      assert.equal(bossList.response.status, 200);
+      assertErrorContract(bossList, 403, 'PERMISSION_DENIED');
 
       for (const token of [finance.token, sales.token]) {
         const denied = await requestJson(baseUrl, '/api/warehouse/orders', {
@@ -1681,6 +1722,7 @@ test('contract: sales order list supports phase 4 filters and role scopes', asyn
     const group = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-29',
       travelAgency: 'Filter Travel Agency',
+      tasterId: tasterUser.id,
     });
     const markedCustomer = await createCustomerFixture(baseUrl, admin.token, {
       name: 'Filter Marked Customer',
@@ -1859,18 +1901,98 @@ test('contract: sales order list supports phase 4 filters and role scopes', asyn
       'SALES_ORDER_NOT_FOUND',
     );
 
+    const liaisonOnlyGroup = await createScopedTravelGroup(baseUrl, admin.token, {
+      visitDate: '2026-06-29',
+      travelAgency: 'Filter Liaison Only Agency',
+      liaisonTasterId: tasterUser.id,
+    });
+    const liaisonOnlyOrder = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: liaisonOnlyGroup.id,
+        customerId: markedCustomer.id,
+        orderDate: '2026-06-29',
+        salesFormNo: 'FORM-FILTER-LIAISON',
+        items: [
+          {
+            productName: 'Filter Liaison Product',
+            quantity: 1,
+            unitPriceCents: 6000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(liaisonOnlyOrder.response.status, 201);
+
     const tasterList = await requestJson(baseUrl, '/api/sales-orders', {
       token: taster.token,
     });
-    assertErrorContract(tasterList, 403, 'PERMISSION_DENIED');
-    const tasterDetail = await requestJson(
+    assert.equal(tasterList.response.status, 200);
+    assert.deepEqual(orderNos(tasterList.body.data.salesOrders), [
+      shippingOrder.orderNo,
+    ]);
+    const tasterListedOrder = tasterList.body.data.salesOrders[0];
+    assert.equal(tasterListedOrder.entryAmountCents, 0);
+    assert.equal(tasterListedOrder.tasterCommissionCents, 0);
+    assert.equal(tasterListedOrder.financeRemark, null);
+    assert.equal(tasterListedOrder.financeMark, false);
+    assert.equal(tasterListedOrder.markedById, null);
+    assert.equal(tasterListedOrder.markedAt, null);
+    assert.equal(tasterListedOrder.customer.financeMark, false);
+    assert.equal(tasterListedOrder.customer.markedById, null);
+    assert.equal(tasterListedOrder.customer.markedAt, null);
+
+    const tasterSensitiveFilterList = await requestJson(
+      baseUrl,
+      '/api/sales-orders?financeMark=false&customerFinanceMark=false',
+      {
+        token: taster.token,
+      },
+    );
+    assert.equal(tasterSensitiveFilterList.response.status, 200);
+    assert.deepEqual(
+      orderNos(tasterSensitiveFilterList.body.data.salesOrders),
+      [shippingOrder.orderNo],
+    );
+
+    const tasterOwnDetail = await requestJson(
       baseUrl,
       `/api/sales-orders/${shippingOrder.id}`,
       {
         token: taster.token,
       },
     );
-    assertErrorContract(tasterDetail, 403, 'PERMISSION_DENIED');
+    assert.equal(tasterOwnDetail.response.status, 200);
+    assert.equal(tasterOwnDetail.body.data.salesOrder.id, shippingOrder.id);
+    assert.equal(tasterOwnDetail.body.data.salesOrder.entryAmountCents, 0);
+    assert.equal(
+      tasterOwnDetail.body.data.salesOrder.tasterCommissionCents,
+      0,
+    );
+    assert.equal(tasterOwnDetail.body.data.salesOrder.financeMark, false);
+    assert.equal(
+      tasterOwnDetail.body.data.salesOrder.customer.financeMark,
+      false,
+    );
+    const tasterExternalDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${pickupOrder.id}`,
+      {
+        token: taster.token,
+      },
+    );
+    assertErrorContract(tasterExternalDetail, 404, 'SALES_ORDER_NOT_FOUND');
+    const tasterLiaisonOnlyDetail = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${liaisonOnlyOrder.body.data.salesOrder.id}`,
+      {
+        token: taster.token,
+      },
+    );
+    assertErrorContract(tasterLiaisonOnlyDetail, 404, 'SALES_ORDER_NOT_FOUND');
   });
 });
 
@@ -2015,7 +2137,10 @@ test('contract: sales order patch enforces field permissions, replaces items, up
         token: salesAlpha.token,
         body: {
           salesFormNo: 'PATCH-FORM-001',
+          orderType: 'travel_group',
           orderDate: '2026-06-30',
+          salesUserId: salesAlphaUser.id,
+          outreachUserId: salesAlphaUser.id,
           customer: {
             name: 'Patch Customer Updated',
             phone: '13900002001',
@@ -2028,6 +2153,7 @@ test('contract: sales order patch enforces field permissions, replaces items, up
           cashOnDeliveryAmountCents: 2500,
           invoiceRequired: true,
           remark: 'sales patch remark',
+          status: 'partial_refund',
           items: [
             {
               productName: 'Patch Product A',
@@ -2052,7 +2178,11 @@ test('contract: sales order patch enforces field permissions, replaces items, up
     assert.equal(salesPatch.response.status, 200);
     const salesPatchedOrder = salesPatch.body.data.salesOrder;
     assert.equal(salesPatchedOrder.salesFormNo, 'PATCH-FORM-001');
+    assert.equal(salesPatchedOrder.orderType, 'travel_group');
     assert.equal(salesPatchedOrder.orderDate, '2026-06-30');
+    assert.equal(salesPatchedOrder.salesUserId, salesAlphaUser.id);
+    assert.equal(salesPatchedOrder.outreachUserId, salesAlphaUser.id);
+    assert.equal(salesPatchedOrder.status, 'partial_refund');
     assert.equal(salesPatchedOrder.customerId, customerA.id);
     assert.equal(salesPatchedOrder.customerName, 'Patch Customer Updated');
     assert.equal(salesPatchedOrder.customerPhone, '13900002001');
@@ -2134,23 +2264,6 @@ test('contract: sales order patch enforces field permissions, replaces items, up
       'FIELD_PERMISSION_DENIED',
     );
 
-    const salesCannotPatchStatus = await requestJson(
-      baseUrl,
-      `/api/sales-orders/${originalOrder.id}`,
-      {
-        method: 'PATCH',
-        token: salesAlpha.token,
-        body: {
-          status: 'cancelled',
-        },
-      },
-    );
-    assertErrorContract(
-      salesCannotPatchStatus,
-      403,
-      'FIELD_PERMISSION_DENIED',
-    );
-
     const salesCannotPatchCustomerMark = await requestJson(
       baseUrl,
       `/api/sales-orders/${originalOrder.id}`,
@@ -2170,6 +2283,57 @@ test('contract: sales order patch enforces field permissions, replaces items, up
       'FIELD_PERMISSION_DENIED',
     );
 
+    const salesFinancePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}/finance`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          logisticsNo: 'SF-SALES-001',
+          logisticsFeeCents: 1800,
+          invoiceIssued: true,
+          financeRemark: 'sales finance fields',
+          status: 'valid',
+        },
+      },
+    );
+    assert.equal(salesFinancePatch.response.status, 200);
+    assert.equal(salesFinancePatch.body.data.salesOrder.logisticsNo, 'SF-SALES-001');
+    assert.equal(salesFinancePatch.body.data.salesOrder.logisticsFeeCents, 1800);
+    assert.equal(salesFinancePatch.body.data.salesOrder.invoiceIssued, true);
+    assert.equal(
+      salesFinancePatch.body.data.salesOrder.financeRemark,
+      'sales finance fields',
+    );
+    assert.equal(salesFinancePatch.body.data.salesOrder.status, 'valid');
+
+    const salesPackingPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}/packing`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          logisticsMethod: 'SF Express',
+          packingStatus: 'packed',
+          packageCount: 3,
+          warehouseRemark: 'sales packing fields',
+        },
+      },
+    );
+    assert.equal(salesPackingPatch.response.status, 200);
+    assert.equal(
+      salesPackingPatch.body.data.salesOrder.logisticsMethod,
+      'SF Express',
+    );
+    assert.equal(salesPackingPatch.body.data.salesOrder.packingStatus, 'packed');
+    assert.equal(salesPackingPatch.body.data.salesOrder.packageCount, 3);
+    assert.equal(
+      salesPackingPatch.body.data.salesOrder.warehouseRemark,
+      'sales packing fields',
+    );
+
     const otherSalesPatch = await requestJson(
       baseUrl,
       `/api/sales-orders/${originalOrder.id}`,
@@ -2182,6 +2346,40 @@ test('contract: sales order patch enforces field permissions, replaces items, up
       },
     );
     assertErrorContract(otherSalesPatch, 404, 'SALES_ORDER_NOT_FOUND');
+
+    const otherSalesFinancePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}/finance`,
+      {
+        method: 'PATCH',
+        token: salesBeta.token,
+        body: {
+          logisticsNo: 'SHOULD-NOT-UPDATE',
+        },
+      },
+    );
+    assertErrorContract(
+      otherSalesFinancePatch,
+      404,
+      'SALES_ORDER_NOT_FOUND',
+    );
+
+    const otherSalesPackingPatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${originalOrder.id}/packing`,
+      {
+        method: 'PATCH',
+        token: salesBeta.token,
+        body: {
+          packageCount: 9,
+        },
+      },
+    );
+    assertErrorContract(
+      otherSalesPackingPatch,
+      404,
+      'SALES_ORDER_NOT_FOUND',
+    );
 
     for (const token of [
       warehouse.token,
@@ -2552,10 +2750,22 @@ test('contract: sales order finance patch updates finance fields and rejects una
       12000,
     );
 
+    const salesForbidden = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: sales.token,
+        body: {
+          logisticsNo: 'NOPE',
+        },
+      },
+    );
+    assertErrorContract(salesForbidden, 404, 'SALES_ORDER_NOT_FOUND');
+
     for (const token of [
       boss.token,
       frontDesk.token,
-      sales.token,
       warehouse.token,
       afterSales.token,
       taster.token,
@@ -2804,12 +3014,20 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
       'finance packing correction',
     );
 
-    for (const token of [
-      sales.token,
-      afterSales.token,
-      boss.token,
-      taster.token,
-    ]) {
+    const salesForbidden = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: sales.token,
+        body: {
+          packingStatus: 'packed',
+        },
+      },
+    );
+    assertErrorContract(salesForbidden, 404, 'SALES_ORDER_NOT_FOUND');
+
+    for (const token of [afterSales.token, boss.token, taster.token]) {
       const forbidden = await requestJson(
         baseUrl,
         `/api/sales-orders/${order.id}/packing`,
@@ -5167,6 +5385,7 @@ test('contract: travel group list supports filters and computed pending status p
     const groupAlpha = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-26',
       tasterId: tasterAlpha.id,
+      liaisonTasterId: tasterBeta.id,
       travelAgency: 'Filter Agency Alpha',
       groupType: 'filter-alpha',
       guestCount: 8,
@@ -5175,6 +5394,7 @@ test('contract: travel group list supports filters and computed pending status p
     const groupBeta = await createScopedTravelGroup(baseUrl, admin.token, {
       visitDate: '2026-06-27',
       tasterId: tasterBeta.id,
+      liaisonTasterId: tasterAlpha.id,
       travelAgency: 'Filter Agency Beta',
       groupType: 'filter-beta',
       guestCount: 18,
@@ -5270,6 +5490,18 @@ test('contract: travel group list supports filters and computed pending status p
       groupNos([groupAlpha, groupGamma]),
     );
 
+    const liaisonTasterFiltered = await requestJson(
+      baseUrl,
+      `/api/travel-groups?liaisonTasterId=${tasterAlpha.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(liaisonTasterFiltered.response.status, 200);
+    assert.deepEqual(groupNos(liaisonTasterFiltered.body.data.travelGroups), [
+      groupBeta.groupNo,
+    ]);
+
     const agencyFiltered = await requestJson(
       baseUrl,
       '/api/travel-groups?travelAgency=Filter%20Agency%20Alpha',
@@ -5341,7 +5573,7 @@ test('contract: travel group list supports filters and computed pending status p
   });
 });
 
-test('contract: business data role scopes expose all travel groups to tasters and keep sales scopes', async () => {
+test('contract: business data role scopes expose travel groups and keep sales order scopes', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const bossUser = await createUser(baseUrl, admin.token, {
@@ -5422,6 +5654,7 @@ test('contract: business data role scopes expose all travel groups to tasters an
       groupNo: 'GZ-SCOPE-B',
       tasterId: tasterBetaUser.id,
       tasterName: tasterBetaUser.name,
+      liaisonTasterId: tasterAlphaUser.id,
     });
 
     const createdByAlpha = await createScopedSalesOrder(
@@ -5459,6 +5692,30 @@ test('contract: business data role scopes expose all travel groups to tasters an
       groupNos([groupAlpha, groupBeta]),
     );
 
+    const alphaReceptionGroups = await requestJson(
+      baseUrl,
+      `/api/travel-groups?tasterId=${tasterAlphaUser.id}`,
+      {
+        token: tasterAlpha.token,
+      },
+    );
+    assert.equal(alphaReceptionGroups.response.status, 200);
+    assert.deepEqual(groupNos(alphaReceptionGroups.body.data.travelGroups), [
+      groupAlpha.groupNo,
+    ]);
+
+    const alphaLiaisonGroups = await requestJson(
+      baseUrl,
+      `/api/travel-groups?liaisonTasterId=${tasterAlphaUser.id}`,
+      {
+        token: tasterAlpha.token,
+      },
+    );
+    assert.equal(alphaLiaisonGroups.response.status, 200);
+    assert.deepEqual(groupNos(alphaLiaisonGroups.body.data.travelGroups), [
+      groupBeta.groupNo,
+    ]);
+
     const betaTasterGroups = await requestJson(baseUrl, '/api/travel-groups', {
       token: tasterBeta.token,
     });
@@ -5485,18 +5742,20 @@ test('contract: business data role scopes expose all travel groups to tasters an
       token: salesAlpha.token,
     });
     assert.equal(alphaSalesGroups.response.status, 200);
-    assert.deepEqual(groupNos(alphaSalesGroups.body.data.travelGroups), [
-      groupAlpha.groupNo,
-    ]);
+    assert.deepEqual(
+      groupNos(alphaSalesGroups.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta]),
+    );
 
-    const salesBlockedGroupDetail = await requestJson(
+    const salesOtherGroupDetail = await requestJson(
       baseUrl,
       `/api/travel-groups/${groupBeta.id}`,
       {
         token: salesAlpha.token,
       },
     );
-    assertErrorContract(salesBlockedGroupDetail, 404, 'TRAVEL_GROUP_NOT_FOUND');
+    assert.equal(salesOtherGroupDetail.response.status, 200);
+    assertTravelGroupDetailDto(salesOtherGroupDetail.body.data.travelGroup);
 
     const alphaOrders = await requestJson(baseUrl, '/api/sales-orders', {
       token: salesAlpha.token,
@@ -5648,6 +5907,7 @@ test('contract: business data role scopes expose all travel groups to tasters an
       frontDesk.token,
       {
         tasterId: tasterAlphaUser.id,
+        liaisonTasterId: tasterAlphaUser.id,
       },
     );
     const frontDeskGroups = await requestJson(baseUrl, '/api/travel-groups', {
@@ -5668,6 +5928,55 @@ test('contract: business data role scopes expose all travel groups to tasters an
     assert.equal(frontDeskOwnDetail.response.status, 200);
     assertTravelGroupDetailDto(frontDeskOwnDetail.body.data.travelGroup);
 
+    const salesGroupsAfterFrontDeskCreate = await requestJson(
+      baseUrl,
+      '/api/travel-groups',
+      {
+        token: salesAlpha.token,
+      },
+    );
+    assert.equal(salesGroupsAfterFrontDeskCreate.response.status, 200);
+    assert.deepEqual(
+      groupNos(salesGroupsAfterFrontDeskCreate.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta, groupFrontDesk]),
+    );
+
+    const salesFrontDeskGroupDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupFrontDesk.id}`,
+      {
+        token: salesAlpha.token,
+      },
+    );
+    assert.equal(salesFrontDeskGroupDetail.response.status, 200);
+    assertTravelGroupDetailDto(salesFrontDeskGroupDetail.body.data.travelGroup);
+
+    const alphaReceptionAfterFrontDeskCreate = await requestJson(
+      baseUrl,
+      `/api/travel-groups?tasterId=${tasterAlphaUser.id}`,
+      {
+        token: tasterAlpha.token,
+      },
+    );
+    assert.equal(alphaReceptionAfterFrontDeskCreate.response.status, 200);
+    assert.deepEqual(
+      groupNos(alphaReceptionAfterFrontDeskCreate.body.data.travelGroups),
+      groupNos([groupAlpha, groupFrontDesk]),
+    );
+
+    const alphaLiaisonAfterFrontDeskCreate = await requestJson(
+      baseUrl,
+      `/api/travel-groups?liaisonTasterId=${tasterAlphaUser.id}`,
+      {
+        token: tasterAlpha.token,
+      },
+    );
+    assert.equal(alphaLiaisonAfterFrontDeskCreate.response.status, 200);
+    assert.deepEqual(
+      groupNos(alphaLiaisonAfterFrontDeskCreate.body.data.travelGroups),
+      groupNos([groupBeta, groupFrontDesk]),
+    );
+
     const frontDeskBlockedDetail = await requestJson(
       baseUrl,
       `/api/travel-groups/${groupAlpha.id}`,
@@ -5677,15 +5986,85 @@ test('contract: business data role scopes expose all travel groups to tasters an
     );
     assertErrorContract(frontDeskBlockedDetail, 404, 'TRAVEL_GROUP_NOT_FOUND');
 
+    for (const { role, session } of [
+      { role: 'warehouse', session: warehouse },
+      { role: 'after_sales', session: afterSales },
+    ]) {
+      const createAttempt = await requestJson(baseUrl, '/api/travel-groups', {
+        method: 'POST',
+        token: session.token,
+        body: {
+          visitDate: '2026-06-24',
+          travelAgency: `Blocked ${role} Agency`,
+          guideId: groupAlpha.guideId,
+        },
+      });
+      assertErrorContract(createAttempt, 403, 'PERMISSION_DENIED');
+    }
+
     const warehouseGroups = await requestJson(baseUrl, '/api/travel-groups', {
       token: warehouse.token,
     });
-    assertErrorContract(warehouseGroups, 403, 'PERMISSION_DENIED');
+    assert.equal(warehouseGroups.response.status, 200);
+    assert.deepEqual(
+      groupNos(warehouseGroups.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta, groupFrontDesk]),
+    );
+
+    const warehouseGroupDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupAlpha.id}`,
+      {
+        token: warehouse.token,
+      },
+    );
+    assert.equal(warehouseGroupDetail.response.status, 200);
+    assertTravelGroupDetailDto(warehouseGroupDetail.body.data.travelGroup);
+
+    const warehouseGroupPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupAlpha.id}`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          remarks: 'warehouse should not edit travel group',
+        },
+      },
+    );
+    assertErrorContract(warehouseGroupPatch, 403, 'PERMISSION_DENIED');
 
     const afterSalesGroups = await requestJson(baseUrl, '/api/travel-groups', {
       token: afterSales.token,
     });
-    assertErrorContract(afterSalesGroups, 403, 'PERMISSION_DENIED');
+    assert.equal(afterSalesGroups.response.status, 200);
+    assert.deepEqual(
+      groupNos(afterSalesGroups.body.data.travelGroups),
+      groupNos([groupAlpha, groupBeta, groupFrontDesk]),
+    );
+
+    const afterSalesGroupDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupBeta.id}`,
+      {
+        token: afterSales.token,
+      },
+    );
+    assert.equal(afterSalesGroupDetail.response.status, 200);
+    assertTravelGroupDetailDto(afterSalesGroupDetail.body.data.travelGroup);
+
+    const afterSalesGroupPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupBeta.id}`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          remarks: 'after sales should not edit travel group',
+        },
+      },
+    );
+    assertErrorContract(afterSalesGroupPatch, 403, 'PERMISSION_DENIED');
   });
 });
 

@@ -5,11 +5,13 @@ const {
   buildPublicSalesSheetDto,
   buildSalesSheetDto,
   formatCentsAsYuan,
+  maskCustomerAddress,
   maskCustomerPhone,
 } = require('../src/modules/business-data/sales-sheet.dto.helper');
 
 test('unit: sales sheet DTO builds internal and public views for a normal multi-item order', () => {
   const salesSheet = buildSalesSheetDto(buildOrderFixture(), {
+    publicToken: 'token-123',
     publicUrl: 'https://example.test/api/public/sales-sheets/token-123',
   });
 
@@ -50,7 +52,16 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
   assert.equal(salesSheet.public.visibility, 'public');
   assert.equal(salesSheet.public.order.orderNo, salesSheet.order.orderNo);
   assert.equal(salesSheet.public.customer.phoneMasked, '138****0000');
-  assert.equal(salesSheet.public.items[0].subtotalYuan, '199.00');
+  assert.equal(
+    salesSheet.public.customer.addressMasked,
+    '贵** 贵** 观*** 测***',
+  );
+  assert.deepEqual(salesSheet.public.items[0], {
+    productName: '酱香酒 B',
+    quantity: 1,
+    deliveryType: 'self_pickup',
+    deliveryTypeLabel: '自提',
+  });
 });
 
 test('unit: sales sheet DTO supports orders without a travel group', () => {
@@ -58,7 +69,10 @@ test('unit: sales sheet DTO supports orders without a travel group', () => {
     orderType: 'EXTERNAL',
     travelGroupId: null,
     travelGroup: null,
-    qrCodeToken: null,
+    qrCodeTokenHash: null,
+    qrCodeGeneratedAt: null,
+    qrCodeExpiresAt: null,
+    qrCodeRevokedAt: null,
   });
 
   const salesSheet = buildSalesSheetDto(order);
@@ -66,7 +80,7 @@ test('unit: sales sheet DTO supports orders without a travel group', () => {
   assert.equal(salesSheet.order.orderType, 'external');
   assert.equal(salesSheet.order.orderTypeLabel, '外部销售');
   assert.equal(salesSheet.travelGroup, null);
-  assert.equal(salesSheet.public.travelGroup, null);
+  assert.equal('travelGroup' in salesSheet.public, false);
   assert.equal(salesSheet.qrCode, null);
   assert.equal(salesSheet.public.qrCode, null);
 });
@@ -78,8 +92,20 @@ test('unit: sales sheet public view masks phone and does not leak internal field
 
   assert.equal(publicSalesSheet.customer.phoneMasked, '138****0000');
   assert.equal(serialized.includes('13812340000'), false);
+  assert.equal(serialized.includes('贵州省贵阳市观山湖区测试路 1 号'), false);
 
   for (const forbidden of [
+    'amounts',
+    'totalAmountCents',
+    'cashOnDeliveryAmountCents',
+    'logistics',
+    'SF123456',
+    'travelGroup',
+    '测试旅行社',
+    'invoice',
+    'remark',
+    '客户可见备注',
+    'salesFormNo',
     'financeRemark',
     'warehouseRemark',
     'financeMark',
@@ -105,8 +131,17 @@ test('unit: sales sheet public view masks phone and does not leak internal field
 test('unit: sales sheet helpers mask phones and format cents', () => {
   assert.equal(maskCustomerPhone('13812340000'), '138****0000');
   assert.equal(maskCustomerPhone(' 0851-1234567 '), '085****67');
-  assert.equal(maskCustomerPhone('12345'), '12345');
+  assert.equal(maskCustomerPhone('12345'), '1***5');
   assert.equal(maskCustomerPhone(null), null);
+  assert.equal(
+    maskCustomerAddress({
+      province: '贵州省',
+      city: '贵阳市',
+      district: '观山湖区',
+      address: '测试路 1 号',
+    }),
+    '贵** 贵** 观*** 测***',
+  );
   assert.equal(formatCentsAsYuan(0), '0.00');
   assert.equal(formatCentsAsYuan(199), '1.99');
   assert.equal(formatCentsAsYuan(-105), '-1.05');
@@ -146,9 +181,11 @@ function buildOrderFixture(overrides = {}) {
     salesUserId: 'sales-user-1',
     createdAt: new Date('2026-07-01T08:00:00.000Z'),
     updatedAt: new Date('2026-07-01T09:00:00.000Z'),
-    qrCodeToken: 'token-123',
+    qrCodeTokenHash:
+      '8'.repeat(64),
     qrCodeGeneratedAt: new Date('2026-07-01T10:30:00.000Z'),
-    qrCodeExpiresAt: null,
+    qrCodeExpiresAt: new Date('2099-07-01T10:30:00.000Z'),
+    qrCodeRevokedAt: null,
     customer: {
       id: 'customer-1',
       name: '当前客户名',

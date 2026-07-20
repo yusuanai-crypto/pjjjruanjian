@@ -13,7 +13,16 @@ export class GuidesNestService {
   ) {}
 
   async listGuides(actor: any, filters: any = {}) {
-    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'finance']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+      'warehouse',
+      'after_sales',
+    ]);
     const guides = await this.prisma.guide.findMany({
       where: buildGuideWhere(filters),
       orderBy: {
@@ -25,7 +34,16 @@ export class GuidesNestService {
   }
 
   async getGuide(actor: any, id: string) {
-    requireAnyRole(actor, ['admin', 'front_desk', 'sales', 'finance']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'finance',
+      'taster',
+      'warehouse',
+      'after_sales',
+    ]);
     return toGuideDto(await this.findGuideOrThrow(id));
   }
 

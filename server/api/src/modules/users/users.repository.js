@@ -4,7 +4,6 @@ const path = require('node:path');
 const { hashPassword } = require('../auth/password');
 
 const DEFAULT_STORE_PATH = path.resolve(__dirname, '../../../data/users.json');
-const BOOTSTRAP_ADMIN_PASSWORD = 'Admin@123456';
 
 function createUserRepository(storePath = process.env.PHASE1_USER_STORE || DEFAULT_STORE_PATH) {
   return {
@@ -63,12 +62,13 @@ function createDefaultState() {
         id: 'usr_admin',
         name: '系统管理员',
         username: 'admin',
-        passwordHash: hashPassword(BOOTSTRAP_ADMIN_PASSWORD),
+        passwordHash: hashPassword(getBootstrapAdminPassword()),
         role: 'super_admin',
         phone: null,
         leaderId: null,
         isActive: true,
-        mustChangePassword: false,
+        mustChangePassword: true,
+        tokenVersion: 0,
         statusReason: null,
         statusChangedAt: null,
         statusChangedBy: null,
@@ -86,6 +86,27 @@ function normalizeState(state) {
   };
 }
 
+function getBootstrapAdminPassword() {
+  const value = process.env.SEED_ADMIN_PASSWORD;
+  if (typeof value !== 'string' || !value) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD must be configured before creating a legacy user store.',
+    );
+  }
+  const normalizedValue = value.trim();
+  if (
+    /^<[^>]+>$/.test(normalizedValue) ||
+    /^(?:change|replace|example|sample|placeholder|your)(?:[-_\s]|$)/i.test(
+      normalizedValue,
+    )
+  ) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD must not use a placeholder value.',
+    );
+  }
+  return value;
+}
+
 function normalizeUser(user) {
   const now = new Date().toISOString();
   return {
@@ -101,6 +122,7 @@ function normalizeUser(user) {
       user.mustChangePassword !== undefined
         ? Boolean(user.mustChangePassword)
         : Boolean(user.must_change_password ?? false),
+    tokenVersion: Number(user.tokenVersion ?? user.token_version ?? 0),
     statusReason: user.statusReason || user.status_reason || null,
     statusChangedAt: user.statusChangedAt || user.status_changed_at || null,
     statusChangedBy: user.statusChangedBy || user.status_changed_by || null,
@@ -114,7 +136,6 @@ function normalizeUsername(username) {
 }
 
 module.exports = {
-  BOOTSTRAP_ADMIN_PASSWORD,
   createUserRepository,
   normalizeUsername,
 };

@@ -10,17 +10,20 @@ import {
   Req,
   Res,
   UploadedFiles,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { AnyFilesInterceptor } from '@nestjs/platform-express';
 
+import { AuthUserGuard } from '../../common/guards/auth-user.guard';
+import { RequireRoles } from '../../common/guards/required-roles.decorator';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
 import { BusinessDataNestService } from './business-data.nest.service';
 import {
   buildAttachmentContentDisposition,
-  TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST,
-  TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
+  AttachmentUploadConfigService,
+  SecureAttachmentUploadInterceptor,
 } from './travel-group-attachment-storage.helper';
 
 @Controller('travel-groups')
@@ -28,6 +31,7 @@ export class TravelGroupsNestController {
   constructor(
     private readonly authService: AuthNestService,
     private readonly businessDataService: BusinessDataNestService,
+    private readonly uploadConfig: AttachmentUploadConfigService,
   ) {}
 
   @Get()
@@ -68,30 +72,29 @@ export class TravelGroupsNestController {
   }
 
   @Post(':id/attachments/:category')
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      limits: {
-        fileSize: TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
-        files: TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST,
-      },
-    }),
-  )
+  @UseGuards(AuthUserGuard, RolesGuard)
+  @RequireRoles('admin', 'front_desk', 'taster')
+  @UseInterceptors(SecureAttachmentUploadInterceptor)
   async uploadAttachments(
     @Param('id') id: string,
     @Param('category') category: string,
     @UploadedFiles() files: any[],
     @Req() request: any,
   ) {
-    const actor = await this.authService.authenticateRequest(request);
-    return this.businessDataService.uploadTravelGroupAttachments(
-      actor,
-      id,
-      category,
-      files,
-      {
-        ipAddress: getRequestIp(request),
-      },
-    );
+    const actor = request.currentUser;
+    try {
+      return await this.businessDataService.uploadTravelGroupAttachments(
+        actor,
+        id,
+        category,
+        files,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    } finally {
+      await this.uploadConfig.cleanupTemporaryFiles(files);
+    }
   }
 
   @Get(':id/attachments/:attachmentId/download')

@@ -280,10 +280,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('finance-summary-paid-rebate-field')),
-      '25.50',
-    );
-    await tester.enterText(
       find.byKey(const ValueKey('finance-summary-notes-field')),
       'test summary updated',
     );
@@ -302,11 +298,49 @@ void main() {
       apiClient.summaryPatchPaths,
       contains('/api/travel-group-finance-summaries/group-summary-1'),
     );
-    expect(apiClient.lastSummaryPatchBody?['paidRebateCents'], 2550);
+    expect(
+      apiClient.lastSummaryPatchBody?.containsKey('paidRebateCents'),
+      isFalse,
+    );
     expect(apiClient.lastSummaryPatchBody?['notes'], 'test summary updated');
     expect(apiClient.lastSummaryPatchBody?['guideInfoSent'], isTrue);
     expect(apiClient.lastSummaryPatchBody?['travelAgencyInfoSent'], isTrue);
-    expect(find.text('¥25.50'), findsWidgets);
+
+    final dailyRebatePaidButton = find.byKey(
+      const ValueKey('finance-summary-daily-rebate-paid-group-summary-1'),
+    );
+    await tester.ensureVisible(dailyRebatePaidButton);
+    await tester.tap(dailyRebatePaidButton);
+    await tester.pumpAndSettle();
+    expect(
+      apiClient.summaryPatchPaths,
+      contains(
+        '/api/travel-group-finance-summaries/group-summary-1/'
+        'daily-rebate-paid',
+      ),
+    );
+    expect(apiClient.lastSummaryPatchBody?['isPaid'], isTrue);
+    expect(find.text('¥0.00'), findsWidgets);
+
+    final monthlyRebatePaidButton = find.byKey(
+      const ValueKey('finance-summary-monthly-rebate-paid-group-summary-1'),
+    );
+    await tester.ensureVisible(monthlyRebatePaidButton);
+    await tester.tap(monthlyRebatePaidButton);
+    await tester.pumpAndSettle();
+    expect(
+      apiClient.summaryPatchPaths,
+      contains(
+        '/api/travel-group-finance-summaries/group-summary-1/'
+        'monthly-rebate-paid',
+      ),
+    );
+    expect(apiClient.lastSummaryPatchBody?['isPaid'], isTrue);
+
+    await tester.ensureVisible(dailyRebatePaidButton);
+    await tester.tap(dailyRebatePaidButton);
+    await tester.pumpAndSettle();
+    expect(apiClient.lastSummaryPatchBody?['isPaid'], isFalse);
 
     _pressIconButton(
       tester,
@@ -692,7 +726,8 @@ class _FakeApiClient extends ApiClient {
   bool afterSalesConfirmed = false;
   int tasterCommissionAmountCents = 5000;
   bool tasterCommissionConfirmed = false;
-  int summaryPaidRebateCents = 1000;
+  bool summaryDailyRebatePaid = false;
+  bool summaryMonthlyRebatePaid = false;
   bool summaryAgencyDeductionConfirmed = false;
   bool summaryGuideInfoSent = false;
   bool summaryTravelAgencyInfoSent = false;
@@ -808,7 +843,8 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
-            paidRebateCents: summaryPaidRebateCents,
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
             agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
             guideInfoSent: summaryGuideInfoSent,
             travelAgencyInfoSent: summaryTravelAgencyInfoSent,
@@ -824,7 +860,8 @@ class _FakeApiClient extends ApiClient {
         'data': {
           'travelGroupFinanceSummaries': [
             _summaryJson(
-              paidRebateCents: summaryPaidRebateCents,
+              dailyRebatePaid: summaryDailyRebatePaid,
+              monthlyRebatePaid: summaryMonthlyRebatePaid,
               agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
               guideInfoSent: summaryGuideInfoSent,
               travelAgencyInfoSent: summaryTravelAgencyInfoSent,
@@ -940,16 +977,54 @@ class _FakeApiClient extends ApiClient {
     if (path == '/api/travel-group-finance-summaries/group-summary-1') {
       summaryPatchPaths.add(path);
       lastSummaryPatchBody = Map<String, dynamic>.from(body ?? {});
-      summaryPaidRebateCents = body?['paidRebateCents'] is int
-          ? body!['paidRebateCents'] as int
-          : summaryPaidRebateCents;
       summaryGuideInfoSent = body?['guideInfoSent'] == true;
       summaryTravelAgencyInfoSent = body?['travelAgencyInfoSent'] == true;
       summaryNotes = '${body?['notes'] ?? ''}';
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
-            paidRebateCents: summaryPaidRebateCents,
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
+            agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
+            guideInfoSent: summaryGuideInfoSent,
+            travelAgencyInfoSent: summaryTravelAgencyInfoSent,
+            notes: summaryNotes,
+          ),
+        },
+      };
+    }
+
+    if (path ==
+        '/api/travel-group-finance-summaries/group-summary-1/'
+            'daily-rebate-paid') {
+      summaryPatchPaths.add(path);
+      lastSummaryPatchBody = Map<String, dynamic>.from(body ?? {});
+      summaryDailyRebatePaid = body?['isPaid'] == true;
+      return {
+        'data': {
+          'travelGroupFinanceSummary': _summaryJson(
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
+            agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
+            guideInfoSent: summaryGuideInfoSent,
+            travelAgencyInfoSent: summaryTravelAgencyInfoSent,
+            notes: summaryNotes,
+          ),
+        },
+      };
+    }
+
+    if (path ==
+        '/api/travel-group-finance-summaries/group-summary-1/'
+            'monthly-rebate-paid') {
+      summaryPatchPaths.add(path);
+      lastSummaryPatchBody = Map<String, dynamic>.from(body ?? {});
+      summaryMonthlyRebatePaid = body?['isPaid'] == true;
+      return {
+        'data': {
+          'travelGroupFinanceSummary': _summaryJson(
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
             agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
             guideInfoSent: summaryGuideInfoSent,
             travelAgencyInfoSent: summaryTravelAgencyInfoSent,
@@ -968,7 +1043,8 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
-            paidRebateCents: summaryPaidRebateCents,
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
             agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
             guideInfoSent: summaryGuideInfoSent,
             travelAgencyInfoSent: summaryTravelAgencyInfoSent,
@@ -992,7 +1068,8 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
-            paidRebateCents: summaryPaidRebateCents,
+            dailyRebatePaid: summaryDailyRebatePaid,
+            monthlyRebatePaid: summaryMonthlyRebatePaid,
             agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
             guideInfoSent: summaryGuideInfoSent,
             travelAgencyInfoSent: summaryTravelAgencyInfoSent,
@@ -1077,12 +1154,15 @@ Map<String, dynamic> _commissionRecordJson({
 }
 
 Map<String, dynamic> _summaryJson({
-  required int paidRebateCents,
+  required bool dailyRebatePaid,
+  required bool monthlyRebatePaid,
   required bool agencyDeductionConfirmed,
   required bool guideInfoSent,
   required bool travelAgencyInfoSent,
   required String notes,
 }) {
+  final paidRebateCents =
+      (dailyRebatePaid ? 6000 : 0) + (monthlyRebatePaid ? 4000 : 0);
   return {
     'id': 'summary-1',
     'travelGroupId': 'group-summary-1',
@@ -1092,11 +1172,15 @@ Map<String, dynamic> _summaryJson({
       'visitDate': '2026-07-03',
       'travelAgency': 'Smoke Agency',
       'guideName': 'Smoke Guide',
+      'licensePlate': '贵A·12345',
+      'guestCount': 18,
       'tasterId': 'taster-1',
       'tasterName': 'Smoke Taster',
       'financeMark': true,
     },
     'totalSalesAmountCents': 100000,
+    'totalCashOnDeliveryCents': 20000,
+    'totalPaidDepositCents': 80000,
     'confirmedRefundAmountCents': 10000,
     'effectiveSalesAmountCents': 90000,
     'totalAgencyDeductionCents': 12000,
@@ -1116,6 +1200,27 @@ Map<String, dynamic> _summaryJson({
     'totalMonthlyRebateCents': 4000,
     'paidRebateCents': paidRebateCents,
     'unpaidRebateCents': 10000 - paidRebateCents,
+    'dailyRebatePaid': dailyRebatePaid,
+    'dailyRebatePaidBy': dailyRebatePaid
+        ? {
+            'id': 'finance-1',
+            'name': 'Smoke Finance',
+            'username': 'finance',
+            'role': 'finance',
+          }
+        : null,
+    'dailyRebatePaidAt': dailyRebatePaid ? '2026-07-03T11:00:00.000Z' : null,
+    'monthlyRebatePaid': monthlyRebatePaid,
+    'monthlyRebatePaidBy': monthlyRebatePaid
+        ? {
+            'id': 'finance-1',
+            'name': 'Smoke Finance',
+            'username': 'finance',
+            'role': 'finance',
+          }
+        : null,
+    'monthlyRebatePaidAt':
+        monthlyRebatePaid ? '2026-07-03T12:00:00.000Z' : null,
     'notes': notes,
     'guideInfoSent': guideInfoSent,
     'travelAgencyInfoSent': travelAgencyInfoSent,

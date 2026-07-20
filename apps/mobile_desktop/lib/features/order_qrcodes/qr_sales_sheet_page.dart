@@ -34,12 +34,13 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   SalesOrderRecord? _selectedOrder;
   SalesSheetRecord? _salesSheet;
-  int? _expiresInDays;
+  int? _expiresInDays = 30;
   bool _regenerate = false;
   bool _searched = false;
   bool _searching = false;
   bool _loadingSheet = false;
   bool _generating = false;
+  bool _revoking = false;
   String? _searchErrorMessage;
   String? _sheetErrorMessage;
 
@@ -75,7 +76,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
         _orders = const <SalesOrderRecord>[];
         _selectedOrder = null;
         _salesSheet = null;
-        _searchErrorMessage = '请输入订单号、客户电话或销售单号。';
+        _searchErrorMessage = '请输入订单号或客户电话。';
         _sheetErrorMessage = null;
       });
       return;
@@ -148,7 +149,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
 
   Future<void> _generateQrCode() async {
     final order = _selectedOrder;
-    if (order == null || _generating) {
+    if (order == null || _generating || _revoking) {
       return;
     }
 
@@ -183,6 +184,43 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
       }
       setState(() {
         _generating = false;
+        _sheetErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _revokeQrCode() async {
+    final order = _selectedOrder;
+    if (order == null || _revoking) {
+      return;
+    }
+
+    setState(() {
+      _revoking = true;
+      _sheetErrorMessage = null;
+    });
+    try {
+      final salesSheet =
+          await _businessApi.revokeSalesOrderQrCode(order.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _salesSheet = salesSheet;
+        _revoking = false;
+        _regenerate = false;
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('二维码已吊销，旧链接立即失效。')),
+        );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _revoking = false;
         _sheetErrorMessage = _messageForError(error);
       });
     }
@@ -223,6 +261,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
   Widget _buildHeader() {
     final selected = _selectedOrder;
     final url = _salesSheet?.qrCode?.url;
+    final qrCodeActive = _salesSheet?.qrCode?.active ?? false;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -275,10 +314,12 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
               tone: _searching ? StatusTone.warning : StatusTone.info,
             ),
             StatusTag(
-              label: url == null || url.isEmpty ? '未生成二维码' : '可扫码',
-              tone: url == null || url.isEmpty
-                  ? StatusTone.neutral
-                  : StatusTone.success,
+              label: url != null && url.isNotEmpty
+                  ? '可扫码'
+                  : qrCodeActive
+                      ? '二维码已生效'
+                      : '未生成二维码',
+              tone: qrCodeActive ? StatusTone.success : StatusTone.neutral,
             ),
             OutlinedButton.icon(
               onPressed: selected == null || _loadingSheet
@@ -304,7 +345,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
               key: const ValueKey('qr-sales-search-field'),
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: '订单号、客户电话、销售单号',
+                hintText: '订单号、客户电话',
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: IconButton(
                   tooltip: '清空',
@@ -366,6 +407,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
           salesSheet: _salesSheet,
           loadingSheet: _loadingSheet,
           generating: _generating,
+          revoking: _revoking,
           expiresInDays: _expiresInDays,
           regenerate: _regenerate,
           errorMessage: _sheetErrorMessage,
@@ -374,6 +416,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
             setState(() => _regenerate = value);
           },
           onGenerate: _generateQrCode,
+          onRevoke: _revokeQrCode,
           onCopyLink: _copyLink,
         ),
       ],
@@ -476,8 +519,6 @@ class _SearchResultsSection extends StatelessWidget {
                   children: [
                     Text(
                         '${_display(order.customerName)} · ${_display(order.customerPhone)}'),
-                    if (_hasText(order.salesFormNo))
-                      Text('销售单 ${order.salesFormNo}'),
                     Text(_orderTravelGroupLabel(order)),
                   ],
                 ),
@@ -498,12 +539,14 @@ class _QrActionSection extends StatelessWidget {
     required this.salesSheet,
     required this.loadingSheet,
     required this.generating,
+    required this.revoking,
     required this.expiresInDays,
     required this.regenerate,
     required this.errorMessage,
     required this.onExpiresChanged,
     required this.onRegenerateChanged,
     required this.onGenerate,
+    required this.onRevoke,
     required this.onCopyLink,
   });
 
@@ -511,18 +554,21 @@ class _QrActionSection extends StatelessWidget {
   final SalesSheetRecord? salesSheet;
   final bool loadingSheet;
   final bool generating;
+  final bool revoking;
   final int? expiresInDays;
   final bool regenerate;
   final String? errorMessage;
   final ValueChanged<int?> onExpiresChanged;
   final ValueChanged<bool> onRegenerateChanged;
   final VoidCallback onGenerate;
+  final VoidCallback onRevoke;
   final VoidCallback onCopyLink;
 
   @override
   Widget build(BuildContext context) {
     final url = salesSheet?.qrCode?.url;
     final hasUrl = url != null && url.trim().isNotEmpty;
+    final isActive = salesSheet?.qrCode?.active ?? false;
     return FormSection(
       title: '二维码操作',
       trailing: selectedOrder == null
@@ -543,7 +589,7 @@ class _QrActionSection extends StatelessWidget {
             key: const ValueKey('qr-sales-regenerate-switch'),
             contentPadding: EdgeInsets.zero,
             value: regenerate,
-            onChanged: generating ? null : onRegenerateChanged,
+            onChanged: generating || revoking ? null : onRegenerateChanged,
             title: const Text('重新生成二维码'),
           ),
           if (errorMessage != null) ...[
@@ -564,9 +610,23 @@ class _QrActionSection extends StatelessWidget {
                 icon: const Icon(Icons.copy_rounded),
                 label: const Text('复制链接'),
               ),
+              OutlinedButton.icon(
+                key: const ValueKey('qr-sales-revoke-button'),
+                onPressed:
+                    isActive && !generating && !revoking ? onRevoke : null,
+                icon: revoking
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.link_off_rounded),
+                label: Text(revoking ? '吊销中' : '吊销二维码'),
+              ),
               FilledButton.icon(
                 key: const ValueKey('qr-sales-generate-button'),
-                onPressed: loadingSheet || generating ? null : onGenerate,
+                onPressed: loadingSheet || generating || revoking
+                    ? null
+                    : onGenerate,
                 icon: generating
                     ? const SizedBox.square(
                         dimension: 16,
@@ -579,7 +639,11 @@ class _QrActionSection extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            hasUrl ? '请客户拍照保存销售单和二维码。' : '生成后可复制公开链接。',
+            hasUrl
+                ? '请客户拍照保存销售单和二维码。'
+                : isActive
+                    ? '二维码仍有效；Bearer 链接不会被再次显示，可选择吊销或显式重新生成。'
+                    : '生成后可复制公开链接。',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -602,10 +666,9 @@ class _ExpiryChooser extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const options = <MapEntry<int?, String>>[
-      MapEntry(null, '长期有效'),
       MapEntry(7, '7 天'),
       MapEntry(30, '30 天'),
-      MapEntry(365, '1 年'),
+      MapEntry(90, '90 天'),
     ];
     return Wrap(
       spacing: 8,
@@ -714,7 +777,6 @@ class _SalesSheetCoreInfo extends StatelessWidget {
       children: [
         const _SectionTitle('核心信息'),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
-        _InfoRow(label: '销售单号', value: _display(sheet.order.salesFormNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
         _InfoRow(label: '订单状态', value: _statusLabel(sheet.status)),
         _InfoRow(label: '客户', value: _customerLabel(sheet.customer)),
@@ -752,6 +814,7 @@ class _QrPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = qrCode?.url;
     final hasUrl = url != null && url.trim().isNotEmpty;
+    final localUrl = hasUrl && _isLocalhostUrl(url);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -796,6 +859,13 @@ class _QrPanel extends StatelessWidget {
                 : Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
+        if (localUrl) ...[
+          const SizedBox(height: 10),
+          const StatusTag(
+            label: '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
+            tone: StatusTone.warning,
+          ),
+        ],
         const SizedBox(height: 10),
         OutlinedButton.icon(
           onPressed: hasUrl ? onCopyLink : null,
@@ -1011,9 +1081,12 @@ String _expiresLabel(SalesSheetQrCode? qrCode) {
   if (qrCode == null) {
     return '未生成';
   }
+  if (_hasText(qrCode.revokedAt)) {
+    return '已吊销';
+  }
   final expiresAt = qrCode.expiresAt?.trim();
   if (expiresAt == null || expiresAt.isEmpty) {
-    return '长期有效';
+    return '有效期配置异常';
   }
   return expiresAt;
 }
@@ -1025,6 +1098,34 @@ String _display(String? value) {
 
 bool _hasText(String? value) {
   return value != null && value.trim().isNotEmpty;
+}
+
+bool _isLocalhostUrl(String value) {
+  final uri = Uri.tryParse(value.trim());
+  final host = uri?.host.toLowerCase() ?? '';
+  if (host == 'localhost' ||
+      host == '::1' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local')) {
+    return true;
+  }
+  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+    return true;
+  }
+  final octets = host.split('.').map(int.tryParse).toList();
+  if (octets.length != 4 || octets.any((part) => part == null)) {
+    return false;
+  }
+  final a = octets[0]!;
+  final b = octets[1]!;
+  return a == 0 ||
+      a == 10 ||
+      a == 127 ||
+      (a == 169 && b == 254) ||
+      (a == 172 && b >= 16 && b <= 31) ||
+      (a == 192 && b == 168) ||
+      (a == 100 && b >= 64 && b <= 127) ||
+      (a == 198 && (b == 18 || b == 19));
 }
 
 String _messageForError(Object error) {

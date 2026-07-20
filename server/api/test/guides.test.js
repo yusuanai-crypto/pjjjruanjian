@@ -39,16 +39,36 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       password: 'Password123',
       role: 'boss',
     });
+    await createUser(baseUrl, admin.token, {
+      name: 'Guide Taster',
+      username: 'guide-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: 'Guide Warehouse',
+      username: 'guide-warehouse',
+      password: 'Password123',
+      role: 'warehouse',
+    });
+    await createUser(baseUrl, admin.token, {
+      name: 'Guide After Sales',
+      username: 'guide-after-sales',
+      password: 'Password123',
+      role: 'after_sales',
+    });
 
     const frontDesk = await login(baseUrl, 'guide-front-desk', 'Password123');
     const sales = await login(baseUrl, 'guide-sales', 'Password123');
     const finance = await login(baseUrl, 'guide-finance', 'Password123');
     const boss = await login(baseUrl, 'guide-boss', 'Password123');
-
-    const bossList = await requestJson(baseUrl, '/api/guides', {
-      token: boss.token,
-    });
-    assertErrorContract(bossList, 403, 'PERMISSION_DENIED');
+    const taster = await login(baseUrl, 'guide-taster', 'Password123');
+    const warehouse = await login(baseUrl, 'guide-warehouse', 'Password123');
+    const afterSales = await login(
+      baseUrl,
+      'guide-after-sales',
+      'Password123',
+    );
 
     const created = await requestJson(baseUrl, '/api/guides', {
       method: 'POST',
@@ -64,6 +84,31 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     assertGuideContract(created.body.data.guide);
     assert.equal(created.body.data.guide.name, '测试导游');
     assert.equal(created.body.data.guide.isActive, true);
+
+    const guideReadOnlySessions = [
+      { role: 'boss', session: boss },
+      { role: 'taster', session: taster },
+      { role: 'warehouse', session: warehouse },
+      { role: 'after_sales', session: afterSales },
+    ];
+
+    for (const { session } of guideReadOnlySessions) {
+      const list = await requestJson(baseUrl, '/api/guides', {
+        token: session.token,
+      });
+      assert.equal(list.response.status, 200);
+      assert.deepEqual(guidePhones(list.body.data.guides), ['13800001234']);
+
+      const detail = await requestJson(
+        baseUrl,
+        `/api/guides/${created.body.data.guide.id}`,
+        {
+          token: session.token,
+        },
+      );
+      assert.equal(detail.response.status, 200);
+      assert.equal(detail.body.data.guide.phone, '13800001234');
+    }
 
     const duplicate = await requestJson(baseUrl, '/api/guides', {
       method: 'POST',
@@ -114,6 +159,19 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     });
     assertErrorContract(salesCreate, 403, 'PERMISSION_DENIED');
 
+    for (const [index, { role, session }] of guideReadOnlySessions.entries()) {
+      const readOnlyCreate = await requestJson(baseUrl, '/api/guides', {
+        method: 'POST',
+        token: session.token,
+        body: {
+          name: `Blocked ${role} Guide`,
+          phone: `1380000888${index}`,
+          travelAgency: 'Blocked Agency',
+        },
+      });
+      assertErrorContract(readOnlyCreate, 403, 'PERMISSION_DENIED');
+    }
+
     const updated = await requestJson(
       baseUrl,
       `/api/guides/${created.body.data.guide.id}`,
@@ -158,6 +216,41 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       },
     );
     assertErrorContract(salesPatch, 403, 'PERMISSION_DENIED');
+
+    for (const { role, session } of guideReadOnlySessions) {
+      const readOnlyPatch = await requestJson(
+        baseUrl,
+        `/api/guides/${created.body.data.guide.id}`,
+        {
+          method: 'PATCH',
+          token: session.token,
+          body: {
+            remarks: `Blocked ${role} update`,
+          },
+        },
+      );
+      assertErrorContract(readOnlyPatch, 403, 'PERMISSION_DENIED');
+
+      const readOnlyDisable = await requestJson(
+        baseUrl,
+        `/api/guides/${created.body.data.guide.id}/disable`,
+        {
+          method: 'POST',
+          token: session.token,
+        },
+      );
+      assertErrorContract(readOnlyDisable, 403, 'PERMISSION_DENIED');
+
+      const readOnlyEnable = await requestJson(
+        baseUrl,
+        `/api/guides/${created.body.data.guide.id}/enable`,
+        {
+          method: 'POST',
+          token: session.token,
+        },
+      );
+      assertErrorContract(readOnlyEnable, 403, 'PERMISSION_DENIED');
+    }
 
     const frontDeskDisable = await requestJson(
       baseUrl,

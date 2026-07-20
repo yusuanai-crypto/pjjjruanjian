@@ -23,7 +23,7 @@ class ForceChangePasswordPage extends StatefulWidget {
 }
 
 class _ForceChangePasswordPageState extends State<ForceChangePasswordPage> {
-  final _currentPasswordController = TextEditingController(text: '123456');
+  final _currentPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _saving = false;
@@ -44,10 +44,6 @@ class _ForceChangePasswordPageState extends State<ForceChangePasswordPage> {
     final confirmPassword = _confirmPasswordController.text;
     if (newPassword.length < 8) {
       setState(() => _message = '新密码至少需要 8 位。');
-      return;
-    }
-    if (newPassword == '123456') {
-      setState(() => _message = '新密码不能继续使用初始密码 123456。');
       return;
     }
     if (newPassword != confirmPassword) {
