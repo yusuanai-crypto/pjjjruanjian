@@ -39,7 +39,8 @@ void main() {
     await _submit(tester);
 
     expect(apiClient.createCalls, 0);
-    expect(find.text('请选择进店日期。'), findsOneWidget);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('请选择进店日期。'), findsWidgets);
   });
 
   testWidgets('travel agency is the only missing business field that blocks',
@@ -52,7 +53,8 @@ void main() {
     await _submit(tester);
 
     expect(apiClient.createCalls, 0);
-    expect(find.text('请选择旅行社。'), findsOneWidget);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('请选择旅行社。'), findsWidgets);
   });
 
   testWidgets('guide is the only missing business field that blocks',
@@ -65,7 +67,24 @@ void main() {
     await _submit(tester);
 
     expect(apiClient.createCalls, 0);
-    expect(find.text('请选择导游。'), findsOneWidget);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('请选择导游。'), findsWidgets);
+  });
+
+  testWidgets('form validation failure shows its specific reason in a dialog',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await tester.enterText(_textFormFieldWithLabel('人数（选填）'), '0');
+    await _submit(tester);
+
+    expect(apiClient.createCalls, 0);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('人数必须大于 0'), findsWidgets);
   });
 
   testWidgets('optional fields may stay empty and server group number is used',
@@ -101,7 +120,23 @@ void main() {
     ]) {
       expect(body.containsKey(optionalField), isFalse, reason: optionalField);
     }
+    expect(find.text('录入成功'), findsOneWidget);
     expect(find.textContaining('SERVER-TG-001'), findsWidgets);
+  });
+
+  testWidgets('API failure shows the friendly backend reason in a dialog',
+      (tester) async {
+    final apiClient = _FakeApiClient()..failCreate = true;
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await _submit(tester);
+
+    expect(apiClient.createCalls, 1);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('旅行团日期已存在，请更换进店日期。'), findsWidgets);
   });
 
   testWidgets('selected taster assignments are submitted by id',
@@ -150,9 +185,15 @@ void main() {
 
     expect(apiClient.createCalls, 1);
     expect(apiClient.uploadCalls, 1);
-    expect(find.textContaining('重点客户照片（vip.jpg）'), findsOneWidget);
-    expect(find.textContaining('不会重复创建旅行团'), findsOneWidget);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.textContaining('旅行团主记录已经创建'), findsWidgets);
+    expect(find.textContaining('系统团号：SERVER-TG-001'), findsWidgets);
+    expect(find.textContaining('重点客户照片（vip.jpg）'), findsWidgets);
+    expect(find.textContaining('不会重复创建旅行团'), findsWidgets);
     expect(find.text('重试附件上传'), findsOneWidget);
+
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
 
     apiClient.failAttachmentUpload = false;
     await tester.tap(find.text('重试附件上传'));
@@ -236,6 +277,7 @@ class _FakeApiClient extends ApiClient {
   int createCalls = 0;
   int uploadCalls = 0;
   bool failAttachmentUpload = false;
+  bool failCreate = false;
   Map<String, dynamic>? lastCreateBody;
 
   @override
@@ -286,6 +328,13 @@ class _FakeApiClient extends ApiClient {
     }
     createCalls += 1;
     lastCreateBody = Map<String, dynamic>.from(body ?? {});
+    if (failCreate) {
+      throw const ApiException(
+        statusCode: 409,
+        code: 'TRAVEL_GROUP_DATE_CONFLICT',
+        message: '旅行团日期已存在，请更换进店日期。',
+      );
+    }
     return {
       'data': {
         'travelGroup': {
@@ -338,6 +387,12 @@ class _FakeApiClient extends ApiClient {
       },
     };
   }
+}
+
+Finder _textFormFieldWithLabel(String label) {
+  return find.byWidgetPredicate(
+    (widget) => widget is TextField && widget.decoration?.labelText == label,
+  );
 }
 
 Map<String, dynamic> _guideJson() {

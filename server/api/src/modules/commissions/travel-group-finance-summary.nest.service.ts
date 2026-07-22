@@ -178,6 +178,102 @@ export class TravelGroupFinanceSummaryNestService {
     return toTravelGroupFinanceSummaryDetailDto(updated);
   }
 
+  async updateAgencyDeduction(
+    actor: any,
+    travelGroupId: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, WRITE_SUMMARY_ROLES);
+    const current = await this.findSummaryVisibleForApi(travelGroupId);
+    const totalAgencyDeductionCents = normalizeRequiredNonNegativeInteger(
+      payload?.totalAgencyDeductionCents,
+      'totalAgencyDeductionCents',
+    );
+    const totalSalesAmountCents = toInteger(current.totalSalesAmountCents);
+    if (totalAgencyDeductionCents > totalSalesAmountCents) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'totalAgencyDeductionCents cannot exceed totalSalesAmountCents.',
+      );
+    }
+
+    const agencyRebateRecords = await this.loadAgencyRebateRecords(
+      this.prisma,
+      current.travelGroupId,
+    );
+    const agencyRecordSummary = summarizeAgencyRebateRecords(
+      agencyRebateRecords,
+    );
+    const rebateCalculation = buildManualAgencyRebateCalculation(
+      agencyRecordSummary,
+      totalAgencyDeductionCents,
+    );
+    const paymentAmounts = buildRebatePaymentAmounts({
+      totalDailyRebateCents: rebateCalculation.totalDailyRebateCents,
+      totalMonthlyRebateCents: rebateCalculation.totalMonthlyRebateCents,
+      dailyRebatePaid: current.dailyRebatePaid,
+      monthlyRebatePaid: current.monthlyRebatePaid,
+    });
+    const now = new Date();
+    const amountChanged =
+      toInteger(current.totalAgencyDeductionCents) !==
+      totalAgencyDeductionCents;
+    const nextAmounts = {
+      totalAgencyDeductionCents,
+      totalAgencyNetAmountCents:
+        totalSalesAmountCents - totalAgencyDeductionCents,
+      totalDailyRebateCents: rebateCalculation.totalDailyRebateCents,
+      totalMonthlyRebateCents: rebateCalculation.totalMonthlyRebateCents,
+      ...paymentAmounts,
+    };
+    const updated = await this.prisma.travelGroupFinanceSummary.update({
+      where: {
+        id: current.id,
+      },
+      data: {
+        ...nextAmounts,
+        ...(amountChanged
+          ? {
+              agencyDeductionConfirmed: false,
+              agencyDeductionConfirmedById: null,
+              agencyDeductionConfirmedAt: null,
+            }
+          : {}),
+        sourceSnapshot: buildManualAgencyDeductionSourceSnapshot(
+          current.sourceSnapshot,
+          nextAmounts,
+          rebateCalculation,
+          actor,
+          now,
+        ),
+        updatedById: actor.id,
+        updatedAt: now,
+      },
+      include: getTravelGroupFinanceSummaryDetailInclude(),
+    });
+
+    await this.syncTravelGroupCompatibilityFields(
+      this.prisma,
+      current.travelGroupId,
+      updated,
+      actor,
+    );
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'travel_group_finance_summaries.agency_deduction.update',
+      entityType: 'travel_group_finance_summary',
+      entityId: updated.id,
+      beforeData: summarizeAgencyDeductionChange(current),
+      afterData: summarizeAgencyDeductionChange(updated),
+      ipAddress: metadata.ipAddress || null,
+    });
+
+    return toTravelGroupFinanceSummaryDetailDto(updated);
+  }
+
   async setRebatePaymentStatus(
     actor: any,
     travelGroupId: string,
@@ -587,14 +683,22 @@ function buildTravelGroupFinanceCalculation(input: {
   );
   const totalPaidDepositCents =
     totalSalesAmountCents - totalCashOnDeliveryCents;
-  const totalDailyRebateCents = sumBy(
-    agencyRecordSummary.dailyRecords,
-    'grossRateRebateCents',
-  );
-  const totalMonthlyRebateCents = sumBy(
-    agencyRecordSummary.monthlyRecords,
-    'grossRateRebateCents',
-  );
+  const manualAgencyDeduction = getManualAgencyDeduction(input.current);
+  const totalAgencyDeductionCents = manualAgencyDeduction
+    ? toInteger(input.current.totalAgencyDeductionCents)
+    : agencyRecordSummary.totalAgencyDeductionCents;
+  const manualRebateCalculation = manualAgencyDeduction
+    ? buildManualAgencyRebateCalculation(
+        agencyRecordSummary,
+        totalAgencyDeductionCents,
+      )
+    : null;
+  const totalDailyRebateCents = manualRebateCalculation
+    ? manualRebateCalculation.totalDailyRebateCents
+    : sumBy(agencyRecordSummary.dailyRecords, 'grossRateRebateCents');
+  const totalMonthlyRebateCents = manualRebateCalculation
+    ? manualRebateCalculation.totalMonthlyRebateCents
+    : sumBy(agencyRecordSummary.monthlyRecords, 'grossRateRebateCents');
   const paymentAmounts = buildRebatePaymentAmounts({
     totalDailyRebateCents,
     totalMonthlyRebateCents,
@@ -613,9 +717,9 @@ function buildTravelGroupFinanceCalculation(input: {
       orderSummaries,
       'effectiveAmountCents',
     ),
-    totalAgencyDeductionCents: agencyRecordSummary.totalAgencyDeductionCents,
+    totalAgencyDeductionCents,
     totalAgencyNetAmountCents:
-      totalSalesAmountCents - agencyRecordSummary.totalAgencyDeductionCents,
+      totalSalesAmountCents - totalAgencyDeductionCents,
     totalDailyRebateCents,
     totalMonthlyRebateCents,
     paidRebateCents: paymentAmounts.paidRebateCents,
@@ -629,6 +733,8 @@ function buildTravelGroupFinanceCalculation(input: {
     orderSummaries,
     agencyRecordSummary,
     amounts: nextAmounts,
+    agencyDeduction: manualAgencyDeduction,
+    manualRebateCalculation,
   });
 
   return {
@@ -757,6 +863,126 @@ function summarizeAgencyRebateRecords(records: any[]) {
   };
 }
 
+function getManualAgencyDeduction(current: any) {
+  const marker = current?.sourceSnapshot?.agencyDeduction;
+  return isPlainObject(marker) && marker.mode === 'manual' ? marker : null;
+}
+
+function buildManualAgencyRebateCalculation(
+  agencyRecordSummary: any,
+  totalAgencyDeductionCents: number,
+) {
+  const daily = calculateAllocatedRebate(
+    agencyRecordSummary.dailyRecords || [],
+    totalAgencyDeductionCents,
+  );
+  const monthly = calculateAllocatedRebate(
+    agencyRecordSummary.monthlyRecords || [],
+    totalAgencyDeductionCents,
+  );
+  return {
+    allocationMethod: 'gross_sales_proportional_largest_remainder',
+    totalDailyRebateCents: daily.totalRebateCents,
+    totalMonthlyRebateCents: monthly.totalRebateCents,
+    dailyAllocations: daily.allocations,
+    monthlyAllocations: monthly.allocations,
+  };
+}
+
+function calculateAllocatedRebate(records: any[], deductionCents: number) {
+  const candidates = (records || []).map((record: any, index: number) => ({
+    record,
+    index,
+    grossAmountCents: Math.max(0, toInteger(record.grossAmountCents)),
+    allocatedDeductionCents: 0,
+    remainder: BigInt(0),
+  }));
+  const totalGrossAmountCents = candidates.reduce(
+    (total: number, item: any) => total + item.grossAmountCents,
+    0,
+  );
+  const allocatableDeductionCents = Math.min(
+    Math.max(0, toInteger(deductionCents)),
+    totalGrossAmountCents,
+  );
+
+  if (totalGrossAmountCents > 0 && allocatableDeductionCents > 0) {
+    const denominator = BigInt(totalGrossAmountCents);
+    let allocated = 0;
+    for (const item of candidates) {
+      const numerator =
+        BigInt(allocatableDeductionCents) * BigInt(item.grossAmountCents);
+      item.allocatedDeductionCents = Number(numerator / denominator);
+      item.remainder = numerator % denominator;
+      allocated += item.allocatedDeductionCents;
+    }
+    let remainderCents = allocatableDeductionCents - allocated;
+    const remainderOrder = [...candidates].sort((left, right) => {
+      if (left.remainder !== right.remainder) {
+        return left.remainder > right.remainder ? -1 : 1;
+      }
+      return left.index - right.index;
+    });
+    for (const item of remainderOrder) {
+      if (remainderCents <= 0) {
+        break;
+      }
+      if (item.allocatedDeductionCents < item.grossAmountCents) {
+        item.allocatedDeductionCents += 1;
+        remainderCents -= 1;
+      }
+    }
+  }
+
+  const allocations = candidates.map((item: any) => {
+    const netBaseAmountCents = Math.max(
+      0,
+      item.grossAmountCents - item.allocatedDeductionCents,
+    );
+    return {
+      recordId: item.record.id || null,
+      salesOrderId: item.record.salesOrderId || null,
+      grossAmountCents: item.grossAmountCents,
+      allocatedDeductionCents: item.allocatedDeductionCents,
+      netBaseAmountCents,
+      rateSnapshot: item.record.rateSnapshot || null,
+      rebateCents: multiplyCentsByRate(
+        netBaseAmountCents,
+        item.record.rateSnapshot,
+      ),
+    };
+  });
+  return {
+    allocations,
+    totalRebateCents: sumBy(allocations, 'rebateCents'),
+  };
+}
+
+function buildManualAgencyDeductionSourceSnapshot(
+  sourceSnapshot: any,
+  amounts: any,
+  rebateCalculation: any,
+  actor: any,
+  now: Date,
+) {
+  const current = isPlainObject(sourceSnapshot) ? sourceSnapshot : {};
+  const currentAmounts = isPlainObject(current.amounts) ? current.amounts : {};
+  return {
+    ...current,
+    agencyDeduction: {
+      mode: 'manual',
+      allocationMethod: rebateCalculation.allocationMethod,
+      updatedById: actor.id,
+      updatedAt: now.toISOString(),
+    },
+    manualRebateCalculation: rebateCalculation,
+    amounts: {
+      ...currentAmounts,
+      ...amounts,
+    },
+  };
+}
+
 function summarizeAgencyRebateRecord(record: any) {
   return {
     id: record.id,
@@ -847,6 +1073,8 @@ function buildSourceSnapshot(input: {
   orderSummaries: any[];
   agencyRecordSummary: any;
   amounts: any;
+  agencyDeduction?: any;
+  manualRebateCalculation?: any;
 }) {
   return {
     calculationVersion: CALCULATION_VERSION,
@@ -890,6 +1118,8 @@ function buildSourceSnapshot(input: {
         })),
     },
     ruleSummary: input.agencyRecordSummary.ruleSnapshots,
+    agencyDeduction: input.agencyDeduction || null,
+    manualRebateCalculation: input.manualRebateCalculation || null,
     amounts: input.amounts,
   };
 }
@@ -974,6 +1204,27 @@ function summarizeFinanceSummary(summary: any) {
     guideInfoSent: Boolean(summary.guideInfoSent),
     travelAgencyInfoSent: Boolean(summary.travelAgencyInfoSent),
     calculationVersion: summary.calculationVersion || null,
+  };
+}
+
+function summarizeAgencyDeductionChange(summary: any) {
+  return {
+    travelGroupId: summary.travelGroupId,
+    totalSalesAmountCents: toInteger(summary.totalSalesAmountCents),
+    totalAgencyDeductionCents: toInteger(
+      summary.totalAgencyDeductionCents,
+    ),
+    totalAgencyNetAmountCents: toInteger(summary.totalAgencyNetAmountCents),
+    totalDailyRebateCents: toInteger(summary.totalDailyRebateCents),
+    totalMonthlyRebateCents: toInteger(summary.totalMonthlyRebateCents),
+    paidRebateCents: toInteger(summary.paidRebateCents),
+    unpaidRebateCents: toInteger(summary.unpaidRebateCents),
+    agencyDeductionConfirmed: Boolean(summary.agencyDeductionConfirmed),
+    agencyDeductionConfirmedById:
+      summary.agencyDeductionConfirmedById || null,
+    agencyDeductionConfirmedAt: normalizeDateString(
+      summary.agencyDeductionConfirmedAt,
+    ),
   };
 }
 
@@ -1409,6 +1660,12 @@ function summarizeSourceSnapshotForApi(sourceSnapshot: any) {
       ),
     },
     ruleSummary: scrubSensitiveJson(sourceSnapshot.ruleSummary || null),
+    agencyDeduction: scrubSensitiveJson(
+      sourceSnapshot.agencyDeduction || null,
+    ),
+    manualRebateCalculation: scrubSensitiveJson(
+      sourceSnapshot.manualRebateCalculation || null,
+    ),
   };
 }
 
@@ -1477,6 +1734,25 @@ function normalizeRequiredBoolean(value: unknown, fieldName: string) {
     'VALIDATION_FAILED',
     `${fieldName} must be a boolean.`,
   );
+}
+
+function normalizeRequiredNonNegativeInteger(
+  value: unknown,
+  fieldName: string,
+) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a non-negative integer.`,
+    );
+  }
+  return value;
 }
 
 function normalizeOptionalBooleanFilter(value: unknown, fieldName: string) {

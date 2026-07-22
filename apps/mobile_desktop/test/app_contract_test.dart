@@ -15,7 +15,7 @@ import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.da
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_table_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/role_menu/role_menu_page.dart';
-import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_entry_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/taster_commissions/taster_commission_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_agency_management/travel_agency_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
@@ -57,7 +57,11 @@ void main() {
     );
   });
 
-  test('normalizes API base URLs before they are stored on the client', () {
+  test('normalizes the compile-time API base URL configuration', () {
+    expect(
+      AppConfig.defaultApiBaseUrl,
+      'https://api.gzjiangjiuguan.com',
+    );
     expect(AppConfig.normalizeApiBaseUrl(''), AppConfig.defaultApiBaseUrl);
     expect(AppConfig.normalizeApiBaseUrl(' 127.0.0.1:3000/ '),
         'https://127.0.0.1:3000');
@@ -490,7 +494,7 @@ void main() {
     expect(_page('travel_group_form'), isA<TravelGroupFormPage>());
     expect(_page('travel_group_query'), isA<TravelGroupQueryPage>());
     expect(_page('travel_group_order_notes'), isA<TravelGroupOrderNotesPage>());
-    expect(_page('order_form'), isA<OrderFormPage>());
+    expect(_page('order_form'), isA<OrderFormEntryPage>());
     expect(_page('order_query'), isA<OrderQueryPage>());
     expect(_page('finance_query'), isA<FinanceQueryPage>());
     expect(_page('commission_rules'), isA<CommissionRuleConfigPage>());

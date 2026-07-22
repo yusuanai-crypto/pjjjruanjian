@@ -7,7 +7,7 @@ class AppConfig {
 
   static const _configuredApiBaseUrl = String.fromEnvironment(
     'JIANGJIU_API_BASE_URL',
-    defaultValue: 'https://127.0.0.1:3000',
+    defaultValue: 'https://api.gzjiangjiuguan.com',
   );
 
   static String get defaultApiBaseUrl =>

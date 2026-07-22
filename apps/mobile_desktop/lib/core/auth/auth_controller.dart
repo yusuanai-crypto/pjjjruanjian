@@ -23,7 +23,7 @@ class AuthController {
   final void Function()? _onSessionRevoked;
   late final AuthService _authService;
 
-  String apiBaseUrl = AppConfig.defaultApiBaseUrl;
+  String lastUsername = 'admin';
   AuthSession? session;
   String? restoreMessage;
 
@@ -32,9 +32,7 @@ class AuthController {
   String get token => session?.token ?? '';
 
   Future<void> restore() async {
-    apiBaseUrl = AppConfig.normalizeApiBaseUrl(
-        _storage.readApiBaseUrl() ?? AppConfig.defaultApiBaseUrl);
-    _apiClient.baseUrl = apiBaseUrl;
+    lastUsername = _storage.readLastUsername() ?? 'admin';
 
     final token = await _storage.readToken();
     if (token == null || token.isEmpty) {
@@ -43,6 +41,11 @@ class AuthController {
 
     try {
       session = await _authService.currentUser(token);
+      final restoredUsername = session!.user.username.trim();
+      if (restoredUsername.isNotEmpty) {
+        await _storage.saveLastUsername(restoredUsername);
+        lastUsername = restoredUsername;
+      }
     } on ApiException catch (error) {
       if (_isTerminalSessionError(error)) {
         await _storage.clearToken();
@@ -59,13 +62,10 @@ class AuthController {
   }
 
   Future<void> login({
-    required String nextApiBaseUrl,
     required String username,
     required String password,
   }) async {
     try {
-      apiBaseUrl = AppConfig.normalizeApiBaseUrl(nextApiBaseUrl);
-      _apiClient.baseUrl = apiBaseUrl;
       final nextSession =
           await _authService.login(username: username, password: password);
       final token = nextSession.token;
@@ -73,8 +73,12 @@ class AuthController {
         throw const AuthFailure('服务器未返回登录令牌。');
       }
 
-      await _storage.saveApiBaseUrl(apiBaseUrl);
       await _storage.saveToken(token);
+      final confirmedUsername = nextSession.user.username.trim().isNotEmpty
+          ? nextSession.user.username.trim()
+          : username.trim();
+      await _storage.saveLastUsername(confirmedUsername);
+      lastUsername = confirmedUsername;
       session = nextSession;
       restoreMessage = null;
     } on AuthFailure {

@@ -17,9 +17,11 @@ class JiangjiuApp extends StatefulWidget {
   const JiangjiuApp({
     super.key,
     this.sessionStorageFactory = SessionStorage.create,
+    this.bootstrapTimeout = const Duration(seconds: 15),
   });
 
   final SessionStorageFactory sessionStorageFactory;
+  final Duration bootstrapTimeout;
 
   @override
   State<JiangjiuApp> createState() => _JiangjiuAppState();
@@ -29,6 +31,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   AuthController? _authController;
   Timer? _sessionRefreshTimer;
   bool _bootstrapping = true;
+  String? _bootstrapError;
   String _selectedDestinationId = 'dashboard';
 
   @override
@@ -48,26 +51,58 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   }
 
   Future<void> _bootstrapAuth() async {
+    try {
+      final authController = await _createAndRestoreAuthController().timeout(
+        widget.bootstrapTimeout,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _authController = authController;
+        _selectedDestinationId = _firstDestinationId(authController);
+        _bootstrapping = false;
+        _bootstrapError = null;
+      });
+    } on TimeoutException {
+      _showBootstrapError('启动超时，请检查网络连接后重新尝试。');
+    } catch (_) {
+      _showBootstrapError('客户端启动失败，请重新尝试；如仍失败，请联系管理员。');
+    }
+  }
+
+  Future<AuthController> _createAndRestoreAuthController() async {
     final storage = await widget.sessionStorageFactory();
     final authController = AuthController(
       storage: storage,
       onSessionRevoked: _handleSessionRevoked,
     );
     await authController.restore();
+    return authController;
+  }
 
+  void _showBootstrapError(String message) {
     if (!mounted) {
       return;
     }
-
     setState(() {
-      _authController = authController;
-      _selectedDestinationId = _firstDestinationId(authController);
+      _authController = null;
       _bootstrapping = false;
+      _bootstrapError = message;
     });
   }
 
+  void _retryBootstrap() {
+    setState(() {
+      _bootstrapping = true;
+      _bootstrapError = null;
+    });
+    _bootstrapAuth();
+  }
+
   Future<void> _handleLogin({
-    required String apiBaseUrl,
     required String username,
     required String password,
   }) async {
@@ -77,7 +112,6 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
     }
 
     await authController.login(
-      nextApiBaseUrl: apiBaseUrl,
       username: username,
       password: password,
     );
@@ -167,29 +201,34 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
         Locale('zh', 'CN'),
         Locale('en', 'US'),
       ],
-      home: _bootstrapping || authController == null
+      home: _bootstrapping
           ? const _BootstrapPage()
-          : session == null
-              ? LoginPage(
-                  initialApiBaseUrl: authController.apiBaseUrl,
-                  initialMessage: authController.restoreMessage,
-                  onLogin: _handleLogin,
+          : _bootstrapError != null || authController == null
+              ? _BootstrapErrorPage(
+                  message: _bootstrapError ?? '客户端启动失败，请重新尝试。',
+                  onRetry: _retryBootstrap,
                 )
-              : session.user.mustChangePassword
-                  ? ForceChangePasswordPage(
-                      onSubmit: _handleChangePassword,
-                      onLogout: _handleLogout,
+              : session == null
+                  ? LoginPage(
+                      initialUsername: authController.lastUsername,
+                      initialMessage: authController.restoreMessage,
+                      onLogin: _handleLogin,
                     )
-                  : AppShell(
-                      apiClient: authController.apiClient,
-                      token: authController.token,
-                      role: session.user.role,
-                      user: session.user,
-                      allowedDestinations: destinations,
-                      selectedDestinationId: _selectedDestinationId,
-                      onDestinationChanged: _handleDestinationChanged,
-                      onLogout: _handleLogout,
-                    ),
+                  : session.user.mustChangePassword
+                      ? ForceChangePasswordPage(
+                          onSubmit: _handleChangePassword,
+                          onLogout: _handleLogout,
+                        )
+                      : AppShell(
+                          apiClient: authController.apiClient,
+                          token: authController.token,
+                          role: session.user.role,
+                          user: session.user,
+                          allowedDestinations: destinations,
+                          selectedDestinationId: _selectedDestinationId,
+                          onDestinationChanged: _handleDestinationChanged,
+                          onLogout: _handleLogout,
+                        ),
     );
   }
 
@@ -218,6 +257,68 @@ class _BootstrapPage extends StatelessWidget {
     return const Scaffold(
       body: Center(
         child: CircularProgressIndicator(),
+      ),
+    );
+  }
+}
+
+class _BootstrapErrorPage extends StatelessWidget {
+  const _BootstrapErrorPage({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      key: const ValueKey('bootstrap-error-page'),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.cloud_off_rounded,
+                      size: 48,
+                      color: colorScheme.error,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      '启动失败',
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      key: const ValueKey('bootstrap-retry-button'),
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重新尝试'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

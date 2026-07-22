@@ -31,6 +31,10 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于将贵州酱酒馆积分表图片保存到系统相册。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于访问“贵州酱酒馆积分表”相册并保存积分表图片。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

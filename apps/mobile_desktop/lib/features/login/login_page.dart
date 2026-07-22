@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_controller.dart';
-import '../../core/config/app_config.dart';
 import '../../shared/widgets/brand_logo.dart';
 
 typedef LoginSubmit = Future<void> Function({
-  required String apiBaseUrl,
   required String username,
   required String password,
 });
@@ -13,12 +11,12 @@ typedef LoginSubmit = Future<void> Function({
 class LoginPage extends StatefulWidget {
   const LoginPage({
     super.key,
-    required this.initialApiBaseUrl,
+    required this.initialUsername,
     required this.onLogin,
     this.initialMessage,
   });
 
-  final String initialApiBaseUrl;
+  final String initialUsername;
   final String? initialMessage;
   final LoginSubmit onLogin;
 
@@ -27,9 +25,8 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _usernameController = TextEditingController(text: 'admin');
+  late final TextEditingController _usernameController;
   final _passwordController = TextEditingController();
-  late final TextEditingController _apiHostController;
   bool _obscurePassword = true;
   bool _submitting = false;
   String? _message;
@@ -37,7 +34,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    _apiHostController = TextEditingController(text: widget.initialApiBaseUrl);
+    _usernameController = TextEditingController(text: widget.initialUsername);
     _message = widget.initialMessage;
   }
 
@@ -45,12 +42,10 @@ class _LoginPageState extends State<LoginPage> {
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
-    _apiHostController.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
-    final apiBaseUrl = _apiHostController.text.trim();
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
 
@@ -66,7 +61,6 @@ class _LoginPageState extends State<LoginPage> {
 
     try {
       await widget.onLogin(
-        apiBaseUrl: apiBaseUrl,
         username: username,
         password: password,
       );
@@ -139,15 +133,6 @@ class _LoginPageState extends State<LoginPage> {
             ),
             const SizedBox(height: 18),
             TextField(
-              controller: _apiHostController,
-              enabled: !_submitting,
-              decoration: const InputDecoration(
-                labelText: '服务器地址',
-                prefixIcon: Icon(Icons.cloud_queue_rounded),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
               controller: _usernameController,
               enabled: !_submitting,
               textInputAction: TextInputAction.next,
@@ -196,19 +181,6 @@ class _LoginPageState extends State<LoginPage> {
                     )
                   : const Icon(Icons.login_rounded),
               label: Text(_submitting ? '登录中' : '进入系统'),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _submitting
-                  ? null
-                  : () => setState(() {
-                        _apiHostController.text = AppConfig.defaultApiBaseUrl;
-                        _usernameController.text = 'admin';
-                        _passwordController.clear();
-                        _message = null;
-                      }),
-              icon: const Icon(Icons.restore_rounded),
-              label: const Text('使用默认配置'),
             ),
           ],
         ),

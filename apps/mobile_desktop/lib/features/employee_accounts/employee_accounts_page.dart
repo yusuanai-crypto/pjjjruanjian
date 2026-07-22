@@ -236,7 +236,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                   SizedBox(
                     width: 180,
                     child: DropdownButtonFormField<UserRole?>(
-                      value: _roleFilter,
+                      initialValue: _roleFilter,
                       decoration: const InputDecoration(
                         labelText: '角色',
                         prefixIcon: Icon(Icons.badge_rounded),
@@ -269,7 +269,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                   SizedBox(
                     width: 160,
                     child: DropdownButtonFormField<String>(
-                      value: _statusFilter,
+                      initialValue: _statusFilter,
                       decoration: const InputDecoration(
                         labelText: '状态',
                         prefixIcon: Icon(Icons.toggle_on_rounded),
@@ -505,7 +505,7 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<UserRole>(
-              value: _role,
+              initialValue: _role,
               decoration: const InputDecoration(
                 labelText: '角色',
                 prefixIcon: Icon(Icons.badge_rounded),

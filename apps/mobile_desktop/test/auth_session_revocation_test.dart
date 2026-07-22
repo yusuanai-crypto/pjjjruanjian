@@ -51,7 +51,6 @@ void main() {
 
     try {
       await controller.login(
-        nextApiBaseUrl: 'http://${server.address.address}:${server.port}',
         username: 'test-user',
         password: 'test-password',
       );
@@ -150,7 +149,6 @@ Future<void> _expectTerminalSessionErrorClears(String errorCode) async {
 
   try {
     await controller.login(
-      nextApiBaseUrl: 'http://${server.address.address}:${server.port}',
       username: 'test-user',
       password: 'test-password',
     );

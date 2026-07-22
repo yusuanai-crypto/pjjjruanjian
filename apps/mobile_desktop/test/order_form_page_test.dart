@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_entry_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
+import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
-  testWidgets('keeps removed metadata hidden and shows travel group picker',
+  testWidgets('keeps removed metadata and travel group controls hidden',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
@@ -21,7 +23,11 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('select-travel-group-button')),
-      findsOneWidget,
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('clear-selected-travel-group-button')),
+      findsNothing,
     );
     expect(find.text('订单类型'), findsNothing);
     expect(find.text('销售单号（可选）'), findsNothing);
@@ -33,7 +39,6 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
-    await _selectTravelGroup(tester);
     await _selectExistingCustomer(tester);
     await _selectProductForItem(tester, 0, 'product-1');
     await tester.enterText(
@@ -74,6 +79,7 @@ void main() {
     expect(items.first['deliveryType'], 'shipping');
     expect(items.first['notes'], '礼盒装');
     expect(items.first['sortOrder'], 1);
+    expect(find.text('录入成功'), findsOneWidget);
     expect(find.textContaining('SO20260630001'), findsWidgets);
   });
 
@@ -117,7 +123,6 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
-    await _selectTravelGroup(tester);
     expect(find.text('¥0.00'), findsWidgets);
 
     await _selectProductForItem(tester, 0, 'product-1');
@@ -177,35 +182,92 @@ void main() {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
 
-    await _selectTravelGroup(tester);
     await _selectExistingCustomer(tester);
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
     await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
     await tester.pumpAndSettle();
 
-    expect(find.text('第 1 条明细请选择启用商品。'), findsOneWidget);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('第 1 条明细请选择启用商品。'), findsWidgets);
     expect(apiClient.lastSalesOrderBody, isNull);
   });
 
-  testWidgets('requires travel group before submitting', (tester) async {
+  testWidgets('handles a missing upstream travel group safely', (tester) async {
     final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient, travelGroupId: null);
+
+    expect(
+      find.byKey(const ValueKey('order-form-missing-travel-group')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('请从旅行团管理页选择旅行团'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '保存订单'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('select-travel-group-button')),
+      findsNothing,
+    );
+    expect(apiClient.lastSalesOrderBody, isNull);
+  });
+
+  testWidgets('standalone entry chooses a travel group before opening form',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrderFormEntryPage(
+            apiClient: apiClient,
+            token: 'test-token',
+            role: UserRole.sales,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('choose-travel-group-for-order-button')),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(FilledButton, '保存订单'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('choose-travel-group-for-order-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('TG20260630001').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(OrderFormPage), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '保存订单'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('select-travel-group-button')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('API failure shows its specific reason in a dialog',
+      (tester) async {
+    final apiClient = _FakeApiClient()..failSalesOrder = true;
     await _pumpOrderForm(tester, apiClient);
 
     await _selectExistingCustomer(tester);
     await _selectProductForItem(tester, 0, 'product-1');
-
-    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
-    await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
-    expect(find.text('请选择旅行团。'), findsOneWidget);
-    expect(apiClient.lastSalesOrderBody, isNull);
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(find.text('库存不足，请调整商品明细。'), findsWidgets);
   });
 }
 
 Future<void> _pumpOrderForm(
   WidgetTester tester,
-  _FakeApiClient apiClient,
+  _FakeApiClient apiClient, {
+  String? travelGroupId = 'group-1',
+}
 ) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -213,6 +275,7 @@ Future<void> _pumpOrderForm(
         body: OrderFormPage(
           apiClient: apiClient,
           token: 'test-token',
+          travelGroupId: travelGroupId,
         ),
       ),
     ),
@@ -227,16 +290,6 @@ Future<void> _selectExistingCustomer(WidgetTester tester) async {
   await tester.tap(button);
   await tester.pumpAndSettle();
   await tester.tap(find.text('张女士').last);
-  await tester.pumpAndSettle();
-}
-
-Future<void> _selectTravelGroup(WidgetTester tester) async {
-  final button = find.byKey(const ValueKey('select-travel-group-button'));
-  await tester.ensureVisible(button);
-  await tester.pumpAndSettle();
-  await tester.tap(button);
-  await tester.pumpAndSettle();
-  await tester.tap(find.text('TG20260630001').last);
   await tester.pumpAndSettle();
 }
 
@@ -274,6 +327,7 @@ class _FakeApiClient extends ApiClient {
 
   Map<String, dynamic>? lastCustomerBody;
   Map<String, dynamic>? lastSalesOrderBody;
+  bool failSalesOrder = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -325,6 +379,13 @@ class _FakeApiClient extends ApiClient {
     }
     if (path == '/api/sales-orders') {
       lastSalesOrderBody = Map<String, dynamic>.from(body ?? {});
+      if (failSalesOrder) {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'INSUFFICIENT_STOCK',
+          message: '库存不足，请调整商品明细。',
+        );
+      }
       return {
         'data': {
           'salesOrder': _salesOrderJson(body ?? const <String, dynamic>{}),

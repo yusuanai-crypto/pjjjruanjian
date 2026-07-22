@@ -11,7 +11,6 @@ import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../customers/customer_picker_dialog.dart';
-import '../travel_groups/travel_group_picker_dialog.dart';
 
 class OrderFormPage extends StatefulWidget {
   const OrderFormPage({
@@ -19,11 +18,13 @@ class OrderFormPage extends StatefulWidget {
     required this.apiClient,
     required this.token,
     this.role = UserRole.sales,
+    this.travelGroupId,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
+  final String? travelGroupId;
 
   @override
   State<OrderFormPage> createState() => _OrderFormPageState();
@@ -41,7 +42,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
   late final List<String> _provinceOptions;
 
   CustomerRecord? _selectedCustomer;
-  TravelGroupRecord? _selectedTravelGroup;
   String? _province;
   String? _city;
   String? _district;
@@ -151,22 +151,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _applyCustomer(selected);
   }
 
-  Future<void> _selectTravelGroup() async {
-    final selected = await showDialog<TravelGroupRecord>(
-      context: context,
-      builder: (context) => TravelGroupPickerDialog(
-        businessApi: _businessApi,
-        initialQuery: _selectedTravelGroup?.groupNo,
-        showFinanceMark: canViewFinanceMark(widget.role),
-      ),
-    );
-
-    if (selected == null) {
-      return;
-    }
-    setState(() => _selectedTravelGroup = selected);
-  }
-
   Future<void> _saveOrder() async {
     setState(() {
       _saving = true;
@@ -187,15 +171,52 @@ class _OrderFormPageState extends State<OrderFormPage> {
         _lastSavedOrderNo = order.orderNo;
         _successMessage = '系统单号 ${order.orderNo} 已保存。';
       });
+      if (!mounted) {
+        return;
+      }
+      await _showOrderResultDialog(
+        title: '录入成功',
+        message: '订单录入成功。系统单号：${order.orderNo}',
+      );
     } catch (error) {
       if (!mounted) {
         return;
       }
+      final message = _messageForError(error);
       setState(() {
         _saving = false;
-        _errorMessage = _messageForError(error);
+        _errorMessage = message;
       });
+      if (!mounted) {
+        return;
+      }
+      await _showOrderResultDialog(
+        title: '录入失败',
+        message: message,
+      );
     }
+  }
+
+  Future<void> _showOrderResultDialog({
+    required String title,
+    required String message,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _saveLocalDraft() {
@@ -224,7 +245,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _orderDate = now;
     _orderDateController.text = formatDate(now);
     _selectedCustomer = null;
-    _selectedTravelGroup = null;
     _province = null;
     _city = null;
     _district = null;
@@ -236,9 +256,9 @@ class _OrderFormPageState extends State<OrderFormPage> {
       'orderType': _orderEntryOrderType,
       'orderDate': formatDate(_orderDate),
     };
-    final travelGroupId = _selectedTravelGroup?.id.trim() ?? '';
+    final travelGroupId = widget.travelGroupId?.trim() ?? '';
     if (validateRequired && travelGroupId.isEmpty) {
-      throw const _OrderFormValidationError('请选择旅行团。');
+      throw const _OrderFormValidationError('未提供旅行团，请从旅行团管理页发起订单录入。');
     }
     if (travelGroupId.isNotEmpty) {
       payload['travelGroupId'] = travelGroupId;
@@ -376,6 +396,20 @@ class _OrderFormPageState extends State<OrderFormPage> {
 
   @override
   Widget build(BuildContext context) {
+    if ((widget.travelGroupId?.trim() ?? '').isEmpty) {
+      return ResponsivePage(
+        children: [
+          Container(
+            key: const ValueKey('order-form-missing-travel-group'),
+            child: const _InlineNotice(
+              message: '未提供旅行团，请从旅行团管理页选择旅行团后再录入订单。',
+              tone: StatusTone.warning,
+            ),
+          ),
+        ],
+      );
+    }
+
     final cityOptions = _optionsWithCurrent(
       administrativeCitiesForProvince(_province),
       _city,
@@ -533,36 +567,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
               FormSection(
                 title: '订单信息',
                 children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        key: const ValueKey('select-travel-group-button'),
-                        onPressed: _selectTravelGroup,
-                        icon: const Icon(Icons.directions_bus_rounded),
-                        label: const Text('选择旅行团'),
-                      ),
-                      if (_selectedTravelGroup != null)
-                        TextButton.icon(
-                          key: const ValueKey('clear-selected-travel-group-button'),
-                          onPressed: () =>
-                              setState(() => _selectedTravelGroup = null),
-                          icon: const Icon(Icons.close_rounded),
-                          label: const Text('清空旅行团'),
-                        ),
-                    ],
-                  ),
-                  if (_selectedTravelGroup != null) ...[
-                    const SizedBox(height: 12),
-                    _SelectionSummary(
-                      icon: Icons.directions_bus_rounded,
-                      title: '已选择：${_selectedTravelGroup!.groupNo}',
-                      subtitle: _travelGroupSummary(_selectedTravelGroup!),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
                   TextField(
                     key: const ValueKey('order-date-field'),
                     controller: _orderDateController,
@@ -622,7 +626,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
             orderDate: _orderDate,
             customerName: _customerNameController.text,
             customerPhone: _customerPhoneController.text,
-            travelGroup: _selectedTravelGroup,
             totalAmountCents: totalAmountCents,
             localDraft: _localDraft,
             lastSavedOrderNo: _lastSavedOrderNo,
@@ -638,13 +641,11 @@ class _SelectionSummary extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
-    this.trailing,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -675,10 +676,6 @@ class _SelectionSummary extends StatelessWidget {
                 ],
               ),
             ),
-            if (trailing != null) ...[
-              const SizedBox(width: 10),
-              trailing!,
-            ],
           ],
         ),
       ),
@@ -947,7 +944,6 @@ class _OrderSummary extends StatelessWidget {
     required this.orderDate,
     required this.customerName,
     required this.customerPhone,
-    required this.travelGroup,
     required this.totalAmountCents,
     required this.localDraft,
     required this.lastSavedOrderNo,
@@ -956,7 +952,6 @@ class _OrderSummary extends StatelessWidget {
   final DateTime orderDate;
   final String customerName;
   final String customerPhone;
-  final TravelGroupRecord? travelGroup;
   final int totalAmountCents;
   final Map<String, dynamic>? localDraft;
   final String? lastSavedOrderNo;
@@ -971,11 +966,6 @@ class _OrderSummary extends StatelessWidget {
           const SizedBox(height: 10),
         ],
         _SummaryLine(label: '订单日期', value: formatDate(orderDate)),
-        const SizedBox(height: 10),
-        _SummaryLine(
-          label: '旅行团',
-          value: travelGroup?.groupNo ?? '未选择旅行团',
-        ),
         const SizedBox(height: 10),
         _SummaryLine(
           label: '客户',
@@ -1152,15 +1142,6 @@ String _customerSummary(CustomerRecord customer) {
   return parts.isEmpty ? '客户资料已回填到表单' : parts.join(' · ');
 }
 
-String _travelGroupSummary(TravelGroupRecord group) {
-  final parts = [
-    group.visitDate,
-    group.travelAgency,
-    group.guideName,
-  ].whereType<String>().where((part) => part.trim().isNotEmpty).toList();
-  return parts.isEmpty ? '旅行团订单' : parts.join(' 路 ');
-}
-
 List<String> _optionsWithCurrent(List<String> options, String? current) {
   final text = current?.trim() ?? '';
   if (text.isEmpty || options.contains(text)) {
@@ -1204,7 +1185,24 @@ String _messageForError(Object error) {
     return error.message;
   }
   if (error is ApiException) {
-    return error.message;
+    final message = error.message.trim();
+    if (message.isEmpty) {
+      return '订单保存失败，请稍后重试。';
+    }
+    if (_containsSensitiveInternalDetails(message)) {
+      return '服务暂时无法处理该订单，请稍后重试或联系管理员。';
+    }
+    return message;
   }
   return '订单保存失败，请稍后重试。';
+}
+
+bool _containsSensitiveInternalDetails(String message) {
+  final normalized = message.toLowerCase();
+  return normalized.contains('prisma') ||
+      normalized.contains('stack trace') ||
+      normalized.contains('node_modules') ||
+      normalized.contains('sqlstate') ||
+      normalized.contains(' at /') ||
+      normalized.contains(r' at c:\');
 }

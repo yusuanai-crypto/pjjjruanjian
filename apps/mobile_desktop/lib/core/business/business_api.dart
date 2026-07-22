@@ -1617,6 +1617,23 @@ class BusinessApi {
     );
   }
 
+  Future<TravelGroupFinanceSummaryRecord> updateAgencyDeduction(
+    String travelGroupId,
+    int totalAgencyDeductionCents,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-group-finance-summaries/$travelGroupId/'
+      'agency-deduction',
+      body: {
+        'totalAgencyDeductionCents': totalAgencyDeductionCents,
+      },
+      token: _token,
+    );
+    return TravelGroupFinanceSummaryRecord.fromJson(
+      _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
   Future<TravelGroupFinanceSummaryRecord> setDailyRebatePaid(
     String travelGroupId,
     bool isPaid,

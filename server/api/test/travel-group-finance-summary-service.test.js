@@ -196,6 +196,82 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
   assert.equal(prisma.__store.travelGroup.orderAmountCents, 1330000);
 });
 
+test('unit: manual agency deduction recalculates rebates by proportional order allocation and survives refresh', async () => {
+  const commissionRecords = buildAgencyRebateRecords().map((record) => ({
+    ...record,
+    rateSnapshot:
+      record.id === 'record-daily-b' ? '0.0500' : record.rateSnapshot,
+  }));
+  const prisma = createSummaryPrisma({
+    commissionRecords,
+    summary: {
+      id: 'summary-manual-deduction',
+      travelGroupId: 'group-stage7',
+      totalSalesAmountCents: 1500000,
+      totalAgencyDeductionCents: 170000,
+      totalAgencyNetAmountCents: 1330000,
+      totalDailyRebateCents: 55000,
+      totalMonthlyRebateCents: 30000,
+      unpaidRebateCents: 85000,
+      agencyDeductionConfirmed: true,
+      agencyDeductionConfirmedById: 'user-finance-confirmed',
+      agencyDeductionConfirmedAt: new Date('2026-07-18T10:00:00.000Z'),
+    },
+  });
+  const service = createService(prisma);
+
+  const updated = await service.updateAgencyDeduction(
+    { id: 'user-finance', role: 'finance' },
+    'group-stage7',
+    { totalAgencyDeductionCents: 300000 },
+    { ipAddress: '127.0.0.1' },
+  );
+
+  assertSummaryAmounts(updated, {
+    totalAgencyDeductionCents: 300000,
+    totalAgencyNetAmountCents: 1200000,
+    totalDailyRebateCents: 44000,
+    totalMonthlyRebateCents: 24000,
+    paidRebateCents: 0,
+    unpaidRebateCents: 68000,
+  });
+  assert.equal(updated.agencyDeductionConfirmed, false);
+  assert.equal(updated.agencyDeductionConfirmedById, null);
+  assert.equal(updated.agencyDeductionConfirmedAt, null);
+  assert.equal(
+    prisma.__store.summaries[0].sourceSnapshot.agencyDeduction.mode,
+    'manual',
+  );
+  assert.equal(
+    prisma.__store.summaries[0].sourceSnapshot.manualRebateCalculation
+      .allocationMethod,
+    'gross_sales_proportional_largest_remainder',
+  );
+  assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 300000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1200000);
+
+  const log = prisma.__store.operationLogs.at(-1);
+  assertStage7SummaryServiceLog(log, {
+    action: 'travel_group_finance_summaries.agency_deduction.update',
+    entityType: 'travel_group_finance_summary',
+    userId: 'user-finance',
+    ipAddress: '127.0.0.1',
+  });
+  assert.equal(log.beforeData.totalAgencyDeductionCents, 170000);
+  assert.equal(log.afterData.totalAgencyDeductionCents, 300000);
+  assert.equal('sourceSnapshot' in log.afterData, false);
+
+  for (const record of prisma.__store.commissionRecords) {
+    record.deductionAmountCents = 1;
+  }
+  await service.refreshTravelGroupFinanceSummary('group-stage7');
+
+  assert.equal(prisma.__store.summaries[0].totalAgencyDeductionCents, 300000);
+  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1200000);
+  assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 44000);
+  assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 24000);
+});
+
 function createService(prisma) {
   return new TravelGroupFinanceSummaryNestService(
     prisma,
@@ -276,6 +352,10 @@ function createSummaryPrisma(overrides = {}) {
         ),
     },
     travelGroupFinanceSummary: {
+      findFirst: async () => {
+        const row = store.summaries[0];
+        return row ? copyDeep(row) : null;
+      },
       findUnique: async ({ where }) => {
         const row = store.summaries.find((summary) =>
           matchesWhere(summary, where),

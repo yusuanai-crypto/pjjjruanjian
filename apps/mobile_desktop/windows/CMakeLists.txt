@@ -57,6 +57,16 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# gal 2.3.2 still enables MSVC's legacy /await mode. Visual Studio 18 turns
+# the matching experimental coroutine deprecation into a hard error, so keep
+# the plugin build compatible until its upstream CMake drops /await.
+if(TARGET gal_plugin AND MSVC)
+  target_compile_definitions(
+    gal_plugin
+    PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+  )
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

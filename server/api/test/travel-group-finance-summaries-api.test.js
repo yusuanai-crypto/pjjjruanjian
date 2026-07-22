@@ -385,6 +385,77 @@ test('contract: stage7 travel group finance summary confirms and cancels agency 
   });
 });
 
+test('contract: manual agency deduction validates, recalculates, resets confirmation, and writes a safe log', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const finance = await login(
+      baseUrl,
+      'stage7-summary-finance',
+      'Password123',
+    );
+    const pathName =
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked/agency-deduction';
+
+    for (const invalidAmount of [-1, 1.5, 100001]) {
+      const invalid = await requestJson(baseUrl, pathName, {
+        method: 'PATCH',
+        token: finance.token,
+        body: { totalAgencyDeductionCents: invalidAmount },
+      });
+      assertErrorContract(invalid, 400, 'VALIDATION_FAILED');
+    }
+
+    const confirmed = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/tg-stage7-summary-marked/agency-deduction-confirm',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: { isConfirmed: true },
+      },
+    );
+    assert.equal(confirmed.response.status, 200);
+
+    const updated = await requestJson(baseUrl, pathName, {
+      method: 'PATCH',
+      token: finance.token,
+      body: { totalAgencyDeductionCents: 20000 },
+    });
+    assert.equal(updated.response.status, 200);
+    const summary = updated.body.data.travelGroupFinanceSummary;
+    assert.equal(summary.totalAgencyDeductionCents, 20000);
+    assert.equal(summary.totalAgencyNetAmountCents, 80000);
+    assert.equal(summary.totalDailyRebateCents, 2400);
+    assert.equal(summary.totalMonthlyRebateCents, 1600);
+    assert.equal(summary.unpaidRebateCents, 4000);
+    assert.equal(summary.agencyDeductionConfirmed, false);
+    assert.equal(summary.agencyDeductionConfirmedById, null);
+    assert.equal(summary.agencyDeductionConfirmedAt, null);
+    assert.equal(summary.sourceSnapshot.agencyDeduction.mode, 'manual');
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=travel_group_finance_summaries.agency_deduction.update',
+      { token: admin.token },
+    );
+    assert.equal(logs.response.status, 200);
+    const log = logs.body.data.logs.find(
+      (item) => item.entityId === 'summary-stage7-marked',
+    );
+    assert.ok(log);
+    assertStage7ApiLog(log, {
+      action: 'travel_group_finance_summaries.agency_deduction.update',
+      entityType: 'travel_group_finance_summary',
+      userId: finance.user.id,
+    });
+    assert.equal(log.beforeData.totalAgencyDeductionCents, 10000);
+    assert.equal(log.afterData.totalAgencyDeductionCents, 20000);
+    assert.equal('sourceSnapshot' in log.afterData, false);
+  }, {
+    prisma: buildTravelGroupFinanceSummaryApiPrisma(),
+  });
+});
+
 test('contract: stage7 travel group finance summary refresh creates calculated summary', async () => {
   await withPhase1Server(async (baseUrl) => {
     const finance = await login(
@@ -485,6 +556,14 @@ test('contract: stage7 travel group finance summaries enforce permissions', asyn
         method: 'PATCH',
         body: {
           isConfirmed: true,
+        },
+      },
+      {
+        pathName:
+          '/api/travel-group-finance-summaries/tg-stage7-summary-marked/agency-deduction',
+        method: 'PATCH',
+        body: {
+          totalAgencyDeductionCents: 10000,
         },
       },
       {
@@ -702,6 +781,22 @@ function buildTravelGroupFinanceSummaryApiPrisma() {
       },
     ],
     commissionRecords: [
+      agencyRebateRecord({
+        id: 'rec-stage7-summary-marked-daily',
+        salesOrderId: 'so-stage7-summary-marked',
+        travelGroupId: 'tg-stage7-summary-marked',
+        targetType: 'AGENCY_DAILY_REBATE',
+        grossAmountCents: 100000,
+        rateSnapshot: '0.0300',
+      }),
+      agencyRebateRecord({
+        id: 'rec-stage7-summary-marked-monthly',
+        salesOrderId: 'so-stage7-summary-marked',
+        travelGroupId: 'tg-stage7-summary-marked',
+        targetType: 'AGENCY_MONTHLY_REBATE',
+        grossAmountCents: 100000,
+        rateSnapshot: '0.0200',
+      }),
       agencyRebateRecord({
         id: 'rec-stage7-summary-refresh-daily',
         salesOrderId: 'so-stage7-summary-refresh',

@@ -146,32 +146,20 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
 
   Future<void> _saveTravelGroup() async {
     if (_visitDate == null) {
-      setState(() {
-        _errorMessage = '请选择进店日期。';
-        _successMessage = null;
-      });
+      await _showSaveFailure('请选择进店日期。');
       return;
     }
     if (_travelAgencyController.text.trim().isEmpty) {
-      setState(() {
-        _errorMessage = '请选择旅行社。';
-        _successMessage = null;
-      });
+      await _showSaveFailure('请选择旅行社。');
       return;
     }
     if (_selectedGuide == null) {
-      setState(() {
-        _errorMessage = '请选择导游。';
-        _successMessage = null;
-      });
+      await _showSaveFailure('请选择导游。');
       return;
     }
     final formValid = _formKey.currentState?.validate() ?? false;
     if (!formValid) {
-      setState(() {
-        _errorMessage = '请检查已填写的信息。';
-        _successMessage = null;
-      });
+      await _showSaveFailure(_formValidationFailureMessage());
       return;
     }
 
@@ -190,10 +178,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _saving = false;
-        _errorMessage = _messageForError(error);
-      });
+      await _showSaveFailure(_messageForError(error));
       return;
     }
     if (!mounted) {
@@ -212,14 +197,19 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       return;
     }
     if (attachmentFailures.isNotEmpty) {
+      final failureMessage = _attachmentFailureMessage(
+        created,
+        attachmentFailures,
+      );
       setState(() {
         _saving = false;
         _successMessage = '旅行团已创建，系统团号：${created.groupNo}';
-        _errorMessage = _attachmentFailureMessage(
-          created,
-          attachmentFailures,
-        );
+        _errorMessage = failureMessage;
       });
+      await _showTravelGroupResultDialog(
+        title: '录入失败',
+        message: failureMessage,
+      );
       return;
     }
 
@@ -228,6 +218,56 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       _saving = false;
       _successMessage = '旅行团已保存，系统团号：${created.groupNo}';
     });
+    await _showTravelGroupResultDialog(
+      title: '录入成功',
+      message: '旅行团录入成功。系统团号：${created.groupNo}',
+    );
+  }
+
+  String _formValidationFailureMessage() {
+    final guestCount = _guestCountController.text.trim();
+    if (guestCount.isNotEmpty &&
+        (int.tryParse(guestCount) == null || int.parse(guestCount) <= 0)) {
+      return '人数必须大于 0';
+    }
+    return '请检查已填写的信息。';
+  }
+
+  Future<void> _showSaveFailure(String message) async {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _errorMessage = message;
+      _successMessage = null;
+    });
+    await _showTravelGroupResultDialog(
+      title: '录入失败',
+      message: message,
+    );
+  }
+
+  Future<void> _showTravelGroupResultDialog({
+    required String title,
+    required String message,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   Map<String, dynamic> _buildTravelGroupCreateBody() {
@@ -331,13 +371,19 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       return;
     }
     if (attachmentFailures.isNotEmpty) {
+      final failureMessage = _attachmentFailureMessage(
+        created,
+        attachmentFailures,
+      );
       setState(() {
         _saving = false;
-        _errorMessage = _attachmentFailureMessage(
-          created,
-          attachmentFailures,
-        );
+        _errorMessage = failureMessage;
+        _successMessage = '旅行团已创建，系统团号：${created.groupNo}';
       });
+      await _showTravelGroupResultDialog(
+        title: '录入失败',
+        message: failureMessage,
+      );
       return;
     }
     _clearForm();
@@ -349,6 +395,10 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       _saving = false;
       _successMessage = '旅行团附件已上传，系统团号：${created.groupNo}';
     });
+    await _showTravelGroupResultDialog(
+      title: '录入成功',
+      message: '旅行团附件上传成功。系统团号：${created.groupNo}',
+    );
   }
 
   void _clearForm() {
@@ -1474,15 +1524,32 @@ String _attachmentFailureMessage(
   TravelGroupRecord group,
   List<String> failures,
 ) {
-  return '旅行团 ${group.groupNo} 已创建，但以下附件上传失败：'
+  return '旅行团主记录已经创建。系统团号：${group.groupNo}。以下附件上传失败：'
       '${failures.join('；')}。请点击“重试附件上传”，不会重复创建旅行团。';
 }
 
 String _messageForError(Object error) {
   if (error is ApiException) {
-    return error.message;
+    final message = error.message.trim();
+    if (message.isEmpty) {
+      return '操作失败，请稍后重试。';
+    }
+    if (_containsSensitiveInternalDetails(message)) {
+      return '服务暂时无法处理该请求，请稍后重试或联系管理员。';
+    }
+    return message;
   }
   return '操作失败，请稍后重试。';
+}
+
+bool _containsSensitiveInternalDetails(String message) {
+  final normalized = message.toLowerCase();
+  return normalized.contains('prisma') ||
+      normalized.contains('stack trace') ||
+      normalized.contains('node_modules') ||
+      normalized.contains('sqlstate') ||
+      normalized.contains(' at /') ||
+      normalized.contains(r' at c:\');
 }
 
 String _groupStatusLabel(String status) {

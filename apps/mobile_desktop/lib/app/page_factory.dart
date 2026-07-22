@@ -14,7 +14,7 @@ import '../features/order_query/order_query_page.dart';
 import '../features/product_management/product_management_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
-import '../features/sales_orders/order_form_page.dart';
+import '../features/sales_orders/order_form_entry_page.dart';
 import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
 import '../features/travel_agency_management/travel_agency_management_page.dart';
@@ -65,7 +65,7 @@ Widget buildPageForDestination({
     case 'travel_group_order_notes':
       return TravelGroupOrderNotesPage(apiClient: apiClient, token: token);
     case 'order_form':
-      return OrderFormPage(apiClient: apiClient, token: token, role: role);
+      return OrderFormEntryPage(apiClient: apiClient, token: token, role: role);
     case 'order_query':
       return OrderQueryPage(apiClient: apiClient, token: token, role: role);
     case 'qr_sales_sheet':

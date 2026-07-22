@@ -14,6 +14,7 @@ import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../../shared/widgets/time_picker_field.dart';
+import '../sales_orders/order_form_page.dart';
 import '../travel_group_detail/travel_group_detail_panel.dart';
 import '../travel_groups/tasting_items_editor.dart';
 
@@ -198,20 +199,6 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
         : null;
   }
 
-  TravelGroupRecord? _selectedRecord() {
-    if (_groups.isEmpty) {
-      return null;
-    }
-    if (_selectedId != null) {
-      for (final group in _groups) {
-        if (group.id == _selectedId) {
-          return group;
-        }
-      }
-    }
-    return _groups.first;
-  }
-
   TravelGroupRecord? _recordById(String id) {
     for (final group in _groups) {
       if (group.id == id) {
@@ -251,6 +238,9 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                     role: widget.role,
                     marking: _markingIds.contains(selected.id),
                     summarizing: _summarizingIds.contains(selected.id),
+                    onCreateOrder: _canCreateOrder(widget.role)
+                        ? () => _openOrderForm(selected)
+                        : null,
                     onEdit: _canEditGroup(selected)
                         ? () => runAction(() => _editTravelGroup(selected))
                         : null,
@@ -278,6 +268,22 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           },
         );
       },
+    );
+  }
+
+  Future<void> _openOrderForm(TravelGroupRecord group) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: Text('${group.groupNo} · 录入订单')),
+          body: OrderFormPage(
+            apiClient: widget.apiClient,
+            token: widget.token,
+            role: widget.role,
+            travelGroupId: group.id,
+          ),
+        ),
+      ),
     );
   }
 
@@ -2010,6 +2016,14 @@ bool _canEdit(UserRole role) {
       role == UserRole.sales ||
       role == UserRole.taster ||
       role == UserRole.finance;
+}
+
+bool _canCreateOrder(UserRole role) {
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.sales ||
+      role == UserRole.finance ||
+      role == UserRole.afterSales;
 }
 
 bool _canMark(UserRole role) {

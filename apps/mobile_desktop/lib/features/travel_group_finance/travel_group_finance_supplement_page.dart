@@ -1,12 +1,11 @@
-import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:gal/gal.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
@@ -15,17 +14,66 @@ import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 
+const financeImageAlbumName = '贵州酱酒馆积分表';
+
+typedef FinanceImageSaver = Future<void> Function(
+  Uint8List bytes, {
+  required String album,
+  required String name,
+});
+
+class FinanceImageSaveException implements Exception {
+  const FinanceImageSaveException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+Future<void> saveFinanceImageToGallery(
+  Uint8List bytes, {
+  required String album,
+  required String name,
+}) async {
+  try {
+    final hasAccess = await Gal.hasAccess(toAlbum: true);
+    final accessGranted =
+        hasAccess || await Gal.requestAccess(toAlbum: true);
+    if (!accessGranted) {
+      throw const FinanceImageSaveException(
+        '相册权限被拒绝，请在系统设置中允许照片写入权限。',
+      );
+    }
+    await Gal.putImageBytes(bytes, album: album, name: name);
+  } on FinanceImageSaveException {
+    rethrow;
+  } on GalException catch (error) {
+    throw FinanceImageSaveException(
+      switch (error.type) {
+        GalExceptionType.accessDenied =>
+          '相册权限被拒绝，请在系统设置中允许照片写入权限。',
+        GalExceptionType.notEnoughSpace => '设备存储空间不足，无法保存到相册。',
+        GalExceptionType.notSupportedFormat => '图片格式不受支持，无法保存到相册。',
+        GalExceptionType.unexpected => '保存到相册失败，请稍后重试。',
+      },
+    );
+  } catch (_) {
+    throw const FinanceImageSaveException('保存到相册失败，请稍后重试。');
+  }
+}
+
 class TravelGroupFinanceSupplementPage extends StatefulWidget {
   const TravelGroupFinanceSupplementPage({
     super.key,
     required this.apiClient,
     required this.token,
-    this.documentsDirectoryProvider,
+    this.imageSaver = saveFinanceImageToGallery,
   });
 
   final ApiClient apiClient;
   final String token;
-  final Future<Directory> Function()? documentsDirectoryProvider;
+  final FinanceImageSaver imageSaver;
 
   @override
   State<TravelGroupFinanceSupplementPage> createState() =>
@@ -45,6 +93,7 @@ class _TravelGroupFinanceSupplementPageState
   final Set<String> _guideImageReadyIds = <String>{};
   final Set<String> _travelAgencyImageReadyIds = <String>{};
   final Set<String> _imageExportingKeys = <String>{};
+  final Set<String> _agencyDeductionUpdatingIds = <String>{};
   final Set<String> _rebateUpdatingKeys = <String>{};
   final Set<String> _sentUpdatingKeys = <String>{};
 
@@ -257,6 +306,44 @@ class _TravelGroupFinanceSupplementPageState
     );
   }
 
+  Future<void> _saveAgencyDeduction(
+    TravelGroupFinanceSummaryRecord summary,
+    int totalAgencyDeductionCents,
+  ) async {
+    final travelGroupId = summary.travelGroupId;
+    if (_agencyDeductionUpdatingIds.contains(travelGroupId)) {
+      return;
+    }
+    setState(() {
+      _agencyDeductionUpdatingIds.add(travelGroupId);
+      _errorMessage = null;
+      _successMessage = null;
+    });
+
+    try {
+      final updated = await _businessApi.updateAgencyDeduction(
+        travelGroupId,
+        totalAgencyDeductionCents,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _agencyDeductionUpdatingIds.remove(travelGroupId);
+        _replaceSummary(updated);
+        _successMessage = '扣酒成本已保存。';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _agencyDeductionUpdatingIds.remove(travelGroupId);
+        _errorMessage = '扣酒成本保存失败：${_messageForError(error)}';
+      });
+    }
+  }
+
   Future<void> _setMonthlyRebatePaid(
     TravelGroupFinanceSummaryRecord summary,
     bool isPaid,
@@ -357,26 +444,42 @@ class _TravelGroupFinanceSupplementPageState
           (summary) => _selectedTravelGroupIds.contains(summary.travelGroupId),
         )
         .toList();
+    var successCount = 0;
     for (final summary in selected) {
-      await _exportImage(summary, type, showSnackBar: false);
+      if (await _exportImage(summary, type, showSnackBar: false)) {
+        successCount += 1;
+      }
     }
     if (!mounted || selected.isEmpty) {
       return;
     }
+    final failureCount = selected.length - successCount;
+    final message = failureCount == 0
+        ? '已保存到相册：成功 $successCount 张，失败 0 张'
+        : '已保存到相册：成功 $successCount 张，失败 $failureCount 张';
+    setState(() {
+      if (failureCount == 0) {
+        _successMessage = message;
+        _errorMessage = null;
+      } else {
+        _successMessage = null;
+        _errorMessage = message;
+      }
+    });
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已导出 ${selected.length} 张${type.label}')),
+      SnackBar(content: Text(message)),
     );
   }
 
-  Future<void> _exportImage(
+  Future<bool> _exportImage(
     TravelGroupFinanceSummaryRecord summary,
     _FinanceImageType type, {
     bool showSnackBar = true,
   }) async {
     final busyKey = '${summary.travelGroupId}:${type.name}';
     if (_imageExportingKeys.contains(busyKey)) {
-      return;
+      return false;
     }
     setState(() {
       _imageExportingKeys.add(busyKey);
@@ -386,9 +489,17 @@ class _TravelGroupFinanceSupplementPageState
 
     try {
       final bytes = await _renderImageBytes(summary, type);
-      final file = await _writeImageFile(summary, type, bytes);
+      final fileName = _imageFileName(summary, type);
+      final imageName = fileName.toLowerCase().endsWith('.png')
+          ? fileName.substring(0, fileName.length - 4)
+          : fileName;
+      await widget.imageSaver(
+        bytes,
+        album: financeImageAlbumName,
+        name: imageName,
+      );
       if (!mounted) {
-        return;
+        return false;
       }
       setState(() {
         _imageExportingKeys.remove(busyKey);
@@ -397,22 +508,24 @@ class _TravelGroupFinanceSupplementPageState
         } else {
           _travelAgencyImageReadyIds.add(summary.travelGroupId);
         }
-        _successMessage = '${type.label}已导出：${file.path}';
+        _successMessage = '${type.label}已保存到相册';
       });
       if (showSnackBar) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${type.label}已导出：${file.path}')),
+          SnackBar(content: Text('${type.label}已保存到相册')),
         );
       }
+      return true;
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
       setState(() {
         _imageExportingKeys.remove(busyKey);
         _errorMessage = _messageForError(error);
       });
+      return false;
     }
   }
 
@@ -461,26 +574,6 @@ class _TravelGroupFinanceSupplementPageState
       throw StateError('无法生成图片。');
     }
     return bytes;
-  }
-
-  Future<File> _writeImageFile(
-    TravelGroupFinanceSummaryRecord summary,
-    _FinanceImageType type,
-    Uint8List bytes,
-  ) async {
-    final directory = await (widget.documentsDirectoryProvider?.call() ??
-        getApplicationDocumentsDirectory());
-    final exportDirectory = Directory(
-      '${directory.path}${Platform.pathSeparator}exports'
-      '${Platform.pathSeparator}finance-images',
-    );
-    await exportDirectory.create(recursive: true);
-    final targetFile = await _nextExportFile(
-      exportDirectory,
-      _imageFileName(summary, type),
-    );
-    await targetFile.writeAsBytes(bytes, flush: true);
-    return targetFile;
   }
 
   String _imageFileName(
@@ -670,10 +763,12 @@ class _TravelGroupFinanceSupplementPageState
                 guideImageReadyIds: _guideImageReadyIds,
                 travelAgencyImageReadyIds: _travelAgencyImageReadyIds,
                 imageExportingKeys: _imageExportingKeys,
+                agencyDeductionUpdatingIds: _agencyDeductionUpdatingIds,
                 rebateUpdatingKeys: _rebateUpdatingKeys,
                 sentUpdatingKeys: _sentUpdatingKeys,
                 onSelectionChanged: _toggleSelection,
                 onSelectAllChanged: _toggleVisibleSelection,
+                onAgencyDeductionSaved: _saveAgencyDeduction,
                 onDailyRebatePaidChanged: _setDailyRebatePaid,
                 onMonthlyRebatePaidChanged: _setMonthlyRebatePaid,
                 onExportImage: _exportImage,
@@ -859,10 +954,12 @@ class _FinancePointTable extends StatelessWidget {
     required this.guideImageReadyIds,
     required this.travelAgencyImageReadyIds,
     required this.imageExportingKeys,
+    required this.agencyDeductionUpdatingIds,
     required this.rebateUpdatingKeys,
     required this.sentUpdatingKeys,
     required this.onSelectionChanged,
     required this.onSelectAllChanged,
+    required this.onAgencyDeductionSaved,
     required this.onDailyRebatePaidChanged,
     required this.onMonthlyRebatePaidChanged,
     required this.onExportImage,
@@ -875,15 +972,18 @@ class _FinancePointTable extends StatelessWidget {
   final Set<String> guideImageReadyIds;
   final Set<String> travelAgencyImageReadyIds;
   final Set<String> imageExportingKeys;
+  final Set<String> agencyDeductionUpdatingIds;
   final Set<String> rebateUpdatingKeys;
   final Set<String> sentUpdatingKeys;
   final void Function(String travelGroupId, bool selected) onSelectionChanged;
   final ValueChanged<bool> onSelectAllChanged;
+  final Future<void> Function(TravelGroupFinanceSummaryRecord, int)
+      onAgencyDeductionSaved;
   final Future<void> Function(TravelGroupFinanceSummaryRecord, bool)
       onDailyRebatePaidChanged;
   final Future<void> Function(TravelGroupFinanceSummaryRecord, bool)
       onMonthlyRebatePaidChanged;
-  final Future<void> Function(
+  final Future<bool> Function(
     TravelGroupFinanceSummaryRecord,
     _FinanceImageType,
   ) onExportImage;
@@ -906,7 +1006,7 @@ class _FinancePointTable extends StatelessWidget {
         horizontalMargin: 12,
         headingRowHeight: 44,
         dataRowMinHeight: 68,
-        dataRowMaxHeight: 82,
+        dataRowMaxHeight: 104,
         columns: [
           DataColumn(
             label: Checkbox(
@@ -976,7 +1076,12 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(_MoneyCell(cents: summary.totalSalesAmountCents)),
         DataCell(_MoneyCell(cents: summary.totalCashOnDeliveryCents)),
         DataCell(_MoneyCell(cents: summary.totalPaidDepositCents)),
-        DataCell(_MoneyCell(cents: summary.totalAgencyDeductionCents)),
+        DataCell(_AgencyDeductionEditor(
+          key: ValueKey('$rowKey:agencyDeductionEditor'),
+          summary: summary,
+          saving: agencyDeductionUpdatingIds.contains(rowKey),
+          onSave: (cents) => onAgencyDeductionSaved(summary, cents),
+        )),
         DataCell(_MoneyCell(cents: summary.totalAgencyNetAmountCents)),
         DataCell(_MoneyCell(cents: summary.totalDailyRebateCents)),
         DataCell(_RebatePaidButton(
@@ -1075,6 +1180,167 @@ class _MoneyCell extends StatelessWidget {
       child: MoneyText(cents: cents),
     );
   }
+}
+
+class _AgencyDeductionEditor extends StatefulWidget {
+  const _AgencyDeductionEditor({
+    super.key,
+    required this.summary,
+    required this.saving,
+    required this.onSave,
+  });
+
+  final TravelGroupFinanceSummaryRecord summary;
+  final bool saving;
+  final Future<void> Function(int cents) onSave;
+
+  @override
+  State<_AgencyDeductionEditor> createState() =>
+      _AgencyDeductionEditorState();
+}
+
+class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
+  late final TextEditingController _controller;
+  String? _validationError;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: _yuanInput(widget.summary.totalAgencyDeductionCents),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _AgencyDeductionEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.summary.totalAgencyDeductionCents !=
+        widget.summary.totalAgencyDeductionCents) {
+      _controller.text = _yuanInput(
+        widget.summary.totalAgencyDeductionCents,
+      );
+      _validationError = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (widget.saving) {
+      return;
+    }
+    final result = _parseAgencyDeduction(
+      _controller.text,
+      widget.summary.totalSalesAmountCents,
+    );
+    if (result.error != null) {
+      setState(() => _validationError = result.error);
+      return;
+    }
+    setState(() => _validationError = null);
+    await widget.onSave(result.cents!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: TextField(
+              key: ValueKey(
+                '${widget.summary.travelGroupId}:agencyDeductionInput',
+              ),
+              controller: _controller,
+              enabled: !widget.saving,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              textInputAction: TextInputAction.done,
+              onChanged: (_) {
+                if (_validationError != null) {
+                  setState(() => _validationError = null);
+                }
+              },
+              onSubmitted: (_) => _save(),
+              decoration: InputDecoration(
+                isDense: true,
+                prefixText: '¥ ',
+                errorText: _validationError,
+                errorMaxLines: 2,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 68,
+            child: FilledButton(
+              key: ValueKey(
+                '${widget.summary.travelGroupId}:agencyDeductionSave',
+              ),
+              onPressed: widget.saving ? null : _save,
+              child: widget.saving
+                  ? const SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('保存'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AgencyDeductionParseResult {
+  const _AgencyDeductionParseResult({this.cents, this.error});
+
+  final int? cents;
+  final String? error;
+}
+
+_AgencyDeductionParseResult _parseAgencyDeduction(
+  String value,
+  int totalSalesAmountCents,
+) {
+  final text = value.trim();
+  if (text.isEmpty) {
+    return const _AgencyDeductionParseResult(error: '请输入扣酒成本。');
+  }
+  if (text.startsWith('-')) {
+    return const _AgencyDeductionParseResult(error: '扣酒成本不能小于 0。');
+  }
+  final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(text);
+  if (match == null) {
+    return const _AgencyDeductionParseResult(
+      error: '请输入最多两位小数的有效金额。',
+    );
+  }
+  final yuan = int.tryParse(match.group(1)!);
+  if (yuan == null) {
+    return const _AgencyDeductionParseResult(error: '金额过大，请重新输入。');
+  }
+  final decimal = (match.group(2) ?? '').padRight(2, '0');
+  final cents = yuan * 100 + (decimal.isEmpty ? 0 : int.parse(decimal));
+  if (cents > totalSalesAmountCents) {
+    return const _AgencyDeductionParseResult(
+      error: '扣酒成本不能大于该旅行团销售额。',
+    );
+  }
+  return _AgencyDeductionParseResult(cents: cents);
+}
+
+String _yuanInput(int cents) {
+  final yuan = cents ~/ 100;
+  final decimal = (cents % 100).abs().toString().padLeft(2, '0');
+  return '$yuan.$decimal';
 }
 
 class _RebatePaidButton extends StatelessWidget {
@@ -1511,6 +1777,9 @@ String _formatDate(DateTime value) {
 }
 
 String _messageForError(Object error) {
+  if (error is FinanceImageSaveException) {
+    return error.message;
+  }
   if (error is ApiException) {
     return error.message;
   }
@@ -1523,28 +1792,6 @@ String _safeExportFileName(String fileName) {
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
   return sanitized.isEmpty ? '积分表图片.png' : sanitized;
-}
-
-Future<File> _nextExportFile(Directory directory, String fileName) async {
-  final separator = Platform.pathSeparator;
-  final first = File('${directory.path}$separator$fileName');
-  if (!await first.exists()) {
-    return first;
-  }
-  final dotIndex = fileName.lastIndexOf('.');
-  final baseName = dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
-  final extension = dotIndex <= 0 ? '' : fileName.substring(dotIndex);
-  for (var index = 1; index < 1000; index += 1) {
-    final candidate = File(
-      '${directory.path}$separator$baseName ($index)$extension',
-    );
-    if (!await candidate.exists()) {
-      return candidate;
-    }
-  }
-  return File(
-    '${directory.path}$separator$baseName-${DateTime.now().microsecondsSinceEpoch}$extension',
-  );
 }
 
 class _NonNegativeIntegerFormatter extends TextInputFormatter {

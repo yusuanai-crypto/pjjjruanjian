@@ -31,6 +31,7 @@ class SessionStorage {
   SessionStorage._(this._preferences, this._secureStorage);
 
   static const tokenKey = 'jiangjiu.auth.token';
+  static const lastUsernameKey = 'jiangjiu.auth.lastUsername';
   static const _apiBaseUrlKey = 'jiangjiu.config.apiBaseUrl';
 
   final SharedPreferences _preferences;
@@ -44,6 +45,7 @@ class SessionStorage {
       preferences ?? await SharedPreferences.getInstance(),
       secureStorage,
     );
+    await storage._clearLegacyApiBaseUrl();
     await storage._migrateLegacyToken();
     return storage;
   }
@@ -66,12 +68,30 @@ class SessionStorage {
     await _preferences.remove(tokenKey);
   }
 
-  String? readApiBaseUrl() {
-    return _preferences.getString(_apiBaseUrlKey);
+  String? readLastUsername() {
+    final username = _preferences.getString(lastUsernameKey)?.trim();
+    return username == null || username.isEmpty ? null : username;
   }
 
-  Future<void> saveApiBaseUrl(String apiBaseUrl) {
-    return _preferences.setString(_apiBaseUrlKey, apiBaseUrl);
+  Future<void> saveLastUsername(String username) async {
+    final normalizedUsername = username.trim();
+    if (normalizedUsername.isEmpty) {
+      return;
+    }
+    final saved = await _preferences.setString(
+      lastUsernameKey,
+      normalizedUsername,
+    );
+    if (!saved) {
+      throw StateError('The last username could not be saved.');
+    }
+  }
+
+  Future<void> _clearLegacyApiBaseUrl() async {
+    final removed = await _preferences.remove(_apiBaseUrlKey);
+    if (!removed && _preferences.containsKey(_apiBaseUrlKey)) {
+      throw StateError('The saved API address could not be removed.');
+    }
   }
 
   Future<void> _migrateLegacyToken() async {

@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/auth/auth_controller.dart';
 import 'package:jiangjiu_mobile_desktop/core/config/app_config.dart';
 import 'package:jiangjiu_mobile_desktop/core/storage/session_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -122,10 +124,7 @@ void main() {
 
       expect(await storage.readToken(), 'legacy-test-token');
       expect(preferences.containsKey(SessionStorage.tokenKey), isFalse);
-      expect(
-        preferences.getString('jiangjiu.config.apiBaseUrl'),
-        'https://api.example.com',
-      );
+      expect(preferences.containsKey('jiangjiu.config.apiBaseUrl'), isFalse);
     });
 
     test('keeps the legacy token and rolls back a failed secure write',
@@ -153,4 +152,173 @@ void main() {
       expect(secureStorage.values, isEmpty);
     });
   });
+
+  group('last successful username', () {
+    test('successful login saves the server-confirmed username only', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final preferences = await SharedPreferences.getInstance();
+      final storage = await SessionStorage.create(
+        preferences: preferences,
+        secureStorage: FakeSecureTokenStorage(),
+      );
+      final apiClient = _FakeAuthApiClient(loginUsername: 'confirmed.user');
+      final controller = AuthController(
+        storage: storage,
+        apiClient: apiClient,
+      );
+
+      await controller.login(
+        username: ' entered.user ',
+        password: 'never-save-this-password',
+      );
+
+      expect(storage.readLastUsername(), 'confirmed.user');
+      expect(controller.lastUsername, 'confirmed.user');
+      expect(
+        preferences.getKeys().map(preferences.get).whereType<String>(),
+        isNot(contains('never-save-this-password')),
+      );
+      apiClient.close(force: true);
+    });
+
+    test('failed login does not overwrite the previous username', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        SessionStorage.lastUsernameKey: 'previous.user',
+      });
+      final preferences = await SharedPreferences.getInstance();
+      final storage = await SessionStorage.create(
+        preferences: preferences,
+        secureStorage: FakeSecureTokenStorage(),
+      );
+      final apiClient = _FakeAuthApiClient(failLogin: true);
+      final controller = AuthController(
+        storage: storage,
+        apiClient: apiClient,
+      );
+      await controller.restore();
+
+      await expectLater(
+        controller.login(username: 'wrong.user', password: 'wrong-password'),
+        throwsA(isA<AuthFailure>()),
+      );
+
+      expect(storage.readLastUsername(), 'previous.user');
+      expect(controller.lastUsername, 'previous.user');
+      apiClient.close(force: true);
+    });
+
+    test('logout does not clear the previous username', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        SessionStorage.lastUsernameKey: 'remembered.user',
+      });
+      final preferences = await SharedPreferences.getInstance();
+      final storage = await SessionStorage.create(
+        preferences: preferences,
+        secureStorage: FakeSecureTokenStorage(),
+      );
+      final apiClient = _FakeAuthApiClient();
+      final controller = AuthController(
+        storage: storage,
+        apiClient: apiClient,
+      );
+      await controller.restore();
+
+      await controller.logout();
+
+      expect(storage.readLastUsername(), 'remembered.user');
+      expect(controller.lastUsername, 'remembered.user');
+      apiClient.close(force: true);
+    });
+
+    test('restoring a valid token saves its current username', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        SessionStorage.lastUsernameKey: 'old.user',
+      });
+      final preferences = await SharedPreferences.getInstance();
+      final storage = await SessionStorage.create(
+        preferences: preferences,
+        secureStorage: FakeSecureTokenStorage(
+          initialValues: <String, String>{
+            SessionStorage.tokenKey: 'existing-token',
+          },
+        ),
+      );
+      final apiClient = _FakeAuthApiClient(
+        restoredUsername: 'current.user',
+      );
+      final controller = AuthController(
+        storage: storage,
+        apiClient: apiClient,
+      );
+
+      await controller.restore();
+
+      expect(controller.session?.user.username, 'current.user');
+      expect(controller.lastUsername, 'current.user');
+      expect(storage.readLastUsername(), 'current.user');
+      apiClient.close(force: true);
+    });
+  });
+}
+
+class _FakeAuthApiClient extends ApiClient {
+  _FakeAuthApiClient({
+    this.failLogin = false,
+    this.loginUsername = 'login.user',
+    this.restoredUsername = 'restored.user',
+  }) : super(baseUrl: 'https://api.example.invalid');
+
+  final bool failLogin;
+  final String loginUsername;
+  final String restoredUsername;
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    if (path != '/api/auth/login') {
+      throw StateError('Unexpected POST $path');
+    }
+    if (failLogin) {
+      throw const ApiException(
+        statusCode: 401,
+        code: 'INVALID_CREDENTIALS',
+        message: '账号或密码不正确。',
+      );
+    }
+    return <String, dynamic>{
+      'data': _authSessionPayload(loginUsername, token: 'login-token'),
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path != '/api/auth/me') {
+      throw StateError('Unexpected GET $path');
+    }
+    return <String, dynamic>{
+      'data': _authSessionPayload(restoredUsername),
+    };
+  }
+}
+
+Map<String, dynamic> _authSessionPayload(String username, {String? token}) {
+  return <String, dynamic>{
+    if (token != null) 'token': token,
+    'user': <String, dynamic>{
+      'id': 'user-1',
+      'name': '测试用户',
+      'username': username,
+      'role': 'admin',
+      'isActive': true,
+      'mustChangePassword': false,
+      'createdAt': '2026-01-01T00:00:00.000Z',
+      'updatedAt': '2026-01-01T00:00:00.000Z',
+    },
+    'permissions': <String>[],
+    'menus': <Map<String, dynamic>>[],
+    'dataScope': <String, dynamic>{},
+  };
 }

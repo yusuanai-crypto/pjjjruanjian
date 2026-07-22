@@ -88,6 +88,26 @@ export class TravelGroupFinanceSummariesNestController {
     };
   }
 
+  @Patch(':travelGroupId/agency-deduction')
+  async updateAgencyDeduction(
+    @Param('travelGroupId') travelGroupId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelGroupFinanceSummary:
+        await this.summaryService.updateAgencyDeduction(
+          actor,
+          travelGroupId,
+          body,
+          {
+            ipAddress: getRequestIp(request),
+          },
+        ),
+    };
+  }
+
   @Patch(':travelGroupId/daily-rebate-paid')
   async setDailyRebatePaid(
     @Param('travelGroupId') travelGroupId: string,

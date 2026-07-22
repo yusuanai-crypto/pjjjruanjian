@@ -18,6 +18,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
     required this.role,
     this.marking = false,
     this.summarizing = false,
+    this.onCreateOrder,
     this.onEdit,
     this.onFinanceMark,
     this.onSummary,
@@ -30,6 +31,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
   final UserRole role;
   final bool marking;
   final bool summarizing;
+  final VoidCallback? onCreateOrder;
   final VoidCallback? onEdit;
   final VoidCallback? onFinanceMark;
   final VoidCallback? onSummary;
@@ -43,6 +45,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
     final markAction = showFinanceMark ? onFinanceMark : null;
     final summaryAction = onSummary;
     final editAction = onEdit;
+    final createOrderAction = onCreateOrder;
 
     return FormSection(
       title: '旅行团详情',
@@ -59,6 +62,13 @@ class TravelGroupDetailPanel extends StatelessWidget {
           spacing: 8,
           runSpacing: 8,
           children: [
+            if (createOrderAction != null)
+              FilledButton.icon(
+                key: const ValueKey('create-order-for-travel-group-button'),
+                onPressed: createOrderAction,
+                icon: const Icon(Icons.receipt_long_rounded),
+                label: const Text('录入订单'),
+              ),
             if (editAction != null)
               OutlinedButton.icon(
                 onPressed: editAction,
@@ -82,7 +92,8 @@ class TravelGroupDetailPanel extends StatelessWidget {
                 busy: marking,
                 onPressed: markAction,
               ),
-            if (editAction == null &&
+            if (createOrderAction == null &&
+                editAction == null &&
                 summaryAction == null &&
                 markAction == null)
               StatusTag(
