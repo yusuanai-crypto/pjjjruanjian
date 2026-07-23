@@ -5,7 +5,6 @@ import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
-import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -35,11 +34,9 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   late final TextEditingController _departureTimeController;
   late final TextEditingController _remarksController;
 
-  final Map<String, Set<String>> _selectedOrderIdsByGroup = {};
   List<TastingItemDraft> _tastingItemDrafts = const <TastingItemDraft>[];
   List<Map<String, dynamic>> _tastingItems = const <Map<String, dynamic>>[];
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
-  List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   String _filter = '待补充';
   String _query = '';
   String? _selectedGroupId;
@@ -86,13 +83,11 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
 
     try {
       final groups = await _businessApi.listTravelGroups(limit: 100);
-      final orders = await _businessApi.listSalesOrders(limit: 100);
       if (!mounted) {
         return;
       }
       setState(() {
         _groups = groups;
-        _orders = orders;
         _loading = false;
         _selectedGroupId = _selectedGroupIdFor(groups);
         _syncSelectedGroupFields();
@@ -153,25 +148,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     }).toList();
   }
 
-  Set<String> get _selectedOrderIds {
-    final group = _selectedGroup;
-    if (group == null) {
-      return <String>{};
-    }
-    return _selectedOrderIdsByGroup.putIfAbsent(group.id, () {
-      return _orders
-          .where((order) => _isOrderBoundToGroup(order, group.id))
-          .map((order) => order.id)
-          .toSet();
-    });
-  }
-
-  int get _selectedOrdersAmountCents {
-    return _orders
-        .where((order) => _selectedOrderIds.contains(order.id))
-        .fold<int>(0, (sum, order) => sum + order.totalAmountCents);
-  }
-
   void _selectGroup(TravelGroupRecord group) {
     setState(() {
       _selectedGroupId = group.id;
@@ -187,17 +163,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     _remarksController.text = group?.remarks ?? '';
     _tastingItemDrafts = _tastingDraftsFromGroup(group);
     _tastingItems = _tastingPayloadFromGroup(group);
-  }
-
-  void _toggleOrder(String orderId, bool selected) {
-    setState(() {
-      final selectedIds = _selectedOrderIds;
-      if (selected) {
-        selectedIds.add(orderId);
-      } else {
-        selectedIds.remove(orderId);
-      }
-    });
   }
 
   Future<void> _saveSupplement() async {
@@ -221,15 +186,10 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     });
 
     try {
-      final selectedOrderIds = Set<String>.from(_selectedOrderIds);
-      final updatedOrders = await _persistOrderBindings(
-        group,
-        selectedOrderIds,
-      );
       final updated = await _businessApi.updateTravelGroup(group.id, {
+        'tastingItems': _tastingItems,
         'departureTime': normalizeTimeText(_departureTimeController.text),
         'remarks': _remarksController.text.trim(),
-        'tastingItems': _tastingItems,
       });
       if (!mounted) {
         return;
@@ -238,12 +198,10 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _groups = [
           for (final item in _groups) item.id == updated.id ? updated : item,
         ];
-        _orders = _ordersWithUpdates(updatedOrders);
-        _selectedOrderIdsByGroup[group.id] = selectedOrderIds;
         _tastingItemDrafts = _tastingDraftsFromGroup(updated);
         _tastingItems = _tastingPayloadFromGroup(updated);
         _saving = false;
-        _successMessage = '明细与备注已成功保存。';
+        _successMessage = '损耗与离店备注已成功保存';
       });
     } catch (error) {
       if (!mounted) {
@@ -257,57 +215,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   }
 
   bool _needsSupplement(TravelGroupRecord group) {
-    final selectedIds = _selectedOrderIdsByGroup[group.id];
-    final hasBoundOrder = (selectedIds != null && selectedIds.isNotEmpty) ||
-        _orders.any((order) => _isOrderBoundToGroup(order, group.id));
-    return (group.departureTime ?? '').isEmpty &&
-        (group.remarks ?? '').isEmpty &&
-        !hasBoundOrder;
-  }
-
-  Future<List<SalesOrderRecord>> _persistOrderBindings(
-    TravelGroupRecord group,
-    Set<String> selectedOrderIds,
-  ) {
-    final currentOrderIds = _orders
-        .where((order) => _isOrderBoundToGroup(order, group.id))
-        .map((order) => order.id)
-        .toSet();
-    final updates = <Future<SalesOrderRecord>>[];
-    for (final order in _orders) {
-      final shouldBind = selectedOrderIds.contains(order.id);
-      final isBound = currentOrderIds.contains(order.id);
-      if (shouldBind == isBound) {
-        continue;
-      }
-      updates.add(
-        _businessApi.updateSalesOrder(
-          order.id,
-          shouldBind
-              ? {
-                  'orderType': 'travel_group',
-                  'travelGroupId': group.id,
-                }
-              : {
-                  'orderType': order.orderType == 'travel_group'
-                      ? 'external'
-                      : order.orderType,
-                  'travelGroupId': null,
-                },
-        ),
-      );
-    }
-    return Future.wait(updates);
-  }
-
-  List<SalesOrderRecord> _ordersWithUpdates(List<SalesOrderRecord> updates) {
-    if (updates.isEmpty) {
-      return _orders;
-    }
-    final updatedById = {for (final order in updates) order.id: order};
-    return [
-      for (final order in _orders) updatedById[order.id] ?? order,
-    ];
+    return (group.departureTime ?? '').isEmpty && (group.remarks ?? '').isEmpty;
   }
 
   @override
@@ -325,8 +233,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _OrderNotesSummary(
           groupCount: _groups.length,
           pendingCount: _groups.where(_needsSupplement).length,
-          selectedOrderCount: _selectedOrderIds.length,
-          selectedOrdersAmountCents: _selectedOrdersAmountCents,
         ),
         ResponsiveTwoColumn(
           primaryFlex: 1,
@@ -341,17 +247,14 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
             onFilterChanged: (value) => setState(() => _filter = value),
             onSelectGroup: _selectGroup,
           ),
-          secondary: _BindingPanel(
+          secondary: _NotesPanel(
             businessApi: _businessApi,
             group: selectedGroup,
-            orders: _orders,
-            selectedOrderIds: _selectedOrderIds,
             tastingItemsKey: _tastingItemsKey,
             initialTastingItems: _tastingItemDrafts,
             departureTimeController: _departureTimeController,
             remarksController: _remarksController,
             saving: _saving,
-            onOrderChanged: _toggleOrder,
             onTastingItemsChanged: (items) => _tastingItems = items,
             onSave: _saving ? null : _saveSupplement,
             onClear: selectedGroup == null
@@ -361,7 +264,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
                     setState(() {
                       _departureTimeController.clear();
                       _remarksController.clear();
-                      _selectedOrderIds.clear();
                       _tastingItems = const <Map<String, dynamic>>[];
                       _tastingItemDrafts = const <TastingItemDraft>[];
                       _successMessage = null;
@@ -379,14 +281,10 @@ class _OrderNotesSummary extends StatelessWidget {
   const _OrderNotesSummary({
     required this.groupCount,
     required this.pendingCount,
-    required this.selectedOrderCount,
-    required this.selectedOrdersAmountCents,
   });
 
   final int groupCount;
   final int pendingCount;
-  final int selectedOrderCount;
-  final int selectedOrdersAmountCents;
 
   @override
   Widget build(BuildContext context) {
@@ -397,14 +295,6 @@ class _OrderNotesSummary extends StatelessWidget {
       children: [
         StatusTag(label: '旅行团 $groupCount 个', tone: StatusTone.info),
         StatusTag(label: '待补充 $pendingCount 个', tone: StatusTone.warning),
-        StatusTag(label: '已选订单 $selectedOrderCount 笔', tone: StatusTone.info),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('已选金额 '),
-            MoneyText(cents: selectedOrdersAmountCents),
-          ],
-        ),
       ],
     );
   }
@@ -488,18 +378,15 @@ class _GroupQueue extends StatelessWidget {
   }
 }
 
-class _BindingPanel extends StatelessWidget {
-  const _BindingPanel({
+class _NotesPanel extends StatelessWidget {
+  const _NotesPanel({
     required this.businessApi,
     required this.group,
-    required this.orders,
-    required this.selectedOrderIds,
     required this.tastingItemsKey,
     required this.initialTastingItems,
     required this.departureTimeController,
     required this.remarksController,
     required this.saving,
-    required this.onOrderChanged,
     required this.onTastingItemsChanged,
     required this.onSave,
     required this.onClear,
@@ -507,14 +394,11 @@ class _BindingPanel extends StatelessWidget {
 
   final BusinessApi businessApi;
   final TravelGroupRecord? group;
-  final List<SalesOrderRecord> orders;
-  final Set<String> selectedOrderIds;
   final GlobalKey<TastingItemsEditorState> tastingItemsKey;
   final List<TastingItemDraft> initialTastingItems;
   final TextEditingController departureTimeController;
   final TextEditingController remarksController;
   final bool saving;
-  final void Function(String orderId, bool selected) onOrderChanged;
   final ValueChanged<List<Map<String, dynamic>>> onTastingItemsChanged;
   final VoidCallback? onSave;
   final VoidCallback? onClear;
@@ -527,11 +411,7 @@ class _BindingPanel extends StatelessWidget {
     }
 
     return FormSection(
-      title: '订单绑定与离店备注',
-      trailing: StatusTag(
-        label: '${selectedOrderIds.length} 笔订单',
-        tone: StatusTone.info,
-      ),
+      title: '损耗与离店备注',
       children: [
         _SelectedGroupHeader(group: selectedGroup),
         const SizedBox(height: 12),
@@ -540,12 +420,6 @@ class _BindingPanel extends StatelessWidget {
           tastingItemsKey: tastingItemsKey,
           initialItems: initialTastingItems,
           onChanged: onTastingItemsChanged,
-        ),
-        const SizedBox(height: 12),
-        _OrderBindingBox(
-          orders: orders,
-          selectedOrderIds: selectedOrderIds,
-          onChanged: onOrderChanged,
         ),
         const SizedBox(height: 12),
         ResponsiveFormGrid(
@@ -564,7 +438,7 @@ class _BindingPanel extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         SectionActions(
-          primaryLabel: saving ? '保存中...' : '保存明细与备注',
+          primaryLabel: saving ? '保存中...' : '保存损耗与备注',
           secondaryLabel: '清空',
           onPrimaryPressed: onSave,
           onSecondaryPressed: onClear,
@@ -645,60 +519,6 @@ class _SelectedGroupHeader extends StatelessWidget {
   }
 }
 
-class _OrderBindingBox extends StatelessWidget {
-  const _OrderBindingBox({
-    required this.orders,
-    required this.selectedOrderIds,
-    required this.onChanged,
-  });
-
-  final List<SalesOrderRecord> orders;
-  final Set<String> selectedOrderIds;
-  final void Function(String orderId, bool selected) onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        border: Border.all(color: scheme.outlineVariant),
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '绑定订单',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            if (orders.isEmpty)
-              Text('暂无可绑定订单', style: Theme.of(context).textTheme.bodySmall)
-            else
-              for (final order in orders)
-                CheckboxListTile(
-                  value: selectedOrderIds.contains(order.id),
-                  onChanged: (value) => onChanged(order.id, value == true),
-                  title: Text('${order.orderNo} · ${order.customerName}'),
-                  subtitle: Text(
-                    '${_orderTypeLabel(order.orderType)} · ${formatMoneyCents(order.totalAmountCents)}',
-                  ),
-                  dense: true,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: EdgeInsets.zero,
-                ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _EmptyCard extends StatelessWidget {
   const _EmptyCard({required this.title});
 
@@ -748,10 +568,6 @@ String _messageForError(Object error) {
   return '操作失败，请稍后重试。';
 }
 
-bool _isOrderBoundToGroup(SalesOrderRecord order, String groupId) {
-  return order.travelGroup?.id == groupId || order.travelGroupId == groupId;
-}
-
 String _groupStatusLabel(String status) {
   switch (status) {
     case 'ordered':
@@ -773,22 +589,6 @@ StatusTone _groupStatusTone(String status) {
     case 'unmarked':
     default:
       return StatusTone.neutral;
-  }
-}
-
-String _orderTypeLabel(String type) {
-  switch (type) {
-    case 'buyback':
-      return '回购订单';
-    case 'external':
-      return '外销订单';
-    case 'internal':
-      return '内购订单';
-    case 'after_sales':
-      return '售后订单';
-    case 'travel_group':
-    default:
-      return '旅行团订单';
   }
 }
 

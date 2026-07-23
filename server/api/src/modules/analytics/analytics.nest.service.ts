@@ -17,6 +17,7 @@ import {
   buildAnalyticsSalesOrderWhere,
   buildAnalyticsTravelGroupWhere,
 } from './analytics-scope.helper';
+import { calculateTravelGroupProfit } from './travel-group-profit.helper';
 
 const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
 const UNASSIGNED_TASTER_KEY = '__unassigned_taster__';
@@ -166,6 +167,141 @@ export class AnalyticsNestService {
     return {
       range: context.range,
       summary: calculateProductProfitSummary(orders),
+    };
+  }
+
+  async listTravelGroupProfits(actor: any, query: any = {}) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const range = normalizeAnalyticsDateRange({
+      preset: query?.preset,
+      dateFrom: query?.dateFrom,
+      dateTo: query?.dateTo,
+    });
+    const { onlyShowMarkedRecords } =
+      await this.settingsService.getGlobalMarkQuery();
+    const travelGroups = await this.prisma.travelGroup.findMany({
+      where: buildAnalyticsTravelGroupWhere({
+        onlyShowMarkedRecords,
+        dateRange: {
+          dateFrom: range.dateFrom,
+          dateTo: range.dateTo,
+        },
+        baseWhere: buildTravelGroupProfitSearchFilter(query?.query),
+      }),
+      orderBy: {
+        visitDate: 'desc',
+      },
+    });
+    const travelGroupIds = travelGroups
+      .map((group: any) => normalizeOptionalString(group?.id))
+      .filter(Boolean);
+    const salesOrders = travelGroupIds.length
+      ? await this.prisma.salesOrder.findMany({
+          where: buildAnalyticsSalesOrderWhere({
+            onlyShowMarkedRecords,
+            baseWhere: {
+              travelGroupId: {
+                in: travelGroupIds,
+              },
+            },
+          }),
+          include: getSalesOrderProfitAnalyticsInclude(),
+          orderBy: {
+            orderDate: 'asc',
+          },
+        })
+      : [];
+    const salesOrderIds = salesOrders
+      .map((order: any) => normalizeOptionalString(order?.id))
+      .filter(Boolean);
+    const [commissionRecords, financeSummaries] = travelGroupIds.length
+      ? await Promise.all([
+          this.prisma.commissionRecord.findMany({
+            where: {
+              OR: [
+                {
+                  travelGroupId: {
+                    in: travelGroupIds,
+                  },
+                },
+                ...(salesOrderIds.length
+                  ? [
+                      {
+                        salesOrderId: {
+                          in: salesOrderIds,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          }),
+          this.prisma.travelGroupFinanceSummary.findMany({
+            where: {
+              travelGroupId: {
+                in: travelGroupIds,
+              },
+            },
+          }),
+        ])
+      : [[], []];
+    const ordersByTravelGroupId = groupRowsBy(
+      salesOrders,
+      (order: any) => normalizeOptionalString(order?.travelGroupId),
+    );
+    const commissionRecordsByTravelGroupId = groupCommissionRecordsByTravelGroup(
+      commissionRecords,
+      salesOrders,
+    );
+    const financeSummaryByTravelGroupId = new Map(
+      financeSummaries
+        .map((summary: any) => [
+          normalizeOptionalString(summary?.travelGroupId),
+          summary,
+        ])
+        .filter(([travelGroupId]) => Boolean(travelGroupId)) as Array<
+        [string, any]
+      >,
+    );
+    const status = normalizeTravelGroupProfitStatus(query?.status);
+    const rows = travelGroups
+      .map((travelGroup: any) => {
+        const travelGroupId = normalizeOptionalString(travelGroup?.id) || '';
+        return calculateTravelGroupProfit({
+          travelGroup,
+          salesOrders: ordersByTravelGroupId.get(travelGroupId) || [],
+          commissionRecords:
+            commissionRecordsByTravelGroupId.get(travelGroupId) || [],
+          financeSummary:
+            financeSummaryByTravelGroupId.get(travelGroupId) || null,
+        });
+      })
+      .filter((row: any) => !status || row.calculationStatus === status);
+    sortTravelGroupProfitRows(
+      rows,
+      normalizeTravelGroupProfitSortBy(query?.sortBy),
+      normalizeSortDirection(query?.sortDirection),
+    );
+    const page = normalizePositivePage(query?.page);
+    const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
+    const total = rows.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+
+    return {
+      range: {
+        preset: range.preset,
+        dateFrom: range.dateFrom,
+        dateTo: range.dateTo,
+      },
+      summary: buildTravelGroupProfitSummary(rows),
+      items: rows.slice(start, start + pageSize).map(toTravelGroupProfitDto),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+      },
     };
   }
 
@@ -795,6 +931,246 @@ function getSalesOrderProfitAnalyticsInclude() {
     items: true,
     afterSalesOrders: true,
     commissionRecords: true,
+  };
+}
+
+function buildTravelGroupProfitSearchFilter(value: unknown) {
+  const query = normalizeOptionalString(value);
+  if (!query) {
+    return null;
+  }
+  return {
+    OR: [
+      { groupNo: { contains: query } },
+      { travelAgency: { contains: query } },
+      { guideName: { contains: query } },
+      { tasterName: { contains: query } },
+    ],
+  };
+}
+
+function groupRowsBy<T>(
+  rows: T[],
+  keyOf: (row: T) => string | null,
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!key) {
+      continue;
+    }
+    grouped.set(key, [...(grouped.get(key) || []), row]);
+  }
+  return grouped;
+}
+
+function groupCommissionRecordsByTravelGroup(
+  commissionRecords: any[],
+  salesOrders: any[],
+) {
+  const travelGroupIdBySalesOrderId = new Map(
+    salesOrders
+      .map((order: any) => [
+        normalizeOptionalString(order?.id),
+        normalizeOptionalString(order?.travelGroupId),
+      ])
+      .filter(
+        ([salesOrderId, travelGroupId]) =>
+          Boolean(salesOrderId) && Boolean(travelGroupId),
+      ) as Array<[string, string]>,
+  );
+  return groupRowsBy(commissionRecords, (record: any) => {
+    const directTravelGroupId = normalizeOptionalString(record?.travelGroupId);
+    if (directTravelGroupId) {
+      return directTravelGroupId;
+    }
+    const salesOrderId = normalizeOptionalString(record?.salesOrderId);
+    return salesOrderId
+      ? travelGroupIdBySalesOrderId.get(salesOrderId) || null
+      : null;
+  });
+}
+
+function normalizeTravelGroupProfitStatus(value: unknown) {
+  const status = normalizeOptionalString(value)?.toLowerCase();
+  if (!status || status === 'all') {
+    return null;
+  }
+  if (['complete', 'estimated', 'incomplete', 'no_sales'].includes(status)) {
+    return status;
+  }
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    'status must be complete, estimated, incomplete, or no_sales.',
+  );
+}
+
+function normalizeTravelGroupProfitSortBy(value: unknown) {
+  const sortBy = normalizeOptionalString(value) || 'visitDate';
+  if (
+    [
+      'visitDate',
+      'effectiveSalesAmountCents',
+      'estimatedProfitCents',
+      'estimatedProfitRate',
+    ].includes(sortBy)
+  ) {
+    return sortBy;
+  }
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    'sortBy must be visitDate, effectiveSalesAmountCents, estimatedProfitCents, or estimatedProfitRate.',
+  );
+}
+
+function sortTravelGroupProfitRows(
+  rows: any[],
+  sortBy: string,
+  sortDirection: string,
+) {
+  const multiplier = sortDirection === 'asc' ? 1 : -1;
+  rows.sort((left, right) => {
+    const leftValue = left?.[sortBy];
+    const rightValue = right?.[sortBy];
+    if (leftValue === null || leftValue === undefined) {
+      return rightValue === null || rightValue === undefined ? 0 : 1;
+    }
+    if (rightValue === null || rightValue === undefined) {
+      return -1;
+    }
+    const comparison =
+      typeof leftValue === 'string' || typeof rightValue === 'string'
+        ? String(leftValue).localeCompare(String(rightValue))
+        : Number(leftValue) - Number(rightValue);
+    if (comparison !== 0) {
+      return comparison * multiplier;
+    }
+    const visitDateComparison = String(right?.visitDate || '').localeCompare(
+      String(left?.visitDate || ''),
+    );
+    if (visitDateComparison !== 0) {
+      return visitDateComparison;
+    }
+    return String(left?.groupNo || '').localeCompare(
+      String(right?.groupNo || ''),
+      'zh-Hans-CN',
+    );
+  });
+}
+
+function normalizePositivePage(value: unknown) {
+  const text = normalizeOptionalString(value);
+  if (!text) {
+    return 1;
+  }
+  const page = Number(text);
+  if (!Number.isInteger(page) || page < 1) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'page must be a positive integer.',
+    );
+  }
+  return page;
+}
+
+function normalizeTravelGroupProfitPageSize(value: unknown) {
+  const text = normalizeOptionalString(value);
+  if (!text) {
+    return 50;
+  }
+  const pageSize = Number(text);
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'pageSize must be a positive integer.',
+    );
+  }
+  return Math.min(pageSize, 200);
+}
+
+function buildTravelGroupProfitSummary(rows: any[]) {
+  const incompleteGroupCount = rows.filter(
+    (row) => row.calculationStatus === 'incomplete',
+  ).length;
+  const effectiveSalesAmountCents = sumBy(
+    rows,
+    (row) => Number(row.effectiveSalesAmountCents || 0),
+  );
+  const knownEstimatedProfitCents = sumBy(
+    rows.filter((row) => row.estimatedProfitCents !== null),
+    (row) => Number(row.estimatedProfitCents || 0),
+  );
+  const estimatedProfitCents =
+    incompleteGroupCount > 0 ? null : knownEstimatedProfitCents;
+  return {
+    groupCount: rows.length,
+    completeGroupCount: rows.filter(
+      (row) => row.calculationStatus === 'complete',
+    ).length,
+    estimatedGroupCount: rows.filter(
+      (row) => row.calculationStatus === 'estimated',
+    ).length,
+    incompleteGroupCount,
+    noSalesGroupCount: rows.filter(
+      (row) => row.calculationStatus === 'no_sales',
+    ).length,
+    effectiveSalesAmountCents,
+    actualProductCostCents: sumBy(
+      rows,
+      (row) => Number(row.actualProductCostCents || 0),
+    ),
+    totalExpenseCents: sumBy(
+      rows,
+      (row) => Number(row.totalExpenseCents || 0),
+    ),
+    estimatedProfitCents,
+    knownEstimatedProfitCents,
+    estimatedProfitRate:
+      estimatedProfitCents === null || effectiveSalesAmountCents === 0
+        ? null
+        : estimatedProfitCents / effectiveSalesAmountCents,
+  };
+}
+
+function toTravelGroupProfitDto(row: any) {
+  return {
+    travelGroupId: String(row.travelGroupId || ''),
+    groupNo: String(row.groupNo || ''),
+    visitDate: String(row.visitDate || ''),
+    travelAgency: String(row.travelAgency || ''),
+    guideName: String(row.guideName || ''),
+    tasterName: String(row.tasterName || ''),
+    guestCount: Number(row.guestCount || 0),
+    orderCount: Number(row.orderCount || 0),
+    effectiveSalesAmountCents: Number(row.effectiveSalesAmountCents || 0),
+    confirmedRefundAmountCents: Number(row.confirmedRefundAmountCents || 0),
+    pendingRefundAmountCents: Number(row.pendingRefundAmountCents || 0),
+    actualProductCostCents: Number(row.actualProductCostCents || 0),
+    logisticsFeeCents: Number(row.logisticsFeeCents || 0),
+    employeeCommissionCents: Number(row.employeeCommissionCents || 0),
+    tasterCommissionCents: Number(row.tasterCommissionCents || 0),
+    dailyAgencyRebateCents: Number(row.dailyAgencyRebateCents || 0),
+    monthlyAgencyRebateCents: Number(row.monthlyAgencyRebateCents || 0),
+    totalExpenseCents: Number(row.totalExpenseCents || 0),
+    estimatedProfitCents:
+      row.estimatedProfitCents === null
+        ? null
+        : Number(row.estimatedProfitCents),
+    estimatedProfitRate:
+      row.estimatedProfitRate === null
+        ? null
+        : Number(row.estimatedProfitRate),
+    calculationStatus: String(row.calculationStatus || ''),
+    warnings: (Array.isArray(row.warnings) ? row.warnings : []).map(
+      (warning: any) => ({
+        code: String(warning?.code || ''),
+        message: String(warning?.message || warning?.code || ''),
+      }),
+    ),
   };
 }
 

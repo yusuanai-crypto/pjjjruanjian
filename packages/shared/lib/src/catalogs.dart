@@ -64,7 +64,7 @@ const sharedMenuEntries = <SharedMenuEntry>[
     label: '积分表',
     phase: 6,
   ),
-  SharedMenuEntry(id: 'travel_group_order_notes', label: '订单绑定与离店备注', phase: 4),
+  SharedMenuEntry(id: 'travel_group_order_notes', label: '损耗与离店备注', phase: 4),
   SharedMenuEntry(id: 'order_form', label: '订单录入', phase: 4),
   SharedMenuEntry(id: 'order_query', label: '订单管理', phase: 4),
   SharedMenuEntry(id: 'qr_sales_sheet', label: '二维码销售单', phase: 5),
@@ -77,6 +77,7 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'warehouse_packing', label: '库管打包', phase: 6),
   SharedMenuEntry(id: 'after_sales_form', label: '售后处理', phase: 6),
   SharedMenuEntry(id: 'analytics', label: '数据分析', phase: 8),
+  SharedMenuEntry(id: 'profit_analysis', label: '利润分析', phase: 10),
   SharedMenuEntry(id: 'ai_assistant', label: 'AI 助手', phase: 9),
 ];
 
@@ -101,6 +102,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'warehouse_packing',
     'after_sales_form',
     'analytics',
+    'profit_analysis',
     'ai_assistant',
   ],
   UserRole.admin: [
@@ -123,6 +125,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'warehouse_packing',
     'after_sales_form',
     'analytics',
+    'profit_analysis',
     'ai_assistant',
   ],
   UserRole.boss: [
@@ -131,6 +134,7 @@ const roleMenuIds = <UserRole, List<String>>{
     'travel_group_query',
     'order_query',
     'analytics',
+    'profit_analysis',
     'ai_assistant',
   ],
   UserRole.frontDesk: [

@@ -47,15 +47,13 @@ export class AfterSalesOrdersNestController {
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      afterSalesOrder: await this.businessDataService.createAfterSalesOrder(
-        actor,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    return this.businessDataService.createAfterSalesOrder(
+      actor,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Get(':id')
@@ -76,17 +74,14 @@ export class AfterSalesOrdersNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      afterSalesOrder:
-        await this.businessDataService.confirmAfterSalesOrderFinance(
-          actor,
-          id,
-          body,
-          {
-            ipAddress: getRequestIp(request),
-          },
-        ),
-    };
+    return this.businessDataService.confirmAfterSalesOrderFinance(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Patch(':id/warehouse-confirm')
@@ -96,17 +91,14 @@ export class AfterSalesOrdersNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      afterSalesOrder:
-        await this.businessDataService.confirmAfterSalesOrderWarehouse(
-          actor,
-          id,
-          body,
-          {
-            ipAddress: getRequestIp(request),
-          },
-        ),
-    };
+    return this.businessDataService.confirmAfterSalesOrderWarehouse(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Post(':id/finance-refund-confirm')
@@ -120,17 +112,14 @@ export class AfterSalesOrdersNestController {
   ) {
     const actor = request.currentUser;
     try {
-      return {
-        afterSalesOrder:
-          await this.businessDataService.confirmAfterSalesOrderFinanceRefund(
-            actor,
-            id,
-            files,
-            {
-              ipAddress: getRequestIp(request),
-            },
-          ),
-      };
+      return await this.businessDataService.confirmAfterSalesOrderFinanceRefund(
+        actor,
+        id,
+        files,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
     } finally {
       await this.uploadConfig.cleanupTemporaryFiles(files);
     }
@@ -168,17 +157,14 @@ export class AfterSalesOrdersNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      afterSalesOrder:
-        await this.businessDataService.updateAfterSalesOrderStatus(
-          actor,
-          id,
-          body,
-          {
-            ipAddress: getRequestIp(request),
-          },
-        ),
-    };
+    return this.businessDataService.updateAfterSalesOrderStatus(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Patch(':id')
@@ -188,15 +174,13 @@ export class AfterSalesOrdersNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      afterSalesOrder: await this.businessDataService.updateAfterSalesOrder(
-        actor,
-        id,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    return this.businessDataService.updateAfterSalesOrder(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 }

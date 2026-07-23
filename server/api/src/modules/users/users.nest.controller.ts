@@ -116,4 +116,19 @@ export class UsersNestController {
       }),
     };
   }
+
+  @Post(':id/reset-password-to-default')
+  @HttpCode(200)
+  async resetPasswordToDefault(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      user: await this.usersService.resetPasswordToDefault(actor, id, body, {
+        ipAddress: getRequestIp(request),
+      }),
+    };
+  }
 }

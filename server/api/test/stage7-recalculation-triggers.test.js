@@ -499,6 +499,18 @@ test('contract: after-sales finance confirm and cancel recalculate stage7 amount
           log.afterData.amountCents === 2600,
       );
       assert.ok(confirmedSalesRecalc);
+      let summary = await getTravelGroupFinanceSummary(
+        baseUrl,
+        admin.token,
+        TRAVEL_GROUP_ID,
+      );
+      assert.equal(summary.pendingAfterSalesRefundAmountCents, 0);
+      assert.equal(summary.confirmedRefundAmountCents, 50000);
+      assert.equal(summary.effectiveSalesAmountCents, 150000);
+      assert.equal(summary.totalAgencyNetAmountCents, 120000);
+      assert.equal(summary.totalDailyRebateCents, 3600);
+      assert.equal(summary.totalMonthlyRebateCents, 2400);
+      assert.equal(summary.afterSalesImpactStatus, 'refund_adjusted');
 
       const cancelled = await requestJson(
         baseUrl,
@@ -527,6 +539,20 @@ test('contract: after-sales finance confirm and cancel recalculate stage7 amount
           log.afterData.amountCents === 3600,
       );
       assert.ok(restoredSalesRecalc);
+      summary = await getTravelGroupFinanceSummary(
+        baseUrl,
+        admin.token,
+        TRAVEL_GROUP_ID,
+      );
+      assert.equal(summary.pendingAfterSalesRefundAmountCents, 50000);
+      assert.equal(summary.confirmedRefundAmountCents, 0);
+      assert.equal(summary.effectiveSalesAmountCents, 200000);
+      assert.equal(summary.totalDailyRebateCents, 5100);
+      assert.equal(summary.totalMonthlyRebateCents, 3400);
+      assert.equal(
+        summary.afterSalesImpactStatus,
+        'refund_pending_confirmation',
+      );
 
       triggerLogs = await operationLogs(
         baseUrl,
@@ -551,6 +577,272 @@ test('contract: after-sales finance confirm and cancel recalculate stage7 amount
       env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
       prisma: buildStage7RecalculationPrisma(),
     });
+  });
+});
+
+test('contract: negotiating after-sales refreshes pending points impact once without changing amounts', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSales = await login(
+      baseUrl,
+      'stage7-recalc-after-sales',
+      TEST_PASSWORD,
+    );
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+
+    const createdAfterSales = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders',
+      {
+        method: 'POST',
+        token: afterSales.token,
+        body: {
+          salesOrderId: createdOrder.id,
+          issueType: 'quality_issue',
+          actionType: 'refund',
+          description: 'stage7 negotiating pending refund regression',
+          refundAmountCents: 50000,
+          status: 'negotiating',
+        },
+      },
+    );
+    assert.equal(createdAfterSales.response.status, 201);
+    assert.equal(
+      createdAfterSales.body.data.afterSalesOrder.salesOrder.status,
+      'valid',
+    );
+    assert.equal(
+      createdAfterSales.body.data.commissionAndPointsImpact
+        .pendingAfterSalesRefundAmountCents,
+      50000,
+    );
+
+    const triggerLogs = await operationLogs(
+      baseUrl,
+      admin.token,
+      'commission_records.recalculate.trigger',
+    );
+    const afterSalesTriggers = triggerLogs.filter(
+      (log) =>
+        log.afterData.afterSalesOrderId ===
+        createdAfterSales.body.data.afterSalesOrder.id,
+    );
+    assert.equal(afterSalesTriggers.length, 1);
+    assert.equal(
+      afterSalesTriggers[0].afterData.trigger,
+      'after_sales_create',
+    );
+    assert.equal(
+      afterSalesTriggers[0].afterData.pendingAfterSalesRefundAmountCents,
+      50000,
+    );
+
+    const summary = await getTravelGroupFinanceSummary(
+      baseUrl,
+      admin.token,
+      TRAVEL_GROUP_ID,
+    );
+    assert.equal(summary.confirmedRefundAmountCents, 0);
+    assert.equal(summary.effectiveSalesAmountCents, 200000);
+    assert.equal(summary.totalDailyRebateCents, 5100);
+    assert.equal(summary.totalMonthlyRebateCents, 3400);
+    assert.equal(summary.afterSalesCount, 1);
+    assert.equal(summary.activeAfterSalesCount, 1);
+    assert.equal(summary.pendingAfterSalesRefundCount, 1);
+    assert.equal(summary.pendingAfterSalesRefundAmountCents, 50000);
+    assert.equal(summary.afterSalesImpactStatus, 'refund_pending_confirmation');
+    const summaryList = await listTravelGroupFinanceSummaries(
+      baseUrl,
+      admin.token,
+    );
+    const listedSummary = summaryList.find(
+      (item) => item.travelGroupId === TRAVEL_GROUP_ID,
+    );
+    assert.ok(listedSummary);
+    assert.equal(listedSummary.afterSalesCount, 1);
+    assert.equal(listedSummary.pendingAfterSalesRefundAmountCents, 50000);
+    assert.equal(
+      listedSummary.afterSalesImpactStatus,
+      'refund_pending_confirmation',
+    );
+
+    const commissionRecords = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    assert.equal(commissionRecords.length, 5);
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: zero-refund resend marks after-sales processing without changing points', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSales = await login(
+      baseUrl,
+      'stage7-recalc-after-sales',
+      TEST_PASSWORD,
+    );
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+    await createAfterSales(baseUrl, afterSales.token, {
+      salesOrderId: createdOrder.id,
+      actionType: 'resend',
+      refundAmountCents: 0,
+      status: 'waiting_resend',
+      description: 'stage7 zero refund resend impact',
+    });
+
+    const summary = await getTravelGroupFinanceSummary(
+      baseUrl,
+      admin.token,
+      TRAVEL_GROUP_ID,
+    );
+    assert.equal(summary.confirmedRefundAmountCents, 0);
+    assert.equal(summary.effectiveSalesAmountCents, 200000);
+    assert.equal(summary.pendingAfterSalesRefundAmountCents, 0);
+    assert.equal(summary.afterSalesCount, 1);
+    assert.equal(summary.activeAfterSalesCount, 1);
+    assert.equal(summary.afterSalesImpactStatus, 'after_sales_processing');
+    assert.equal(summary.totalDailyRebateCents, 5100);
+    assert.equal(summary.totalMonthlyRebateCents, 3400);
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: multiple after-sales changes accumulate snapshot impact without duplicate records', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSales = await login(
+      baseUrl,
+      'stage7-recalc-after-sales',
+      TEST_PASSWORD,
+    );
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+    const refund = await createAfterSales(baseUrl, afterSales.token, {
+      salesOrderId: createdOrder.id,
+      actionType: 'refund',
+      refundAmountCents: 20000,
+      status: 'negotiating',
+      description: 'stage7 first pending refund',
+    });
+    await createAfterSales(baseUrl, afterSales.token, {
+      salesOrderId: createdOrder.id,
+      actionType: 'resend',
+      refundAmountCents: 0,
+      status: 'waiting_resend',
+      description: 'stage7 zero refund resend',
+    });
+
+    const updatedRefund = await requestJson(
+      baseUrl,
+      `/api/after-sales-orders/${refund.id}`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          refundAmountCents: 35000,
+        },
+      },
+    );
+    assert.equal(updatedRefund.response.status, 200);
+
+    let summary = await getTravelGroupFinanceSummary(
+      baseUrl,
+      admin.token,
+      TRAVEL_GROUP_ID,
+    );
+    assert.equal(summary.afterSalesCount, 2);
+    assert.equal(summary.activeAfterSalesCount, 2);
+    assert.equal(summary.pendingAfterSalesRefundCount, 1);
+    assert.equal(summary.pendingAfterSalesRefundAmountCents, 35000);
+    assert.equal(summary.totalDailyRebateCents, 5100);
+
+    const waitingRefund = await requestJson(
+      baseUrl,
+      `/api/after-sales-orders/${refund.id}/status`,
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: {
+          status: 'waiting_refund',
+        },
+      },
+    );
+    assert.equal(waitingRefund.response.status, 200);
+    summary = await getTravelGroupFinanceSummary(
+      baseUrl,
+      admin.token,
+      TRAVEL_GROUP_ID,
+    );
+    assert.equal(summary.pendingAfterSalesRefundAmountCents, 35000);
+    assert.equal(summary.latestAfterSalesNo, refund.afterSalesNo);
+    assert.equal(summary.latestAfterSalesStatus, 'waiting_refund');
+
+    const commissionRecords = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    assert.equal(commissionRecords.length, 5);
+    const triggerLogs = await operationLogs(
+      baseUrl,
+      admin.token,
+      'commission_records.recalculate.trigger',
+    );
+    for (const afterSalesOrderId of [
+      refund.id,
+      waitingRefund.body.data.afterSalesOrder.id,
+    ]) {
+      assert.ok(
+        triggerLogs.some(
+          (log) => log.afterData.afterSalesOrderId === afterSalesOrderId,
+        ),
+      );
+    }
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: after-sales without travel group returns structured warnings', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSales = await login(
+      baseUrl,
+      'stage7-recalc-after-sales',
+      TEST_PASSWORD,
+    );
+    const createdOrder = await createStage7Order(baseUrl, admin.token, {
+      orderType: 'external',
+      travelGroupId: null,
+    });
+    const createdAfterSales = await createAfterSales(
+      baseUrl,
+      afterSales.token,
+      {
+        salesOrderId: createdOrder.id,
+        actionType: 'record_only',
+        refundAmountCents: 0,
+        status: 'negotiating',
+        description: 'stage7 missing travel group warning',
+      },
+    );
+
+    assert.ok(
+      createdAfterSales.warningCodes.includes('missing_travel_group'),
+    );
+    assert.ok(
+      createdAfterSales.warningCodes.includes('missing_travel_agency'),
+    );
+    assert.equal(
+      createdAfterSales.commissionAndPointsImpact.travelGroupIds.length,
+      0,
+    );
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
   });
 });
 
@@ -693,6 +985,63 @@ async function createStage7Order(baseUrl, token, overrides = {}) {
   });
   assert.equal(result.response.status, 201);
   return result.body.data.salesOrder;
+}
+
+async function createAfterSales(baseUrl, token, overrides = {}) {
+  const result = await requestJson(baseUrl, '/api/after-sales-orders', {
+    method: 'POST',
+    token,
+    body: {
+      issueType: 'quality_issue',
+      actionType: 'record_only',
+      description: 'stage7 after-sales impact',
+      refundAmountCents: 0,
+      status: 'negotiating',
+      ...overrides,
+    },
+  });
+  assert.equal(result.response.status, 201, JSON.stringify(result.body));
+  return {
+    ...result.body.data.afterSalesOrder,
+    warningCodes: result.body.data.warningCodes || [],
+    warnings: result.body.data.warnings || [],
+    commissionAndPointsImpact:
+      result.body.data.commissionAndPointsImpact || null,
+  };
+}
+
+async function getTravelGroupFinanceSummary(
+  baseUrl,
+  token,
+  travelGroupId,
+) {
+  const result = await requestJson(
+    baseUrl,
+    `/api/travel-group-finance-summaries/${travelGroupId}`,
+    { token },
+  );
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  return result.body.data.travelGroupFinanceSummary;
+}
+
+async function listTravelGroupFinanceSummaries(baseUrl, token) {
+  const result = await requestJson(
+    baseUrl,
+    '/api/travel-group-finance-summaries?limit=50',
+    { token },
+  );
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  return result.body.data.travelGroupFinanceSummaries;
+}
+
+async function listOrderCommissionRecords(baseUrl, token, salesOrderId) {
+  const result = await requestJson(
+    baseUrl,
+    `/api/commission-records?salesOrderId=${salesOrderId}&limit=50`,
+    { token },
+  );
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  return result.body.data.commissionRecords;
 }
 
 async function operationLogs(baseUrl, token, action) {

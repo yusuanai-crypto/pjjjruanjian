@@ -212,11 +212,10 @@ export class TravelGroupFinanceSummaryNestService {
       agencyRecordSummary,
       totalAgencyDeductionCents,
     );
-    const paymentAmounts = buildRebatePaymentAmounts({
+    const paymentState = buildRefreshRebatePaymentState({
+      current,
       totalDailyRebateCents: rebateCalculation.totalDailyRebateCents,
       totalMonthlyRebateCents: rebateCalculation.totalMonthlyRebateCents,
-      dailyRebatePaid: current.dailyRebatePaid,
-      monthlyRebatePaid: current.monthlyRebatePaid,
     });
     const now = new Date();
     const amountChanged =
@@ -228,7 +227,8 @@ export class TravelGroupFinanceSummaryNestService {
         effectiveSalesAmountCents - totalAgencyDeductionCents,
       totalDailyRebateCents: rebateCalculation.totalDailyRebateCents,
       totalMonthlyRebateCents: rebateCalculation.totalMonthlyRebateCents,
-      ...paymentAmounts,
+      paidRebateCents: paymentState.paidRebateCents,
+      unpaidRebateCents: paymentState.unpaidRebateCents,
     };
     const updated = await this.prisma.travelGroupFinanceSummary.update({
       where: {
@@ -247,6 +247,7 @@ export class TravelGroupFinanceSummaryNestService {
           current.sourceSnapshot,
           nextAmounts,
           rebateCalculation,
+          paymentState.rebatePaidFacts,
           actor,
           now,
         ),
@@ -299,12 +300,58 @@ export class TravelGroupFinanceSummaryNestService {
       normalizedRebateType === 'monthly'
         ? isPaid
         : Boolean(current.monthlyRebatePaid);
-    const paymentAmounts = buildRebatePaymentAmounts({
-      totalDailyRebateCents: current.totalDailyRebateCents,
-      totalMonthlyRebateCents: current.totalMonthlyRebateCents,
+    const currentSourceSnapshot: any = current?.sourceSnapshot;
+    const currentPaidFacts = isPlainObject(
+      currentSourceSnapshot?.rebatePaidFacts,
+    )
+      ? currentSourceSnapshot.rebatePaidFacts
+      : {};
+    const rebatePaidFacts = {
+      paidDailyRebateCents: nextDailyPaid
+        ? normalizedRebateType === 'daily' && isPaid
+          ? toInteger(current.totalDailyRebateCents)
+          : toInteger(
+              currentPaidFacts.paidDailyRebateCents ??
+                current.totalDailyRebateCents,
+            )
+        : 0,
+      paidMonthlyRebateCents: nextMonthlyPaid
+        ? normalizedRebateType === 'monthly' && isPaid
+          ? toInteger(current.totalMonthlyRebateCents)
+          : toInteger(
+              currentPaidFacts.paidMonthlyRebateCents ??
+                current.totalMonthlyRebateCents,
+            )
+        : 0,
       dailyRebatePaid: nextDailyPaid,
       monthlyRebatePaid: nextMonthlyPaid,
-    });
+      dailyRebatePaidAt:
+        normalizedRebateType === 'daily'
+          ? isPaid
+            ? now.toISOString()
+            : null
+          : normalizeDateString(current.dailyRebatePaidAt),
+      monthlyRebatePaidAt:
+        normalizedRebateType === 'monthly'
+          ? isPaid
+            ? now.toISOString()
+            : null
+          : normalizeDateString(current.monthlyRebatePaidAt),
+    };
+    const paidRebateCents =
+      rebatePaidFacts.paidDailyRebateCents +
+      rebatePaidFacts.paidMonthlyRebateCents;
+    const unpaidRebateCents =
+      Math.max(
+        0,
+        toInteger(current.totalDailyRebateCents) -
+          rebatePaidFacts.paidDailyRebateCents,
+      ) +
+      Math.max(
+        0,
+        toInteger(current.totalMonthlyRebateCents) -
+          rebatePaidFacts.paidMonthlyRebateCents,
+      );
     const updated = await this.prisma.travelGroupFinanceSummary.update({
       where: {
         id: current.id,
@@ -321,8 +368,12 @@ export class TravelGroupFinanceSummaryNestService {
               monthlyRebatePaidById: isPaid ? actor.id : null,
               monthlyRebatePaidAt: isPaid ? now : null,
             }),
-        paidRebateCents: paymentAmounts.paidRebateCents,
-        unpaidRebateCents: paymentAmounts.unpaidRebateCents,
+        paidRebateCents,
+        unpaidRebateCents,
+        sourceSnapshot: mergeRebatePaidFactsIntoSourceSnapshot(
+          current.sourceSnapshot,
+          rebatePaidFacts,
+        ),
         updatedById: actor.id,
         updatedAt: now,
       },
@@ -727,11 +778,14 @@ function buildTravelGroupFinanceCalculation(input: {
     orderSummaries,
     'effectiveAmountCents',
   );
-  const paymentAmounts = buildRebatePaymentAmounts({
+  const afterSalesImpact = summarizeAfterSalesImpact(
+    orderSummaries,
+    input.current,
+  );
+  const paymentState = buildRefreshRebatePaymentState({
+    current: input.current,
     totalDailyRebateCents,
     totalMonthlyRebateCents,
-    dailyRebatePaid: Boolean(input.current?.dailyRebatePaid),
-    monthlyRebatePaid: Boolean(input.current?.monthlyRebatePaid),
   });
   const nextAmounts = {
     totalSalesAmountCents,
@@ -744,8 +798,8 @@ function buildTravelGroupFinanceCalculation(input: {
       Math.max(0, effectiveSalesAmountCents - totalAgencyDeductionCents),
     totalDailyRebateCents,
     totalMonthlyRebateCents,
-    paidRebateCents: paymentAmounts.paidRebateCents,
-    unpaidRebateCents: paymentAmounts.unpaidRebateCents,
+    paidRebateCents: paymentState.paidRebateCents,
+    unpaidRebateCents: paymentState.unpaidRebateCents,
   };
   const shouldResetAgencyDeductionConfirmation =
     Boolean(input.current?.agencyDeductionConfirmed) &&
@@ -757,6 +811,8 @@ function buildTravelGroupFinanceCalculation(input: {
     amounts: nextAmounts,
     agencyDeduction: manualAgencyDeduction,
     manualRebateCalculation,
+    afterSalesImpact,
+    rebatePaidFacts: paymentState.rebatePaidFacts,
   });
 
   return {
@@ -802,6 +858,7 @@ function buildTravelGroupFinanceCalculation(input: {
 
 function summarizeSalesOrderForFinance(order: any) {
   const afterSalesOrders = order.afterSalesOrders || [];
+  const summarizedAfterSalesOrders = afterSalesOrders.map(summarizeRefund);
   const confirmedRefunds = afterSalesOrders
     .filter((item: any) => Boolean(item.financeConfirmed))
     .map(summarizeRefund);
@@ -829,6 +886,7 @@ function summarizeSalesOrderForFinance(order: any) {
     effectiveAmountCents: isFullyRefundedOrCancelled(order.status)
       ? 0
       : Math.max(0, totalAmountCents - confirmedRefundAmountCents),
+    afterSalesOrders: summarizedAfterSalesOrders,
     confirmedRefunds,
     unconfirmedRefundSummary: {
       count: unconfirmedRefunds.length,
@@ -858,7 +916,200 @@ function summarizeRefund(afterSalesOrder: any) {
       afterSalesOrder.financeConfirmedAt,
     ),
     createdAt: normalizeDateString(afterSalesOrder.createdAt),
+    updatedAt: normalizeDateString(afterSalesOrder.updatedAt),
   };
+}
+
+function summarizeAfterSalesImpact(
+  orderSummaries: any[],
+  currentSummary: any,
+) {
+  const afterSalesOrders = (orderSummaries || []).flatMap(
+    (order: any) =>
+      (order.afterSalesOrders || []).map((afterSalesOrder: any) => ({
+        ...afterSalesOrder,
+        salesOrderId: order.id || null,
+      })),
+  );
+  const activeAfterSalesOrders = afterSalesOrders.filter(
+    (order: any) => normalizeEnumText(order.status) !== 'COMPLETED',
+  );
+  const pendingRefunds = afterSalesOrders.filter(
+    (order: any) =>
+      !order.financeConfirmed && toInteger(order.refundAmountCents) > 0,
+  );
+  const confirmedRefunds = afterSalesOrders.filter(
+    (order: any) =>
+      order.financeConfirmed && toInteger(order.refundAmountCents) > 0,
+  );
+  const latestAfterSalesOrder = [...afterSalesOrders].sort(
+    (left: any, right: any) =>
+      afterSalesSortTime(right) - afterSalesSortTime(left),
+  )[0] || null;
+  const paidAtTimes = [
+    currentSummary?.dailyRebatePaid
+      ? dateTimeValue(currentSummary?.dailyRebatePaidAt)
+      : null,
+    currentSummary?.monthlyRebatePaid
+      ? dateTimeValue(currentSummary?.monthlyRebatePaidAt)
+      : null,
+  ].filter((value): value is number => value !== null);
+  const hasPaidRebate =
+    Boolean(currentSummary?.dailyRebatePaid) ||
+    Boolean(currentSummary?.monthlyRebatePaid);
+  const afterPaidRefunds = afterSalesOrders.filter((order: any) => {
+    if (!hasPaidRebate || toInteger(order.refundAmountCents) <= 0) {
+      return false;
+    }
+    if (paidAtTimes.length === 0) {
+      return true;
+    }
+    const createdAt = dateTimeValue(order.createdAt);
+    return (
+      createdAt !== null &&
+      paidAtTimes.some((paidAt) => createdAt > paidAt)
+    );
+  });
+  const pendingAfterSalesRefundAmountCents = sumBy(
+    pendingRefunds,
+    'refundAmountCents',
+  );
+  const afterSalesImpactStatus = afterPaidRefunds.length > 0
+    ? 'after_rebate_paid_requires_finance'
+    : pendingRefunds.length > 0
+      ? 'refund_pending_confirmation'
+      : confirmedRefunds.length > 0
+        ? 'refund_adjusted'
+        : afterSalesOrders.length > 0
+          ? 'after_sales_processing'
+          : 'none';
+
+  return {
+    afterSalesOrderIds: afterSalesOrders
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    activeAfterSalesOrderIds: activeAfterSalesOrders
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    pendingAfterSalesRefundOrderIds: pendingRefunds
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    confirmedAfterSalesRefundOrderIds: confirmedRefunds
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    afterRebatePaidAfterSalesOrderIds: afterPaidRefunds
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    afterSalesCount: afterSalesOrders.length,
+    activeAfterSalesCount: activeAfterSalesOrders.length,
+    pendingAfterSalesRefundCount: pendingRefunds.length,
+    pendingAfterSalesRefundAmountCents,
+    confirmedAfterSalesRefundCount: confirmedRefunds.length,
+    confirmedAfterSalesRefundAmountCents: sumBy(
+      confirmedRefunds,
+      'refundAmountCents',
+    ),
+    latestAfterSalesNo: latestAfterSalesOrder?.afterSalesNo || null,
+    latestAfterSalesStatus: latestAfterSalesOrder?.status || null,
+    afterSalesImpactStatus,
+  };
+}
+
+function afterSalesSortTime(order: any) {
+  return (
+    dateTimeValue(order?.updatedAt) ??
+    dateTimeValue(order?.createdAt) ??
+    0
+  );
+}
+
+function dateTimeValue(value: unknown) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function buildRefreshRebatePaymentState(input: {
+  current: any;
+  totalDailyRebateCents: number;
+  totalMonthlyRebateCents: number;
+}) {
+  const current = input.current || null;
+  const existingFacts = isPlainObject(current?.sourceSnapshot?.rebatePaidFacts)
+    ? current.sourceSnapshot.rebatePaidFacts
+    : {};
+  const dailyRebatePaid = Boolean(current?.dailyRebatePaid);
+  const monthlyRebatePaid = Boolean(current?.monthlyRebatePaid);
+  const paidDailyRebateCents = dailyRebatePaid
+    ? resolvePreviouslyPaidRebateCents({
+        snapshotAmount: existingFacts.paidDailyRebateCents,
+        currentTotalAmount: current?.totalDailyRebateCents,
+        currentPaidAmount: current?.paidRebateCents,
+        otherRebatePaid: monthlyRebatePaid,
+        nextTotalAmount: input.totalDailyRebateCents,
+      })
+    : 0;
+  const paidMonthlyRebateCents = monthlyRebatePaid
+    ? resolvePreviouslyPaidRebateCents({
+        snapshotAmount: existingFacts.paidMonthlyRebateCents,
+        currentTotalAmount: current?.totalMonthlyRebateCents,
+        currentPaidAmount: current?.paidRebateCents,
+        otherRebatePaid: dailyRebatePaid,
+        nextTotalAmount: input.totalMonthlyRebateCents,
+      })
+    : 0;
+  const unpaidDailyRebateCents = dailyRebatePaid
+    ? Math.max(0, input.totalDailyRebateCents - paidDailyRebateCents)
+    : input.totalDailyRebateCents;
+  const unpaidMonthlyRebateCents = monthlyRebatePaid
+    ? Math.max(0, input.totalMonthlyRebateCents - paidMonthlyRebateCents)
+    : input.totalMonthlyRebateCents;
+  return {
+    paidRebateCents:
+      paidDailyRebateCents + paidMonthlyRebateCents,
+    unpaidRebateCents:
+      unpaidDailyRebateCents + unpaidMonthlyRebateCents,
+    rebatePaidFacts: {
+      paidDailyRebateCents,
+      paidMonthlyRebateCents,
+      dailyRebatePaid,
+      monthlyRebatePaid,
+      dailyRebatePaidAt: normalizeDateString(current?.dailyRebatePaidAt),
+      monthlyRebatePaidAt: normalizeDateString(current?.monthlyRebatePaidAt),
+    },
+  };
+}
+
+function resolvePreviouslyPaidRebateCents(input: {
+  snapshotAmount: unknown;
+  currentTotalAmount: unknown;
+  currentPaidAmount: unknown;
+  otherRebatePaid: boolean;
+  nextTotalAmount: unknown;
+}) {
+  if (
+    input.snapshotAmount !== undefined &&
+    input.snapshotAmount !== null
+  ) {
+    return Math.max(0, toInteger(input.snapshotAmount));
+  }
+  const currentTotalAmount = Math.max(
+    0,
+    toInteger(input.currentTotalAmount),
+  );
+  if (currentTotalAmount > 0) {
+    return currentTotalAmount;
+  }
+  const currentPaidAmount = Math.max(
+    0,
+    toInteger(input.currentPaidAmount),
+  );
+  if (!input.otherRebatePaid && currentPaidAmount > 0) {
+    return currentPaidAmount;
+  }
+  return Math.max(0, toInteger(input.nextTotalAmount));
 }
 
 function summarizeAgencyRebateRecords(records: any[]) {
@@ -986,6 +1237,7 @@ function buildManualAgencyDeductionSourceSnapshot(
   sourceSnapshot: any,
   amounts: any,
   rebateCalculation: any,
+  rebatePaidFacts: any,
   actor: any,
   now: Date,
 ) {
@@ -1000,10 +1252,21 @@ function buildManualAgencyDeductionSourceSnapshot(
       updatedAt: now.toISOString(),
     },
     manualRebateCalculation: rebateCalculation,
+    rebatePaidFacts,
     amounts: {
       ...currentAmounts,
       ...amounts,
     },
+  };
+}
+
+function mergeRebatePaidFactsIntoSourceSnapshot(
+  sourceSnapshot: any,
+  rebatePaidFacts: any,
+) {
+  return {
+    ...(isPlainObject(sourceSnapshot) ? sourceSnapshot : {}),
+    rebatePaidFacts,
   };
 }
 
@@ -1085,6 +1348,7 @@ function summarizeRecordSourceSnapshot(sourceSnapshot: any) {
   return {
     businessKey: sourceSnapshot.businessKey || null,
     travelAgencyMatch: sourceSnapshot.travelAgencyMatch || null,
+    afterSalesOrderIds: sourceSnapshot.afterSalesOrderIds || [],
     confirmedRefunds: sourceSnapshot.confirmedRefunds || [],
     unconfirmedRefundSummary:
       sourceSnapshot.unconfirmedRefundSummary || null,
@@ -1099,6 +1363,8 @@ function buildSourceSnapshot(input: {
   amounts: any;
   agencyDeduction?: any;
   manualRebateCalculation?: any;
+  afterSalesImpact: any;
+  rebatePaidFacts: any;
 }) {
   return {
     calculationVersion: CALCULATION_VERSION,
@@ -1106,6 +1372,9 @@ function buildSourceSnapshot(input: {
       id: input.travelGroup.id,
       groupNo: input.travelGroup.groupNo || null,
       visitDate: normalizeDateString(input.travelGroup.visitDate),
+      agencyId: resolveAgencyIdFromRecordSummary(
+        input.agencyRecordSummary,
+      ),
       travelAgency: normalizeNullableString(input.travelGroup.travelAgency),
       guideName: input.travelGroup.guideName || null,
       guidePhone: input.travelGroup.guidePhone || null,
@@ -1129,6 +1398,18 @@ function buildSourceSnapshot(input: {
         0,
       ),
     },
+    afterSalesOrderIds: input.afterSalesImpact.afterSalesOrderIds,
+    afterSalesCount: input.afterSalesImpact.afterSalesCount,
+    activeAfterSalesCount: input.afterSalesImpact.activeAfterSalesCount,
+    pendingAfterSalesRefundCount:
+      input.afterSalesImpact.pendingAfterSalesRefundCount,
+    pendingAfterSalesRefundAmountCents:
+      input.afterSalesImpact.pendingAfterSalesRefundAmountCents,
+    latestAfterSalesNo: input.afterSalesImpact.latestAfterSalesNo,
+    latestAfterSalesStatus: input.afterSalesImpact.latestAfterSalesStatus,
+    afterSalesImpactStatus: input.afterSalesImpact.afterSalesImpactStatus,
+    afterSalesImpact: input.afterSalesImpact,
+    rebatePaidFacts: input.rebatePaidFacts,
     agencyRebateRecords: {
       daily: input.agencyRecordSummary.dailyRecords,
       monthly: input.agencyRecordSummary.monthlyRecords,
@@ -1492,10 +1773,16 @@ function buildTravelGroupFinanceSummaryUpdateData(
 function toTravelGroupFinanceSummaryListDto(summary: any) {
   const paymentAmounts = deriveSummaryRebatePaymentAmounts(summary);
   const splitPaymentAmounts = deriveSummaryRebateSplitAmounts(summary);
+  const afterSalesImpact = readAfterSalesImpactFields(
+    summary.sourceSnapshot,
+  );
   return {
     id: summary.id,
     travelGroupId: summary.travelGroupId,
-    travelGroup: summarizeTravelGroup(summary.travelGroup),
+    travelGroup: summarizeTravelGroup(
+      summary.travelGroup,
+      summary.sourceSnapshot,
+    ),
     totalSalesAmountCents: toInteger(summary.totalSalesAmountCents),
     totalCashOnDeliveryCents: toInteger(
       summary.totalCashOnDeliveryCents,
@@ -1505,6 +1792,7 @@ function toTravelGroupFinanceSummaryListDto(summary: any) {
       summary.confirmedRefundAmountCents,
     ),
     effectiveSalesAmountCents: toInteger(summary.effectiveSalesAmountCents),
+    ...afterSalesImpact,
     totalAgencyDeductionCents: toInteger(
       summary.totalAgencyDeductionCents,
     ),
@@ -1551,6 +1839,9 @@ function toTravelGroupFinanceSummaryDetailDto(summary: any) {
 function toTravelGroupFinanceSummaryDto(summary: any) {
   const paymentAmounts = deriveSummaryRebatePaymentAmounts(summary);
   const splitPaymentAmounts = deriveSummaryRebateSplitAmounts(summary);
+  const afterSalesImpact = readAfterSalesImpactFields(
+    summary.sourceSnapshot,
+  );
   return {
     id: summary.id,
     travelGroupId: summary.travelGroupId,
@@ -1563,6 +1854,7 @@ function toTravelGroupFinanceSummaryDto(summary: any) {
       summary.confirmedRefundAmountCents,
     ),
     effectiveSalesAmountCents: toInteger(summary.effectiveSalesAmountCents),
+    ...afterSalesImpact,
     totalAgencyDeductionCents: toInteger(
       summary.totalAgencyDeductionCents,
     ),
@@ -1595,7 +1887,7 @@ function toTravelGroupFinanceSummaryDto(summary: any) {
   };
 }
 
-function summarizeTravelGroup(group: any) {
+function summarizeTravelGroup(group: any, sourceSnapshot: any = null) {
   if (!group) {
     return null;
   }
@@ -1603,14 +1895,84 @@ function summarizeTravelGroup(group: any) {
     id: group.id,
     groupNo: group.groupNo || null,
     visitDate: normalizeDateString(group.visitDate),
+    agencyId: resolveAgencyIdFromSourceSnapshot(sourceSnapshot),
     travelAgency: normalizeNullableString(group.travelAgency),
+    guideId: group.guideId || null,
     guideName: group.guideName || null,
+    guidePhone: group.guidePhone || null,
     licensePlate: group.licensePlate || null,
     guestCount: toInteger(group.guestCount),
     tasterId: group.tasterId || null,
     tasterName: group.tasterName || null,
     financeMark:
       group.financeMark === undefined ? null : Boolean(group.financeMark),
+  };
+}
+
+function resolveAgencyIdFromRecordSummary(recordSummary: any) {
+  const records = [
+    ...(recordSummary?.dailyRecords || []),
+    ...(recordSummary?.monthlyRecords || []),
+    ...(recordSummary?.perOrderRecords || []),
+  ];
+  const agencyIds = normalizeIdList(
+    records.map((record: any) => record?.agencyId),
+  );
+  return agencyIds.length === 1 ? agencyIds[0] : null;
+}
+
+function resolveAgencyIdFromSourceSnapshot(sourceSnapshot: any) {
+  if (!isPlainObject(sourceSnapshot)) {
+    return null;
+  }
+  const snapshotAgencyId = normalizeOptionalString(
+    sourceSnapshot.travelGroup?.agencyId,
+  );
+  if (snapshotAgencyId) {
+    return snapshotAgencyId;
+  }
+  const recordGroups = sourceSnapshot.agencyRebateRecords;
+  const records = [
+    ...(Array.isArray(recordGroups?.daily) ? recordGroups.daily : []),
+    ...(Array.isArray(recordGroups?.monthly) ? recordGroups.monthly : []),
+    ...(Array.isArray(recordGroups?.perOrderForDeductionAndNet)
+      ? recordGroups.perOrderForDeductionAndNet
+      : []),
+  ];
+  const agencyIds = normalizeIdList(
+    records.map((record: any) => record?.agencyId),
+  );
+  return agencyIds.length === 1 ? agencyIds[0] : null;
+}
+
+function readAfterSalesImpactFields(sourceSnapshot: any) {
+  const snapshot = isPlainObject(sourceSnapshot) ? sourceSnapshot : {};
+  const nested = isPlainObject(snapshot.afterSalesImpact)
+    ? snapshot.afterSalesImpact
+    : {};
+  const readValue = (fieldName: string) =>
+    snapshot[fieldName] !== undefined
+      ? snapshot[fieldName]
+      : nested[fieldName];
+  return {
+    afterSalesCount: toInteger(readValue('afterSalesCount')),
+    activeAfterSalesCount: toInteger(
+      readValue('activeAfterSalesCount'),
+    ),
+    pendingAfterSalesRefundCount: toInteger(
+      readValue('pendingAfterSalesRefundCount'),
+    ),
+    pendingAfterSalesRefundAmountCents: toInteger(
+      readValue('pendingAfterSalesRefundAmountCents'),
+    ),
+    latestAfterSalesNo:
+      normalizeOptionalString(readValue('latestAfterSalesNo')) || null,
+    latestAfterSalesStatus:
+      normalizeOptionalString(
+        readValue('latestAfterSalesStatus'),
+      )?.toLowerCase() || null,
+    afterSalesImpactStatus:
+      normalizeOptionalString(readValue('afterSalesImpactStatus')) || 'none',
   };
 }
 
@@ -1664,6 +2026,16 @@ function summarizeSourceSnapshotForApi(sourceSnapshot: any) {
     calculationVersion: sourceSnapshot.calculationVersion || null,
     travelGroup: scrubSensitiveJson(sourceSnapshot.travelGroup || null),
     amounts: scrubSensitiveJson(sourceSnapshot.amounts || null),
+    ...readAfterSalesImpactFields(sourceSnapshot),
+    afterSalesOrderIds: scrubSensitiveJson(
+      sourceSnapshot.afterSalesOrderIds || [],
+    ),
+    afterSalesImpact: scrubSensitiveJson(
+      sourceSnapshot.afterSalesImpact || null,
+    ),
+    rebatePaidFacts: scrubSensitiveJson(
+      sourceSnapshot.rebatePaidFacts || null,
+    ),
     orderCount: orders.length,
     orders,
     confirmedRefunds: scrubSensitiveJson(
@@ -1735,6 +2107,16 @@ function normalizeOptionalString(value: unknown) {
   }
   const text = String(value).trim();
   return text || null;
+}
+
+function normalizeIdList(values: unknown[]) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map(normalizeOptionalString)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
 }
 
 function normalizeNullableString(value: unknown) {
@@ -1822,6 +2204,22 @@ function buildRebatePaymentAmounts(input: {
 }
 
 function deriveSummaryRebatePaymentAmounts(summary: any) {
+  if (
+    summary &&
+    summary.paidRebateCents !== undefined &&
+    summary.unpaidRebateCents !== undefined
+  ) {
+    return {
+      paidRebateCents: Math.max(
+        0,
+        toInteger(summary.paidRebateCents),
+      ),
+      unpaidRebateCents: Math.max(
+        0,
+        toInteger(summary.unpaidRebateCents),
+      ),
+    };
+  }
   return buildRebatePaymentAmounts({
     totalDailyRebateCents: summary?.totalDailyRebateCents,
     totalMonthlyRebateCents: summary?.totalMonthlyRebateCents,
@@ -1835,11 +2233,34 @@ function deriveSummaryRebateSplitAmounts(summary: any) {
   const totalMonthlyRebateCents = toInteger(summary?.totalMonthlyRebateCents);
   const dailyPaid = Boolean(summary?.dailyRebatePaid);
   const monthlyPaid = Boolean(summary?.monthlyRebatePaid);
+  const paidFacts = isPlainObject(summary?.sourceSnapshot?.rebatePaidFacts)
+    ? summary.sourceSnapshot.rebatePaidFacts
+    : {};
+  const paidDailyRebateCents = dailyPaid
+    ? Math.max(
+        0,
+        paidFacts.paidDailyRebateCents !== undefined
+          ? toInteger(paidFacts.paidDailyRebateCents)
+          : totalDailyRebateCents,
+      )
+    : 0;
+  const paidMonthlyRebateCents = monthlyPaid
+    ? Math.max(
+        0,
+        paidFacts.paidMonthlyRebateCents !== undefined
+          ? toInteger(paidFacts.paidMonthlyRebateCents)
+          : totalMonthlyRebateCents,
+      )
+    : 0;
   return {
-    paidDailyRebateCents: dailyPaid ? totalDailyRebateCents : 0,
-    unpaidDailyRebateCents: dailyPaid ? 0 : totalDailyRebateCents,
-    paidMonthlyRebateCents: monthlyPaid ? totalMonthlyRebateCents : 0,
-    unpaidMonthlyRebateCents: monthlyPaid ? 0 : totalMonthlyRebateCents,
+    paidDailyRebateCents,
+    unpaidDailyRebateCents: dailyPaid
+      ? Math.max(0, totalDailyRebateCents - paidDailyRebateCents)
+      : totalDailyRebateCents,
+    paidMonthlyRebateCents,
+    unpaidMonthlyRebateCents: monthlyPaid
+      ? Math.max(0, totalMonthlyRebateCents - paidMonthlyRebateCents)
+      : totalMonthlyRebateCents,
   };
 }
 

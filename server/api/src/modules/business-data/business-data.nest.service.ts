@@ -2271,12 +2271,16 @@ export class BusinessDataNestService {
             },
             include: getAfterSalesOrderInclude(),
           });
-          await this.syncSalesOrderStatusFromAfterSales(
+          const impact =
+            await this.refreshAfterSalesCommissionAndPointsImpact(
             tx,
             createdOrder,
             salesOrder,
             actor,
             metadata,
+            {
+              trigger: 'after_sales_create',
+            },
           );
           const orderForLog =
             (await tx.afterSalesOrder.findUnique({
@@ -2297,12 +2301,15 @@ export class BusinessDataNestService {
             },
             tx,
           );
-          return orderForLog;
+          return attachAfterSalesCommissionAndPointsImpact(
+            orderForLog,
+            impact,
+          );
         },
       );
     });
 
-    return toAfterSalesOrderDto(created);
+    return toAfterSalesOrderMutationResult(created);
   }
 
   async getAfterSalesOrder(actor: any, id: string) {
@@ -2362,12 +2369,16 @@ export class BusinessDataNestService {
         data: buildAfterSalesOrderUpdateData(payload, actor),
         include: getAfterSalesOrderInclude(),
       });
-      await this.syncSalesOrderStatusFromAfterSales(
+      const impact =
+        await this.refreshAfterSalesCommissionAndPointsImpact(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
+        {
+          trigger: 'after_sales_update',
+        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2388,10 +2399,10 @@ export class BusinessDataNestService {
         },
         tx,
       );
-      return orderForLog;
+      return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
-    return toAfterSalesOrderDto(updated);
+    return toAfterSalesOrderMutationResult(updated);
   }
 
   async updateAfterSalesOrderStatus(
@@ -2481,12 +2492,16 @@ export class BusinessDataNestService {
         data: buildAfterSalesOrderStatusUpdateData(body, actor, status),
         include: getAfterSalesOrderInclude(),
       });
-      await this.syncSalesOrderStatusFromAfterSales(
+      const impact =
+        await this.refreshAfterSalesCommissionAndPointsImpact(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
+        {
+          trigger: 'after_sales_status_update',
+        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2507,10 +2522,10 @@ export class BusinessDataNestService {
         },
         tx,
       );
-      return orderForLog;
+      return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
-    return toAfterSalesOrderDto(updated);
+    return toAfterSalesOrderMutationResult(updated);
   }
 
   async confirmAfterSalesOrderWarehouse(
@@ -2552,12 +2567,16 @@ export class BusinessDataNestService {
         data: buildAfterSalesOrderWarehouseConfirmData(body, actor),
         include: getAfterSalesOrderInclude(),
       });
-      await this.syncSalesOrderStatusFromAfterSales(
+      const impact =
+        await this.refreshAfterSalesCommissionAndPointsImpact(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
+        {
+          trigger: 'after_sales_warehouse_confirm',
+        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2578,10 +2597,10 @@ export class BusinessDataNestService {
         },
         tx,
       );
-      return orderForLog;
+      return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
-    return toAfterSalesOrderDto(updated);
+    return toAfterSalesOrderMutationResult(updated);
   }
 
   async confirmAfterSalesOrderFinanceRefund(
@@ -2685,32 +2704,35 @@ export class BusinessDataNestService {
           },
           tx,
         );
-        const currentSalesOrder = (current as any).salesOrder;
-        const updatedSalesOrder = (updatedOrder as any).salesOrder;
-        await this.refreshStage7SalesOrderCommissionAndSummary(
+        const impact =
+          await this.refreshAfterSalesCommissionAndPointsImpact(
           tx,
-          updatedOrder.salesOrderId,
+          updatedOrder,
+          current.salesOrder,
           actor,
           metadata,
           {
             trigger: 'after_sales_finance_refund_confirm',
-            entityType: 'after_sales_order',
-            entityId: updatedOrder.id,
-            afterSalesOrderId: updatedOrder.id,
-            affectedTravelGroupIds: [
-              currentSalesOrder?.travelGroupId,
-              updatedSalesOrder?.travelGroupId,
-            ],
           },
         );
-        return updatedOrder;
+        const orderForReturn =
+          (await tx.afterSalesOrder.findUnique({
+            where: {
+              id: updatedOrder.id,
+            },
+            include: getAfterSalesOrderInclude(),
+          })) || updatedOrder;
+        return attachAfterSalesCommissionAndPointsImpact(
+          orderForReturn,
+          impact,
+        );
       });
     } catch (error) {
       await cleanupStoredTravelGroupAttachments(storedAttachments);
       throw error;
     }
 
-    return toAfterSalesOrderDto(updated);
+    return toAfterSalesOrderMutationResult(updated);
   }
 
   async downloadAfterSalesRefundProof(
@@ -2837,30 +2859,30 @@ export class BusinessDataNestService {
         },
         tx,
       );
-      const currentSalesOrder = (current as any).salesOrder;
-      const updatedSalesOrder = (updatedOrder as any).salesOrder;
-      await this.refreshStage7SalesOrderCommissionAndSummary(
+      const impact =
+        await this.refreshAfterSalesCommissionAndPointsImpact(
         tx,
-        updatedOrder.salesOrderId,
+        updatedOrder,
+        current.salesOrder,
         actor,
         metadata,
         {
           trigger: financeConfirmed
             ? 'after_sales_finance_confirm'
             : 'after_sales_finance_unconfirm',
-          entityType: 'after_sales_order',
-          entityId: updatedOrder.id,
-          afterSalesOrderId: updatedOrder.id,
-          affectedTravelGroupIds: [
-            currentSalesOrder?.travelGroupId,
-            updatedSalesOrder?.travelGroupId,
-          ],
         },
       );
-      return updatedOrder;
+      const orderForReturn =
+        (await tx.afterSalesOrder.findUnique({
+          where: {
+            id: updatedOrder.id,
+          },
+          include: getAfterSalesOrderInclude(),
+        })) || updatedOrder;
+      return attachAfterSalesCommissionAndPointsImpact(orderForReturn, impact);
     });
 
-    return toAfterSalesOrderDto(updated);
+    return toAfterSalesOrderMutationResult(updated);
   }
 
   async getFinanceOverview(actor: any, filters: any = {}) {
@@ -3409,7 +3431,13 @@ export class BusinessDataNestService {
     metadata: any = {},
   ) {
     if (!afterSalesOrder?.salesOrderId || !currentSalesOrder) {
-      return null;
+      return {
+        salesOrder: currentSalesOrder || null,
+        statusChanged: false,
+        affectedTravelGroupIds: normalizeIdList([
+          currentSalesOrder?.travelGroupId,
+        ]),
+      };
     }
 
     const refundOrders = await tx.afterSalesOrder.findMany({
@@ -3434,7 +3462,13 @@ export class BusinessDataNestService {
       refundAmountCents,
     );
     if (!targetStatus || currentSalesOrder.status === targetStatus) {
-      return currentSalesOrder;
+      return {
+        salesOrder: currentSalesOrder,
+        statusChanged: false,
+        affectedTravelGroupIds: normalizeIdList([
+          currentSalesOrder.travelGroupId,
+        ]),
+      };
     }
 
     const updatedOrder = await tx.salesOrder.update({
@@ -3476,23 +3510,107 @@ export class BusinessDataNestService {
       },
       tx,
     );
-    await this.refreshStage7SalesOrderCommissionAndSummary(
+    return {
+      salesOrder: orderForLog,
+      statusChanged: true,
+      affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
+        currentSalesOrder,
+        orderForLog,
+      ),
+    };
+  }
+
+  private async refreshAfterSalesCommissionAndPointsImpact(
+    tx: any,
+    afterSalesOrder: any,
+    currentSalesOrder: any,
+    actor: any,
+    metadata: any = {},
+    context: any = {},
+  ) {
+    const salesOrderId = normalizeOptionalString(
+      afterSalesOrder?.salesOrderId || currentSalesOrder?.id,
+    );
+    if (!salesOrderId) {
+      const warnings = [
+        {
+          code: 'missing_sales_order',
+          message: 'After-sales order is not linked to a sales order.',
+          context: {
+            afterSalesOrderId:
+              normalizeOptionalString(afterSalesOrder?.id) || null,
+          },
+        },
+      ];
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor?.id || null,
+          action: 'commission_records.recalculate.trigger',
+          entityType: 'after_sales_order',
+          entityId:
+            normalizeOptionalString(afterSalesOrder?.id) ||
+            'after_sales_order',
+          beforeData: null,
+          afterData: {
+            trigger: context.trigger || 'after_sales_update',
+            salesOrderId: null,
+            afterSalesOrderId:
+              normalizeOptionalString(afterSalesOrder?.id) || null,
+            travelGroupIds: [],
+            pendingAfterSalesRefundAmountCents: Math.max(
+              0,
+              Number(afterSalesOrder?.refundAmountCents || 0),
+            ),
+            warningCodes: warnings.map((warning) => warning.code),
+            warnings,
+          },
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return {
+        recalculation: null,
+        summaryResults: [],
+        tasterAdjustment: {
+          records: [],
+          recordIds: [],
+        },
+        warnings,
+      };
+    }
+
+    const statusSync = await this.syncSalesOrderStatusFromAfterSales(
       tx,
-      orderForLog.id,
+      afterSalesOrder,
+      currentSalesOrder,
       actor,
       metadata,
-      {
-        trigger: 'after_sales_order_status_sync',
-        entityType: 'sales_order',
-        entityId: orderForLog.id,
-        afterSalesOrderId: afterSalesOrder.id,
-        affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
-          currentSalesOrder,
-          orderForLog,
-        ),
-      },
     );
-    return orderForLog;
+    const refreshResult =
+      await this.refreshStage7SalesOrderCommissionAndSummary(
+        tx,
+        salesOrderId,
+        actor,
+        metadata,
+        {
+          trigger: statusSync.statusChanged
+            ? 'after_sales_order_status_sync'
+            : context.trigger || 'after_sales_update',
+          entityType: 'after_sales_order',
+          entityId: afterSalesOrder.id,
+          afterSalesOrderId: afterSalesOrder.id,
+          affectedTravelGroupIds: normalizeIdList([
+            ...(statusSync.affectedTravelGroupIds || []),
+            currentSalesOrder?.travelGroupId,
+            statusSync.salesOrder?.travelGroupId,
+          ]),
+        },
+      );
+    return {
+      ...refreshResult,
+      statusSync,
+      warnings: refreshResult?.recalculation?.warnings || [],
+    };
   }
 
   private async refreshStage7SalesOrderCommissionAndSummary(
@@ -3568,6 +3686,9 @@ export class BusinessDataNestService {
           afterSalesOrderId: context.afterSalesOrderId || null,
           travelGroupIds,
           orderStatus: latestOrder?.status || null,
+          pendingAfterSalesRefundAmountCents:
+            recalculation.calculation.amounts
+              .unconfirmedRefundAmountCents || 0,
           generatedRecordCount: recalculation.generatedRecords.length,
           updatedRecordCount: recalculation.updatedRecords.length,
           unchangedRecordCount: recalculation.unchangedRecords.length,
@@ -4091,6 +4212,16 @@ function buildAfterSalesOrderWhere(filters: any = {}) {
   const status = normalizeOptionalString(filters.status);
   if (status) {
     where.status = toPrismaAfterSalesStatus(status);
+  }
+  if (filters.unfinished !== undefined && filters.unfinished !== '') {
+    const unfinished = normalizeBoolean(filters.unfinished, 'unfinished');
+    if (unfinished) {
+      where = andWhere(where, {
+        status: {
+          not: 'COMPLETED',
+        },
+      });
+    }
   }
   const issueType = normalizeOptionalString(filters.issueType);
   if (issueType) {
@@ -6592,6 +6723,48 @@ function toAfterSalesOrderDto(order: any) {
     updatedById: order.updatedById || null,
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
+  };
+}
+
+function attachAfterSalesCommissionAndPointsImpact(
+  order: any,
+  impact: any,
+) {
+  return {
+    ...order,
+    __commissionAndPointsImpact: impact || null,
+  };
+}
+
+function toAfterSalesOrderMutationResult(order: any) {
+  const dto = toAfterSalesOrderDto(order);
+  const impact = order?.__commissionAndPointsImpact || null;
+  const warnings = Array.isArray(impact?.warnings) ? impact.warnings : [];
+  const travelGroupIds = normalizeIdList(
+    (impact?.summaryResults || []).map(
+      (result: any) => result?.travelGroupId,
+    ),
+  );
+  const pendingAfterSalesRefundAmountCents = Math.max(
+    0,
+    Number(
+      impact?.recalculation?.calculation?.amounts
+        ?.unconfirmedRefundAmountCents || 0,
+    ),
+  );
+  return {
+    afterSalesOrder: dto,
+    warningCodes: warnings.map((warning: any) => warning.code),
+    warnings,
+    commissionAndPointsImpact: {
+      refreshed: Boolean(impact?.recalculation),
+      salesOrderId: order?.salesOrderId || null,
+      afterSalesOrderId: order?.id || null,
+      travelGroupIds,
+      pendingAfterSalesRefundAmountCents,
+      warningCodes: warnings.map((warning: any) => warning.code),
+      warnings,
+    },
   };
 }
 

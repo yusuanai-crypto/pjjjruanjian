@@ -79,14 +79,14 @@ test('unit: DOCX export clones one page per bottle, preserves order and a single
   const units = [
     {
       moutaiName: '飞天茅台',
-      factoryDate: '2026-01-02',
+      factoryDate: '20260102',
       productionBatch: '00123',
       batchSerialNo: '000456',
       logisticsCode: '000000789',
     },
     {
       moutaiName: '2024年甲辰龙年生肖茅台酒',
-      factoryDate: '2026-02-03',
+      factoryDate: new Date('2026-06-25T23:30:00.000Z'),
       productionBatch: '00009',
       batchSerialNo: '000010',
       logisticsCode: '000000011',
@@ -102,12 +102,25 @@ test('unit: DOCX export clones one page per bottle, preserves order and a single
     1,
   );
   assert.ok(documentXml.indexOf('飞天茅台') < documentXml.indexOf('2024年甲辰'));
+  const pages = documentXml.split(
+    '<w:p><w:r><w:br w:type="page"/></w:r></w:p>',
+  );
+  assert.equal(pages.length, 2);
+  assert.deepEqual(extractFactoryDateTexts(pages[0]), [
+    '出厂日期：20260102',
+  ]);
+  assert.deepEqual(extractFactoryDateTexts(pages[1]), [
+    '出厂日期：20260625',
+  ]);
+  for (const text of extractFactoryDateTexts(documentXml)) {
+    assert.match(text.slice('出厂日期：'.length), /^\d{8}$/);
+  }
   for (const value of [
-    '2026年01月02日',
+    '出厂日期：20260102',
     '00123',
     '000456',
     '000000789',
-    '2026年02月03日',
+    '出厂日期：20260625',
     '00009',
     '000010',
     '000000011',
@@ -119,6 +132,10 @@ test('unit: DOCX export clones one page per bottle, preserves order and a single
     'unit-1',
     'AVAILABLE',
     'PENDING_COST',
+    '出厂日期：2026年06月25日',
+    '出厂日期：2026 年 06 月 25 日',
+    '出厂日期：2026-06-25',
+    '出厂日期：2026/06/25',
   ]) {
     assert.equal(documentXml.includes(forbidden), false);
   }
@@ -129,7 +146,7 @@ test('unit: DOCX export writes XML-special Chinese values safely and changes onl
   const buffer = await buildMoutaiLogisticsDocx(template, [
     {
       moutaiName: '2024龙年生肖茅台 & <珍藏> "甲"',
-      factoryDate: '2024-12-31',
+      factoryDate: '20241231',
       productionBatch: '00&A',
       batchSerialNo: '01<02',
       logisticsCode: '0000"ABC"',
@@ -151,10 +168,37 @@ test('unit: DOCX export writes XML-special Chinese values safely and changes onl
   const xml = await outputZip.file('word/document.xml').async('string');
   assert.match(xml, /&amp;/);
   assert.match(xml, /&lt;珍藏&gt;/);
+  assertStaticTemplateTextPreserved(
+    await originalZip.file('word/document.xml').async('string'),
+    xml,
+  );
   assert.doesNotThrow(() => {
     const tags = xml.match(/<[^>]+>/g);
     assert.ok(tags.length > 0);
   });
+});
+
+test('unit: DOCX export rejects malformed and impossible factory dates', async () => {
+  const template = fs.readFileSync(templatePath);
+  const unit = {
+    moutaiName: '飞天茅台',
+    factoryDate: '20260230',
+    productionBatch: '00123',
+    batchSerialNo: '000456',
+    logisticsCode: '000000789',
+  };
+
+  for (const factoryDate of [
+    '20260230',
+    '2026-06-25',
+    '2026/06/25',
+    new Date(Number.NaN),
+  ]) {
+    await assert.rejects(
+      () => buildMoutaiLogisticsDocx(template, [{ ...unit, factoryDate }]),
+      (error) => error.code === 'SERIALIZED_INVENTORY_DATA_INCOMPLETE',
+    );
+  }
 });
 
 test('unit: DOCX controller returns the required MIME type and UTF-8 safe filename', async () => {
@@ -517,4 +561,41 @@ function inventoryUnit(overrides = {}) {
     updatedAt: new Date('2026-07-23T00:00:00Z'),
     ...overrides,
   };
+}
+
+function extractWordTextNodes(xml) {
+  return Array.from(
+    xml.matchAll(/<w:t(?:\s+[^>]*)?>([\s\S]*?)<\/w:t>/g),
+    (match) => match[1],
+  );
+}
+
+function extractFactoryDateTexts(xml) {
+  return extractWordTextNodes(xml).filter((text) =>
+    text.startsWith('出厂日期：'),
+  );
+}
+
+function assertStaticTemplateTextPreserved(templateXml, outputXml) {
+  const dynamicLabels = new Set([
+    '商品名称：',
+    '出厂日期：',
+    '生产批次：',
+    '批次序号：',
+    '物流码：',
+  ]);
+  const expectedCounts = new Map();
+  for (const text of extractWordTextNodes(templateXml)) {
+    if (!text || dynamicLabels.has(text)) {
+      continue;
+    }
+    expectedCounts.set(text, (expectedCounts.get(text) || 0) + 1);
+  }
+  const outputCounts = new Map();
+  for (const text of extractWordTextNodes(outputXml)) {
+    outputCounts.set(text, (outputCounts.get(text) || 0) + 1);
+  }
+  for (const [text, expectedCount] of expectedCounts) {
+    assert.equal(outputCounts.get(text), expectedCount, text);
+  }
 }

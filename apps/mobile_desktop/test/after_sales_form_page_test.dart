@@ -7,6 +7,50 @@ import 'package:jiangjiu_mobile_desktop/features/after_sales/after_sales_form_pa
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
+  testWidgets('admin automatically loads unfinished after-sales orders',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient, role: UserRole.admin);
+
+    expect(find.text('未完成售后单'), findsOneWidget);
+    expect(find.text('AS20260630001'), findsOneWidget);
+    expect(find.text('AS20260630003'), findsNothing);
+    expect(apiClient.salesOrderListPaths, isEmpty);
+
+    final uri = Uri.parse(apiClient.afterSalesListPaths.first);
+    expect(uri.path, '/api/after-sales-orders');
+    expect(uri.queryParameters['unfinished'], 'true');
+    expect(uri.queryParameters['limit'], '200');
+  });
+
+  testWidgets(
+      'after-sales automatically loads and opens unfinished order details',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient);
+
+    expect(find.text('未完成售后单'), findsOneWidget);
+    expect(find.text('AS20260630001'), findsOneWidget);
+    expect(find.text('AS20260630003'), findsNothing);
+    expect(apiClient.salesOrderListPaths, isEmpty);
+
+    await tester.tap(find.text('AS20260630001'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('关联订单信息'), findsOneWidget);
+    expect(find.text('SO20260630001'), findsWidgets);
+    expect(find.text('张女士'), findsWidgets);
+    expect(find.text('售后历史'), findsOneWidget);
+    expect(find.text('售后详情'), findsOneWidget);
+    expect(find.text('smoke 已有售后记录'), findsWidgets);
+    expect(
+      apiClient.afterSalesListPaths
+          .map(Uri.parse)
+          .any((uri) => uri.queryParameters['salesOrderId'] == 'order-1'),
+      true,
+    );
+  });
+
   testWidgets('searches real sales orders and fills selected order',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -44,7 +88,7 @@ void main() {
     expect(find.text('TG20260630001'), findsWidgets);
     expect(find.text('酱香珍藏 x2 · ¥798.00 · 邮寄'), findsOneWidget);
     expect(find.text('售后历史'), findsOneWidget);
-    expect(find.text('AS20260630001'), findsOneWidget);
+    expect(find.text('AS20260630001'), findsWidgets);
   });
 
   testWidgets('admin can see customer finance mark in order search results',
@@ -138,8 +182,11 @@ void main() {
     );
     await tester.enterText(
       find.byKey(const ValueKey('after-sales-refund-amount-field')),
-      '1200',
+      '12',
     );
+    expect(find.text('退款金额（元）'), findsOneWidget);
+    expect(find.text('元'), findsOneWidget);
+    expect(find.text('退款金额（分）'), findsNothing);
     await tester.ensureVisible(saveButton);
     await tester.tap(saveButton);
     await tester.pumpAndSettle();
@@ -154,6 +201,90 @@ void main() {
     expect(apiClient.lastAfterSalesBody?['resolution'], 'smoke 先登记后退款');
     expect(apiClient.lastAfterSalesBody?['refundAmountCents'], 1200);
     expect(find.text('AS20260702001'), findsWidgets);
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('after-sales-refund-amount-field')),
+          )
+          .controller
+          ?.text,
+      '0',
+    );
+  });
+
+  testWidgets('converts decimal yuan to exact integer cents', (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient);
+    await _selectOrderFromSearch(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-description-field')),
+      '小数退款测试',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-refund-amount-field')),
+      '12.34',
+    );
+    final saveButton = find.widgetWithText(FilledButton, '创建售后单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastAfterSalesBody?['refundAmountCents'], 1234);
+  });
+
+  testWidgets('rejects refund yuan with more than two decimals',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient);
+    await _selectOrderFromSearch(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-description-field')),
+      '超精度退款测试',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-refund-amount-field')),
+      '12.345',
+    );
+    final saveButton = find.widgetWithText(FilledButton, '创建售后单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('退款金额最多保留两位小数'), findsOneWidget);
+    expect(apiClient.afterSalesCreatePaths, isEmpty);
+  });
+
+  testWidgets('shows Chinese validation for invalid or incomplete yuan input',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpAfterSalesForm(tester, apiClient);
+    await _selectOrderFromSearch(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('after-sales-description-field')),
+      '退款金额格式测试',
+    );
+    final refundField =
+        find.byKey(const ValueKey('after-sales-refund-amount-field'));
+    final saveButton = find.widgetWithText(FilledButton, '创建售后单');
+    final cases = <String, String>{
+      '': '请输入退款金额（元）',
+      '12.': '退款金额格式不完整，请补充小数位',
+      '-1': '退款金额不能为负数',
+      '12..3': '请输入有效的退款金额，格式如 0、12 或 12.34',
+      'abc': '请输入有效的退款金额，格式如 0、12 或 12.34',
+    };
+
+    for (final entry in cases.entries) {
+      await tester.enterText(refundField, entry.key);
+      await tester.ensureVisible(saveButton);
+      await tester.tap(saveButton);
+      await tester.pumpAndSettle();
+      expect(find.text(entry.value), findsOneWidget);
+    }
+    expect(apiClient.afterSalesCreatePaths, isEmpty);
   });
 
   testWidgets('opens after-sales detail and updates status', (tester) async {
@@ -209,6 +340,9 @@ void main() {
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpAfterSalesForm(tester, apiClient, role: UserRole.sales);
+
+    expect(find.text('未完成售后单'), findsNothing);
+    expect(apiClient.afterSalesListPaths, isEmpty);
 
     await tester.enterText(
       find.byKey(const ValueKey('after-sales-order-search-field')),
@@ -314,20 +448,9 @@ void main() {
     );
     await _pumpAfterSalesForm(tester, apiClient);
 
-    await tester.enterText(
-      find.byKey(const ValueKey('after-sales-order-search-field')),
-      '13800001111',
-    );
-    await tester.tap(
-      find.byKey(const ValueKey('after-sales-order-search-button')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('SO20260630001').first);
-    await tester.pumpAndSettle();
-    final historyItem = find.text('AS20260630001').first;
-    await tester.ensureVisible(historyItem);
-    await tester.pumpAndSettle();
-    await tester.tap(historyItem);
+    expect(find.text('AS20260630001'), findsOneWidget);
+    expect(find.text('状态 待退款'), findsOneWidget);
+    await tester.tap(find.text('AS20260630001'));
     await tester.pumpAndSettle();
 
     final completedButton =
@@ -342,7 +465,21 @@ void main() {
       contains('/api/after-sales-orders/after-sales-1/status'),
     );
     expect(apiClient.lastStatusBody?['status'], 'completed');
+    expect(find.text('状态 待退款'), findsNothing);
   });
+}
+
+Future<void> _selectOrderFromSearch(WidgetTester tester) async {
+  await tester.enterText(
+    find.byKey(const ValueKey('after-sales-order-search-field')),
+    '13800001111',
+  );
+  await tester.tap(
+    find.byKey(const ValueKey('after-sales-order-search-button')),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('SO20260630001').first);
+  await tester.pumpAndSettle();
 }
 
 Future<void> _pumpAfterSalesForm(
@@ -400,15 +537,49 @@ class _FakeApiClient extends ApiClient {
       status: 'waiting_resend',
       actionType: 'resend',
     ),
+    _afterSalesJson(
+      id: 'after-sales-completed',
+      afterSalesNo: 'AS20260630003',
+      description: 'smoke 已完成售后记录',
+      refundAmountCents: 300,
+      resolution: 'smoke 已完成处理',
+      status: 'completed',
+      actionType: 'refund',
+    ),
   ];
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
-    if (path.startsWith('/api/after-sales-orders')) {
+    final uri = Uri.parse(path);
+    if (uri.path == '/api/after-sales-orders') {
       afterSalesListPaths.add(path);
+      var records = List<Map<String, dynamic>>.from(_afterSalesOrders);
+      if (uri.queryParameters['unfinished'] == 'true') {
+        records =
+            records.where((record) => record['status'] != 'completed').toList();
+      }
+      final status = uri.queryParameters['status'];
+      if (status != null) {
+        records =
+            records.where((record) => record['status'] == status).toList();
+      }
+      final financeConfirmed = uri.queryParameters['financeConfirmed'];
+      if (financeConfirmed != null) {
+        records = records
+            .where(
+              (record) => '${record['financeConfirmed']}' == financeConfirmed,
+            )
+            .toList();
+      }
+      final salesOrderId = uri.queryParameters['salesOrderId'];
+      if (salesOrderId != null) {
+        records = records
+            .where((record) => record['salesOrderId'] == salesOrderId)
+            .toList();
+      }
       return {
         'data': {
-          'afterSalesOrders': _afterSalesOrders,
+          'afterSalesOrders': records,
         },
       };
     }
@@ -456,6 +627,8 @@ class _FakeApiClient extends ApiClient {
             : 0,
         resolution: '${body?['resolution'] ?? ''}',
         notes: '${body?['notes'] ?? ''}',
+        status: '${body?['status'] ?? 'negotiating'}',
+        actionType: '${body?['actionType'] ?? 'record_only'}',
       );
       _afterSalesOrders.insert(0, created);
       return {

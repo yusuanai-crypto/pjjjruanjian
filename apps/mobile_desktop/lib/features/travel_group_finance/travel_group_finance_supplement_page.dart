@@ -11,7 +11,6 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
-import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
 
@@ -28,6 +27,83 @@ typedef FinanceGalleryWriter = Future<void> Function(
   required String album,
   required String name,
 });
+typedef FinanceTableImageRenderer = Future<Uint8List> Function(
+  FinanceExportTablePage page,
+);
+
+enum FinanceImageType {
+  guide(
+    'guide',
+    '导游图片',
+    '批量导出导游表格图',
+    '导游积分表',
+    '导游积分表',
+  ),
+  travelAgency(
+    'travelAgency',
+    '旅行社图片',
+    '批量导出旅行社表格图',
+    '旅行社积分表',
+    '积分表',
+  );
+
+  const FinanceImageType(
+    this.name,
+    this.label,
+    this.batchLabel,
+    this.tableTitle,
+    this.fileTypeLabel,
+  );
+
+  final String name;
+  final String label;
+  final String batchLabel;
+  final String tableTitle;
+  final String fileTypeLabel;
+}
+
+class FinanceExportTableRow {
+  const FinanceExportTableRow({
+    required this.travelGroupId,
+    required this.cells,
+  });
+
+  final String travelGroupId;
+  final List<String> cells;
+}
+
+class FinanceExportTablePage {
+  const FinanceExportTablePage({
+    required this.type,
+    required this.receiverKey,
+    required this.receiverName,
+    required this.headers,
+    required this.columnWidths,
+    required this.rows,
+    required this.dateRangeLabel,
+    required this.pageNumber,
+    required this.totalPages,
+    required this.exportDate,
+  });
+
+  final FinanceImageType type;
+  final String receiverKey;
+  final String receiverName;
+  final List<String> headers;
+  final List<double> columnWidths;
+  final List<FinanceExportTableRow> rows;
+  final String dateRangeLabel;
+  final int pageNumber;
+  final int totalPages;
+  final String exportDate;
+
+  double get canvasWidth =>
+      columnWidths.fold<double>(0, (sum, width) => sum + width) + 64;
+
+  String get fileName => _safeExportFileName(
+        '$receiverName-${type.fileTypeLabel}-$dateRangeLabel-第$pageNumber页.png',
+      );
+}
 
 enum FinanceImageSaveTarget {
   windowsFolder,
@@ -175,8 +251,7 @@ Future<void> _saveFinanceImageToGallery(
 }) async {
   try {
     final hasAccess = await Gal.hasAccess(toAlbum: true);
-    final accessGranted =
-        hasAccess || await Gal.requestAccess(toAlbum: true);
+    final accessGranted = hasAccess || await Gal.requestAccess(toAlbum: true);
     if (!accessGranted) {
       throw const FinanceImageSaveException(
         '相册权限被拒绝，请在系统设置中允许照片写入权限。',
@@ -188,8 +263,7 @@ Future<void> _saveFinanceImageToGallery(
   } on GalException catch (error) {
     throw FinanceImageSaveException(
       switch (error.type) {
-        GalExceptionType.accessDenied =>
-          '相册权限被拒绝，请在系统设置中允许照片写入权限。',
+        GalExceptionType.accessDenied => '相册权限被拒绝，请在系统设置中允许照片写入权限。',
         GalExceptionType.notEnoughSpace => '设备存储空间不足，无法保存到相册。',
         GalExceptionType.notSupportedFormat => '图片格式不受支持，无法保存到相册。',
         GalExceptionType.unexpected => '保存到相册失败，请稍后重试。',
@@ -201,9 +275,7 @@ Future<void> _saveFinanceImageToGallery(
 }
 
 String _joinPath(List<String> parts) {
-  return parts
-      .where((part) => part.isNotEmpty)
-      .join(Platform.pathSeparator);
+  return parts.where((part) => part.isNotEmpty).join(Platform.pathSeparator);
 }
 
 class TravelGroupFinanceSupplementPage extends StatefulWidget {
@@ -213,12 +285,14 @@ class TravelGroupFinanceSupplementPage extends StatefulWidget {
     required this.token,
     this.imageSaver = saveFinanceImage,
     this.folderOpener = openFinanceImageFolder,
+    this.tableImageRenderer,
   });
 
   final ApiClient apiClient;
   final String token;
   final FinanceImageSaver imageSaver;
   final FinanceFolderOpener folderOpener;
+  final FinanceTableImageRenderer? tableImageRenderer;
 
   @override
   State<TravelGroupFinanceSupplementPage> createState() =>
@@ -252,6 +326,7 @@ class _TravelGroupFinanceSupplementPageState
   String _statusFilter = _allFilter;
   bool _loading = true;
   bool _recalculating = false;
+  bool _batchExporting = false;
   String? _errorMessage;
   String? _successMessage;
   String? _lastWindowsSaveDirectory;
@@ -275,6 +350,18 @@ class _TravelGroupFinanceSupplementPageState
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
       _loadData();
+    }
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    if (!_loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _loadData();
+        }
+      });
     }
   }
 
@@ -345,7 +432,8 @@ class _TravelGroupFinanceSupplementPageState
         return false;
       }
       if (unreturnedPointsFilter != null &&
-          summary.unpaidRebateCents != unreturnedPointsFilter) {
+          scalePointsTableAmountCents(summary.unpaidRebateCents) !=
+              unreturnedPointsFilter) {
         return false;
       }
       if (!_matchesSentFilter(summary.guideInfoSent, _guideInfoSentFilter)) {
@@ -619,28 +707,73 @@ class _TravelGroupFinanceSupplementPageState
     }
   }
 
-  Future<void> _exportSelectedImages(_FinanceImageType type) async {
-    final selected = _summaries
+  Future<void> _exportSelectedImages(FinanceImageType type) async {
+    if (_batchExporting) {
+      return;
+    }
+    final selected = _visibleSummaries
         .where(
           (summary) => _selectedTravelGroupIds.contains(summary.travelGroupId),
         )
         .toList();
-    var successCount = 0;
-    _lastWindowsSaveDirectory = null;
-    for (final summary in selected) {
-      if (await _exportImage(summary, type, showSnackBar: false)) {
-        successCount += 1;
-      }
-    }
-    if (!mounted || selected.isEmpty) {
+    if (selected.isEmpty) {
       return;
     }
-    final failureCount = selected.length - successCount;
+    final pages = _buildFinanceExportTablePages(selected, type);
+    var successCount = 0;
+    setState(() {
+      _batchExporting = true;
+      _lastWindowsSaveDirectory = null;
+      _errorMessage = null;
+      _successMessage = null;
+    });
+    try {
+      for (final page in pages) {
+        try {
+          final bytes = await (widget.tableImageRenderer?.call(page) ??
+              _renderTableImageBytes(page));
+          final fileName = page.fileName;
+          final imageName = fileName.toLowerCase().endsWith('.png')
+              ? fileName.substring(0, fileName.length - 4)
+              : fileName;
+          final saveResult = await widget.imageSaver(
+            bytes,
+            album: financeImageAlbumName,
+            name: imageName,
+          );
+          successCount += 1;
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            final readyIds = page.rows.map((row) => row.travelGroupId);
+            if (type == FinanceImageType.guide) {
+              _guideImageReadyIds.addAll(readyIds);
+            } else {
+              _travelAgencyImageReadyIds.addAll(readyIds);
+            }
+            if (saveResult.directoryPath != null) {
+              _lastWindowsSaveDirectory = saveResult.directoryPath;
+            }
+          });
+        } catch (_) {
+          // A failed page must not mark any of its rows as image-ready.
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _batchExporting = false);
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    final failureCount = pages.length - successCount;
     final destination = _lastWindowsSaveDirectory == null
         ? '系统相册：$financeImageAlbumName'
         : _lastWindowsSaveDirectory!;
     final message =
-        '批量导出完成：成功 $successCount 张，失败 $failureCount 张；保存位置：$destination';
+        '批量导出完成：成功 $successCount 张表格，失败 $failureCount 张；保存位置：$destination';
     setState(() {
       if (failureCount == 0) {
         _successMessage = message;
@@ -658,7 +791,7 @@ class _TravelGroupFinanceSupplementPageState
 
   Future<bool> _exportImage(
     TravelGroupFinanceSummaryRecord summary,
-    _FinanceImageType type, {
+    FinanceImageType type, {
     bool showSnackBar = true,
   }) async {
     final busyKey = '${summary.travelGroupId}:${type.name}';
@@ -687,7 +820,7 @@ class _TravelGroupFinanceSupplementPageState
       }
       setState(() {
         _imageExportingKeys.remove(busyKey);
-        if (type == _FinanceImageType.guide) {
+        if (type == FinanceImageType.guide) {
           _guideImageReadyIds.add(summary.travelGroupId);
         } else {
           _travelAgencyImageReadyIds.add(summary.travelGroupId);
@@ -736,8 +869,23 @@ class _TravelGroupFinanceSupplementPageState
 
   Future<Uint8List> _renderImageBytes(
     TravelGroupFinanceSummaryRecord summary,
-    _FinanceImageType type,
-  ) async {
+    FinanceImageType type,
+  ) {
+    return _renderOffstageWidgetBytes(
+      _FinanceExportImageCard(
+        summary: summary,
+        type: type,
+      ),
+    );
+  }
+
+  Future<Uint8List> _renderTableImageBytes(FinanceExportTablePage page) {
+    return _renderOffstageWidgetBytes(
+      FinanceExportTableImage(page: page),
+    );
+  }
+
+  Future<Uint8List> _renderOffstageWidgetBytes(Widget child) async {
     final repaintKey = GlobalKey();
     final overlay = Overlay.of(context, rootOverlay: true);
     final entry = OverlayEntry(
@@ -751,10 +899,7 @@ class _TravelGroupFinanceSupplementPageState
               color: Colors.transparent,
               child: RepaintBoundary(
                 key: repaintKey,
-                child: _FinanceExportImageCard(
-                  summary: summary,
-                  type: type,
-                ),
+                child: child,
               ),
             ),
           ),
@@ -763,27 +908,33 @@ class _TravelGroupFinanceSupplementPageState
     );
 
     overlay.insert(entry);
-    await WidgetsBinding.instance.endOfFrame;
-    await WidgetsBinding.instance.endOfFrame;
-    final boundary =
-        repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) {
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary = repaintKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) {
+        throw StateError('无法生成图片。');
+      }
+      final image = await boundary.toImage(pixelRatio: 2);
+      try {
+        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+        final bytes = byteData?.buffer.asUint8List();
+        if (bytes == null || bytes.isEmpty) {
+          throw StateError('无法生成图片。');
+        }
+        return bytes;
+      } finally {
+        image.dispose();
+      }
+    } finally {
       entry.remove();
-      throw StateError('无法生成图片。');
     }
-    final image = await boundary.toImage(pixelRatio: 2);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    entry.remove();
-    final bytes = byteData?.buffer.asUint8List();
-    if (bytes == null || bytes.isEmpty) {
-      throw StateError('无法生成图片。');
-    }
-    return bytes;
   }
 
   String _imageFileName(
     TravelGroupFinanceSummaryRecord summary,
-    _FinanceImageType type,
+    FinanceImageType type,
   ) {
     final group = summary.travelGroup;
     final date = _dateOnlyText(group?.visitDate ?? '');
@@ -879,6 +1030,9 @@ class _TravelGroupFinanceSupplementPageState
                     MapEntry(_allFilter, '全部'),
                     MapEntry(_statusPending, '待返'),
                     MapEntry(_statusComplete, '已完成'),
+                    MapEntry(_statusAfterSalesProcessing, '售后处理中'),
+                    MapEntry(_statusRefundPending, '退款待确认'),
+                    MapEntry(_statusFinanceRequired, '需财务处理'),
                   ],
                   onChanged: (value) => setState(() => _statusFilter = value),
                 ),
@@ -961,20 +1115,26 @@ class _TravelGroupFinanceSupplementPageState
               ),
               OutlinedButton.icon(
                 key: const ValueKey('finance-export-guide-images-button'),
-                onPressed: selectedVisibleCount == 0
+                onPressed: selectedVisibleCount == 0 || _batchExporting
                     ? null
-                    : () => _exportSelectedImages(_FinanceImageType.guide),
+                    : () => _exportSelectedImages(FinanceImageType.guide),
                 icon: const Icon(Icons.badge_rounded),
-                label: const Text('批量导出导游图片'),
+                label: Text(
+                  _batchExporting ? '表格导出中' : FinanceImageType.guide.batchLabel,
+                ),
               ),
               OutlinedButton.icon(
                 key: const ValueKey('finance-export-agency-images-button'),
-                onPressed: selectedVisibleCount == 0
+                onPressed: selectedVisibleCount == 0 || _batchExporting
                     ? null
                     : () =>
-                        _exportSelectedImages(_FinanceImageType.travelAgency),
+                        _exportSelectedImages(FinanceImageType.travelAgency),
                 icon: const Icon(Icons.apartment_rounded),
-                label: const Text('批量导出旅行社图片'),
+                label: Text(
+                  _batchExporting
+                      ? '表格导出中'
+                      : FinanceImageType.travelAgency.batchLabel,
+                ),
               ),
             ],
           ),
@@ -1162,14 +1322,14 @@ class _FinanceSummaryStrip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('上单金额 '),
-            MoneyText(cents: orderAmountCents),
+            Text(formatPointsTableMoneyCents(orderAmountCents)),
           ],
         ),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('已返积分 '),
-            MoneyText(cents: returnedAmountCents),
+            Text(formatPointsTableMoneyCents(returnedAmountCents)),
           ],
         ),
       ],
@@ -1215,7 +1375,7 @@ class _FinancePointTable extends StatelessWidget {
       onMonthlyRebatePaidChanged;
   final Future<bool> Function(
     TravelGroupFinanceSummaryRecord,
-    _FinanceImageType,
+    FinanceImageType,
   ) onExportImage;
   final Future<void> Function(TravelGroupFinanceSummaryRecord, bool)
       onGuideInfoSentChanged;
@@ -1232,6 +1392,7 @@ class _FinancePointTable extends StatelessWidget {
         selectedCount == summaries.length && summaries.isNotEmpty;
     return _TableScroller(
       child: DataTable(
+        showCheckboxColumn: false,
         columnSpacing: 18,
         horizontalMargin: 12,
         headingRowHeight: 44,
@@ -1252,6 +1413,8 @@ class _FinancePointTable extends StatelessWidget {
           const DataColumn(label: Text('人数')),
           const DataColumn(label: Text('品鉴师')),
           const DataColumn(label: Text('销售额')),
+          const DataColumn(label: Text('已确认退款')),
+          const DataColumn(label: Text('有效销售额')),
           const DataColumn(label: Text('货到付款')),
           const DataColumn(label: Text('已付定金')),
           const DataColumn(label: Text('扣酒成本')),
@@ -1262,6 +1425,7 @@ class _FinancePointTable extends StatelessWidget {
           const DataColumn(label: Text('月返积分')),
           const DataColumn(label: Text('已返月返积分')),
           const DataColumn(label: Text('未返月返积分')),
+          const DataColumn(label: Text('售后影响')),
           const DataColumn(label: Text('导游图片')),
           const DataColumn(label: Text('旅行社图片')),
           const DataColumn(label: Text('导游信息发送')),
@@ -1297,13 +1461,18 @@ class _FinancePointTable extends StatelessWidget {
           value: selected,
           onChanged: (value) => onSelectionChanged(rowKey, value ?? false),
         )),
-        DataCell(_TextCell(value: _dateOnlyText(group?.visitDate ?? ''))),
+        DataCell(_TextCell(
+          key: ValueKey('$rowKey:rowTapTarget'),
+          value: _dateOnlyText(group?.visitDate ?? ''),
+        )),
         DataCell(_TextCell(value: _text(group?.travelAgency), width: 132)),
         DataCell(_TextCell(value: _text(group?.guideName), width: 96)),
         DataCell(_TextCell(value: _text(group?.licensePlate), width: 104)),
         DataCell(_TextCell(value: '${group?.guestCount ?? 0}', width: 64)),
         DataCell(_TextCell(value: _text(group?.tasterName), width: 104)),
         DataCell(_MoneyCell(cents: summary.totalSalesAmountCents)),
+        DataCell(_MoneyCell(cents: summary.confirmedRefundAmountCents)),
+        DataCell(_MoneyCell(cents: summary.effectiveSalesAmountCents)),
         DataCell(_MoneyCell(cents: summary.totalCashOnDeliveryCents)),
         DataCell(_MoneyCell(cents: summary.totalPaidDepositCents)),
         DataCell(_AgencyDeductionEditor(
@@ -1316,6 +1485,7 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(_MoneyCell(cents: summary.totalDailyRebateCents)),
         DataCell(_RebatePaidButton(
           key: ValueKey('$rowKey:dailyRebatePaid'),
+          amountCents: summary.paidDailyRebateCents,
           paid: summary.dailyRebatePaid,
           busy: rebateUpdatingKeys.contains('$rowKey:dailyRebatePaid'),
           onPressed: () => onDailyRebatePaidChanged(
@@ -1327,6 +1497,7 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(_MoneyCell(cents: summary.totalMonthlyRebateCents)),
         DataCell(_RebatePaidButton(
           key: ValueKey('$rowKey:monthlyRebatePaid'),
+          amountCents: summary.paidMonthlyRebateCents,
           paid: summary.monthlyRebatePaid,
           busy: rebateUpdatingKeys.contains('$rowKey:monthlyRebatePaid'),
           onPressed: () => onMonthlyRebatePaidChanged(
@@ -1335,12 +1506,13 @@ class _FinancePointTable extends StatelessWidget {
           ),
         )),
         DataCell(_MoneyCell(cents: summary.unpaidMonthlyRebateCents)),
+        DataCell(_AfterSalesImpactCell(summary: summary)),
         DataCell(_ImageExportButton(
           key: ValueKey('$rowKey:guideImage'),
           label: '导游图片',
           busy: imageExportingKeys.contains('$rowKey:guide'),
           ready: guideReady,
-          onPressed: () => onExportImage(summary, _FinanceImageType.guide),
+          onPressed: () => onExportImage(summary, FinanceImageType.guide),
         )),
         DataCell(_ImageExportButton(
           key: ValueKey('$rowKey:travelAgencyImage'),
@@ -1348,7 +1520,7 @@ class _FinancePointTable extends StatelessWidget {
           busy: imageExportingKeys.contains('$rowKey:travelAgency'),
           ready: agencyReady,
           onPressed: () =>
-              onExportImage(summary, _FinanceImageType.travelAgency),
+              onExportImage(summary, FinanceImageType.travelAgency),
         )),
         DataCell(Switch(
           key: ValueKey('$rowKey:guideInfoSent'),
@@ -1367,9 +1539,7 @@ class _FinancePointTable extends StatelessWidget {
         )),
         DataCell(StatusTag(
           label: _summaryStatus(summary),
-          tone: _summaryStatus(summary) == _statusComplete
-              ? StatusTone.success
-              : StatusTone.warning,
+          tone: _summaryStatusTone(summary),
         )),
       ],
     );
@@ -1378,6 +1548,7 @@ class _FinancePointTable extends StatelessWidget {
 
 class _TextCell extends StatelessWidget {
   const _TextCell({
+    super.key,
     required this.value,
     this.width = 116,
   });
@@ -1407,7 +1578,25 @@ class _MoneyCell extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: 112,
-      child: MoneyText(cents: cents),
+      child: Text(formatPointsTableMoneyCents(cents)),
+    );
+  }
+}
+
+class _AfterSalesImpactCell extends StatelessWidget {
+  const _AfterSalesImpactCell({required this.summary});
+
+  final TravelGroupFinanceSummaryRecord summary;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      key: ValueKey('${summary.travelGroupId}:afterSalesImpact'),
+      width: 190,
+      child: StatusTag(
+        label: _afterSalesImpactLabel(summary),
+        tone: _afterSalesImpactTone(summary),
+      ),
     );
   }
 }
@@ -1425,8 +1614,7 @@ class _AgencyDeductionEditor extends StatefulWidget {
   final Future<void> Function(int cents) onSave;
 
   @override
-  State<_AgencyDeductionEditor> createState() =>
-      _AgencyDeductionEditorState();
+  State<_AgencyDeductionEditor> createState() => _AgencyDeductionEditorState();
 }
 
 class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
@@ -1437,7 +1625,11 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
   void initState() {
     super.initState();
     _controller = TextEditingController(
-      text: _yuanInput(widget.summary.totalAgencyDeductionCents),
+      text: _yuanInput(
+        scalePointsTableAmountCents(
+          widget.summary.totalAgencyDeductionCents,
+        ),
+      ),
     );
   }
 
@@ -1447,7 +1639,9 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
     if (oldWidget.summary.totalAgencyDeductionCents !=
         widget.summary.totalAgencyDeductionCents) {
       _controller.text = _yuanInput(
-        widget.summary.totalAgencyDeductionCents,
+        scalePointsTableAmountCents(
+          widget.summary.totalAgencyDeductionCents,
+        ),
       );
       _validationError = null;
     }
@@ -1558,13 +1752,14 @@ _AgencyDeductionParseResult _parseAgencyDeduction(
     return const _AgencyDeductionParseResult(error: '金额过大，请重新输入。');
   }
   final decimal = (match.group(2) ?? '').padRight(2, '0');
-  final cents = yuan * 100 + (decimal.isEmpty ? 0 : int.parse(decimal));
-  if (cents > totalSalesAmountCents) {
+  final displayCents = yuan * 100 + (decimal.isEmpty ? 0 : int.parse(decimal));
+  final sourceCents = pointsTableDisplayCentsToSourceCents(displayCents);
+  if (sourceCents > totalSalesAmountCents) {
     return const _AgencyDeductionParseResult(
       error: '扣酒成本不能大于该旅行团销售额。',
     );
   }
-  return _AgencyDeductionParseResult(cents: cents);
+  return _AgencyDeductionParseResult(cents: sourceCents);
 }
 
 String _yuanInput(int cents) {
@@ -1576,34 +1771,43 @@ String _yuanInput(int cents) {
 class _RebatePaidButton extends StatelessWidget {
   const _RebatePaidButton({
     super.key,
+    required this.amountCents,
     required this.paid,
     required this.busy,
     required this.onPressed,
   });
 
+  final int amountCents;
   final bool paid;
   final bool busy;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final child = busy
+    final action = busy
         ? const SizedBox.square(
             dimension: 16,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
         : Text(paid ? '已返' : '标记已返');
     return SizedBox(
-      width: 96,
-      child: paid
-          ? FilledButton(
-              onPressed: busy ? null : onPressed,
-              child: child,
-            )
-          : OutlinedButton(
-              onPressed: busy ? null : onPressed,
-              child: child,
-            ),
+      width: 112,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(formatPointsTableMoneyCents(amountCents)),
+          const SizedBox(height: 4),
+          paid
+              ? FilledButton(
+                  onPressed: busy ? null : onPressed,
+                  child: action,
+                )
+              : OutlinedButton(
+                  onPressed: busy ? null : onPressed,
+                  child: action,
+                ),
+        ],
+      ),
     );
   }
 }
@@ -1647,12 +1851,12 @@ class _FinanceExportImageCard extends StatelessWidget {
   });
 
   final TravelGroupFinanceSummaryRecord summary;
-  final _FinanceImageType type;
+  final FinanceImageType type;
 
   @override
   Widget build(BuildContext context) {
     final group = summary.travelGroup;
-    final fields = type == _FinanceImageType.guide
+    final fields = type == FinanceImageType.guide
         ? <MapEntry<String, String>>[
             MapEntry('日期', _dateOnlyText(group?.visitDate ?? '')),
             MapEntry('旅行社', _text(group?.travelAgency)),
@@ -1662,8 +1866,11 @@ class _FinanceExportImageCard extends StatelessWidget {
             MapEntry('品鉴师', _text(group?.tasterName)),
             MapEntry(
               '上单金额',
-              formatMoneyCents(summary.totalAgencyNetAmountCents),
+              formatPointsTableMoneyCents(
+                summary.totalAgencyNetAmountCents,
+              ),
             ),
+            MapEntry('售后影响', _afterSalesImpactLabel(summary)),
           ]
         : <MapEntry<String, String>>[
             MapEntry('日期', _dateOnlyText(group?.visitDate ?? '')),
@@ -1672,21 +1879,53 @@ class _FinanceExportImageCard extends StatelessWidget {
             MapEntry('车牌', _text(group?.licensePlate)),
             MapEntry('人数', '${group?.guestCount ?? 0} 人'),
             MapEntry('品鉴师', _text(group?.tasterName)),
-            MapEntry('销售额', formatMoneyCents(summary.totalSalesAmountCents)),
-            MapEntry('已付定金', formatMoneyCents(summary.totalPaidDepositCents)),
+            MapEntry(
+              '销售额',
+              formatPointsTableMoneyCents(summary.totalSalesAmountCents),
+            ),
+            MapEntry(
+              '已付定金',
+              formatPointsTableMoneyCents(summary.totalPaidDepositCents),
+            ),
             MapEntry(
               '货到付款',
-              formatMoneyCents(summary.totalCashOnDeliveryCents),
+              formatPointsTableMoneyCents(
+                summary.totalCashOnDeliveryCents,
+              ),
+            ),
+            MapEntry(
+              '已确认退款',
+              formatPointsTableMoneyCents(
+                summary.confirmedRefundAmountCents,
+              ),
+            ),
+            MapEntry(
+              '有效销售额',
+              formatPointsTableMoneyCents(
+                summary.effectiveSalesAmountCents,
+              ),
             ),
             MapEntry(
               '扣酒成本',
-              formatMoneyCents(summary.totalAgencyDeductionCents),
+              formatPointsTableMoneyCents(
+                summary.totalAgencyDeductionCents,
+              ),
             ),
             MapEntry(
               '上单金额',
-              formatMoneyCents(summary.totalAgencyNetAmountCents),
+              formatPointsTableMoneyCents(
+                summary.totalAgencyNetAmountCents,
+              ),
             ),
-            MapEntry('积分', formatMoneyCents(summary.totalDailyRebateCents)),
+            MapEntry(
+              '日返积分',
+              formatPointsTableMoneyCents(summary.totalDailyRebateCents),
+            ),
+            MapEntry(
+              '月返积分',
+              formatPointsTableMoneyCents(summary.totalMonthlyRebateCents),
+            ),
+            MapEntry('售后影响', _afterSalesImpactLabel(summary)),
           ];
 
     return SizedBox(
@@ -1745,6 +1984,344 @@ class _FinanceExportImageCard extends StatelessWidget {
                     ),
                   ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+const _financeExportPageSize = 20;
+
+const _guideExportHeaders = <String>[
+  '日期',
+  '旅行社',
+  '导游',
+  '车牌',
+  '人数',
+  '品鉴师',
+  '上单金额',
+  '售后影响',
+];
+
+const _guideExportColumnWidths = <double>[
+  130,
+  190,
+  150,
+  150,
+  80,
+  150,
+  160,
+  260,
+];
+
+const _agencyExportHeaders = <String>[
+  '日期',
+  '旅行社',
+  '导游',
+  '销售额',
+  '货到付款',
+  '已付定金',
+  '已确认退款',
+  '有效销售额',
+  '扣酒成本',
+  '上单金额',
+  '日返积分',
+  '月返积分',
+  '售后影响',
+];
+
+const _agencyExportColumnWidths = <double>[
+  130,
+  190,
+  150,
+  150,
+  150,
+  150,
+  150,
+  150,
+  150,
+  150,
+  140,
+  140,
+  260,
+];
+
+List<FinanceExportTablePage> _buildFinanceExportTablePages(
+  List<TravelGroupFinanceSummaryRecord> summaries,
+  FinanceImageType type,
+) {
+  final grouped = <String, List<TravelGroupFinanceSummaryRecord>>{};
+  for (final summary in summaries) {
+    final key = type == FinanceImageType.guide
+        ? _guideExportGroupKey(summary)
+        : _agencyExportGroupKey(summary);
+    grouped.putIfAbsent(key, () => []).add(summary);
+  }
+
+  final pages = <FinanceExportTablePage>[];
+  final exportDate = _formatDate(DateTime.now());
+  for (final entry in grouped.entries) {
+    final groupRows = entry.value;
+    final receiverName = type == FinanceImageType.guide
+        ? _text(groupRows.first.travelGroup?.guideName, fallback: '未知导游')
+        : _text(
+            groupRows.first.travelGroup?.travelAgency,
+            fallback: '未知旅行社',
+          );
+    final dateRangeLabel = _exportDateRangeLabel(groupRows);
+    final totalPages = (groupRows.length + _financeExportPageSize - 1) ~/
+        _financeExportPageSize;
+    for (var pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
+      final start = pageIndex * _financeExportPageSize;
+      final end =
+          (start + _financeExportPageSize).clamp(0, groupRows.length).toInt();
+      final pageRows = groupRows
+          .sublist(start, end)
+          .map((summary) => _buildFinanceExportTableRow(summary, type))
+          .toList(growable: false);
+      pages.add(
+        FinanceExportTablePage(
+          type: type,
+          receiverKey: entry.key,
+          receiverName: receiverName,
+          headers: type == FinanceImageType.guide
+              ? _guideExportHeaders
+              : _agencyExportHeaders,
+          columnWidths: type == FinanceImageType.guide
+              ? _guideExportColumnWidths
+              : _agencyExportColumnWidths,
+          rows: pageRows,
+          dateRangeLabel: dateRangeLabel,
+          pageNumber: pageIndex + 1,
+          totalPages: totalPages,
+          exportDate: exportDate,
+        ),
+      );
+    }
+  }
+  return pages;
+}
+
+FinanceExportTableRow _buildFinanceExportTableRow(
+  TravelGroupFinanceSummaryRecord summary,
+  FinanceImageType type,
+) {
+  final group = summary.travelGroup;
+  final common = <String>[
+    _dateOnlyText(group?.visitDate ?? ''),
+    _text(group?.travelAgency),
+    _text(group?.guideName),
+  ];
+  final cells = type == FinanceImageType.guide
+      ? <String>[
+          ...common,
+          _text(group?.licensePlate),
+          '${group?.guestCount ?? 0}',
+          _text(group?.tasterName),
+          formatPointsTableMoneyCents(summary.totalAgencyNetAmountCents),
+          _afterSalesImpactLabel(summary),
+        ]
+      : <String>[
+          ...common,
+          formatPointsTableMoneyCents(summary.totalSalesAmountCents),
+          formatPointsTableMoneyCents(
+            summary.totalCashOnDeliveryCents,
+          ),
+          formatPointsTableMoneyCents(summary.totalPaidDepositCents),
+          formatPointsTableMoneyCents(
+            summary.confirmedRefundAmountCents,
+          ),
+          formatPointsTableMoneyCents(
+            summary.effectiveSalesAmountCents,
+          ),
+          formatPointsTableMoneyCents(
+            summary.totalAgencyDeductionCents,
+          ),
+          formatPointsTableMoneyCents(summary.totalAgencyNetAmountCents),
+          formatPointsTableMoneyCents(summary.totalDailyRebateCents),
+          formatPointsTableMoneyCents(summary.totalMonthlyRebateCents),
+          _afterSalesImpactLabel(summary),
+        ];
+  return FinanceExportTableRow(
+    travelGroupId: summary.travelGroupId,
+    cells: cells,
+  );
+}
+
+String _guideExportGroupKey(TravelGroupFinanceSummaryRecord summary) {
+  final group = summary.travelGroup;
+  final guideId = _text(group?.guideId);
+  final agencyKey = _agencyExportGroupKey(summary);
+  if (guideId.isNotEmpty) {
+    return 'guide-id:$guideId|$agencyKey';
+  }
+  final name = _normalizeExportGroupingText(group?.guideName);
+  final phone = _normalizeExportPhone(group?.guidePhone);
+  if (name.isNotEmpty || phone.isNotEmpty) {
+    return 'guide-fallback:$name|$phone|$agencyKey';
+  }
+  return 'guide-travel-group:${summary.travelGroupId}';
+}
+
+String _agencyExportGroupKey(TravelGroupFinanceSummaryRecord summary) {
+  final group = summary.travelGroup;
+  final agencyId = _text(group?.agencyId);
+  if (agencyId.isNotEmpty) {
+    return 'agency-id:$agencyId';
+  }
+  final agencyName = _normalizeExportGroupingText(group?.travelAgency);
+  if (agencyName.isNotEmpty) {
+    return 'agency-fallback:$agencyName';
+  }
+  return 'agency-travel-group:${summary.travelGroupId}';
+}
+
+String _normalizeExportGroupingText(String? value) {
+  return _text(value).toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+String _normalizeExportPhone(String? value) {
+  return _text(value).replaceAll(RegExp(r'[^0-9+]'), '');
+}
+
+String _exportDateRangeLabel(
+  List<TravelGroupFinanceSummaryRecord> summaries,
+) {
+  final dates = summaries
+      .map((summary) => _dateOnlyText(summary.travelGroup?.visitDate ?? ''))
+      .where((date) => RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date))
+      .toList()
+    ..sort();
+  if (dates.isEmpty) {
+    return '未知日期';
+  }
+  return '${dates.first}至${dates.last}';
+}
+
+class FinanceExportTableImage extends StatelessWidget {
+  const FinanceExportTableImage({
+    super.key,
+    required this.page,
+  });
+
+  final FinanceExportTablePage page;
+
+  @override
+  Widget build(BuildContext context) {
+    final columnWidths = <int, TableColumnWidth>{
+      for (var index = 0; index < page.columnWidths.length; index += 1)
+        index: FixedColumnWidth(page.columnWidths[index]),
+    };
+    return SizedBox(
+      key: const ValueKey('finance-export-table-image'),
+      width: page.canvasWidth,
+      child: ColoredBox(
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: DefaultTextStyle(
+            style: const TextStyle(
+              color: Color(0xFF17212B),
+              fontSize: 18,
+              height: 1.3,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  page.type.tableTitle,
+                  style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '接收对象：${page.receiverName}',
+                  style: const TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '日期范围：${page.dateRangeLabel}  '
+                  '页码：${page.pageNumber}/${page.totalPages}  '
+                  '导出日期：${page.exportDate}',
+                  style: const TextStyle(color: Color(0xFF5A6673)),
+                ),
+                const SizedBox(height: 18),
+                Table(
+                  key: const ValueKey('finance-export-table'),
+                  border: TableBorder.all(
+                    color: const Color(0xFF9AA5B1),
+                    width: 1,
+                  ),
+                  columnWidths: columnWidths,
+                  defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                  children: [
+                    TableRow(
+                      key: const ValueKey('finance-export-table-header'),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFEFF3F7),
+                      ),
+                      children: [
+                        for (final header in page.headers)
+                          _FinanceExportTableCell(
+                            value: header,
+                            header: true,
+                          ),
+                      ],
+                    ),
+                    for (var rowIndex = 0;
+                        rowIndex < page.rows.length;
+                        rowIndex += 1)
+                      TableRow(
+                        key: ValueKey(
+                          'finance-export-table-row-$rowIndex',
+                        ),
+                        children: [
+                          for (final cell in page.rows[rowIndex].cells)
+                            _FinanceExportTableCell(value: cell),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FinanceExportTableCell extends StatelessWidget {
+  const _FinanceExportTableCell({
+    required this.value,
+    this.header = false,
+  });
+
+  final String value;
+  final bool header;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: header ? 54 : 64),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: header ? FontWeight.w800 : FontWeight.w500,
             ),
           ),
         ),
@@ -1946,21 +2523,14 @@ class _InlineNotice extends StatelessWidget {
   }
 }
 
-enum _FinanceImageType {
-  guide('guide', '导游图片'),
-  travelAgency('travelAgency', '旅行社图片');
-
-  const _FinanceImageType(this.name, this.label);
-
-  final String name;
-  final String label;
-}
-
 const _allFilter = '__all__';
 const _sentFilter = '__sent__';
 const _notSentFilter = '__not_sent__';
 const _statusPending = '待返';
 const _statusComplete = '已完成';
+const _statusAfterSalesProcessing = '售后处理中';
+const _statusRefundPending = '退款待确认';
+const _statusFinanceRequired = '需财务处理';
 
 const _sentFilterItems = <MapEntry<String, String>>[
   MapEntry(_allFilter, '全部'),
@@ -1977,7 +2547,44 @@ bool _matchesSentFilter(bool sent, String filter) {
 }
 
 String _summaryStatus(TravelGroupFinanceSummaryRecord summary) {
+  switch (summary.afterSalesImpactStatus) {
+    case 'after_rebate_paid_requires_finance':
+      return _statusFinanceRequired;
+    case 'refund_pending_confirmation':
+      return _statusRefundPending;
+    case 'after_sales_processing':
+      return _statusAfterSalesProcessing;
+  }
   return summary.unpaidRebateCents == 0 ? _statusComplete : _statusPending;
+}
+
+StatusTone _summaryStatusTone(TravelGroupFinanceSummaryRecord summary) {
+  return switch (_summaryStatus(summary)) {
+    _statusComplete => StatusTone.success,
+    _statusFinanceRequired => StatusTone.danger,
+    _ => StatusTone.warning,
+  };
+}
+
+String _afterSalesImpactLabel(TravelGroupFinanceSummaryRecord summary) {
+  return switch (summary.afterSalesImpactStatus) {
+    'after_sales_processing' => '售后处理中',
+    'refund_pending_confirmation' =>
+      '退款待确认 ${formatPointsTableMoneyCents(summary.pendingAfterSalesRefundAmountCents)}',
+    'refund_adjusted' => '已按退款调整',
+    'after_rebate_paid_requires_finance' => '已返后发生售后，需财务处理',
+    _ => '无',
+  };
+}
+
+StatusTone _afterSalesImpactTone(TravelGroupFinanceSummaryRecord summary) {
+  return switch (summary.afterSalesImpactStatus) {
+    'after_rebate_paid_requires_finance' => StatusTone.danger,
+    'refund_pending_confirmation' => StatusTone.warning,
+    'after_sales_processing' => StatusTone.warning,
+    'refund_adjusted' => StatusTone.info,
+    _ => StatusTone.neutral,
+  };
 }
 
 String _text(String? value, {String fallback = ''}) {

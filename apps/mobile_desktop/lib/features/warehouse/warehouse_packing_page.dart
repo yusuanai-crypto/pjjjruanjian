@@ -323,6 +323,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   }
 
   Widget _buildListPane() {
+    final filterForegroundColor = Theme.of(context).colorScheme.onSurface;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -387,6 +389,12 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   FilterChip(
                     key: ValueKey('warehouse-packing-filter-${status.value}'),
                     selected: _filter == status,
+                    labelStyle: TextStyle(
+                      color: WidgetStateColor.resolveWith(
+                        (_) => filterForegroundColor,
+                      ),
+                    ),
+                    checkmarkColor: filterForegroundColor,
                     label: Text(_packingStatusLabel(status.value)),
                     onSelected: (_) {
                       setState(() => _filter = status);

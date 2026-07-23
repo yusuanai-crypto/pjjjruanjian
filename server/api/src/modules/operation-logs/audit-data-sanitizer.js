@@ -98,7 +98,9 @@ function sanitizeAiText(value, options = {}) {
 }
 
 function sanitizeValue(value, key, depth, seen, config, reportState) {
-  const fieldCategory = classifyField(key);
+  const fieldCategory = isSafePasswordStateMarker(key, value)
+    ? 'normal'
+    : classifyField(key);
   if (fieldCategory === 'secret') {
     reportState.redactedCategories.add(classifySecretCategory(key));
     return OMIT_VALUE;
@@ -220,6 +222,17 @@ function sanitizeValue(value, key, depth, seen, config, reportState) {
   } finally {
     seen.delete(value);
   }
+}
+
+function isSafePasswordStateMarker(key, value) {
+  if (typeof value !== 'boolean') {
+    return false;
+  }
+  return [
+    'mustchangepassword',
+    'passwordchanged',
+    'passwordreset',
+  ].includes(normalizeKey(key));
 }
 
 function sanitizeText(value, config, reportState, maskOrderIdentifiers) {

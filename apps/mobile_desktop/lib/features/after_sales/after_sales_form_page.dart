@@ -1,6 +1,5 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
@@ -50,16 +49,20 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   bool _savingAfterSales = false;
   bool _statusUpdating = false;
   bool _todoLoading = false;
+  bool _unfinishedLoading = false;
   String? _errorMessage;
   String? _historyErrorMessage;
   String? _formErrorMessage;
   String? _statusErrorMessage;
   String? _todoErrorMessage;
+  String? _unfinishedErrorMessage;
   String? _createdAfterSalesNo;
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   List<AfterSalesOrderRecord> _afterSalesHistory =
       const <AfterSalesOrderRecord>[];
   List<AfterSalesOrderRecord> _roleTodos = const <AfterSalesOrderRecord>[];
+  List<AfterSalesOrderRecord> _unfinishedOrders =
+      const <AfterSalesOrderRecord>[];
   final Set<String> _warehouseConfirmingIds = <String>{};
   final Set<String> _financeUploadingIds = <String>{};
   SalesOrderRecord? _selectedOrder;
@@ -79,14 +82,14 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
 
   bool get _usesTodoWorkflow => _isWarehouseWorkflow || _isFinanceWorkflow;
 
+  bool get _usesUnfinishedWorkflow => _canManageAfterSales;
+
   @override
   void initState() {
     super.initState();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
-    if (_usesTodoWorkflow) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadRoleTodos());
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialWorkflow());
   }
 
   @override
@@ -97,8 +100,24 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
     }
-    if (oldWidget.role != widget.role && _usesTodoWorkflow) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadRoleTodos());
+    if (oldWidget.role != widget.role ||
+        oldWidget.apiClient != widget.apiClient ||
+        oldWidget.token != widget.token) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _loadInitialWorkflow());
+    }
+  }
+
+  void _loadInitialWorkflow() {
+    if (!mounted) {
+      return;
+    }
+    if (_usesTodoWorkflow) {
+      _loadRoleTodos();
+      return;
+    }
+    if (_usesUnfinishedWorkflow) {
+      _loadUnfinishedOrders();
     }
   }
 
@@ -193,7 +212,10 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     });
   }
 
-  Future<void> _loadAfterSalesHistory({String? preserveSelectedId}) async {
+  Future<void> _loadAfterSalesHistory({
+    String? preserveSelectedId,
+    AfterSalesOrderRecord? fallbackSelected,
+  }) async {
     final order = _selectedOrder;
     if (order == null) {
       setState(() {
@@ -219,7 +241,8 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       final selectedId = preserveSelectedId ?? _selectedAfterSales?.id;
       setState(() {
         _afterSalesHistory = history;
-        _selectedAfterSales = _selectedAfterSalesFrom(history, selectedId);
+        _selectedAfterSales =
+            _selectedAfterSalesFrom(history, selectedId) ?? fallbackSelected;
         _historyLoading = false;
       });
     } catch (error) {
@@ -228,7 +251,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       }
       setState(() {
         _afterSalesHistory = const <AfterSalesOrderRecord>[];
-        _selectedAfterSales = null;
+        _selectedAfterSales = fallbackSelected;
         _historyLoading = false;
         _historyErrorMessage = _messageForError(error);
       });
@@ -248,9 +271,9 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       return;
     }
     final refundAmountCents =
-        int.tryParse(_refundAmountController.text.trim()) ?? -1;
-    if (refundAmountCents < 0) {
-      setState(() => _formErrorMessage = '退款金额不能小于 0。');
+        _refundYuanToCents(_refundAmountController.text.trim());
+    if (refundAmountCents == null) {
+      setState(() => _formErrorMessage = '退款金额格式不正确，请输入最多两位小数的元金额。');
       return;
     }
 
@@ -278,11 +301,17 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         _selectedAfterSales = created;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('售后单 ${created.afterSalesNo} 已创建。')),
+        SnackBar(
+          content: Text(
+            '售后单 ${created.afterSalesNo} 已创建。'
+            '积分表已标记售后影响，退款将在财务确认后正式扣减。',
+          ),
+        ),
       );
       _resetAfterSalesDraft();
       await _loadAfterSalesHistory(preserveSelectedId: created.id);
       await _refreshSelectedOrder();
+      await _loadUnfinishedOrders();
     } catch (error) {
       if (!mounted) {
         return;
@@ -336,6 +365,12 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       }
       setState(() {
         _selectedAfterSales = updated;
+        _unfinishedOrders = status == 'completed'
+            ? _unfinishedOrders.where((item) => item.id != updated.id).toList()
+            : [
+                for (final item in _unfinishedOrders)
+                  if (item.id == updated.id) updated else item,
+              ];
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -346,6 +381,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       );
       await _loadAfterSalesHistory(preserveSelectedId: updated.id);
       await _refreshSelectedOrder();
+      await _loadUnfinishedOrders();
     } catch (error) {
       if (!mounted) {
         return;
@@ -383,6 +419,74 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       }
       setState(() {
         _statusErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _loadUnfinishedOrders() async {
+    if (!_usesUnfinishedWorkflow) {
+      return;
+    }
+    setState(() {
+      _unfinishedLoading = true;
+      _unfinishedErrorMessage = null;
+    });
+    try {
+      final records = await _businessApi.listAfterSalesOrders(
+        unfinished: true,
+        limit: 200,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _unfinishedOrders =
+            records.where((record) => record.status != 'completed').toList();
+        _unfinishedLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _unfinishedOrders = const <AfterSalesOrderRecord>[];
+        _unfinishedLoading = false;
+        _unfinishedErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _selectUnfinishedOrder(
+    AfterSalesOrderRecord record,
+  ) async {
+    try {
+      final order = record.salesOrder ??
+          await _businessApi.getSalesOrder(record.salesOrderId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedOrder = order;
+        _selectedAfterSales = record;
+        _createdAfterSalesNo = null;
+        _formErrorMessage = null;
+        _statusErrorMessage = null;
+        _unfinishedErrorMessage = null;
+        if (!_orders.any((item) => item.id == order.id)) {
+          _orders = [order, ..._orders];
+        }
+      });
+      _resetAfterSalesDraft();
+      await _loadAfterSalesHistory(
+        preserveSelectedId: record.id,
+        fallbackSelected: record,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _unfinishedErrorMessage = _messageForError(error);
       });
     }
   }
@@ -539,6 +643,34 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   Widget _buildAfterSalesWorkflow() {
     return ResponsivePage(
       children: [
+        if (_usesUnfinishedWorkflow) ...[
+          FormSection(
+            title: '未完成售后单',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                StatusTag(
+                  label: _unfinishedLoading
+                      ? '加载中'
+                      : '${_unfinishedOrders.length} 笔',
+                  tone:
+                      _unfinishedLoading ? StatusTone.warning : StatusTone.info,
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  key: const ValueKey('after-sales-unfinished-refresh-button'),
+                  tooltip: '刷新未完成售后单',
+                  onPressed: _unfinishedLoading ? null : _loadUnfinishedOrders,
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+              ],
+            ),
+            children: [
+              _buildUnfinishedOrders(),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
         ResponsiveTwoColumn(
           primary: FormSection(
             title: '订单定位',
@@ -637,6 +769,44 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
             ],
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildUnfinishedOrders() {
+    if (_unfinishedLoading) {
+      return const LoadingState(title: '正在加载未完成售后单');
+    }
+    if (_unfinishedErrorMessage != null) {
+      return ErrorState(
+        title: _unfinishedErrorMessage!,
+        onRetry: _loadUnfinishedOrders,
+      );
+    }
+    if (_unfinishedOrders.isEmpty) {
+      return const EmptyState(title: '暂无未完成售后单');
+    }
+
+    return AppRecordList(
+      compact: true,
+      items: [
+        for (final record in _unfinishedOrders)
+          AppRecordItem(
+            title: record.afterSalesNo,
+            subtitle:
+                '关联订单 ${record.salesOrder?.orderNo ?? record.salesOrderId}',
+            meta: [
+              '客户 ${record.salesOrder?.customerName ?? record.customer?.name ?? '未填写'}',
+              '问题 ${_issueTypeLabel(record.issueType)}',
+              '处理 ${_actionTypeLabel(record.actionType)}',
+              '状态 ${_afterSalesStatusLabel(record.status)}',
+              '退款 ${formatMoneyCents(record.refundAmountCents)}',
+              '创建 ${_dateTimeLabel(record.createdAt)}',
+            ],
+            icon: Icons.pending_actions_rounded,
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => _selectUnfinishedOrder(record),
+          ),
       ],
     );
   }
@@ -899,9 +1069,12 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 key: const ValueKey('after-sales-refund-amount-field'),
                 controller: _refundAmountController,
                 enabled: !_savingAfterSales,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: '退款金额（分）'),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: '退款金额（元）',
+                  suffixText: '元',
+                ),
                 validator: _refundAmountValidator,
               ),
             ],
@@ -1075,14 +1248,23 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   String? _refundAmountValidator(String? value) {
     final text = (value ?? '').trim();
     if (text.isEmpty) {
-      return '请输入 0 或正整数';
+      return '请输入退款金额（元）';
     }
-    final amount = int.tryParse(text);
-    if (amount == null) {
-      return '请输入 0 或正整数';
+    if (text.startsWith('-')) {
+      return '退款金额不能为负数';
     }
-    if (amount < 0) {
-      return '退款金额不能小于 0';
+    if (text == '.' || text.endsWith('.')) {
+      return '退款金额格式不完整，请补充小数位';
+    }
+    if (!RegExp(r'^\d+(?:\.\d+)?$').hasMatch(text)) {
+      return '请输入有效的退款金额，格式如 0、12 或 12.34';
+    }
+    final decimalPoint = text.indexOf('.');
+    if (decimalPoint >= 0 && text.length - decimalPoint - 1 > 2) {
+      return '退款金额最多保留两位小数';
+    }
+    if (_refundYuanToCents(text) == null) {
+      return '退款金额过大，请重新输入';
     }
     return null;
   }
@@ -1228,6 +1410,26 @@ AfterSalesOrderRecord? _selectedAfterSalesFrom(
     }
   }
   return null;
+}
+
+int? _refundYuanToCents(String value) {
+  final parts = value.split('.');
+  if (parts.isEmpty || parts.length > 2 || parts.first.isEmpty) {
+    return null;
+  }
+  final yuan = int.tryParse(parts.first);
+  if (yuan == null) {
+    return null;
+  }
+  final fraction = parts.length == 1 ? '' : parts[1];
+  if (fraction.length > 2 || !RegExp(r'^\d*$').hasMatch(fraction)) {
+    return null;
+  }
+  final cents = fraction.isEmpty ? 0 : int.tryParse(fraction.padRight(2, '0'));
+  if (cents == null) {
+    return null;
+  }
+  return yuan * 100 + cents;
 }
 
 String _orderAddress(SalesOrderRecord order) {

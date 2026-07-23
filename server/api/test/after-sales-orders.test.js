@@ -133,7 +133,42 @@ test('contract: after-sales order creation rejects missing orders and invalid re
 
 test('contract: after-sales order list supports documented filters', async () => {
   await withNestApiServer(async (baseUrl) => {
+    const admin = await login(baseUrl, 'admin');
+    const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
     const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+
+    const allOrders = await requestJson(baseUrl, '/api/after-sales-orders', {
+      token: admin.token,
+    });
+    assert.equal(allOrders.response.status, 200);
+    assert.equal(
+      allOrders.body.data.afterSalesOrders.some(
+        (order) => order.status === 'completed',
+      ),
+      true,
+    );
+
+    for (const token of [admin.token, afterSales.token]) {
+      const unfinished = await requestJson(
+        baseUrl,
+        '/api/after-sales-orders?unfinished=true&limit=200',
+        { token },
+      );
+      assert.equal(unfinished.response.status, 200);
+      assert.equal(unfinished.body.data.afterSalesOrders.length > 0, true);
+      assert.equal(
+        unfinished.body.data.afterSalesOrders.every(
+          (order) => order.status !== 'completed',
+        ),
+        true,
+      );
+      assert.equal(
+        unfinished.body.data.afterSalesOrders.some(
+          (order) => order.afterSalesNo === 'AS20260701003',
+        ),
+        false,
+      );
+    }
 
     const filtered = await requestJson(
       baseUrl,
@@ -147,6 +182,32 @@ test('contract: after-sales order list supports documented filters', async () =>
       filtered.body.data.afterSalesOrders.map((order) => order.afterSalesNo),
       ['AS20260701001'],
     );
+
+    const exactCompleted = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders?status=completed',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(exactCompleted.response.status, 200);
+    assert.equal(exactCompleted.body.data.afterSalesOrders.length > 0, true);
+    assert.equal(
+      exactCompleted.body.data.afterSalesOrders.every(
+        (order) => order.status === 'completed',
+      ),
+      true,
+    );
+
+    const conflictingFilters = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders?unfinished=true&status=completed',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(conflictingFilters.response.status, 200);
+    assert.deepEqual(conflictingFilters.body.data.afterSalesOrders, []);
 
     const query = await requestJson(
       baseUrl,

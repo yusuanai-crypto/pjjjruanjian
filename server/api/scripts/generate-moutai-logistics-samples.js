@@ -21,21 +21,21 @@ const outputDirectory = path.join(
 
 const feitian = {
   moutaiName: '飞天茅台',
-  factoryDate: '2024-05-06',
+  factoryDate: '20260625',
   productionBatch: '202405',
   batchSerialNo: '123456',
   logisticsCode: '9876543210',
 };
 const dragon = {
   moutaiName: '2024年甲辰龙年生肖茅台酒',
-  factoryDate: '2024-01-18',
+  factoryDate: '20240118',
   productionBatch: '202401',
   batchSerialNo: '000888',
   logisticsCode: '000000000888',
 };
 const leadingZeros = {
   moutaiName: '飞天茅台',
-  factoryDate: '2023-12-31',
+  factoryDate: '20231231',
   productionBatch: '000001',
   batchSerialNo: '000002',
   logisticsCode: '000000000003',

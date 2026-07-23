@@ -49,6 +49,12 @@ export class AnalyticsNestController {
     return this.analyticsService.getProfitOverview(actor, query);
   }
 
+  @Get('travel-group-profits')
+  async travelGroupProfits(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.listTravelGroupProfits(actor, query);
+  }
+
   @Get('trends')
   async trends(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

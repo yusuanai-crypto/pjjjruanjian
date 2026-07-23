@@ -13,6 +13,7 @@ import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/profit_analysis/profit_analysis_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_table_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/role_menu/role_menu_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_entry_page.dart';
@@ -25,7 +26,7 @@ import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_pag
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
-  test('uses unified travel group and taster menu labels', () {
+  test('uses unified travel group, loss notes, and taster menu labels', () {
     final managementDestination = appDestinations.singleWhere(
       (item) => item.id == 'travel_group_query',
     );
@@ -38,11 +39,19 @@ void main() {
     final commissionDestination = appDestinations.singleWhere(
       (item) => item.id == 'taster_commissions',
     );
+    final orderNotesDestination = appDestinations.singleWhere(
+      (item) => item.id == 'travel_group_order_notes',
+    );
+    final sharedOrderNotesEntry = sharedMenuEntries.singleWhere(
+      (item) => item.id == 'travel_group_order_notes',
+    );
 
     expect(managementDestination.label, '旅行团管理');
     expect(intakeDestination.label, '旅行团录入');
     expect(receptionDestination.label, '我的接待');
     expect(commissionDestination.label, '我的提成');
+    expect(orderNotesDestination.label, '损耗与离店备注');
+    expect(sharedOrderNotesEntry.label, '损耗与离店备注');
     expect(
       appDestinations.any(
         (item) => item.label == '旅行团查询' || item.label == '待处理旅行团',
@@ -395,6 +404,35 @@ void main() {
     }
   });
 
+  test('profit analysis menu is visible only to admin super admin and boss',
+      () {
+    for (final role in [
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.boss,
+    ]) {
+      expect(_roleIds(role), contains('profit_analysis'));
+      expect(
+        _destinationIds(['profit_analysis'], role),
+        contains('profit_analysis'),
+      );
+    }
+    for (final role in [
+      UserRole.finance,
+      UserRole.sales,
+      UserRole.frontDesk,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('profit_analysis')));
+      expect(
+        _destinationIds(['profit_analysis'], role),
+        isNot(contains('profit_analysis')),
+      );
+    }
+  });
+
   testWidgets('ai assistant menu is visible only to stage 9 allowed roles',
       (_) async {
     for (final role in [
@@ -506,6 +544,7 @@ void main() {
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());
     expect(_page('analytics'), isA<AnalyticsPage>());
+    expect(_page('profit_analysis'), isA<ProfitAnalysisPage>());
     expect(_page('ai_assistant'), isA<AiAssistantPage>());
   });
 }

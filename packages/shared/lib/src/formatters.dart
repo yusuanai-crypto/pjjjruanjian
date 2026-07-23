@@ -6,6 +6,31 @@ String formatMoneyCents(int cents, {String symbol = '¥'}) {
   return '$sign$symbol$yuan.$fraction';
 }
 
+/// Converts the backend amount used by the points table to its dedicated
+/// display amount. The display contract is 1/100 of the current value.
+///
+/// Integer half-up rounding avoids introducing floating-point money errors.
+int scalePointsTableAmountCents(int sourceCents) {
+  final sign = sourceCents < 0 ? -1 : 1;
+  final absolute = sourceCents.abs();
+  return sign * ((absolute + 50) ~/ 100);
+}
+
+/// Converts an edited points-table display amount back to the unchanged
+/// backend storage unit.
+int pointsTableDisplayCentsToSourceCents(int displayCents) =>
+    displayCents * 100;
+
+String formatPointsTableMoneyCents(
+  int sourceCents, {
+  String symbol = '¥',
+}) {
+  return formatMoneyCents(
+    scalePointsTableAmountCents(sourceCents),
+    symbol: symbol,
+  );
+}
+
 String formatDate(DateTime value) {
   final month = value.month.toString().padLeft(2, '0');
   final day = value.day.toString().padLeft(2, '0');
@@ -17,4 +42,3 @@ String formatDateTime(DateTime value) {
   final minute = value.minute.toString().padLeft(2, '0');
   return '${formatDate(value)} $hour:$minute';
 }
-

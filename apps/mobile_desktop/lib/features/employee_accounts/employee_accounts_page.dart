@@ -5,6 +5,8 @@ import '../../core/api/api_client.dart';
 import '../../core/auth/auth_models.dart';
 import '../../shared/widgets/status_tag.dart';
 
+const _defaultEmployeePassword = 'A12345678';
+
 class EmployeeAccountsPage extends StatefulWidget {
   const EmployeeAccountsPage({
     super.key,
@@ -44,6 +46,9 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
   }
 
   Future<void> _loadUsers() async {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -68,6 +73,9 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
       );
       final data = _data(payload);
       final rows = data['users'] is List ? data['users'] as List : const [];
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _users = rows
             .whereType<Map>()
@@ -75,7 +83,9 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
             .toList();
       });
     } on ApiException catch (error) {
-      setState(() => _error = error.message);
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -91,15 +101,18 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
         token: widget.token,
       ),
     );
+    if (!mounted) {
+      return;
+    }
     if (created == true) {
-      _showMessage('员工账号已创建，请通过受控渠道交付初始密码。');
       await _loadUsers();
+      _showMessage('员工账号已创建，员工首次登录必须修改密码。');
     }
   }
 
   Future<void> _setUserActive(EmployeeAccountRecord user, bool active) async {
     final reason = await _askReason(active ? '填写解冻原因' : '填写冻结原因');
-    if (reason == null) {
+    if (reason == null || !mounted) {
       return;
     }
     try {
@@ -115,18 +128,41 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
     }
   }
 
-  Future<void> _resetPassword(EmployeeAccountRecord user) async {
-    final reset = await showDialog<bool>(
+  Future<void> _changePassword(EmployeeAccountRecord user) async {
+    final changed = await showDialog<bool>(
       context: context,
-      builder: (context) => _ResetPasswordDialog(
+      builder: (context) => _ChangePasswordDialog(
         apiClient: widget.apiClient,
         token: widget.token,
         user: user,
       ),
     );
-    if (reset == true) {
-      _showMessage('验证码已核验，员工的新密码已生效。');
+    if (!mounted) {
+      return;
+    }
+    if (changed == true) {
       await _loadUsers();
+      _showMessage('修改密码成功：员工密码已修改，原登录已失效。');
+    }
+  }
+
+  Future<void> _resetPasswordToDefault(EmployeeAccountRecord user) async {
+    final reset = await showDialog<bool>(
+      context: context,
+      builder: (context) => _ResetPasswordToDefaultDialog(
+        apiClient: widget.apiClient,
+        token: widget.token,
+        user: user,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (reset == true) {
+      await _loadUsers();
+      _showMessage(
+        '重置密码成功：密码已重置为 $_defaultEmployeePassword，员工下次登录必须修改密码。',
+      );
     }
   }
 
@@ -178,6 +214,9 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
   }
 
   bool _canManage(EmployeeAccountRecord user) {
+    if (widget.role != UserRole.admin && widget.role != UserRole.superAdmin) {
+      return false;
+    }
     if (user.id == widget.currentUserId || user.role == UserRole.superAdmin) {
       return false;
     }
@@ -357,12 +396,22 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                                             : Icons.lock_open_rounded),
                                       ),
                                       IconButton(
-                                        tooltip: '重置密码',
+                                        tooltip: '修改密码',
                                         onPressed: _canManage(user)
-                                            ? () => _resetPassword(user)
+                                            ? () => _changePassword(user)
                                             : null,
                                         icon:
                                             const Icon(Icons.password_rounded),
+                                      ),
+                                      IconButton(
+                                        tooltip: '重置密码',
+                                        onPressed: _canManage(user)
+                                            ? () =>
+                                                _resetPasswordToDefault(user)
+                                            : null,
+                                        icon: const Icon(
+                                          Icons.lock_reset_rounded,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -396,10 +445,14 @@ class _CreateEmployeeDialog extends StatefulWidget {
 class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
+  final _passwordController =
+      TextEditingController(text: _defaultEmployeePassword);
+  final _confirmPasswordController =
+      TextEditingController(text: _defaultEmployeePassword);
   UserRole _role = UserRole.frontDesk;
   bool _saving = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
   String? _error;
 
   @override
@@ -448,7 +501,9 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
         Navigator.of(context).pop(true);
       }
     } on ApiException catch (error) {
-      setState(() => _error = error.message);
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -487,20 +542,47 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
             TextField(
               controller: _passwordController,
               enabled: !_saving,
-              obscureText: true,
-              decoration: const InputDecoration(
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
                 labelText: '初始密码',
-                prefixIcon: Icon(Icons.password_rounded),
+                prefixIcon: const Icon(Icons.password_rounded),
+                suffixIcon: IconButton(
+                  tooltip: _obscurePassword ? '显示初始密码' : '隐藏初始密码',
+                  onPressed: _saving
+                      ? null
+                      : () => setState(
+                            () => _obscurePassword = !_obscurePassword,
+                          ),
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_off_rounded,
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _confirmPasswordController,
               enabled: !_saving,
-              obscureText: true,
-              decoration: const InputDecoration(
+              obscureText: _obscureConfirmPassword,
+              decoration: InputDecoration(
                 labelText: '确认初始密码',
-                prefixIcon: Icon(Icons.done_all_rounded),
+                prefixIcon: const Icon(Icons.done_all_rounded),
+                suffixIcon: IconButton(
+                  tooltip: _obscureConfirmPassword ? '显示确认密码' : '隐藏确认密码',
+                  onPressed: _saving
+                      ? null
+                      : () => setState(
+                            () => _obscureConfirmPassword =
+                                !_obscureConfirmPassword,
+                          ),
+                  icon: Icon(
+                    _obscureConfirmPassword
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_off_rounded,
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -551,8 +633,8 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
   }
 }
 
-class _ResetPasswordDialog extends StatefulWidget {
-  const _ResetPasswordDialog({
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog({
     required this.apiClient,
     required this.token,
     required this.user,
@@ -563,10 +645,10 @@ class _ResetPasswordDialog extends StatefulWidget {
   final EmployeeAccountRecord user;
 
   @override
-  State<_ResetPasswordDialog> createState() => _ResetPasswordDialogState();
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
 }
 
-class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   final _codeController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
@@ -595,11 +677,15 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
         token: widget.token,
       );
       final verification = _stringKeyMap(_data(payload)['verification'] as Map);
-      setState(() {
-        _message = '验证码已发送至 ${verification['phoneMasked'] ?? '员工手机'}。';
-      });
+      if (mounted) {
+        setState(() {
+          _message = '验证码已发送至 ${verification['phoneMasked'] ?? '员工手机'}。';
+        });
+      }
     } on ApiException catch (error) {
-      setState(() => _message = error.message);
+      if (mounted) {
+        setState(() => _message = error.message);
+      }
     } finally {
       if (mounted) {
         setState(() => _sending = false);
@@ -607,7 +693,7 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
     }
   }
 
-  Future<void> _reset() async {
+  Future<void> _submit() async {
     final code = _codeController.text.trim();
     final newPassword = _newPasswordController.text;
     final confirmPassword = _confirmPasswordController.text;
@@ -641,7 +727,9 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
         Navigator.of(context).pop(true);
       }
     } on ApiException catch (error) {
-      setState(() => _message = error.message);
+      if (mounted) {
+        setState(() => _message = error.message);
+      }
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -652,7 +740,7 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('重置 ${widget.user.name} 的密码'),
+      title: Text('修改 ${widget.user.name} 的密码'),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -719,13 +807,146 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
       ),
       actions: [
         TextButton(
+          onPressed: _sending || _saving
+              ? null
+              : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _sending || _saving ? null : _submit,
+          icon: const Icon(Icons.lock_reset_rounded),
+          label: Text(_saving ? '修改中' : '确认修改'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ResetPasswordToDefaultDialog extends StatefulWidget {
+  const _ResetPasswordToDefaultDialog({
+    required this.apiClient,
+    required this.token,
+    required this.user,
+  });
+
+  final ApiClient apiClient;
+  final String token;
+  final EmployeeAccountRecord user;
+
+  @override
+  State<_ResetPasswordToDefaultDialog> createState() =>
+      _ResetPasswordToDefaultDialogState();
+}
+
+class _ResetPasswordToDefaultDialogState
+    extends State<_ResetPasswordToDefaultDialog> {
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final reason = _reasonController.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = '请填写重置原因。');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.apiClient.postJson(
+        '/api/users/${widget.user.id}/reset-password-to-default',
+        token: widget.token,
+        body: {
+          'reason': reason,
+        },
+      );
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('重置密码'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('员工姓名：${widget.user.name}'),
+            const SizedBox(height: 8),
+            Text(
+              '手机号/登录账号：${widget.user.phone ?? widget.user.username}',
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '密码将重置为 $_defaultEmployeePassword',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '员工当前登录将失效，下次登录必须修改密码。',
+              style: TextStyle(
+                color: scheme.error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _reasonController,
+              enabled: !_saving,
+              autofocus: true,
+              maxLength: 255,
+              decoration: const InputDecoration(
+                labelText: '重置原因（必填）',
+                prefixIcon: Icon(Icons.edit_note_rounded),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: TextStyle(color: scheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(false),
           child: const Text('取消'),
         ),
         FilledButton.icon(
-          onPressed: _saving ? null : _reset,
-          icon: const Icon(Icons.lock_reset_rounded),
-          label: Text(_saving ? '重置中' : '确认新密码'),
+          onPressed: _saving ? null : _submit,
+          icon: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.lock_reset_rounded),
+          label: Text(_saving ? '重置中' : '确认重置'),
         ),
       ],
     );

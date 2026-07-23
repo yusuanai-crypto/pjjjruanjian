@@ -13,6 +13,7 @@ import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
 import '../features/moutai_inventory/moutai_inventory_page.dart';
 import '../features/product_management/product_management_page.dart';
+import '../features/profit_analysis/profit_analysis_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_entry_page.dart';
@@ -128,6 +129,12 @@ Widget buildPageForDestination({
       );
     case 'analytics':
       return AnalyticsPage(apiClient: apiClient, token: token, role: role);
+    case 'profit_analysis':
+      return ProfitAnalysisPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'ai_assistant':
       return AiAssistantPage(apiClient: apiClient, token: token, role: role);
     case 'dashboard':

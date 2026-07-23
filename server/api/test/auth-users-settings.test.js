@@ -484,6 +484,393 @@ test('contract: POST /api/auth/change-password returns current session shape and
   });
 });
 
+test('contract: employees default to the initial password and must change it before normal access', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const username = '13800000041';
+    const created = await requestJson(baseUrl, '/api/users', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        name: '默认密码员工',
+        phone: username,
+        role: 'sales',
+        mustChangePassword: false,
+      },
+    });
+    assert.equal(created.response.status, 201);
+    assertPublicUserContract(created.body.data.user);
+    assert.equal(created.body.data.user.mustChangePassword, true);
+    assert.equal('password' in created.body.data.user, false);
+    assert.equal('passwordHash' in created.body.data.user, false);
+
+    const initialSession = await login(
+      baseUrl,
+      username,
+      'A12345678',
+    );
+    assert.equal(initialSession.user.mustChangePassword, true);
+
+    const blockedBusinessAccess = await requestJson(
+      baseUrl,
+      '/api/auth/roles',
+      {
+        token: initialSession.token,
+      },
+    );
+    assertErrorContract(
+      blockedBusinessAccess,
+      403,
+      'PASSWORD_CHANGE_REQUIRED',
+    );
+
+    const changed = await requestJson(
+      baseUrl,
+      '/api/auth/change-password',
+      {
+        method: 'POST',
+        token: initialSession.token,
+        body: {
+          currentPassword: 'A12345678',
+          newPassword: 'EmployeeChangedPassword123',
+        },
+      },
+    );
+    assert.equal(changed.response.status, 200);
+    assert.equal(changed.body.data.user.mustChangePassword, false);
+
+    const normalAccess = await requestJson(
+      baseUrl,
+      '/api/auth/roles',
+      {
+        token: changed.body.data.token,
+      },
+    );
+    assert.equal(normalAccess.response.status, 200);
+
+    const explicitlyEmptyPassword = await requestJson(
+      baseUrl,
+      '/api/users',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          name: '空密码员工',
+          phone: '13800000042',
+          password: '',
+          role: 'sales',
+        },
+      },
+    );
+    assertErrorContract(
+      explicitlyEmptyPassword,
+      400,
+      'WEAK_PASSWORD',
+    );
+  });
+});
+
+test('contract: default-password reset revokes sessions, enforces hierarchy, and writes a safe audit log', async () => {
+  const targetId = 'usr-default-reset-target';
+  const targetUsername = '13800000043';
+  const oldPassword = 'EmployeeOldPassword123';
+  const resetReason = 'Employee forgot the managed credential';
+  await withPhase1Server(
+    async (baseUrl) => {
+      const superAdmin = await login(baseUrl);
+      const oldTargetSession = await login(
+        baseUrl,
+        targetUsername,
+        oldPassword,
+      );
+
+      const reset = await requestJson(
+        baseUrl,
+        `/api/users/${targetId}/reset-password-to-default`,
+        {
+          method: 'POST',
+          token: superAdmin.token,
+          body: {
+            reason: resetReason,
+          },
+        },
+      );
+      assert.equal(reset.response.status, 200);
+      assertPublicUserContract(reset.body.data.user);
+      assert.equal(reset.body.data.user.mustChangePassword, true);
+      assert.equal('password' in reset.body.data.user, false);
+      assert.equal('passwordHash' in reset.body.data.user, false);
+      assert.equal(
+        JSON.stringify(reset.body).includes('A12345678'),
+        false,
+      );
+
+      const oldPasswordLogin = await requestJson(
+        baseUrl,
+        '/api/auth/login',
+        {
+          method: 'POST',
+          body: {
+            username: targetUsername,
+            password: oldPassword,
+          },
+        },
+      );
+      assertErrorContract(
+        oldPasswordLogin,
+        401,
+        'INVALID_CREDENTIALS',
+      );
+
+      const resetSession = await login(
+        baseUrl,
+        targetUsername,
+        'A12345678',
+      );
+      assert.equal(resetSession.user.mustChangePassword, true);
+
+      const revokedSession = await requestJson(
+        baseUrl,
+        '/api/auth/me',
+        {
+          token: oldTargetSession.token,
+        },
+      );
+      assertErrorContract(revokedSession, 401, 'SESSION_REVOKED');
+
+      const selfReset = await requestJson(
+        baseUrl,
+        '/api/users/usr_admin/reset-password-to-default',
+        {
+          method: 'POST',
+          token: superAdmin.token,
+          body: {
+            reason: 'Self reset must be rejected',
+          },
+        },
+      );
+      assertErrorContract(
+        selfReset,
+        400,
+        'CANNOT_RESET_OWN_PASSWORD',
+      );
+
+      const employee = await login(
+        baseUrl,
+        '13800000044',
+        'OrdinaryEmployeePassword123',
+      );
+      const employeeAttempt = await requestJson(
+        baseUrl,
+        `/api/users/${targetId}/reset-password-to-default`,
+        {
+          method: 'POST',
+          token: employee.token,
+          body: {
+            reason: 'Ordinary employee is not an administrator',
+          },
+        },
+      );
+      assertErrorContract(employeeAttempt, 403, 'ADMIN_REQUIRED');
+
+      const hierarchyAdmin = await login(
+        baseUrl,
+        'hierarchy-reset-admin',
+        'HierarchyResetAdminPassword123',
+      );
+      const peerAdminAttempt = await requestJson(
+        baseUrl,
+        '/api/users/usr-peer-reset-admin/reset-password-to-default',
+        {
+          method: 'POST',
+          token: hierarchyAdmin.token,
+          body: {
+            reason: 'Peer administrator reset must be rejected',
+          },
+        },
+      );
+      assertErrorContract(
+        peerAdminAttempt,
+        403,
+        'SUPER_ADMIN_REQUIRED',
+      );
+
+      const superAdminAttempt = await requestJson(
+        baseUrl,
+        '/api/users/usr_admin/reset-password-to-default',
+        {
+          method: 'POST',
+          token: hierarchyAdmin.token,
+          body: {
+            reason: 'Super administrator reset must be rejected',
+          },
+        },
+      );
+      assertErrorContract(
+        superAdminAttempt,
+        403,
+        'SUPER_ADMIN_ACCOUNT_PROTECTED',
+      );
+
+      const logs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=users.reset_password_to_default',
+        {
+          token: superAdmin.token,
+        },
+      );
+      assert.equal(logs.response.status, 200);
+      assert.equal(logs.body.data.logs.length, 1);
+      const resetLog = logs.body.data.logs[0];
+      assert.equal(resetLog.action, 'users.reset_password_to_default');
+      assert.equal(resetLog.entityType, 'user');
+      assert.equal(resetLog.entityId, targetId);
+      assert.equal(resetLog.beforeData, null);
+      assert.deepEqual(resetLog.afterData, {
+        passwordReset: true,
+        mustChangePassword: true,
+        reason: resetReason,
+      });
+      const serializedLog = JSON.stringify(resetLog);
+      assert.equal(serializedLog.includes('A12345678'), false);
+      assert.equal(serializedLog.includes('passwordHash'), false);
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: targetId,
+            username: targetUsername,
+            phone: targetUsername,
+            password: oldPassword,
+            role: 'sales',
+          },
+          {
+            id: 'usr-ordinary-reset-actor',
+            username: '13800000044',
+            phone: '13800000044',
+            password: 'OrdinaryEmployeePassword123',
+            role: 'sales',
+          },
+          {
+            id: 'usr-hierarchy-reset-admin',
+            username: 'hierarchy-reset-admin',
+            password: 'HierarchyResetAdminPassword123',
+            role: 'admin',
+          },
+          {
+            id: 'usr-peer-reset-admin',
+            username: 'peer-reset-admin',
+            password: 'PeerResetAdminPassword123',
+            role: 'admin',
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: default-password reset validates its reason with stable errors', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const missingReason = await requestJson(
+        baseUrl,
+        '/api/users/usr-reset-reason-target/reset-password-to-default',
+        {
+          method: 'POST',
+          token: admin.token,
+          body: {},
+        },
+      );
+      assertErrorContract(
+        missingReason,
+        400,
+        'RESET_PASSWORD_REASON_REQUIRED',
+      );
+
+      const longReason = await requestJson(
+        baseUrl,
+        '/api/users/usr-reset-reason-target/reset-password-to-default',
+        {
+          method: 'POST',
+          token: admin.token,
+          body: {
+            reason: 'x'.repeat(256),
+          },
+        },
+      );
+      assertErrorContract(
+        longReason,
+        400,
+        'RESET_PASSWORD_REASON_TOO_LONG',
+      );
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: 'usr-reset-reason-target',
+            username: 'reset-reason-target',
+            role: 'sales',
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: default-password reset reuses the existing password-reset rate limit', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const first = await requestJson(
+        baseUrl,
+        '/api/users/usr-rate-limited-reset-target/reset-password-to-default',
+        {
+          method: 'POST',
+          token: admin.token,
+          body: {
+            reason: 'First controlled reset',
+          },
+        },
+      );
+      assert.equal(first.response.status, 200);
+
+      const limited = await requestJson(
+        baseUrl,
+        '/api/users/usr-rate-limited-reset-target/reset-password-to-default',
+        {
+          method: 'POST',
+          token: admin.token,
+          body: {
+            reason: 'Second controlled reset',
+          },
+        },
+      );
+      assertErrorContract(
+        limited,
+        429,
+        'PASSWORD_RESET_RATE_LIMITED',
+      );
+    },
+    {
+      env: {
+        PASSWORD_RESET_RATE_LIMIT_MAX_REQUESTS: '1',
+      },
+      prisma: {
+        users: [
+          {
+            id: 'usr-rate-limited-reset-target',
+            username: 'rate-limited-reset-target',
+            role: 'sales',
+          },
+        ],
+      },
+    },
+  );
+});
+
 test('contract: admin user management paths preserve request and response structures', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);

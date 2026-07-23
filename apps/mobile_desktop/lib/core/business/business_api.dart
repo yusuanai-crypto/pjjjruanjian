@@ -949,6 +949,7 @@ class BusinessApi {
     String? salesOrderId,
     String? customerId,
     bool? financeConfirmed,
+    bool? unfinished,
   }) async {
     final queryParameters = _afterSalesOrderQueryParameters(
       limit: limit,
@@ -962,6 +963,7 @@ class BusinessApi {
       salesOrderId: salesOrderId,
       customerId: customerId,
       financeConfirmed: financeConfirmed,
+      unfinished: unfinished,
     );
     final payload = await _apiClient.getJson(
       _path('/api/after-sales-orders', queryParameters),
@@ -984,6 +986,7 @@ class BusinessApi {
     String? salesOrderId,
     String? customerId,
     bool? financeConfirmed,
+    bool? unfinished,
   }) {
     final queryParameters = <String, String>{};
     if (limit != null) {
@@ -1004,6 +1007,9 @@ class BusinessApi {
     _putNonEmpty(queryParameters, 'customerId', customerId);
     if (financeConfirmed != null) {
       queryParameters['financeConfirmed'] = '$financeConfirmed';
+    }
+    if (unfinished != null) {
+      queryParameters['unfinished'] = '$unfinished';
     }
     return queryParameters;
   }
@@ -1850,6 +1856,37 @@ class BusinessApi {
     return AnalyticsOverview.fromJson(_data(payload));
   }
 
+  Future<ProfitAnalysisResponse> getTravelGroupProfits({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? query,
+    String? status,
+    String? sortBy,
+    String? sortDirection,
+    int? page,
+    int? pageSize,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/travel-group-profits',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          query: query,
+          status: status,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+          page: page,
+          pageSize: pageSize,
+        ),
+      ),
+      token: _token,
+    );
+    return ProfitAnalysisResponse.fromJson(_data(payload));
+  }
+
   Future<List<TasterRankingRecord>> listTasterRankings({
     String? preset,
     DateTime? dateFrom,
@@ -2185,9 +2222,13 @@ class BusinessApi {
     String? preset,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? query,
+    String? status,
     String? sortBy,
     String? sortDirection,
     int? limit,
+    int? page,
+    int? pageSize,
     String? granularity,
     String? metric,
     String? source,
@@ -2204,10 +2245,18 @@ class BusinessApi {
     if (dateTo != null) {
       queryParameters['dateTo'] = formatDate(dateTo);
     }
+    _putNonEmpty(queryParameters, 'query', query);
+    _putNonEmpty(queryParameters, 'status', status);
     _putNonEmpty(queryParameters, 'sortBy', sortBy);
     _putNonEmpty(queryParameters, 'sortDirection', sortDirection);
     if (limit != null) {
       queryParameters['limit'] = '$limit';
+    }
+    if (page != null) {
+      queryParameters['page'] = '$page';
+    }
+    if (pageSize != null) {
+      queryParameters['pageSize'] = '$pageSize';
     }
     _putNonEmpty(queryParameters, 'granularity', granularity);
     _putNonEmpty(queryParameters, 'metric', metric);
@@ -3993,6 +4042,13 @@ class TravelGroupFinanceSummaryRecord {
     required this.totalPaidDepositCents,
     required this.confirmedRefundAmountCents,
     required this.effectiveSalesAmountCents,
+    required this.afterSalesCount,
+    required this.activeAfterSalesCount,
+    required this.pendingAfterSalesRefundCount,
+    required this.pendingAfterSalesRefundAmountCents,
+    required this.latestAfterSalesNo,
+    required this.latestAfterSalesStatus,
+    required this.afterSalesImpactStatus,
     required this.totalAgencyDeductionCents,
     required this.agencyDeductionConfirmed,
     required this.agencyDeductionConfirmedById,
@@ -4034,6 +4090,13 @@ class TravelGroupFinanceSummaryRecord {
   final int totalPaidDepositCents;
   final int confirmedRefundAmountCents;
   final int effectiveSalesAmountCents;
+  final int afterSalesCount;
+  final int activeAfterSalesCount;
+  final int pendingAfterSalesRefundCount;
+  final int pendingAfterSalesRefundAmountCents;
+  final String? latestAfterSalesNo;
+  final String? latestAfterSalesStatus;
+  final String afterSalesImpactStatus;
   final int totalAgencyDeductionCents;
   final bool agencyDeductionConfirmed;
   final String? agencyDeductionConfirmedById;
@@ -4080,6 +4143,16 @@ class TravelGroupFinanceSummaryRecord {
       totalPaidDepositCents: _intValue(json['totalPaidDepositCents']),
       confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
       effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
+      afterSalesCount: _intValue(json['afterSalesCount']),
+      activeAfterSalesCount: _intValue(json['activeAfterSalesCount']),
+      pendingAfterSalesRefundCount:
+          _intValue(json['pendingAfterSalesRefundCount']),
+      pendingAfterSalesRefundAmountCents:
+          _intValue(json['pendingAfterSalesRefundAmountCents']),
+      latestAfterSalesNo: _stringOrNull(json['latestAfterSalesNo']),
+      latestAfterSalesStatus: _stringOrNull(json['latestAfterSalesStatus']),
+      afterSalesImpactStatus:
+          _stringOrNull(json['afterSalesImpactStatus']) ?? 'none',
       totalAgencyDeductionCents: _intValue(json['totalAgencyDeductionCents']),
       agencyDeductionConfirmed: _boolValue(json['agencyDeductionConfirmed']),
       agencyDeductionConfirmedById:
@@ -4284,6 +4357,189 @@ class AnalyticsOverview {
       range: AnalyticsDateRange.fromJson(_map(json['range'])),
       metrics: AnalyticsMetrics.fromJson(metrics),
       warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class ProfitAnalysisResponse {
+  const ProfitAnalysisResponse({
+    required this.range,
+    required this.summary,
+    required this.items,
+    required this.pagination,
+  });
+
+  final AnalyticsDateRange range;
+  final ProfitAnalysisSummary summary;
+  final List<TravelGroupProfitRecord> items;
+  final ProfitAnalysisPagination pagination;
+
+  factory ProfitAnalysisResponse.fromJson(Map<String, dynamic> json) {
+    return ProfitAnalysisResponse(
+      range: AnalyticsDateRange.fromJson(_map(json['range'])),
+      summary: ProfitAnalysisSummary.fromJson(_map(json['summary'])),
+      items:
+          _list(json['items']).map(TravelGroupProfitRecord.fromJson).toList(),
+      pagination: ProfitAnalysisPagination.fromJson(_map(json['pagination'])),
+    );
+  }
+}
+
+class ProfitAnalysisSummary {
+  const ProfitAnalysisSummary({
+    required this.groupCount,
+    required this.completeGroupCount,
+    required this.estimatedGroupCount,
+    required this.incompleteGroupCount,
+    required this.noSalesGroupCount,
+    required this.effectiveSalesAmountCents,
+    required this.actualProductCostCents,
+    required this.totalExpenseCents,
+    required this.estimatedProfitCents,
+    required this.knownEstimatedProfitCents,
+    required this.estimatedProfitRate,
+  });
+
+  final int groupCount;
+  final int completeGroupCount;
+  final int estimatedGroupCount;
+  final int incompleteGroupCount;
+  final int noSalesGroupCount;
+  final int effectiveSalesAmountCents;
+  final int actualProductCostCents;
+  final int totalExpenseCents;
+  final int? estimatedProfitCents;
+  final int knownEstimatedProfitCents;
+  final double? estimatedProfitRate;
+
+  int get calculableGroupCount =>
+      completeGroupCount + estimatedGroupCount + noSalesGroupCount;
+
+  factory ProfitAnalysisSummary.fromJson(Map<String, dynamic> json) {
+    return ProfitAnalysisSummary(
+      groupCount: _intValue(json['groupCount']),
+      completeGroupCount: _intValue(json['completeGroupCount']),
+      estimatedGroupCount: _intValue(json['estimatedGroupCount']),
+      incompleteGroupCount: _intValue(json['incompleteGroupCount']),
+      noSalesGroupCount: _intValue(json['noSalesGroupCount']),
+      effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
+      actualProductCostCents: _intValue(json['actualProductCostCents']),
+      totalExpenseCents: _intValue(json['totalExpenseCents']),
+      estimatedProfitCents: json['estimatedProfitCents'] == null
+          ? null
+          : _intValue(json['estimatedProfitCents']),
+      knownEstimatedProfitCents: _intValue(json['knownEstimatedProfitCents']),
+      estimatedProfitRate: json['estimatedProfitRate'] == null
+          ? null
+          : _doubleValue(json['estimatedProfitRate']),
+    );
+  }
+}
+
+class TravelGroupProfitRecord {
+  const TravelGroupProfitRecord({
+    required this.travelGroupId,
+    required this.groupNo,
+    required this.visitDate,
+    required this.travelAgency,
+    required this.guideName,
+    required this.tasterName,
+    required this.guestCount,
+    required this.orderCount,
+    required this.effectiveSalesAmountCents,
+    required this.confirmedRefundAmountCents,
+    required this.pendingRefundAmountCents,
+    required this.actualProductCostCents,
+    required this.logisticsFeeCents,
+    required this.employeeCommissionCents,
+    required this.tasterCommissionCents,
+    required this.dailyAgencyRebateCents,
+    required this.monthlyAgencyRebateCents,
+    required this.totalExpenseCents,
+    required this.estimatedProfitCents,
+    required this.estimatedProfitRate,
+    required this.calculationStatus,
+    required this.warnings,
+  });
+
+  final String travelGroupId;
+  final String groupNo;
+  final String visitDate;
+  final String travelAgency;
+  final String guideName;
+  final String tasterName;
+  final int guestCount;
+  final int orderCount;
+  final int effectiveSalesAmountCents;
+  final int confirmedRefundAmountCents;
+  final int pendingRefundAmountCents;
+  final int actualProductCostCents;
+  final int logisticsFeeCents;
+  final int employeeCommissionCents;
+  final int tasterCommissionCents;
+  final int dailyAgencyRebateCents;
+  final int monthlyAgencyRebateCents;
+  final int totalExpenseCents;
+  final int? estimatedProfitCents;
+  final double? estimatedProfitRate;
+  final String calculationStatus;
+  final List<AnalyticsWarning> warnings;
+
+  bool hasWarning(String code) =>
+      warnings.any((warning) => warning.code == code);
+
+  factory TravelGroupProfitRecord.fromJson(Map<String, dynamic> json) {
+    return TravelGroupProfitRecord(
+      travelGroupId: '${json['travelGroupId'] ?? ''}',
+      groupNo: '${json['groupNo'] ?? ''}',
+      visitDate: '${json['visitDate'] ?? ''}',
+      travelAgency: '${json['travelAgency'] ?? ''}',
+      guideName: '${json['guideName'] ?? ''}',
+      tasterName: '${json['tasterName'] ?? ''}',
+      guestCount: _intValue(json['guestCount']),
+      orderCount: _intValue(json['orderCount']),
+      effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
+      confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
+      pendingRefundAmountCents: _intValue(json['pendingRefundAmountCents']),
+      actualProductCostCents: _intValue(json['actualProductCostCents']),
+      logisticsFeeCents: _intValue(json['logisticsFeeCents']),
+      employeeCommissionCents: _intValue(json['employeeCommissionCents']),
+      tasterCommissionCents: _intValue(json['tasterCommissionCents']),
+      dailyAgencyRebateCents: _intValue(json['dailyAgencyRebateCents']),
+      monthlyAgencyRebateCents: _intValue(json['monthlyAgencyRebateCents']),
+      totalExpenseCents: _intValue(json['totalExpenseCents']),
+      estimatedProfitCents: json['estimatedProfitCents'] == null
+          ? null
+          : _intValue(json['estimatedProfitCents']),
+      estimatedProfitRate: json['estimatedProfitRate'] == null
+          ? null
+          : _doubleValue(json['estimatedProfitRate']),
+      calculationStatus:
+          _stringOrNull(json['calculationStatus']) ?? 'incomplete',
+      warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class ProfitAnalysisPagination {
+  const ProfitAnalysisPagination({
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory ProfitAnalysisPagination.fromJson(Map<String, dynamic> json) {
+    return ProfitAnalysisPagination(
+      page: _intValue(json['page']),
+      pageSize: _intValue(json['pageSize']),
+      total: _intValue(json['total']),
+      totalPages: _intValue(json['totalPages']),
     );
   }
 }
@@ -4715,8 +4971,11 @@ class Stage7TravelGroupSummaryRecord {
     required this.id,
     required this.groupNo,
     required this.visitDate,
+    required this.agencyId,
     required this.travelAgency,
+    required this.guideId,
     required this.guideName,
+    required this.guidePhone,
     required this.licensePlate,
     required this.guestCount,
     required this.tasterId,
@@ -4727,8 +4986,11 @@ class Stage7TravelGroupSummaryRecord {
   final String? id;
   final String? groupNo;
   final String? visitDate;
+  final String? agencyId;
   final String? travelAgency;
+  final String? guideId;
   final String? guideName;
+  final String? guidePhone;
   final String? licensePlate;
   final int guestCount;
   final String? tasterId;
@@ -4742,8 +5004,11 @@ class Stage7TravelGroupSummaryRecord {
       id: _stringOrNull(json['id']),
       groupNo: _stringOrNull(json['groupNo']),
       visitDate: _stringOrNull(json['visitDate']),
+      agencyId: _stringOrNull(json['agencyId']),
       travelAgency: _stringOrNull(json['travelAgency']),
+      guideId: _stringOrNull(json['guideId']),
       guideName: _stringOrNull(json['guideName']),
+      guidePhone: _stringOrNull(json['guidePhone']),
       licensePlate: _stringOrNull(json['licensePlate']),
       guestCount: _intValue(json['guestCount']),
       tasterId: _stringOrNull(json['tasterId']),

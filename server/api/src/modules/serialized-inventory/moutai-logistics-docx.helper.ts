@@ -149,18 +149,69 @@ function assertGeneratedDocumentStructure(xml: string, pageCount: number) {
 }
 
 function formatFactoryDate(value: Date | string) {
-  const date = value instanceof Date ? value : new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) {
-    throw createHttpError(
-      400,
-      'SERIALIZED_INVENTORY_DATA_INCOMPLETE',
-      '出厂日期无效，无法导出物流单。',
-    );
+  let year: number;
+  let month: number;
+  let day: number;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      throw invalidFactoryDateError();
+    }
+    year = value.getUTCFullYear();
+    month = value.getUTCMonth() + 1;
+    day = value.getUTCDate();
+  } else if (/^\d{8}$/.test(value)) {
+    year = Number(value.slice(0, 4));
+    month = Number(value.slice(4, 6));
+    day = Number(value.slice(6, 8));
+  } else {
+    throw invalidFactoryDateError();
   }
-  const year = date.getUTCFullYear().toString().padStart(4, '0');
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-  const day = date.getUTCDate().toString().padStart(2, '0');
-  return `${year}年${month}月${day}日`;
+
+  if (!isValidFactoryDateParts(year, month, day)) {
+    throw invalidFactoryDateError();
+  }
+  const formattedYear = year.toString().padStart(4, '0');
+  const formattedMonth = month.toString().padStart(2, '0');
+  const formattedDay = day.toString().padStart(2, '0');
+  const formatted = `${formattedYear}${formattedMonth}${formattedDay}`;
+  if (!/^\d{8}$/.test(formatted)) {
+    throw invalidFactoryDateError();
+  }
+  return formatted;
+}
+
+function isValidFactoryDateParts(year: number, month: number, day: number) {
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1) {
+    return false;
+  }
+  const daysInMonth = [
+    31,
+    isLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day <= daysInMonth[month - 1];
+}
+
+function isLeapYear(year: number) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function invalidFactoryDateError() {
+  return createHttpError(
+    400,
+    'SERIALIZED_INVENTORY_DATA_INCOMPLETE',
+    '出厂日期无效，无法导出物流单。',
+  );
 }
 
 function requiredText(value: unknown, fieldName: string) {

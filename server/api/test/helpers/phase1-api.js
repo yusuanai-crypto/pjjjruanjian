@@ -2468,6 +2468,30 @@ async function createUser(baseUrl, token, payload) {
   assertPublicUserContract(result.body.data.user);
   assert.equal(Array.isArray(result.body.data.permissions), true);
   assert.equal(Array.isArray(result.body.data.menus), true);
+  if (result.body.data.user.isActive) {
+    const initialPassword =
+      payload.password === undefined ? 'A12345678' : payload.password;
+    const initialSession = await login(
+      baseUrl,
+      result.body.data.user.username,
+      initialPassword,
+    );
+    const changed = await requestJson(
+      baseUrl,
+      '/api/auth/change-password',
+      {
+        method: 'POST',
+        token: initialSession.token,
+        body: {
+          currentPassword: initialPassword,
+          newPassword: initialPassword,
+        },
+      },
+    );
+    assert.equal(changed.response.status, 200);
+    assertSessionContract(changed.body.data);
+    return changed.body.data.user;
+  }
   return result.body.data.user;
 }
 

@@ -22,6 +22,7 @@ import {
 const SMS_RESET_PURPOSE = 'RESET_PASSWORD';
 const SMS_CODE_TTL_SECONDS = Number(process.env.SMS_CODE_TTL_SECONDS || 300);
 const SMS_CODE_MAX_ATTEMPTS = 5;
+const DEFAULT_EMPLOYEE_PASSWORD = 'A12345678';
 
 @Injectable()
 export class UsersNestService {
@@ -105,14 +106,11 @@ export class UsersNestService {
       await assertPhoneAvailable(this.prisma, identity.phone);
     }
 
-    if (typeof payload?.password !== 'string' || !payload.password) {
-      throw createHttpError(
-        400,
-        'PASSWORD_REQUIRED',
-        'password is required when creating an account.',
-      );
-    }
-    const passwordHash = hashPassword(payload.password);
+    const initialPassword =
+      payload?.password === undefined
+        ? DEFAULT_EMPLOYEE_PASSWORD
+        : payload.password;
+    const passwordHash = hashPassword(initialPassword);
 
     const user = await this.prisma.user.create({
       data: {
@@ -124,10 +122,7 @@ export class UsersNestService {
         phone: identity.phone,
         leaderId: normalizeOptionalString(payload?.leaderId),
         isActive: payload?.isActive === undefined ? true : Boolean(payload.isActive),
-        mustChangePassword:
-          payload?.mustChangePassword === undefined
-            ? false
-            : Boolean(payload.mustChangePassword),
+        mustChangePassword: true,
         tokenVersion: 0,
         createdAt: now,
         updatedAt: now,
@@ -409,6 +404,69 @@ export class UsersNestService {
       },
       ipAddress: metadata.ipAddress || null,
     });
+
+    return toPublicUser(nextUser);
+  }
+
+  async resetPasswordToDefault(
+    actor: any,
+    id: string,
+    patch: any,
+    metadata: any = {},
+  ) {
+    requireAdmin(actor);
+    const reason = validatePasswordResetReason(patch?.reason);
+    const target = await this.findUserOrThrow(id);
+    assertCannotResetOwnPassword(actor, target);
+    assertCanManageTargetAccount(actor, target, 'reset_password_to_default');
+    await this.rateLimitService.enforcePasswordReset({
+      actorId: actor.id,
+      targetUserId: target.id,
+    });
+
+    const passwordHash = hashPassword(DEFAULT_EMPLOYEE_PASSWORD);
+    const nextUser = await this.runSerializableAccountMutation(
+      async (transaction: any) => {
+        const current = await this.findUserOrThrow(id, transaction);
+        assertCannotResetOwnPassword(actor, current);
+        assertCanManageTargetAccount(
+          actor,
+          current,
+          'reset_password_to_default',
+        );
+
+        const updated = await transaction.user.update({
+          where: {
+            id: current.id,
+          },
+          data: {
+            passwordHash,
+            mustChangePassword: true,
+            tokenVersion: {
+              increment: 1,
+            },
+            updatedAt: new Date(),
+          },
+        });
+
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'users.reset_password_to_default',
+            entityType: 'user',
+            entityId: updated.id,
+            afterData: {
+              passwordReset: true,
+              mustChangePassword: true,
+              reason,
+            },
+            ipAddress: metadata.ipAddress || null,
+          },
+          transaction,
+        );
+        return updated;
+      },
+    );
 
     return toPublicUser(nextUser);
   }
@@ -865,6 +923,25 @@ function validateReason(reason: unknown) {
   return normalized;
 }
 
+function validatePasswordResetReason(reason: unknown) {
+  const normalized = String(reason || '').trim();
+  if (!normalized) {
+    throw createHttpError(
+      400,
+      'RESET_PASSWORD_REASON_REQUIRED',
+      'reason is required when resetting a password to the default.',
+    );
+  }
+  if (normalized.length > 255) {
+    throw createHttpError(
+      400,
+      'RESET_PASSWORD_REASON_TOO_LONG',
+      'reason must be 255 characters or fewer.',
+    );
+  }
+  return normalized;
+}
+
 function normalizeOptionalPhone(value: unknown) {
   if (value === undefined || value === null) {
     return null;
@@ -916,6 +993,16 @@ function assertCanManageTargetAccount(actor: any, target: any, action: string) {
     'ACCOUNT_MANAGEMENT_FORBIDDEN',
     'This account cannot manage the target account.',
   );
+}
+
+function assertCannotResetOwnPassword(actor: any, target: any) {
+  if (actor?.id === target?.id) {
+    throw createHttpError(
+      400,
+      'CANNOT_RESET_OWN_PASSWORD',
+      'Administrators cannot reset their own password to the default.',
+    );
+  }
 }
 
 async function assertActiveSuperAdminRemains(

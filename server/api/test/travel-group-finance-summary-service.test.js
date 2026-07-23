@@ -159,10 +159,24 @@ test('unit: stage7 travel group finance summary source snapshot keeps traceabili
 
   const snapshot = prisma.__store.summaries[0].sourceSnapshot;
   assert.equal(snapshot.travelGroup.id, 'group-stage7');
+  assert.equal(snapshot.travelGroup.agencyId, 'agency-1');
+  assert.equal(snapshot.travelGroup.guideId, 'guide-stage7');
+  assert.equal(snapshot.travelGroup.guidePhone, '18800000000');
   assert.equal(snapshot.orders.length, 2);
   assert.equal(snapshot.orders[0].items.length, 2);
   assert.equal(snapshot.confirmedRefunds.length, 1);
   assert.equal(snapshot.unconfirmedRefundSummary.count, 1);
+  assert.equal(snapshot.afterSalesCount, 2);
+  assert.equal(snapshot.activeAfterSalesCount, 1);
+  assert.equal(snapshot.pendingAfterSalesRefundCount, 1);
+  assert.equal(snapshot.pendingAfterSalesRefundAmountCents, 50000);
+  assert.equal(snapshot.latestAfterSalesNo, 'SO-STAGE7-SUMMARY-A-AS-UNCONFIRMED');
+  assert.equal(snapshot.latestAfterSalesStatus, 'WAITING_REFUND');
+  assert.equal(snapshot.afterSalesImpactStatus, 'refund_pending_confirmation');
+  assert.deepEqual(snapshot.afterSalesOrderIds.sort(), [
+    'order-stage7-a-confirmed-refund',
+    'order-stage7-a-unconfirmed-refund',
+  ]);
   assert.equal(snapshot.agencyRebateRecords.daily.length, 2);
   assert.equal(snapshot.agencyRebateRecords.monthly.length, 2);
   assert.equal(snapshot.ruleSummary.agencyDeductionRules.length, 2);
@@ -172,6 +186,22 @@ test('unit: stage7 travel group finance summary source snapshot keeps traceabili
     ),
     true,
   );
+});
+
+test('unit: finance summary list DTO exposes stable agency and guide identifiers', async () => {
+  const prisma = createSummaryPrisma();
+  const service = createService(prisma);
+
+  await service.refreshTravelGroupFinanceSummary('group-stage7');
+  const summaries = await service.listTravelGroupFinanceSummaries({
+    id: 'user-finance',
+    role: 'finance',
+  });
+
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].travelGroup.agencyId, 'agency-1');
+  assert.equal(summaries[0].travelGroup.guideId, 'guide-stage7');
+  assert.equal(summaries[0].travelGroup.guidePhone, '18800000000');
 });
 
 test('unit: stage7 travel group finance summary syncs compatibility fields', async () => {
@@ -194,6 +224,47 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
   assert.equal(prisma.__store.travelGroup.cashOnDeliveryCents, 300000);
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 170000);
   assert.equal(prisma.__store.travelGroup.orderAmountCents, 1230000);
+});
+
+test('unit: after-sales after paid rebate preserves paid fact and requires finance handling', async () => {
+  const commissionRecords = buildAgencyRebateRecords().map((record) => ({
+    ...record,
+    pointsCents:
+      record.targetType === 'AGENCY_DAILY_REBATE'
+        ? Math.floor(record.pointsCents / 2)
+        : record.pointsCents,
+  }));
+  const prisma = createSummaryPrisma({
+    commissionRecords,
+    summary: {
+      id: 'summary-paid-before-after-sales',
+      travelGroupId: 'group-stage7',
+      totalDailyRebateCents: 36900,
+      totalMonthlyRebateCents: 24600,
+      paidRebateCents: 36900,
+      unpaidRebateCents: 24600,
+      dailyRebatePaid: true,
+      dailyRebatePaidById: 'user-finance',
+      dailyRebatePaidAt: new Date('2026-07-15T10:00:00.000Z'),
+    },
+  });
+  const service = createService(prisma);
+
+  const result = await service.refreshTravelGroupFinanceSummary('group-stage7');
+
+  assert.equal(result.summary.totalDailyRebateCents, 18450);
+  assert.equal(result.summary.paidRebateCents, 36900);
+  assert.equal(result.summary.paidDailyRebateCents, 36900);
+  assert.equal(result.summary.unpaidDailyRebateCents, 0);
+  assert.equal(
+    result.summary.afterSalesImpactStatus,
+    'after_rebate_paid_requires_finance',
+  );
+  assert.equal(
+    prisma.__store.summaries[0].sourceSnapshot.rebatePaidFacts
+      .paidDailyRebateCents,
+    36900,
+  );
 });
 
 test('unit: manual agency deduction recalculates rebates by proportional order allocation and survives refresh', async () => {
@@ -353,6 +424,17 @@ function createSummaryPrisma(overrides = {}) {
         ),
     },
     travelGroupFinanceSummary: {
+      findMany: async () =>
+        copyDeep(
+          store.summaries.map((summary) => ({
+            ...summary,
+            travelGroup: store.travelGroup,
+            agencyDeductionConfirmedBy: null,
+            dailyRebatePaidBy: null,
+            monthlyRebatePaidBy: null,
+            updatedBy: null,
+          })),
+        ),
       findFirst: async () => {
         const row = store.summaries[0];
         return row ? copyDeep(row) : null;

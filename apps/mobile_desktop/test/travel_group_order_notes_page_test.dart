@@ -4,7 +4,34 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
 
 void main() {
-  testWidgets('uses a read-only time picker field for departure time',
+  testWidgets('shows loss notes UI without order binding requests or controls',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TravelGroupOrderNotesPage(
+            apiClient: apiClient,
+            token: 'test-token',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('损耗与离店备注'), findsOneWidget);
+    expect(find.text('绑定订单'), findsNothing);
+    expect(find.text('暂无可绑定订单'), findsNothing);
+    expect(find.byType(CheckboxListTile), findsNothing);
+    expect(
+      apiClient.getPaths.where(
+        (path) => path.startsWith('/api/sales-orders'),
+      ),
+      isEmpty,
+    );
+  });
+
+  testWidgets('clears departure time and only patches the travel group',
       (tester) async {
     final apiClient = _FakeApiClient();
     await tester.pumpWidget(
@@ -44,35 +71,42 @@ void main() {
     await tester.pumpAndSettle();
     expect(field.controller?.text, isEmpty);
 
-    final saveButton = find.widgetWithText(FilledButton, '保存明细与备注');
+    final saveButton = find.widgetWithText(FilledButton, '保存损耗与备注');
     await tester.ensureVisible(saveButton);
     await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
-    expect(apiClient.lastPatchPath, '/api/travel-groups/group-1');
-    expect(apiClient.lastPatchBody?['departureTime'], '');
+    expect(apiClient.patchCalls, hasLength(1));
+    expect(apiClient.patchCalls.single.path, '/api/travel-groups/group-1');
+    expect(
+      apiClient.patchCalls.where(
+        (call) => call.path.startsWith('/api/sales-orders/'),
+      ),
+      isEmpty,
+    );
+    expect(
+      apiClient.patchCalls.single.body,
+      containsPair('tastingItems', <Map<String, dynamic>>[]),
+    );
+    expect(apiClient.patchCalls.single.body, containsPair('departureTime', ''));
+    expect(apiClient.patchCalls.single.body, containsPair('remarks', ''));
+    expect(find.text('损耗与离店备注已成功保存'), findsOneWidget);
   });
 }
 
 class _FakeApiClient extends ApiClient {
   _FakeApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
 
-  String? lastPatchPath;
-  Map<String, dynamic>? lastPatchBody;
+  final List<String> getPaths = [];
+  final List<_PatchCall> patchCalls = [];
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    getPaths.add(path);
     if (path.startsWith('/api/travel-groups')) {
       return {
         'data': {
           'travelGroups': [_travelGroupJson()],
-        },
-      };
-    }
-    if (path.startsWith('/api/sales-orders')) {
-      return {
-        'data': {
-          'salesOrders': [_salesOrderJson()],
         },
       };
     }
@@ -94,30 +128,27 @@ class _FakeApiClient extends ApiClient {
     Map<String, dynamic>? body,
     String? token,
   }) async {
-    lastPatchPath = path;
-    lastPatchBody = Map<String, dynamic>.from(body ?? const {});
+    final patchBody = Map<String, dynamic>.from(body ?? const {});
+    patchCalls.add(_PatchCall(path, patchBody));
     if (path.startsWith('/api/travel-groups/')) {
       return {
         'data': {
           'travelGroup': {
             ..._travelGroupJson(),
-            ...lastPatchBody!,
-          },
-        },
-      };
-    }
-    if (path.startsWith('/api/sales-orders/')) {
-      return {
-        'data': {
-          'salesOrder': {
-            ..._salesOrderJson(),
-            ...lastPatchBody!,
+            ...patchBody,
           },
         },
       };
     }
     throw StateError('Unexpected PATCH $path');
   }
+}
+
+class _PatchCall {
+  const _PatchCall(this.path, this.body);
+
+  final String path;
+  final Map<String, dynamic> body;
 }
 
 Map<String, dynamic> _travelGroupJson() {
@@ -175,47 +206,6 @@ Map<String, dynamic> _travelGroupJson() {
     },
     'pendingStatus': null,
     'pendingReasons': const [],
-    'createdAt': null,
-    'updatedAt': null,
-  };
-}
-
-Map<String, dynamic> _salesOrderJson() {
-  return {
-    'id': 'order-1',
-    'orderNo': 'SO20260630001',
-    'orderType': 'travel_group',
-    'orderDate': '2026-06-30',
-    'customerId': 'customer-1',
-    'customer': {
-      'id': 'customer-1',
-      'name': '张女士',
-      'phone': '13800001111',
-      'financeMark': false,
-    },
-    'customerName': '张女士',
-    'customerPhone': '13800001111',
-    'province': '贵州省',
-    'city': '贵阳市',
-    'district': '观山湖区',
-    'address': '测试路 1 号',
-    'travelGroupId': 'group-1',
-    'travelGroup': _travelGroupJson(),
-    'salesFormNo': 'XS-001',
-    'totalAmountCents': 79800,
-    'entryAmountCents': 76000,
-    'tasterCommissionCents': 8800,
-    'cashOnDeliveryAmountCents': 0,
-    'status': 'valid',
-    'deliverySummary': 'shipping',
-    'packingStatus': 'pending',
-    'packageCount': 1,
-    'logisticsFeeCents': 0,
-    'invoiceRequired': false,
-    'invoiceIssued': false,
-    'financeMark': false,
-    'salesUserId': 'sales-1',
-    'items': const [],
     'createdAt': null,
     'updatedAt': null,
   };

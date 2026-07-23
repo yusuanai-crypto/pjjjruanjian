@@ -180,6 +180,10 @@ export function calculateStage7CommissionAndPoints(
   const sourceSnapshot = {
     salesOrder: snapshotSalesOrder(salesOrder, orderStatus, calculationDate),
     items,
+    afterSalesOrderIds: afterSalesOrders
+      .map((order: any) => normalizeOptionalString(order.id))
+      .filter(Boolean),
+    afterSalesOrders: afterSalesOrders.map(snapshotAfterSalesOrder),
     confirmedRefunds: confirmedRefunds.map(snapshotAfterSalesOrder),
     unconfirmedRefundSummary: {
       count: unconfirmedRefunds.length,
@@ -576,6 +580,19 @@ function resolveTravelAgencyMatch(
   warnings: Stage7CalculationWarning[],
 ) {
   const travelGroup = salesOrder?.travelGroup || {};
+  const travelGroupId =
+    normalizeOptionalString(salesOrder?.travelGroupId) ||
+    normalizeOptionalString(travelGroup?.id);
+  if (!travelGroupId) {
+    addWarning(
+      warnings,
+      'missing_travel_group',
+      'Sales order is not linked to a travel group.',
+      {
+        salesOrderId: normalizeOptionalString(salesOrder?.id),
+      },
+    );
+  }
   const explicitAgencyId =
     normalizeOptionalString(salesOrder.agencyId) ||
     normalizeOptionalString(salesOrder.travelAgencyId) ||
@@ -586,6 +603,28 @@ function resolveTravelAgencyMatch(
     normalizeOptionalString(salesOrder.travelAgency) ||
     normalizeOptionalString(travelGroup.agencyName) ||
     normalizeOptionalString(travelGroup.travelAgency);
+
+  if (!explicitAgencyId && !rawAgencyName) {
+    addWarning(
+      warnings,
+      'missing_travel_agency',
+      'Sales order travel group has no travel agency to match.',
+      {
+        salesOrderId: normalizeOptionalString(salesOrder?.id),
+        travelGroupId,
+      },
+    );
+    return {
+      agencyId: null,
+      agencyName: null,
+      inputAgencyName: null,
+      normalizedAgencyName: '',
+      matchMode: 'missing_travel_agency',
+      matchedTravelAgencyId: null,
+      matchedTravelAgencyName: null,
+      usedTextRuleFallback: false,
+    };
+  }
 
   if (explicitAgencyId) {
     const agency = travelAgencies.find(
@@ -823,6 +862,8 @@ function normalizeAfterSalesOrders(afterSalesOrders: any[]) {
       refundAmountCents: Math.max(0, toCents(order?.refundAmountCents)),
       financeConfirmed: Boolean(order?.financeConfirmed),
       financeConfirmedAt: toIsoString(order?.financeConfirmedAt),
+      createdAt: toIsoString(order?.createdAt),
+      updatedAt: toIsoString(order?.updatedAt),
     }),
   );
 }
@@ -865,6 +906,8 @@ function snapshotAfterSalesOrder(order: any) {
     refundAmountCents: order.refundAmountCents,
     financeConfirmed: order.financeConfirmed,
     financeConfirmedAt: order.financeConfirmedAt,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
   };
 }
 

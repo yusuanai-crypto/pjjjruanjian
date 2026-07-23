@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jiangjiu_mobile_desktop/app/theme.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
@@ -13,6 +14,31 @@ void main() {
     expect(uri.path, '/api/warehouse/orders');
     expect(uri.queryParameters['packingStatus'], 'pending');
     expect(uri.queryParameters['limit'], '100');
+
+    final expectedForegroundColor =
+        buildJiangjiuTheme().colorScheme.onSurface;
+    const filterStates = <Set<WidgetState>>[
+      <WidgetState>{},
+      <WidgetState>{WidgetState.selected},
+      <WidgetState>{WidgetState.hovered},
+      <WidgetState>{WidgetState.focused},
+      <WidgetState>{WidgetState.disabled},
+      <WidgetState>{WidgetState.selected, WidgetState.disabled},
+    ];
+    for (final status in PackingStatus.values) {
+      final chip = tester.widget<FilterChip>(
+        find.byKey(ValueKey('warehouse-packing-filter-${status.value}')),
+      );
+      final labelColor = chip.labelStyle?.color;
+      expect(labelColor, isA<WidgetStateColor>());
+      for (final states in filterStates) {
+        expect(
+          (labelColor! as WidgetStateColor).resolve(states),
+          expectedForegroundColor,
+        );
+      }
+      expect(chip.checkmarkColor, expectedForegroundColor);
+    }
 
     await tester.enterText(
       find.byKey(const ValueKey('warehouse-packing-search-field')),
@@ -209,6 +235,7 @@ Future<void> _pumpWarehousePacking(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      theme: buildJiangjiuTheme(),
       home: Scaffold(
         body: WarehousePackingPage(
           apiClient: apiClient,

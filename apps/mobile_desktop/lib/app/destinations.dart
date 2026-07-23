@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../core/auth/auth_models.dart';
+import '../core/auth/role_access.dart';
 
 class AppDestination {
   const AppDestination({
@@ -52,7 +53,7 @@ const appDestinations = <AppDestination>[
       phase: 6),
   AppDestination(
       id: 'travel_group_order_notes',
-      label: '订单绑定与离店备注',
+      label: '损耗与离店备注',
       icon: Icons.assignment_turned_in_rounded,
       phase: 4),
   AppDestination(
@@ -118,6 +119,11 @@ const appDestinations = <AppDestination>[
   AppDestination(
       id: 'analytics', label: '数据分析', icon: Icons.bar_chart_rounded, phase: 8),
   AppDestination(
+      id: 'profit_analysis',
+      label: '利润分析',
+      icon: Icons.trending_up_rounded,
+      phase: 10),
+  AppDestination(
       id: 'ai_assistant',
       label: 'AI 助手',
       icon: Icons.auto_awesome_rounded,
@@ -155,6 +161,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       ids.contains('finance_query') || ids.contains('commission_rules');
   final requestedAnalytics =
       ids.contains('analytics') || ids.contains('finance_query');
+  if (!canViewProfitAnalysis(role)) {
+    ids.remove('profit_analysis');
+  }
   if (role != UserRole.superAdmin &&
       role != UserRole.admin &&
       role != UserRole.finance) {

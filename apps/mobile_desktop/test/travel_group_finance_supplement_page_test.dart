@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_finance/travel_group_finance_supplement_page.dart';
+import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
   setUp(() {
@@ -72,6 +74,40 @@ void main() {
     expect(calls.single.name, '手机积分表');
   });
 
+  test('points-table money scaling uses integer half-up rounding', () {
+    expect(scalePointsTableAmountCents(699400), 6994);
+    expect(formatPointsTableMoneyCents(699400), '¥69.94');
+    expect(formatPointsTableMoneyCents(1295600), '¥129.56');
+    expect(scalePointsTableAmountCents(149), 1);
+    expect(scalePointsTableAmountCents(150), 2);
+    expect(scalePointsTableAmountCents(-150), -2);
+    expect(pointsTableDisplayCentsToSourceCents(123), 12300);
+  });
+
+  test('summary model parses stable after-sales impact fields', () {
+    final record = TravelGroupFinanceSummaryRecord.fromJson({
+      ..._summaryJson(),
+      'afterSalesCount': 3,
+      'activeAfterSalesCount': 2,
+      'pendingAfterSalesRefundCount': 2,
+      'pendingAfterSalesRefundAmountCents': 4567,
+      'latestAfterSalesNo': 'AS-20260723-001',
+      'latestAfterSalesStatus': 'waiting_refund',
+      'afterSalesImpactStatus': 'refund_pending_confirmation',
+    });
+
+    expect(record.afterSalesCount, 3);
+    expect(record.activeAfterSalesCount, 2);
+    expect(record.pendingAfterSalesRefundCount, 2);
+    expect(record.pendingAfterSalesRefundAmountCents, 4567);
+    expect(record.latestAfterSalesNo, 'AS-20260723-001');
+    expect(record.latestAfterSalesStatus, 'waiting_refund');
+    expect(record.afterSalesImpactStatus, 'refund_pending_confirmation');
+    expect(record.travelGroup?.agencyId, 'agency-default');
+    expect(record.travelGroup?.guideId, 'guide-default');
+    expect(record.travelGroup?.guidePhone, '18800000000');
+  });
+
   testWidgets('loads real summaries without showing group number column',
       (tester) async {
     final apiClient = _FakeFinanceApiClient();
@@ -89,7 +125,11 @@ void main() {
     expect(find.text('团号'), findsNothing);
     expect(find.byKey(const ValueKey('finance-select-all')), findsOneWidget);
     expect(find.byKey(const ValueKey('group-1:select')), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(2));
     expect(find.text('月返积分'), findsOneWidget);
+    expect(find.text('已确认退款'), findsOneWidget);
+    expect(find.text('有效销售额'), findsOneWidget);
+    expect(find.text('售后影响'), findsOneWidget);
     expect(find.text('已返月返积分'), findsOneWidget);
     expect(find.text('未返月返积分'), findsOneWidget);
     expect(find.byKey(const ValueKey('group-1:guideImage')), findsOneWidget);
@@ -118,6 +158,108 @@ void main() {
           .value,
       isTrue,
     );
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isFalse,
+    );
+  });
+
+  testWidgets('clicking a data row toggles its manual checkbox',
+      (tester) async {
+    await _pumpPage(tester, apiClient: _FakeFinanceApiClient());
+
+    await tester.tap(
+      find.byKey(const ValueKey('group-1:rowTapTarget')),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isTrue,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('group-1:rowTapTarget')),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isFalse,
+    );
+  });
+
+  testWidgets('select-all and filtered select-all affect visible rows only',
+      (tester) async {
+    final summaries = [
+      _summaryJson(index: 1, agencyId: 'agency-a', agencyName: '甲旅行社'),
+      _summaryJson(index: 2, agencyId: 'agency-b', agencyName: '乙旅行社'),
+    ];
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(summaries: summaries),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-2:select')))
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+
+    final agencyFilter = find.byKey(const ValueKey('finance-filter-agency'));
+    await tester.enterText(agencyFilter, '甲');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('group-2:select')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+
+    await tester.enterText(agencyFilter, '');
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-2:select')))
+          .value,
+      isFalse,
+    );
+  });
+
+  testWidgets('points table displays dedicated scaled amounts', (tester) async {
+    final summary = _summaryJson(
+      totalSalesAmountCents: 699400,
+      totalAgencyNetAmountCents: 1295600,
+    );
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(summaries: [summary]),
+    );
+
+    expect(find.text('¥69.94'), findsWidgets);
+    expect(find.text('¥129.56'), findsWidgets);
+    expect(find.text('¥6994.00'), findsNothing);
+    expect(find.text('¥12956.00'), findsNothing);
   });
 
   testWidgets('enables and saves guide send state after guide image export',
@@ -156,7 +298,7 @@ void main() {
     );
 
     expect(saver.saved.single.album, financeImageAlbumName);
-    expect(saver.saved.single.name, contains('导游图片'));
+    expect(saver.saved.single.name, contains('导游积分表'));
     expect(find.textContaining('系统相册：贵州酱酒馆积分表'), findsWidgets);
     expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNotNull);
     expect(
@@ -228,7 +370,7 @@ void main() {
               null,
     );
 
-    expect(saver.saved.single.name, contains('旅行社图片'));
+    expect(saver.saved.single.name, contains('积分表'));
     expect(
       tester
           .widget<Switch>(
@@ -245,6 +387,233 @@ void main() {
     );
   });
 
+  testWidgets(
+      'same agency exports one two-row table with shared money formatting',
+      (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    final summaries = [
+      _summaryJson(
+        index: 1,
+        agencyId: 'agency-shared',
+        agencyName: '黔程旅行社',
+        totalSalesAmountCents: 699400,
+      ),
+      _summaryJson(
+        index: 2,
+        agencyId: 'agency-shared',
+        agencyName: '黔程旅行社',
+        totalSalesAmountCents: 1295600,
+      ),
+    ];
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(summaries: summaries),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-agency-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 1);
+
+    expect(renderer.pages, hasLength(1));
+    expect(renderer.pages.single.rows, hasLength(2));
+    expect(renderer.pages.single.rows[0].cells[3], '¥69.94');
+    expect(renderer.pages.single.rows[1].cells[3], '¥129.56');
+    expect(saver.saved.single.name, contains('黔程旅行社-积分表-'));
+    expect(saver.saved.single.name, contains('第1页'));
+  });
+
+  testWidgets('different agencies export separate tables without mixing rows',
+      (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(
+        summaries: [
+          _summaryJson(
+            index: 1,
+            agencyId: 'agency-a',
+            agencyName: '甲旅行社',
+          ),
+          _summaryJson(
+            index: 2,
+            agencyId: 'agency-b',
+            agencyName: '乙旅行社',
+          ),
+        ],
+      ),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-agency-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 2);
+
+    expect(renderer.pages, hasLength(2));
+    expect(
+      renderer.pages.map((page) => page.receiverName).toSet(),
+      {'甲旅行社', '乙旅行社'},
+    );
+    expect(
+      renderer.pages.every((page) => page.rows.length == 1),
+      isTrue,
+    );
+    expect(
+      renderer.pages
+          .expand((page) => page.rows)
+          .map((row) => row.travelGroupId)
+          .toSet(),
+      {'group-1', 'group-2'},
+    );
+  });
+
+  testWidgets('same guide and agency merge into one guide table',
+      (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(
+        summaries: [
+          _summaryJson(index: 1),
+          _summaryJson(index: 2),
+        ],
+      ),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-guide-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 1);
+
+    expect(renderer.pages, hasLength(1));
+    expect(renderer.pages.single.type, FinanceImageType.guide);
+    expect(renderer.pages.single.rows, hasLength(2));
+  });
+
+  testWidgets('different guides never mix in one guide table', (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(
+        summaries: [
+          _summaryJson(
+            index: 1,
+            guideId: 'guide-a',
+            guideName: '甲导游',
+          ),
+          _summaryJson(
+            index: 2,
+            guideId: 'guide-b',
+            guideName: '乙导游',
+          ),
+        ],
+      ),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-guide-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 2);
+
+    expect(renderer.pages, hasLength(2));
+    expect(
+      renderer.pages.map((page) => page.receiverName).toSet(),
+      {'甲导游', '乙导游'},
+    );
+  });
+
+  testWidgets('after-sales impact and pending refund appear in export table',
+      (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(
+        afterSalesImpactStatus: 'refund_pending_confirmation',
+        pendingAfterSalesRefundAmountCents: 2500,
+      ),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-agency-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 1);
+
+    final page = renderer.pages.single;
+    expect(page.headers, contains('已确认退款'));
+    expect(page.headers, contains('有效销售额'));
+    expect(page.headers, contains('售后影响'));
+    expect(page.rows.single.cells, contains('退款待确认 ¥0.25'));
+  });
+
+  testWidgets('export table component repeats headers and has no controls',
+      (tester) async {
+    const page = FinanceExportTablePage(
+      type: FinanceImageType.guide,
+      receiverKey: 'guide-id:guide-default',
+      receiverName: '赵导',
+      headers: ['日期', '旅行社'],
+      columnWidths: [140, 200],
+      rows: [
+        FinanceExportTableRow(
+          travelGroupId: 'group-1',
+          cells: ['2026-07-01', '黔程旅行社'],
+        ),
+      ],
+      dateRangeLabel: '2026-07-01至2026-07-01',
+      pageNumber: 1,
+      totalPages: 2,
+      exportDate: '2026-07-24',
+    );
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: FinanceExportTableImage(page: page),
+        ),
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey('finance-export-table')),
+      findsOneWidget,
+    );
+    expect(find.text('日期'), findsOneWidget);
+    expect(find.text('旅行社'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is ButtonStyleButton || widget is IconButton,
+      ),
+      findsNothing,
+    );
+    expect(find.byType(Switch), findsNothing);
+  });
+
   testWidgets('saves manual agency deduction in cents and replaces row data',
       (tester) async {
     final apiClient = _FakeFinanceApiClient();
@@ -253,10 +622,11 @@ void main() {
     final input = find.byKey(
       const ValueKey('group-1:agencyDeductionInput'),
     );
-    await tester.enterText(input, '123.45');
-    await tester.tap(
-      find.byKey(const ValueKey('group-1:agencyDeductionSave')),
+    final save = find.byKey(
+      const ValueKey('group-1:agencyDeductionSave'),
     );
+    await tester.enterText(input, '1.23');
+    tester.widget<FilledButton>(save).onPressed!.call();
     await _pumpUntil(
       tester,
       () => apiClient.patchPaths.any(
@@ -265,14 +635,14 @@ void main() {
     );
 
     expect(apiClient.patchBodies.last, {
-      'totalAgencyDeductionCents': 12345,
+      'totalAgencyDeductionCents': 12300,
     });
     expect(
       tester.widget<TextField>(input).controller?.text,
-      '123.45',
+      '1.23',
     );
     expect(find.text('扣酒成本已保存。'), findsOneWidget);
-    expect(find.text('¥876.55'), findsWidgets);
+    expect(find.text('¥8.77'), findsWidgets);
   });
 
   testWidgets('rejects negative invalid precision and over-sales deductions',
@@ -286,19 +656,18 @@ void main() {
     final save = find.byKey(
       const ValueKey('group-1:agencyDeductionSave'),
     );
-
     await tester.enterText(input, '-1');
-    await tester.tap(save);
+    tester.widget<FilledButton>(save).onPressed!.call();
     await tester.pump();
     expect(find.text('扣酒成本不能小于 0。'), findsOneWidget);
 
     await tester.enterText(input, '1.234');
-    await tester.tap(save);
+    tester.widget<FilledButton>(save).onPressed!.call();
     await tester.pump();
     expect(find.text('请输入最多两位小数的有效金额。'), findsOneWidget);
 
-    await tester.enterText(input, '1000.01');
-    await tester.tap(save);
+    await tester.enterText(input, '10.01');
+    tester.widget<FilledButton>(save).onPressed!.call();
     await tester.pump();
     expect(find.text('扣酒成本不能大于该旅行团销售额。'), findsOneWidget);
     expect(apiClient.patchPaths, isEmpty);
@@ -312,16 +681,18 @@ void main() {
     final input = find.byKey(
       const ValueKey('group-1:agencyDeductionInput'),
     );
-    await tester.enterText(input, '88.88');
-    await tester.tap(
-      find.byKey(const ValueKey('group-1:agencyDeductionSave')),
+    final save = find.byKey(
+      const ValueKey('group-1:agencyDeductionSave'),
     );
+    await tester.enterText(input, '0.88');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
     await _pumpUntil(
       tester,
       () => find.textContaining('扣酒成本保存失败').evaluate().isNotEmpty,
     );
 
-    expect(tester.widget<TextField>(input).controller?.text, '88.88');
+    expect(tester.widget<TextField>(input).controller?.text, '0.88');
     expect(find.textContaining('服务器暂时无法保存'), findsOneWidget);
   });
 
@@ -333,7 +704,7 @@ void main() {
     final input = find.byKey(
       const ValueKey('group-1:agencyDeductionInput'),
     );
-    await tester.enterText(input, '50');
+    await tester.enterText(input, '0.50');
     await tester.pump();
     expect(apiClient.patchPaths, isEmpty);
 
@@ -378,18 +749,20 @@ void main() {
     );
   });
 
-  testWidgets('batch image save reports actual partial success counts',
+  testWidgets('partial page failure reports table counts and marks only rows',
       (tester) async {
-    final apiClient = _FakeFinanceApiClient(summaryCount: 2);
+    final apiClient = _FakeFinanceApiClient(summaryCount: 21);
     final saver = _FakeImageSaver(
       failureForCall: (call) => call == 2
           ? const FinanceImageSaveException('设备存储空间不足，无法保存到相册。')
           : null,
     );
+    final renderer = _FakeTableImageRenderer();
     await _pumpPage(
       tester,
       apiClient: apiClient,
       imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
     );
 
     await tester.tap(find.byKey(const ValueKey('finance-select-all')));
@@ -400,7 +773,15 @@ void main() {
     await _pumpUntil(tester, () => saver.attempts == 2);
     await tester.pump();
 
-    expect(find.textContaining('成功 1 张，失败 1 张'), findsWidgets);
+    expect(renderer.pages, hasLength(2));
+    expect(renderer.pages.first.rows, hasLength(20));
+    expect(renderer.pages.last.rows, hasLength(1));
+    expect(renderer.pages.first.headers, renderer.pages.last.headers);
+    expect(renderer.pages.first.pageNumber, 1);
+    expect(renderer.pages.last.pageNumber, 2);
+    expect(renderer.pages.first.fileName, contains('第1页.png'));
+    expect(renderer.pages.last.fileName, contains('第2页.png'));
+    expect(find.textContaining('成功 1 张表格，失败 1 张'), findsWidgets);
     expect(
       tester
           .widget<Switch>(
@@ -412,7 +793,7 @@ void main() {
     expect(
       tester
           .widget<Switch>(
-            find.byKey(const ValueKey('group-2:guideInfoSent')),
+            find.byKey(const ValueKey('group-21:guideInfoSent')),
           )
           .onChanged,
       isNull,
@@ -426,8 +807,7 @@ void main() {
       resultForCall: (_) => const FinanceImageSaveResult(
         target: FinanceImageSaveTarget.windowsFolder,
         album: financeImageAlbumName,
-        filePath:
-            r'C:\Users\Test\Pictures\贵州酱酒馆积分表\积分表.png',
+        filePath: r'C:\Users\Test\Pictures\贵州酱酒馆积分表\积分表.png',
         directoryPath: r'C:\Users\Test\Pictures\贵州酱酒馆积分表',
       ),
     );
@@ -480,10 +860,26 @@ void main() {
       'travelGroupIds': ['group-1'],
       'agencyOnly': true,
     });
-    expect(find.text('¥70.00'), findsWidgets);
-    expect(find.text('¥2.10'), findsWidgets);
-    expect(find.text('¥1.40'), findsWidgets);
+    expect(find.text('¥0.70'), findsWidgets);
+    expect(find.text('¥0.02'), findsWidgets);
+    expect(find.text('¥0.01'), findsWidgets);
     expect(find.textContaining('订单 1 笔'), findsOneWidget);
+  });
+
+  testWidgets('after-sales pending impact overrides ordinary row status',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(
+      afterSalesImpactStatus: 'refund_pending_confirmation',
+      pendingAfterSalesRefundAmountCents: 2500,
+    );
+    await _pumpPage(tester, apiClient: apiClient);
+
+    expect(find.text('退款待确认 ¥0.25'), findsOneWidget);
+    expect(find.text('退款待确认'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('group-1:afterSalesImpact')),
+      findsOneWidget,
+    );
   });
 }
 
@@ -492,6 +888,7 @@ Future<void> _pumpPage(
   required _FakeFinanceApiClient apiClient,
   FinanceImageSaver? imageSaver,
   FinanceFolderOpener? folderOpener,
+  FinanceTableImageRenderer? tableImageRenderer,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(2200, 1200);
@@ -509,6 +906,7 @@ Future<void> _pumpPage(
           token: 'test-token',
           imageSaver: imageSaver ?? _FakeImageSaver().call,
           folderOpener: folderOpener ?? (_) async {},
+          tableImageRenderer: tableImageRenderer,
         ),
       ),
     ),
@@ -579,12 +977,38 @@ class _FakeImageSaver {
   }
 }
 
+class _FakeTableImageRenderer {
+  final List<FinanceExportTablePage> pages = <FinanceExportTablePage>[];
+
+  Future<Uint8List> call(FinanceExportTablePage page) async {
+    pages.add(page);
+    return Uint8List.fromList([137, 80, 78, 71]);
+  }
+}
+
 class _FakeFinanceApiClient extends ApiClient {
-  _FakeFinanceApiClient({int summaryCount = 1, this.failAgencyDeduction = false})
-      : super(baseUrl: 'http://127.0.0.1:3000') {
+  _FakeFinanceApiClient({
+    int summaryCount = 1,
+    List<Map<String, dynamic>>? summaries,
+    this.failAgencyDeduction = false,
+    String afterSalesImpactStatus = 'none',
+    int pendingAfterSalesRefundAmountCents = 0,
+  }) : super(baseUrl: 'http://127.0.0.1:3000') {
+    final source = summaries ??
+        [
+          for (var index = 1; index <= summaryCount; index += 1)
+            _summaryJson(index: index),
+        ];
     _summaries = [
-      for (var index = 1; index <= summaryCount; index += 1)
-        _summaryJson(index: index),
+      for (final summary in source)
+        {
+          ...summary,
+          if (summaries == null || afterSalesImpactStatus != 'none')
+            'afterSalesImpactStatus': afterSalesImpactStatus,
+          if (summaries == null || pendingAfterSalesRefundAmountCents != 0)
+            'pendingAfterSalesRefundAmountCents':
+                pendingAfterSalesRefundAmountCents,
+        },
     ];
   }
 
@@ -708,26 +1132,46 @@ class _FakeFinanceApiClient extends ApiClient {
   }
 }
 
-Map<String, dynamic> _summaryJson({int index = 1}) {
+Map<String, dynamic> _summaryJson({
+  int index = 1,
+  String agencyId = 'agency-default',
+  String agencyName = '山水旅行社',
+  String guideId = 'guide-default',
+  String guideName = '赵导',
+  String guidePhone = '18800000000',
+  String visitDate = '2026-07-03',
+  int totalSalesAmountCents = 100000,
+  int totalAgencyNetAmountCents = 92000,
+}) {
   return {
     'id': 'summary-$index',
     'travelGroupId': 'group-$index',
     'travelGroup': {
       'id': 'group-$index',
       'groupNo': 'TG-HIDDEN-00$index',
-      'visitDate': '2026-07-03',
-      'travelAgency': '山水旅行社',
-      'guideName': '赵导',
+      'visitDate': visitDate,
+      'agencyId': agencyId,
+      'travelAgency': agencyName,
+      'guideId': guideId,
+      'guideName': guideName,
+      'guidePhone': guidePhone,
       'licensePlate': '贵A12345',
       'guestCount': 18,
       'tasterName': '陈品鉴',
       'financeMark': false,
     },
-    'totalSalesAmountCents': 100000,
+    'totalSalesAmountCents': totalSalesAmountCents,
     'totalCashOnDeliveryCents': 20000,
     'totalPaidDepositCents': 80000,
     'confirmedRefundAmountCents': 0,
-    'effectiveSalesAmountCents': 100000,
+    'effectiveSalesAmountCents': totalSalesAmountCents,
+    'afterSalesCount': 0,
+    'activeAfterSalesCount': 0,
+    'pendingAfterSalesRefundCount': 0,
+    'pendingAfterSalesRefundAmountCents': 0,
+    'latestAfterSalesNo': null,
+    'latestAfterSalesStatus': null,
+    'afterSalesImpactStatus': 'none',
     'totalAgencyDeductionCents': 8000,
     'agencyDeductionConfirmed': true,
     'agencyDeductionConfirmedById': 'usr_finance',
@@ -738,7 +1182,7 @@ Map<String, dynamic> _summaryJson({int index = 1}) {
       'role': 'finance',
     },
     'agencyDeductionConfirmedAt': '2026-07-03T09:10:00.000Z',
-    'totalAgencyNetAmountCents': 92000,
+    'totalAgencyNetAmountCents': totalAgencyNetAmountCents,
     'totalDailyRebateCents': 3000,
     'totalMonthlyRebateCents': 1000,
     'paidRebateCents': 0,
