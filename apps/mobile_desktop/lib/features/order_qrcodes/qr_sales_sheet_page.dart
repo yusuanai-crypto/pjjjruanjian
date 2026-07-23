@@ -714,13 +714,27 @@ class _SalesSheetPreview extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${_display(sheet.companyName)}销售单',
+                        _display(sheet.companyName),
                         style: Theme.of(context)
                             .textTheme
                             .headlineSmall
                             ?.copyWith(fontWeight: FontWeight.w900),
                       ),
-                      const SizedBox(height: 6),
+                      Text(
+                        _display(sheet.venueName),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        '销售单',
+                        style: Theme.of(context)
+                            .textTheme
+                            .headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 8),
                       Text(
                         _display(sheet.order.orderNo),
                         style: Theme.of(context).textTheme.titleSmall,
@@ -753,11 +767,49 @@ class _SalesSheetPreview extends StatelessWidget {
             const Divider(height: 28),
             const _SectionTitle('物流与开票'),
             _InfoRow(label: '配送', value: _display(sheet.delivery.summaryLabel)),
-            _InfoRow(label: '物流方式', value: _display(sheet.logistics.method)),
             _InfoRow(
-                label: '物流单号', value: _display(sheet.logistics.logisticsNo)),
+              label: '快递方式',
+              value: _display(
+                sheet.logistics.providerName ?? sheet.logistics.method,
+              ),
+            ),
+            _InfoRow(
+              label: '快递单号',
+              value: _display(sheet.logistics.logisticsNo),
+            ),
+            _InfoRow(
+              label: '最新运输状态',
+              value: _display(sheet.logistics.trackingStateLabel),
+            ),
+            _InfoRow(
+              label: '当前所在地点',
+              value: _display(sheet.logistics.trackingLatestLocation),
+            ),
+            _InfoRow(
+              label: '最新物流动态',
+              value: _display(sheet.logistics.trackingLatestDescription),
+            ),
+            _InfoRow(
+              label: '轨迹发生时间',
+              value: _display(sheet.logistics.trackingEventAt),
+            ),
+            _InfoRow(
+              label: '查询更新时间',
+              value: _display(sheet.logistics.trackingCheckedAt),
+            ),
+            if (sheet.logistics.trackingMessage != null)
+              _InfoRow(
+                label: '物流提示',
+                value: _display(sheet.logistics.trackingMessage),
+              ),
             _InfoRow(label: '开票状态', value: _invoiceLabel(sheet.invoice)),
             _InfoRow(label: '二维码有效期', value: _expiresLabel(qrCode)),
+            const Divider(height: 28),
+            Text(
+              '如需售后服务，请联系：${_display(sheet.afterSalesPhone)}',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
           ],
         ),
       ),
@@ -779,7 +831,12 @@ class _SalesSheetCoreInfo extends StatelessWidget {
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
         _InfoRow(label: '订单状态', value: _statusLabel(sheet.status)),
-        _InfoRow(label: '客户', value: _customerLabel(sheet.customer)),
+        _InfoRow(label: '客户姓名', value: _display(sheet.customer.name)),
+        _InfoRow(label: '客户电话', value: _display(sheet.customer.phone)),
+        _InfoRow(
+          label: '收货地址',
+          value: _display(sheet.customer.fullAddress),
+        ),
         _InfoRow(label: '旅行团', value: _travelGroupLabel(sheet.travelGroup)),
         _InfoRow(label: '销售', value: _salesUserLabel(sheet.salesUser)),
         const SizedBox(height: 8),
@@ -1038,12 +1095,6 @@ String _orderTravelGroupLabel(SalesOrderRecord order) {
     return group.groupNo;
   }
   return '${group.groupNo} · $agency';
-}
-
-String _customerLabel(SalesSheetCustomerRecord customer) {
-  final name = _display(customer.name);
-  final phone = customer.phoneMasked ?? customer.phone;
-  return '$name · ${_display(phone)}';
 }
 
 String _travelGroupLabel(SalesSheetTravelGroupRecord? group) {

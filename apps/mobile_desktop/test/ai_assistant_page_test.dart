@@ -10,6 +10,7 @@ void main() {
   testWidgets('loads capabilities and templates for stage 9 roles',
       (tester) async {
     final roleTemplates = <UserRole, String>{
+      UserRole.superAdmin: 'super_admin template',
       UserRole.admin: 'admin template',
       UserRole.boss: 'boss template',
       UserRole.finance: 'finance template',
@@ -214,9 +215,19 @@ void main() {
       ): '登录已失效，请重新登录后再使用 AI 助手。',
       const ApiException(
         statusCode: 403,
+        code: 'AI_ROLE_NOT_ALLOWED',
+        message: 'forbidden',
+      ): '当前角色没有使用 AI 助手的权限。',
+      const ApiException(
+        statusCode: 403,
+        code: 'AI_PERMISSION_DENIED',
+        message: 'forbidden',
+      ): '当前问题超出该角色可访问的 AI 数据范围。',
+      const ApiException(
+        statusCode: 403,
         code: 'FORBIDDEN',
         message: 'forbidden',
-      ): '当前角色没有使用 AI 助手的权限，或问题超出可访问范围。',
+      ): 'AI 请求被拒绝，请确认当前账号权限或联系管理员。',
       const ApiException(
         statusCode: 429,
         code: 'AI_DAILY_LIMIT_EXCEEDED',
@@ -285,7 +296,7 @@ void main() {
     final client = _FakeAiApiClient(
       capabilitiesError: const ApiException(
         statusCode: 403,
-        code: 'FORBIDDEN',
+        code: 'AI_ROLE_NOT_ALLOWED',
         message: 'forbidden',
       ),
       templates: [
@@ -310,6 +321,10 @@ void main() {
     expect(client.getPaths.map((path) => Uri.parse(path).path), [
       '/api/ai/capabilities',
     ]);
+    final input = tester.widget<TextField>(
+      find.byKey(const ValueKey('ai-question-input')),
+    );
+    expect(input.enabled, isFalse);
   });
 
   testWidgets('shows no permission state without templates or history',
@@ -346,6 +361,137 @@ void main() {
       find.byKey(const ValueKey('ai-question-input')),
     );
     expect(input.enabled, isFalse);
+  });
+
+  testWidgets(
+      'template 403 or 500 stays isolated and manual questions remain usable',
+      (tester) async {
+    for (final error in [
+      const ApiException(
+        statusCode: 403,
+        code: 'AI_PERMISSION_DENIED',
+        message: 'forbidden',
+      ),
+      const ApiException(
+        statusCode: 500,
+        code: 'AI_TEMPLATES_FAILED',
+        message: 'server error',
+      ),
+    ]) {
+      final client = _FakeAiApiClient(
+        capabilities: _capabilities(role: 'super_admin'),
+        templatesError: error,
+      );
+
+      await tester.pumpWidget(
+        _page(client, role: UserRole.superAdmin),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('已启用'), findsOneWidget);
+      final input = tester.widget<TextField>(
+        find.byKey(const ValueKey('ai-question-input')),
+      );
+      expect(input.enabled, isTrue);
+      expect(
+        find.byKey(const ValueKey('ai-retry-templates')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          error.statusCode == 403
+              ? '当前问题超出该角色可访问的 AI 数据范围。'
+              : 'AI 服务暂时不可用，请稍后重试。',
+        ),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const ValueKey('ai-question-input')),
+        '请查询今天销售额',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('ai-send-button')));
+      await tester.pumpAndSettle();
+
+      expect(client.postPaths, hasLength(1));
+      expect(client.lastPostBody?['question'], '请查询今天销售额');
+      expect(find.text('按今天数据看，净销售额为 1000 元。'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('template retry reloads common questions without disabling chat',
+      (tester) async {
+    final client = _FakeAiApiClient(
+      capabilities: _capabilities(role: 'super_admin'),
+      templates: [
+        _template(
+          id: 'super_admin_sales',
+          title: '超级管理员销售额',
+          question: '今天销售额是多少？',
+        ),
+      ],
+      templatesError: const ApiException(
+        statusCode: 500,
+        code: 'AI_TEMPLATES_FAILED',
+        message: 'server error',
+      ),
+      templatesErrorOnce: true,
+    );
+
+    await tester.pumpWidget(
+      _page(client, role: UserRole.superAdmin),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('超级管理员销售额'), findsNothing);
+
+    final retryTemplates = find.byKey(const ValueKey('ai-retry-templates'));
+    await tester.ensureVisible(retryTemplates);
+    await tester.pumpAndSettle();
+    await tester.tap(retryTemplates);
+    await tester.pumpAndSettle();
+
+    expect(find.text('超级管理员销售额'), findsOneWidget);
+    expect(find.text('已启用'), findsOneWidget);
+  });
+
+  testWidgets('history failure does not disable or block manual questions',
+      (tester) async {
+    final client = _FakeAiApiClient(
+      capabilities: _capabilities(role: 'super_admin'),
+      templates: [
+        _template(id: 'sales', title: '销售额', question: '今天销售额是多少？'),
+      ],
+      historyError: const ApiException(
+        statusCode: 500,
+        code: 'AI_HISTORY_FAILED',
+        message: 'server error',
+      ),
+    );
+
+    await tester.pumpWidget(
+      _page(client, role: UserRole.superAdmin),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('ai-retry-history')), findsOneWidget);
+    final input = tester.widget<TextField>(
+      find.byKey(const ValueKey('ai-question-input')),
+    );
+    expect(input.enabled, isTrue);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-question-input')),
+      '查询今天销售额',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('ai-send-button')));
+    await tester.pumpAndSettle();
+
+    expect(client.postPaths, hasLength(1));
+    expect(find.text('按今天数据看，净销售额为 1000 元。'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ai-retry-history')), findsOneWidget);
   });
 }
 
@@ -507,6 +653,9 @@ class _FakeAiApiClient extends ApiClient {
     Map<String, dynamic>? chatResponse,
     this.capabilitiesCompleter,
     this.capabilitiesError,
+    this.templatesError,
+    this.templatesErrorOnce = false,
+    this.historyError,
     this.chatCompleter,
     this.chatError,
     this.chatErrorOnce = false,
@@ -522,6 +671,9 @@ class _FakeAiApiClient extends ApiClient {
   final Map<String, dynamic> chatResponse;
   final Completer<Map<String, dynamic>>? capabilitiesCompleter;
   final ApiException? capabilitiesError;
+  ApiException? templatesError;
+  final bool templatesErrorOnce;
+  ApiException? historyError;
   final Completer<Map<String, dynamic>>? chatCompleter;
   ApiException? chatError;
   final bool chatErrorOnce;
@@ -548,9 +700,20 @@ class _FakeAiApiClient extends ApiClient {
       return capabilities;
     }
     if (uriPath == '/api/ai/chat/templates') {
+      final error = templatesError;
+      if (error != null) {
+        if (templatesErrorOnce) {
+          templatesError = null;
+        }
+        throw error;
+      }
       return {'data': templates};
     }
     if (uriPath == '/api/ai/chat/history') {
+      final error = historyError;
+      if (error != null) {
+        throw error;
+      }
       return {
         'data': {
           'items': historyItems,

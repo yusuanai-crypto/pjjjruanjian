@@ -32,7 +32,16 @@ void main() {
 
     expect(
         apiClient.salesSheetPaths, ['/api/sales-orders/order-1/sales-sheet']);
-    expect(find.text('贵州酱酒馆销售单'), findsOneWidget);
+    expect(find.text('贵州酱酒馆'), findsOneWidget);
+    expect(find.text('茅台集团茅乡酱酒体验馆'), findsOneWidget);
+    expect(find.text('销售单'), findsOneWidget);
+    expect(find.text('13800000000'), findsWidgets);
+    expect(find.text('贵州省贵阳市南明区测试地址'), findsOneWidget);
+    expect(find.text('顺丰速运'), findsOneWidget);
+    expect(find.text('SF123456'), findsOneWidget);
+    expect(find.text('运输中'), findsOneWidget);
+    expect(find.text('贵州省遵义市'), findsOneWidget);
+    expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('生成二维码后显示'), findsWidgets);
     expect(find.text('酱香珍藏'), findsOneWidget);
     expect(find.textContaining('测试旅行社'), findsWidgets);
@@ -239,6 +248,8 @@ Map<String, dynamic> _salesSheetJson({
   return {
     'visibility': 'internal',
     'companyName': '贵州酱酒馆',
+    'venueName': '茅台集团茅乡酱酒体验馆',
+    'afterSalesPhone': '177-8530-5984',
     'order': {
       'id': 'order-1',
       'orderNo': 'SO20260701001',
@@ -293,10 +304,18 @@ Map<String, dynamic> _salesSheetJson({
     'delivery': {'summary': 'shipping', 'summaryLabel': '邮寄'},
     'logistics': {
       'method': '顺丰',
+      'providerCode': 'shunfeng',
+      'providerName': '顺丰速运',
       'logisticsNo': 'SF123456',
       'packingStatus': 'pending',
       'packingStatusLabel': '待打包',
       'packageCount': 1,
+      'trackingState': 'in_transit',
+      'trackingStateLabel': '运输中',
+      'trackingLatestLocation': '贵州省遵义市',
+      'trackingLatestDescription': '快件已发往贵阳市',
+      'trackingEventAt': '2026-07-23T01:00:00.000Z',
+      'trackingCheckedAt': '2026-07-23T01:05:00.000Z',
     },
     'invoice': {
       'required': true,

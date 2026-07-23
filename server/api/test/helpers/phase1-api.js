@@ -554,7 +554,7 @@ function createInMemoryPrisma(options = {}) {
             )
           : null;
       },
-      findMany: async ({ where, include, orderBy, take } = {}) => {
+      findMany: async ({ where, include, select, orderBy, take } = {}) => {
         const rows = sortRows(
           salesOrders
             .filter((order) =>
@@ -581,18 +581,19 @@ function createInMemoryPrisma(options = {}) {
         );
         return rows
           .slice(0, take || rows.length)
-          .map((order) =>
-            withSalesOrderIncludes(
+          .map((order) => {
+            const expanded = withSalesOrderIncludes(
               order,
-              include,
+              include || (select?.travelGroup ? { travelGroup: true } : null),
               salesOrderItems,
               travelGroups,
               customers,
               users,
               afterSalesOrders,
               commissionRecords,
-            ),
-          );
+            );
+            return select ? selectRow(expanded, select) : expanded;
+          });
       },
       create: async ({ data, include } = {}) => {
         const nestedItems = data.items?.create || [];
@@ -1566,10 +1567,17 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       totalAmountCents: seed.totalAmountCents ?? 0,
       cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
       logisticsMethod: seed.logisticsMethod ?? null,
+      logisticsProviderCode: seed.logisticsProviderCode ?? null,
       packingStatus: seed.packingStatus || 'PACKED',
       packageCount: seed.packageCount ?? 0,
       warehouseRemark: seed.warehouseRemark ?? null,
       logisticsNo: seed.logisticsNo ?? null,
+      trackingState: seed.trackingState ?? null,
+      trackingStateLabel: seed.trackingStateLabel ?? null,
+      trackingLatestLocation: seed.trackingLatestLocation ?? null,
+      trackingLatestDescription: seed.trackingLatestDescription ?? null,
+      trackingEventAt: asDate(seed.trackingEventAt) || null,
+      trackingCheckedAt: asDate(seed.trackingCheckedAt) || null,
       logisticsFeeCents: seed.logisticsFeeCents ?? 0,
       invoiceRequired: Boolean(seed.invoiceRequired),
       invoiceIssued: Boolean(seed.invoiceIssued),

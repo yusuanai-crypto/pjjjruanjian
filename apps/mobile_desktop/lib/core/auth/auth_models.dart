@@ -129,12 +129,34 @@ class AuthSession {
 }
 
 UserRole userRoleFromValue(String value) {
+  final normalizedValue = value.trim().toLowerCase();
   for (final role in UserRole.values) {
-    if (role.value == value) {
+    if (role.value == normalizedValue) {
       return role;
     }
   }
-  throw FormatException('Unsupported user role: $value');
+  throw UnsupportedUserRoleException(value);
+}
+
+class UnsupportedUserRoleException implements Exception {
+  const UnsupportedUserRoleException(this.value);
+
+  final String value;
+
+  String get displayValue {
+    final sanitized = value
+        .replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ')
+        .trim();
+    if (sanitized.isEmpty) {
+      return '空值';
+    }
+    return sanitized.length <= 32
+        ? sanitized
+        : '${sanitized.substring(0, 32)}…';
+  }
+
+  @override
+  String toString() => 'Unsupported user role: $displayValue';
 }
 
 Map<String, dynamic> _asMap(Object? value) {

@@ -9,7 +9,13 @@ const { getRoleMenus } = require('../src/modules/auth/roles');
 test('unit: AI policy allows only first-version AI roles', () => {
   const service = new AiPolicyService();
 
-  for (const role of ['admin', 'boss', 'finance', 'after_sales']) {
+  for (const role of [
+    'super_admin',
+    'admin',
+    'boss',
+    'finance',
+    'after_sales',
+  ]) {
     assert.equal(service.canUseAi(role), true, `${role} should use AI`);
     assert.match(service.getScopeDescription(role), /可/);
   }
@@ -29,7 +35,7 @@ test('unit: AI policy allows only first-version AI roles', () => {
 test('unit: AI policy covers role and intent matrix', () => {
   const service = new AiPolicyService();
 
-  for (const role of ['admin', 'boss']) {
+  for (const role of ['super_admin', 'admin', 'boss']) {
     assertAllowed(service, role, 'analytics_overview');
     assertAllowed(service, role, 'taster_ranking');
     assertAllowed(service, role, 'analytics_trend');
@@ -104,7 +110,13 @@ test('unit: AI policy rejects unsafe write, SQL, and explicit denial intents', (
 });
 
 test('unit: AI assistant menu follows first-version backend policy', () => {
-  for (const role of ['admin', 'boss', 'finance', 'after_sales']) {
+  for (const role of [
+    'super_admin',
+    'admin',
+    'boss',
+    'finance',
+    'after_sales',
+  ]) {
     assert.equal(roleMenus(role).includes('ai_assistant'), true);
   }
 

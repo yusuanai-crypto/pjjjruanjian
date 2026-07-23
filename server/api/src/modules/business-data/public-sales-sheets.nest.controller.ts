@@ -35,6 +35,7 @@ export class PublicSalesSheetsNestController {
         'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': PUBLIC_SALES_SHEET_CSP,
         'X-Frame-Options': 'DENY',
+        'X-Robots-Tag': 'noindex, nofollow, noarchive',
       })
       .type('html')
       .send(result.html);

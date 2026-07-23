@@ -86,6 +86,9 @@ model User {
   updatedProducts                  Product[]                   @relation("ProductUpdatedBy")
   createdProductActualCosts        ProductActualCost[]         @relation("ProductActualCostCreatedBy")
   updatedProductActualCosts        ProductActualCost[]         @relation("ProductActualCostUpdatedBy")
+  createdSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitCreatedBy")
+  updatedSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitUpdatedBy")
+  correctedSerializedInventoryUnits SerializedInventoryUnit[]  @relation("SerializedInventoryUnitCorrectedBy")
 
   @@index([role])
   @@index([leaderId])
@@ -194,20 +197,38 @@ model AiChatMessage {
   @@map("ai_chat_messages")
 }
 
+enum InventoryTrackingMode {
+  NONE       @map("none")
+  SERIALIZED @map("serialized")
+
+  @@map("inventory_tracking_mode")
+}
+
+enum SerializedInventoryStatus {
+  PENDING_COST @map("pending_cost")
+  AVAILABLE    @map("available")
+  ALLOCATED    @map("allocated")
+  VOID         @map("void")
+
+  @@map("serialized_inventory_status")
+}
+
 model Product {
-  id             String   @id @default(uuid()) @db.Char(36)
-  name           String   @unique @db.VarChar(160)
-  normalizedName String   @unique @map("normalized_name") @db.VarChar(160)
-  unit           String   @db.VarChar(20)
-  isActive       Boolean  @default(true) @map("is_active")
-  notes          String?  @db.Text
-  createdById    String?  @map("created_by_id") @db.Char(36)
-  updatedById    String?  @map("updated_by_id") @db.Char(36)
-  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+  id                    String                @id @default(uuid()) @db.Char(36)
+  name                  String                @unique @db.VarChar(160)
+  normalizedName        String                @unique @map("normalized_name") @db.VarChar(160)
+  unit                  String                @db.VarChar(20)
+  inventoryTrackingMode InventoryTrackingMode @default(NONE) @map("inventory_tracking_mode")
+  isActive              Boolean               @default(true) @map("is_active")
+  notes                 String?               @db.Text
+  createdById           String?               @map("created_by_id") @db.Char(36)
+  updatedById           String?               @map("updated_by_id") @db.Char(36)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt             DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
 
   actualCosts          ProductActualCost[]
   salesOrderItems      SalesOrderItem[]
+  serializedInventoryUnits SerializedInventoryUnit[]
   tastingItems         TravelGroupTastingItem[]
   salesDeductionRules  SalesDeductionRule[]
   agencyDeductionRules AgencyDeductionRule[]
@@ -215,10 +236,57 @@ model Product {
   updatedBy            User?                    @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([isActive])
+  @@index([inventoryTrackingMode])
   @@index([unit])
   @@index([createdById])
   @@index([updatedById])
   @@map("products")
+}
+
+model SerializedInventoryUnit {
+  id                      String                    @id @default(uuid()) @db.Char(36)
+  productId               String                    @map("product_id") @db.Char(36)
+  salesOrderId            String?                   @map("sales_order_id") @db.Char(36)
+  salesOrderItemId        String?                   @map("sales_order_item_id") @db.Char(36)
+  moutaiName              String?                   @map("moutai_name") @db.VarChar(160)
+  normalizedMoutaiName    String?                   @map("normalized_moutai_name") @db.VarChar(160)
+  factoryDate             DateTime?                 @map("factory_date") @db.Date
+  productionBatch         String?                   @map("production_batch") @db.VarChar(80)
+  batchSerialNo           String?                   @map("batch_serial_no") @db.VarChar(80)
+  logisticsCode           String?                   @map("logistics_code") @db.VarChar(160)
+  normalizedLogisticsCode String?                   @unique @map("normalized_logistics_code") @db.VarChar(160)
+  purchaseCostCents       Int?                      @map("purchase_cost_cents")
+  orderCostSnapshotCents  Int?                      @map("order_cost_snapshot_cents")
+  status                  SerializedInventoryStatus @default(PENDING_COST)
+  correctionReason        String?                   @map("correction_reason") @db.VarChar(500)
+  correctedById           String?                   @map("corrected_by_id") @db.Char(36)
+  correctedAt             DateTime?                 @map("corrected_at") @db.DateTime(0)
+  createdById             String?                   @map("created_by_id") @db.Char(36)
+  updatedById             String?                   @map("updated_by_id") @db.Char(36)
+  createdAt               DateTime                  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt               DateTime                  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  salesOrder     SalesOrder?     @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  salesOrderItem SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("SerializedInventoryUnitCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?           @relation("SerializedInventoryUnitUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  correctedBy    User?           @relation("SerializedInventoryUnitCorrectedBy", fields: [correctedById], references: [id], onDelete: SetNull)
+
+  @@index([productId, status])
+  @@index([moutaiName])
+  @@index([normalizedMoutaiName])
+  @@index([factoryDate])
+  @@index([productionBatch])
+  @@index([batchSerialNo])
+  @@index([logisticsCode])
+  @@index([status])
+  @@index([salesOrderId])
+  @@index([salesOrderItemId])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([correctedById])
+  @@map("serialized_inventory_units")
 }
 
 model ProductActualCost {
@@ -633,10 +701,17 @@ model SalesOrder {
   totalAmountCents          Int                     @default(0) @map("total_amount_cents")
   cashOnDeliveryAmountCents Int                     @default(0) @map("cash_on_delivery_amount_cents")
   logisticsMethod           String?                 @map("logistics_method") @db.VarChar(80)
+  logisticsProviderCode     String?                 @map("logistics_provider_code") @db.VarChar(40)
   packingStatus             SalesOrderPackingStatus @default(PACKED) @map("packing_status")
   packageCount              Int                     @default(0) @map("package_count")
   warehouseRemark           String?                 @map("warehouse_remark") @db.Text
   logisticsNo               String?                 @map("logistics_no") @db.VarChar(120)
+  trackingState             String?                 @map("tracking_state") @db.VarChar(40)
+  trackingStateLabel        String?                 @map("tracking_state_label") @db.VarChar(80)
+  trackingLatestLocation    String?                 @map("tracking_latest_location") @db.VarChar(255)
+  trackingLatestDescription String?                 @map("tracking_latest_description") @db.Text
+  trackingEventAt           DateTime?               @map("tracking_event_at") @db.DateTime(0)
+  trackingCheckedAt         DateTime?               @map("tracking_checked_at") @db.DateTime(0)
   logisticsFeeCents         Int                     @default(0) @map("logistics_fee_cents")
   invoiceRequired           Boolean                 @default(false) @map("invoice_required")
   invoiceIssued             Boolean                 @default(false) @map("invoice_issued")
@@ -661,6 +736,7 @@ model SalesOrder {
   items             SalesOrderItem[]
   afterSalesOrders  AfterSalesOrder[]
   commissionRecords CommissionRecord[]
+  serializedInventoryUnits SerializedInventoryUnit[]
 
   @@index([customerId])
   @@index([travelGroupId])
@@ -675,6 +751,7 @@ model SalesOrder {
   @@index([salesFormNo])
   @@index([qrCodeExpiresAt])
   @@index([packingStatus])
+  @@index([logisticsProviderCode])
   @@index([logisticsNo])
   @@index([orderDate, status])
   @@index([travelGroupId, status])
@@ -700,6 +777,7 @@ model SalesOrderItem {
 
   salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
   product    Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  serializedInventoryUnits SerializedInventoryUnit[]
 
   @@index([salesOrderId])
   @@index([productId])

@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AgencyRuleRecalculationNestService } from '../commissions/agency-rule-recalculation.nest.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 
 const READ_RULE_ROLES = ['admin', 'finance', 'boss'];
@@ -33,6 +34,12 @@ type RuleKind =
   | 'salesDeduction'
   | 'agencyDeduction'
   | 'agencyRebate';
+
+function isAgencyRuleKind(
+  kind: RuleKind,
+): kind is 'agencyDeduction' | 'agencyRebate' {
+  return kind === 'agencyDeduction' || kind === 'agencyRebate';
+}
 
 const RULE_CONFIG: Record<string, any> = {
   commission: {
@@ -134,6 +141,7 @@ export class CommissionRulesNestService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
+    private readonly agencyRuleRecalculationService: AgencyRuleRecalculationNestService,
   ) {}
 
   async listCommissionRules(actor: any, filters: any = {}) {
@@ -275,7 +283,23 @@ export class CommissionRulesNestService {
       afterData: dto,
       ipAddress: metadata.ipAddress || null,
     });
-    return dto;
+    if (!isAgencyRuleKind(kind)) {
+      return dto;
+    }
+    const recalculation = await this.triggerAgencyRecalculation(
+      actor,
+      {
+        source: `${config.logPrefix}.create`,
+        ruleKind: kind,
+        rules: [created],
+        ruleIds: [created.id],
+      },
+      metadata,
+    );
+    return {
+      ...dto,
+      recalculation,
+    };
   }
 
   private async batchImportRules(
@@ -289,6 +313,7 @@ export class CommissionRulesNestService {
     const rows = normalizeBatchRows(payload);
     const results: any[] = [];
     const createdIds: string[] = [];
+    const createdRules: any[] = [];
 
     for (let index = 0; index < rows.length; index += 1) {
       const rowNumber = index + 1;
@@ -299,6 +324,7 @@ export class CommissionRulesNestService {
         });
         const dto = config.toDto(created);
         createdIds.push(created.id);
+        createdRules.push(created);
         results.push({
           index,
           rowNumber,
@@ -347,9 +373,22 @@ export class CommissionRulesNestService {
       ipAddress: metadata.ipAddress || null,
     });
 
+    const recalculation = isAgencyRuleKind(kind)
+      ? await this.triggerAgencyRecalculation(
+          actor,
+          {
+            source: `${config.logPrefix}.batch_import`,
+            ruleKind: kind,
+            rules: createdRules,
+            ruleIds: createdIds,
+          },
+          metadata,
+        )
+      : null;
     return {
       ...summary,
       results,
+      ...(recalculation ? { recalculation } : {}),
     };
   }
 
@@ -400,16 +439,99 @@ export class CommissionRulesNestService {
       data,
     });
     const dto = config.toDto(updated);
+    const updateAction = resolveRuleUpdateLogAction(config, current, updated);
     await this.operationLogsService.appendLog({
       userId: actor.id,
-      action: resolveRuleUpdateLogAction(config, current, updated),
+      action: updateAction,
       entityType: config.entityType,
       entityId: updated.id,
       beforeData: config.toDto(current),
       afterData: dto,
       ipAddress: metadata.ipAddress || null,
     });
-    return dto;
+    if (!isAgencyRuleKind(kind)) {
+      return dto;
+    }
+    const recalculation = await this.triggerAgencyRecalculation(
+      actor,
+      {
+        source: updateAction,
+        ruleKind: kind,
+        rules: [current, updated],
+        ruleIds: [updated.id],
+      },
+      metadata,
+    );
+    return {
+      ...dto,
+      recalculation,
+    };
+  }
+
+  private async triggerAgencyRecalculation(
+    actor: any,
+    input: {
+      source: string;
+      ruleKind: 'agencyDeduction' | 'agencyRebate';
+      rules: any[];
+      ruleIds: string[];
+    },
+    metadata: any,
+  ) {
+    try {
+      return await this.agencyRuleRecalculationService.recalculateForAgencyRuleChange(
+        actor,
+        input,
+        metadata,
+      );
+    } catch {
+      const warning = {
+        code: 'agency_rule_recalculation_failed',
+        message: '规则已保存，但自动重算失败，请在积分表中手工执行“重新计算”。',
+      };
+      await this.operationLogsService.appendLog({
+        userId: actor.id,
+        action: 'commission_records.agency_scope.recalculate_failed',
+        entityType: 'agency_rule_recalculation',
+        entityId: input.ruleIds[0] || null,
+        beforeData: null,
+        afterData: {
+          triggerSource: input.source,
+          ruleKind: input.ruleKind,
+          ruleIds: input.ruleIds.slice(0, 50),
+          orderCount: 0,
+          travelGroupCount: 0,
+          successCount: 0,
+          skippedCount: 0,
+          warningSummary: {
+            count: 1,
+            codes: { [warning.code]: 1 },
+            messageSamples: [warning.message],
+          },
+        },
+        ipAddress: metadata.ipAddress || null,
+      });
+      return {
+        source: input.source,
+        agencyOnly: true,
+        ruleIds: input.ruleIds,
+        orderCount: 0,
+        travelGroupCount: 0,
+        successCount: 0,
+        failureCount: 1,
+        skippedCount: 0,
+        skippedConfirmedCount: 0,
+        skippedManualOverrideCount: 0,
+        generatedCount: 0,
+        updatedCount: 0,
+        unchangedCount: 0,
+        generatedRecords: [],
+        updatedRecords: [],
+        unchangedRecords: [],
+        travelGroupFinanceSummaries: [],
+        warnings: [warning],
+      };
+    }
   }
 
   private delegate(config: any) {

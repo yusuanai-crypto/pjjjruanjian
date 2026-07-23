@@ -166,6 +166,11 @@ String messageForAuthError(Object error) {
   }
 
   if (error is ApiException) {
+    if (error.statusCode == 502 ||
+        error.statusCode == 503 ||
+        error.statusCode == 504) {
+      return '服务器暂时不可用（HTTP ${error.statusCode}），请联系管理员检查后端服务。';
+    }
     switch (error.code) {
       case 'LOGIN_FIELDS_REQUIRED':
         return '请输入账号和密码。';
@@ -190,8 +195,12 @@ String messageForAuthError(Object error) {
     }
   }
 
+  if (error is UnsupportedUserRoleException) {
+    return '服务器返回了无法识别的用户角色：${error.displayValue}。请联系管理员检查后端版本。';
+  }
+
   if (error is FormatException) {
-    return '服务器返回了无法识别的用户角色。';
+    return '服务器返回的数据格式异常。';
   }
 
   return '登录失败，请稍后重试。';

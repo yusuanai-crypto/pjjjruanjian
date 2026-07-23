@@ -69,6 +69,238 @@ test('contract: stage7 recalculation runs after sales order creation', async () 
   });
 });
 
+test('contract: creating a 30 percent agency deduction rule recalculates existing orders and summary', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  prisma.agencyDeductionRules = [];
+
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+
+    const createdRule = await requestJson(
+      baseUrl,
+      '/api/agency-deduction-rules',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          agencyName: 'stage7 smoke agency',
+          calculationMode: 'effective_sales_rate',
+          deductionRate: '0.3000',
+          effectiveFrom: '2026-01-01',
+        },
+      },
+    );
+
+    assert.equal(
+      createdRule.response.status,
+      201,
+      JSON.stringify(createdRule.body),
+    );
+    const recalculation = createdRule.body.data.recalculation;
+    assert.equal(
+      recalculation.orderCount,
+      1,
+      JSON.stringify(recalculation),
+    );
+    assert.equal(recalculation.successCount, 1);
+    assert.deepEqual(
+      recalculation.updatedRecords.map((record) => record.targetType).sort(),
+      ['agency_daily_rebate', 'agency_monthly_rebate'],
+    );
+    const daily = recalculation.updatedRecords.find(
+      (record) => record.targetType === 'agency_daily_rebate',
+    );
+    const monthly = recalculation.updatedRecords.find(
+      (record) => record.targetType === 'agency_monthly_rebate',
+    );
+    assert.equal(daily.salesOrderId, createdOrder.id);
+    assert.equal(daily.deductionAmountCents, 60000);
+    assert.equal(daily.baseAmountCents, 140000);
+    assert.equal(daily.pointsCents, 4200);
+    assert.equal(monthly.deductionAmountCents, 60000);
+    assert.equal(monthly.baseAmountCents, 140000);
+    assert.equal(monthly.pointsCents, 2800);
+
+    const summary = recalculation.travelGroupFinanceSummaries[0];
+    assert.equal(summary.totalSalesAmountCents, 200000);
+    assert.equal(summary.totalAgencyDeductionCents, 60000);
+    assert.equal(summary.totalAgencyNetAmountCents, 140000);
+    assert.equal(summary.totalDailyRebateCents, 4200);
+    assert.equal(summary.totalMonthlyRebateCents, 2800);
+
+    const aggregateLogs = await operationLogs(
+      baseUrl,
+      admin.token,
+      'commission_records.agency_scope.recalculate',
+    );
+    const aggregateLog = aggregateLogs.find(
+      (log) =>
+        log.afterData.triggerSource === 'agency_deduction_rules.create' &&
+        log.afterData.orderCount === 1,
+    );
+    assert.ok(aggregateLog);
+    assert.equal(aggregateLog.afterData.travelGroupCount, 1);
+    assert.equal(aggregateLog.afterData.successCount, 1);
+    assert.equal(aggregateLog.afterData.skippedCount, 0);
+  }, {
+    prisma,
+  });
+});
+
+test('contract: updating and disabling an agency rebate rule recalculates unconfirmed records', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    await createStage7Order(baseUrl, admin.token);
+
+    const updatedRule = await requestJson(
+      baseUrl,
+      '/api/agency-rebate-rules/rule-stage7-agency-rebate',
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          dailyRebateRate: '0.0400',
+          monthlyRebateRate: '0.0100',
+        },
+      },
+    );
+
+    assert.equal(updatedRule.response.status, 200);
+    const updatedRecalculation = updatedRule.body.data.recalculation;
+    assert.equal(updatedRecalculation.orderCount, 1);
+    assert.equal(updatedRecalculation.successCount, 1);
+    const updatedDaily = updatedRecalculation.updatedRecords.find(
+      (record) => record.targetType === 'agency_daily_rebate',
+    );
+    const updatedMonthly = updatedRecalculation.updatedRecords.find(
+      (record) => record.targetType === 'agency_monthly_rebate',
+    );
+    assert.equal(updatedDaily.baseAmountCents, 170000);
+    assert.equal(updatedDaily.pointsCents, 6800);
+    assert.equal(updatedMonthly.pointsCents, 1700);
+    assert.equal(
+      updatedRecalculation.travelGroupFinanceSummaries[0]
+        .totalDailyRebateCents,
+      6800,
+    );
+    assert.equal(
+      updatedRecalculation.travelGroupFinanceSummaries[0]
+        .totalMonthlyRebateCents,
+      1700,
+    );
+
+    const disabledRule = await requestJson(
+      baseUrl,
+      '/api/agency-rebate-rules/rule-stage7-agency-rebate',
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          isActive: false,
+        },
+      },
+    );
+
+    assert.equal(disabledRule.response.status, 200);
+    const disabledRecalculation = disabledRule.body.data.recalculation;
+    assert.equal(disabledRecalculation.orderCount, 1);
+    assert.equal(disabledRecalculation.successCount, 1);
+    assert.equal(
+      disabledRecalculation.updatedRecords
+        .filter((record) =>
+          [
+            'agency_daily_rebate',
+            'agency_monthly_rebate',
+          ].includes(record.targetType),
+        )
+        .every((record) => record.pointsCents === 0),
+      true,
+    );
+    assert.equal(
+      disabledRecalculation.warnings.some(
+        (warning) => warning.code === 'missing_agency_daily_rebate_rule',
+      ),
+      true,
+    );
+    assert.equal(
+      disabledRecalculation.warnings.some(
+        (warning) => warning.code === 'missing_agency_monthly_rebate_rule',
+      ),
+      true,
+    );
+    const disabledSummary =
+      disabledRecalculation.travelGroupFinanceSummaries[0];
+    assert.equal(disabledSummary.totalDailyRebateCents, 0);
+    assert.equal(disabledSummary.totalMonthlyRebateCents, 0);
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: batch importing an agency rule recalculates only that agency', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  prisma.agencyDeductionRules = [];
+  prisma.travelGroups.push({
+    id: 'tg-stage7-recalc-other-agency',
+    groupNo: 'TG-STAGE7-RECALC-OTHER',
+    visitDate: '2026-07-03T00:00:00.000Z',
+    travelAgency: 'stage7 other agency',
+    tasterId: TASTER_USER_ID,
+    tasterName: 'stage7 smoke taster',
+    liquorCostDeductionCents: 0,
+    status: 'UNMARKED',
+  });
+
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const matchingOrder = await createStage7Order(baseUrl, admin.token);
+    const otherOrder = await createStage7Order(baseUrl, admin.token, {
+      travelGroupId: 'tg-stage7-recalc-other-agency',
+      orderDate: '2026-07-03',
+    });
+
+    const imported = await requestJson(
+      baseUrl,
+      '/api/agency-deduction-rules/batch-import',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          rules: [
+            {
+              agencyName: 'stage7 smoke agency',
+              calculationMode: 'effective_sales_rate',
+              deductionRate: '0.3000',
+              effectiveFrom: '2026-01-01',
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(imported.response.status, 201);
+    assert.equal(imported.body.data.importResult.successCount, 1);
+    const recalculation = imported.body.data.recalculation;
+    assert.equal(recalculation.orderCount, 1);
+    assert.equal(recalculation.successCount, 1);
+    assert.equal(
+      recalculation.updatedRecords.every(
+        (record) => record.salesOrderId === matchingOrder.id,
+      ),
+      true,
+    );
+    assert.equal(
+      recalculation.updatedRecords.some(
+        (record) => record.salesOrderId === otherOrder.id,
+      ),
+      false,
+    );
+  }, {
+    prisma,
+  });
+});
+
 test('contract: stage7 recalculation runs after sales order amount and item changes', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);

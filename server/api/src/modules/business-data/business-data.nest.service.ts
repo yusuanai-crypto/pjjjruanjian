@@ -44,6 +44,15 @@ import {
 import { withGeneratedSalesOrderNo } from './sales-order-no.helper';
 import { buildSalesSheetDto } from './sales-sheet.dto.helper';
 import {
+  clearTrackingCacheData,
+  LogisticsTrackingService,
+} from './logistics-tracking.service';
+import {
+  assertLogisticsProviderCode,
+  logisticsProviderName,
+  normalizeLogisticsProviderCode,
+} from './logistics-provider.helper';
+import {
   assertAttachmentAggregateSize,
   createAttachmentStorageKey,
   finalizeStagedTravelGroupAttachmentDeletion,
@@ -508,6 +517,7 @@ const SALES_ORDER_FINANCE_PATCH_FIELDS = [
 
 const SALES_ORDER_PACKING_PATCH_FIELDS = [
   'logisticsMethod',
+  'logisticsProviderCode',
   'packingStatus',
   'packageCount',
   'warehouseRemark',
@@ -566,6 +576,7 @@ export class BusinessDataNestService {
     private readonly settingsService: SettingsNestService,
     private readonly commissionRecordsService: CommissionRecordsNestService,
     private readonly travelGroupFinanceSummaryService: TravelGroupFinanceSummaryNestService,
+    private readonly logisticsTrackingService: LogisticsTrackingService,
   ) {}
 
   async listGroups(kind: string, actor: any, filters: any = {}) {
@@ -1390,7 +1401,13 @@ export class BusinessDataNestService {
     const order = await this.findReadableSalesOrderOrThrow(actor, id, {
       includeSalesUser: true,
     });
-    return buildSalesSheetDto(order);
+    const tracking = await this.logisticsTrackingService.resolveForSalesSheet(
+      order,
+    );
+    return buildSalesSheetDto({
+      ...tracking.order,
+      trackingMessage: tracking.trackingMessage,
+    });
   }
 
   async generateSalesOrderQrCode(
@@ -1463,8 +1480,14 @@ export class BusinessDataNestService {
       return updatedOrder;
     });
 
-    return buildSalesOrderQrCodeResponse(
+    const tracking = await this.logisticsTrackingService.resolveForSalesSheet(
       updated,
+    );
+    return buildSalesOrderQrCodeResponse(
+      {
+        ...tracking.order,
+        trackingMessage: tracking.trackingMessage,
+      },
       metadata.publicSalesSheetBaseUrl,
       nextQrCodeToken,
     );
@@ -1534,7 +1557,13 @@ export class BusinessDataNestService {
       return buildPublicSalesSheetUnavailableResult();
     }
 
-    const salesSheet = buildSalesSheetDto(order).public;
+    const tracking = await this.logisticsTrackingService.resolveForSalesSheet(
+      order,
+    );
+    const salesSheet = buildSalesSheetDto({
+      ...tracking.order,
+      trackingMessage: tracking.trackingMessage,
+    }).public;
     return {
       statusCode: 200,
       html: renderPublicSalesSheetHtml(salesSheet),
@@ -1608,7 +1637,9 @@ export class BusinessDataNestService {
         data.orderDate,
       );
       data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
-      data.items = { create: orderItems };
+      data.items = {
+        create: orderItems.map(toSalesOrderItemCreateData),
+      };
 
       return withGeneratedSalesOrderNo(
         tx.salesOrder,
@@ -1629,7 +1660,19 @@ export class BusinessDataNestService {
             include: getSalesOrderInclude(),
           });
 
-          let orderForLog = createdOrder;
+          await synchronizeSerializedInventoryUnits(
+            tx,
+            createdOrder.id,
+            orderItems,
+            [],
+          );
+          let orderForLog =
+            (await tx.salesOrder.findUnique({
+              where: {
+                id: createdOrder.id,
+              },
+              include: getSalesOrderInclude(),
+            })) || createdOrder;
           if (
             travelGroup &&
             createdOrder.orderType === 'TRAVEL_GROUP' &&
@@ -1807,6 +1850,7 @@ export class BusinessDataNestService {
       const orderDateChanged =
         data.orderDate !== undefined &&
         formatDate(data.orderDate) !== formatDate(current.orderDate);
+      let resolvedOrderItems: any[] | null = null;
       if (submittedItemInputs) {
         const orderItems = await resolveSalesOrderItemSnapshots(
           tx,
@@ -1815,10 +1859,11 @@ export class BusinessDataNestService {
           current.items || [],
           orderDateChanged,
         );
+        resolvedOrderItems = orderItems;
         data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
         data.items = {
           deleteMany: {},
-          create: orderItems,
+          create: orderItems.map(toSalesOrderItemCreateData),
         };
       } else if (orderDateChanged) {
         const existingItemInputs = (current.items || []).map(
@@ -1831,10 +1876,11 @@ export class BusinessDataNestService {
           current.items || [],
           true,
         );
+        resolvedOrderItems = orderItems;
         data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
         data.items = {
           deleteMany: {},
-          create: orderItems,
+          create: orderItems.map(toSalesOrderItemCreateData),
         };
       }
 
@@ -1845,6 +1891,14 @@ export class BusinessDataNestService {
         data,
         include: getSalesOrderInclude(),
       });
+      if (resolvedOrderItems) {
+        await synchronizeSerializedInventoryUnits(
+          tx,
+          id,
+          resolvedOrderItems,
+          current.items || [],
+        );
+      }
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
         current,
@@ -1925,11 +1979,20 @@ export class BusinessDataNestService {
     assertCanReadSalesOrder(actor, current);
     await this.assertPassesGlobalSalesOrderMarkScope(current);
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      const financeData = buildSalesOrderFinanceUpdateData(payload, actor);
+      if (
+        hasOwn(payload, 'logisticsNo') &&
+        normalizeOptionalString(current.logisticsNo) !==
+          normalizeOptionalString(financeData.logisticsNo)
+      ) {
+        Object.assign(financeData, clearTrackingCacheData());
+      }
+      assertPackedLogisticsNoPresent(current, financeData);
       const updatedOrder = await tx.salesOrder.update({
         where: {
           id,
         },
-        data: buildSalesOrderFinanceUpdateData(payload, actor),
+        data: financeData,
         include: getSalesOrderInclude(),
       });
 
@@ -1996,11 +2059,17 @@ export class BusinessDataNestService {
     await this.assertPassesGlobalSalesOrderMarkScope(current);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      const packingData = buildSalesOrderPackingUpdateData(payload, actor);
+      if (packingUpdateChangesProvider(current, packingData)) {
+        Object.assign(packingData, clearTrackingCacheData());
+      }
+      assertPackingProviderDetails(current, packingData);
+      assertShippedLogisticsComplete(current, packingData);
       const updatedOrder = await tx.salesOrder.update({
         where: {
           id,
         },
-        data: buildSalesOrderPackingUpdateData(payload, actor),
+        data: packingData,
         include: getSalesOrderInclude(),
       });
 
@@ -4728,12 +4797,14 @@ function buildSalesOrderData(payload: any, actor: any, items: any[]) {
       0,
     ),
     logisticsMethod: null,
+    logisticsProviderCode: null,
     packingStatus: items.some((item: any) => item.deliveryType === 'SHIPPING')
       ? 'PENDING'
       : 'PACKED',
     packageCount: 0,
     warehouseRemark: null,
     logisticsNo: null,
+    ...clearTrackingCacheData(),
     logisticsFeeCents: 0,
     invoiceRequired:
       payload?.invoiceRequired === undefined
@@ -4847,6 +4918,30 @@ function buildSalesOrderPackingUpdateData(payload: any, actor: any) {
   if (hasOwn(payload, 'logisticsMethod')) {
     data.logisticsMethod = normalizeOptionalString(payload.logisticsMethod);
   }
+  if (hasOwn(payload, 'logisticsProviderCode')) {
+    const rawProviderCode = normalizeOptionalString(
+      payload.logisticsProviderCode,
+    );
+    const providerCode = rawProviderCode
+      ? assertLogisticsProviderCode(rawProviderCode)
+      : null;
+    if (rawProviderCode && !providerCode) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'logisticsProviderCode is not supported.',
+      );
+    }
+    data.logisticsProviderCode = providerCode;
+    if (providerCode && providerCode !== 'other') {
+      data.logisticsMethod = logisticsProviderName(providerCode);
+    }
+  } else if (hasOwn(payload, 'logisticsMethod')) {
+    data.logisticsProviderCode = normalizeLogisticsProviderCode(
+      null,
+      data.logisticsMethod,
+    );
+  }
   if (hasOwn(payload, 'packingStatus')) {
     data.packingStatus = toPrismaPackingStatus(payload.packingStatus);
   }
@@ -4861,6 +4956,93 @@ function buildSalesOrderPackingUpdateData(payload: any, actor: any) {
   }
 
   return data;
+}
+
+function packingUpdateChangesProvider(current: any, data: any) {
+  return (
+    (hasOwn(data, 'logisticsProviderCode') &&
+      normalizeOptionalString(current?.logisticsProviderCode) !==
+        normalizeOptionalString(data.logisticsProviderCode)) ||
+    (hasOwn(data, 'logisticsMethod') &&
+      normalizeOptionalString(current?.logisticsMethod) !==
+        normalizeOptionalString(data.logisticsMethod))
+  );
+}
+
+function assertPackingProviderDetails(current: any, data: any) {
+  const providerCode = normalizeLogisticsProviderCode(
+    hasOwn(data, 'logisticsProviderCode')
+      ? data.logisticsProviderCode
+      : current?.logisticsProviderCode,
+    hasOwn(data, 'logisticsMethod')
+      ? data.logisticsMethod
+      : current?.logisticsMethod,
+  );
+  const logisticsMethod = hasOwn(data, 'logisticsMethod')
+    ? data.logisticsMethod
+    : current?.logisticsMethod;
+  if (providerCode === 'other' && !hasText(logisticsMethod)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'logisticsMethod is required when logisticsProviderCode is other.',
+    );
+  }
+}
+
+function assertShippedLogisticsComplete(current: any, data: any) {
+  const enteringPacked =
+    data.packingStatus === 'PACKED' &&
+    String(current?.packingStatus || '').toUpperCase() !== 'PACKED';
+  if (!enteringPacked || !hasShippingDelivery(current)) {
+    return;
+  }
+  const providerCode = normalizeLogisticsProviderCode(
+    hasOwn(data, 'logisticsProviderCode')
+      ? data.logisticsProviderCode
+      : current?.logisticsProviderCode,
+    hasOwn(data, 'logisticsMethod')
+      ? data.logisticsMethod
+      : current?.logisticsMethod,
+  );
+  const logisticsMethod = hasOwn(data, 'logisticsMethod')
+    ? data.logisticsMethod
+    : current?.logisticsMethod;
+  if (providerCode === 'self_carry') {
+    return;
+  }
+  if (
+    !providerCode ||
+    (providerCode === 'other' && !hasText(logisticsMethod)) ||
+    !hasText(current?.logisticsNo)
+  ) {
+    throw createHttpError(
+      400,
+      'SHIPPED_LOGISTICS_REQUIRED',
+      'A shipped order requires a logistics provider and tracking number.',
+    );
+  }
+}
+
+function assertPackedLogisticsNoPresent(current: any, data: any) {
+  if (
+    !hasOwn(data, 'logisticsNo') ||
+    String(current?.packingStatus || '').toUpperCase() !== 'PACKED' ||
+    !hasShippingDelivery(current)
+  ) {
+    return;
+  }
+  const providerCode = normalizeLogisticsProviderCode(
+    current?.logisticsProviderCode,
+    current?.logisticsMethod,
+  );
+  if (providerCode !== 'self_carry' && !hasText(data.logisticsNo)) {
+    throw createHttpError(
+      400,
+      'SHIPPED_LOGISTICS_REQUIRED',
+      'A shipped order requires a logistics provider and tracking number.',
+    );
+  }
 }
 
 function buildSalesOrderStatusUpdateData(payload: any, actor: any) {
@@ -5304,6 +5486,21 @@ function buildSalesOrderItems(items: any[]) {
             `items[${index}].unitPriceCents`,
           )
         : Math.round(Number(subtotalCents || 0) / quantity);
+    const serializedUnitIds = Array.isArray(item?.serializedUnitIds)
+      ? item.serializedUnitIds.map((id: unknown, unitIndex: number) =>
+          normalizeRequiredString(
+            id,
+            `items[${index}].serializedUnitIds[${unitIndex}]`,
+          ),
+        )
+      : [];
+    if (new Set(serializedUnitIds).size !== serializedUnitIds.length) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `items[${index}].serializedUnitIds must not contain duplicates.`,
+      );
+    }
     return {
       id: normalizeOptionalString(item?.id) || crypto.randomUUID(),
       productId: normalizeRequiredString(
@@ -5321,6 +5518,7 @@ function buildSalesOrderItems(items: any[]) {
         `items[${index}].sortOrder`,
         index + 1,
       ),
+      serializedUnitIds,
       createdAt: now,
     };
   });
@@ -5363,6 +5561,104 @@ async function resolveSalesOrderItemSnapshots(
     let actualUnitCostCents: number | null;
     let actualCostSubtotalCents: number | null;
 
+    if (product.inventoryTrackingMode === 'SERIALIZED') {
+      if (item.quantity !== item.serializedUnitIds.length) {
+        throw createHttpError(
+          400,
+          'SERIALIZED_INVENTORY_QUANTITY_MISMATCH',
+          `items[${index}].quantity 必须等于所选物流码数量。`,
+        );
+      }
+      if (item.serializedUnitIds.length === 0) {
+        throw createHttpError(
+          400,
+          'SERIALIZED_INVENTORY_SELECTION_REQUIRED',
+          `items[${index}] 请选择物流码。`,
+        );
+      }
+      const units = await prisma.serializedInventoryUnit.findMany({
+        where: {
+          id: { in: item.serializedUnitIds },
+        },
+      });
+      if (units.length !== item.serializedUnitIds.length) {
+        throw inventoryUnitUnavailableError();
+      }
+      const unitsById = new Map(
+        units.map((unit: any) => [unit.id, unit]),
+      );
+      const orderedUnits = item.serializedUnitIds.map((id: string) =>
+        unitsById.get(id),
+      );
+      const currentIds = new Set(
+        (current?.serializedInventoryUnits || []).map(
+          (unit: any) => unit.id,
+        ),
+      );
+      const normalizedNames = new Set<string>();
+      const costSnapshots: number[] = [];
+      for (const unit of orderedUnits) {
+        const retained =
+          currentIds.has(unit.id) ||
+          (current?.id && unit.salesOrderItemId === current.id);
+        if (
+          unit.productId !== product.id ||
+          (!retained && unit.status !== 'AVAILABLE') ||
+          !isSerializedInventoryUnitComplete(unit) ||
+          unit.purchaseCostCents === null ||
+          unit.purchaseCostCents === undefined
+        ) {
+          throw inventoryUnitUnavailableError();
+        }
+        normalizedNames.add(
+          unit.normalizedMoutaiName ||
+            normalizeProductSnapshotName(unit.moutaiName),
+        );
+        costSnapshots.push(
+          retained && unit.orderCostSnapshotCents !== null
+            ? Number(unit.orderCostSnapshotCents)
+            : Number(unit.purchaseCostCents),
+        );
+      }
+      if (normalizedNames.size !== 1) {
+        throw createHttpError(
+          400,
+          'SERIALIZED_INVENTORY_MIXED_NAMES',
+          '同一订单明细只能选择相同商品名称的逐瓶库存。',
+        );
+      }
+      actualCostSubtotalCents = costSnapshots.reduce(
+        (sum, cost) => sum + cost,
+        0,
+      );
+      actualUnitCostCents = costSnapshots.every(
+        (cost) => cost === costSnapshots[0],
+      )
+        ? costSnapshots[0]
+        : null;
+      resolved.push({
+        ...item,
+        id: current?.id || item.id,
+        productId: product.id,
+        productName: orderedUnits[0].moutaiName,
+        unit: product.unit,
+        subtotalCents,
+        actualUnitCostCents,
+        actualCostSubtotalCents,
+        grossProfitCents: subtotalCents - actualCostSubtotalCents,
+        serializedUnitIds: item.serializedUnitIds,
+        createdAt: current?.createdAt || item.createdAt || new Date(),
+      });
+      continue;
+    }
+    if (item.serializedUnitIds.length > 0) {
+      throw createHttpError(
+        400,
+        'PRODUCT_NOT_SERIALIZED',
+        `items[${index}] 的普通商品不能选择物流码。`,
+      );
+    }
+
     if (requiresCostRefresh) {
       const actualCost = await findEffectiveProductActualCostOrThrow(
         prisma,
@@ -5396,6 +5692,108 @@ async function resolveSalesOrderItemSnapshots(
     });
   }
   return resolved;
+}
+
+function toSalesOrderItemCreateData(item: any) {
+  const { serializedUnitIds, ...data } = item;
+  return data;
+}
+
+async function synchronizeSerializedInventoryUnits(
+  prisma: any,
+  salesOrderId: string,
+  orderItems: any[],
+  currentItems: any[],
+) {
+  const requestedIds = orderItems.flatMap((item: any) =>
+    Array.isArray(item.serializedUnitIds) ? item.serializedUnitIds : [],
+  );
+  if (new Set(requestedIds).size !== requestedIds.length) {
+    throw createHttpError(
+      400,
+      'SERIALIZED_INVENTORY_DUPLICATE_SELECTION',
+      '同一物流码不能在一个订单中重复选择。',
+    );
+  }
+  const currentIds = (currentItems || []).flatMap((item: any) =>
+    Array.isArray(item.serializedInventoryUnits)
+      ? item.serializedInventoryUnits.map((unit: any) => unit.id)
+      : [],
+  );
+  const requestedSet = new Set(requestedIds);
+  const removedIds = currentIds.filter((id: string) => !requestedSet.has(id));
+  if (removedIds.length > 0) {
+    await prisma.serializedInventoryUnit.updateMany({
+      where: {
+        id: { in: removedIds },
+        salesOrderId,
+      },
+      data: {
+        status: 'AVAILABLE',
+        salesOrderId: null,
+        salesOrderItemId: null,
+        orderCostSnapshotCents: null,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  for (const item of orderItems) {
+    for (const unitId of item.serializedUnitIds || []) {
+      const unit = await prisma.serializedInventoryUnit.findUnique({
+        where: { id: unitId },
+      });
+      if (
+        !unit ||
+        (unit.status !== 'AVAILABLE' && unit.salesOrderId !== salesOrderId) ||
+        unit.purchaseCostCents === null ||
+        unit.purchaseCostCents === undefined
+      ) {
+        throw inventoryUnitUnavailableError();
+      }
+      const retained = unit.salesOrderId === salesOrderId;
+      const updateResult = await prisma.serializedInventoryUnit.updateMany({
+        where: {
+          id: unitId,
+          OR: [
+            { status: 'AVAILABLE' },
+            { salesOrderId },
+          ],
+        },
+        data: {
+          status: 'ALLOCATED',
+          salesOrderId,
+          salesOrderItemId: item.id,
+          orderCostSnapshotCents:
+            retained && unit.orderCostSnapshotCents !== null
+              ? unit.orderCostSnapshotCents
+              : unit.purchaseCostCents,
+          updatedAt: new Date(),
+        },
+      });
+      if (Number(updateResult?.count || 0) !== 1) {
+        throw inventoryUnitUnavailableError();
+      }
+    }
+  }
+}
+
+function isSerializedInventoryUnitComplete(unit: any) {
+  return Boolean(
+    normalizeOptionalString(unit?.moutaiName) &&
+      unit?.factoryDate &&
+      normalizeOptionalString(unit?.productionBatch) &&
+      normalizeOptionalString(unit?.batchSerialNo) &&
+      normalizeOptionalString(unit?.logisticsCode),
+  );
+}
+
+function inventoryUnitUnavailableError() {
+  return createHttpError(
+    409,
+    'INVENTORY_UNIT_UNAVAILABLE',
+    '所选物流码已被其他订单占用、尚未补齐成本或资料不完整，请刷新后重试。',
+  );
 }
 
 async function findActiveProductOrThrow(
@@ -5455,6 +5853,9 @@ function salesOrderItemToSnapshotInput(item: any) {
     deliveryType: item.deliveryType,
     notes: item.notes || null,
     sortOrder: Number(item.sortOrder || 0),
+    serializedUnitIds: Array.isArray(item.serializedInventoryUnits)
+      ? item.serializedInventoryUnits.map((unit: any) => unit.id)
+      : [],
     createdAt: item.createdAt,
   };
 }
@@ -6104,7 +6505,15 @@ function toTravelGroupTastingItemDto(item: any) {
 
 function getSalesOrderInclude(options: any = {}): any {
   return {
-    items: true,
+    items: {
+      include: {
+        serializedInventoryUnits: {
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+      },
+    },
     customer: true,
     travelGroup: getSalesOrderTravelGroupInclude(),
     commissionRecords: getSalesOrderTasterCommissionInclude(),
@@ -6216,12 +6625,26 @@ function toSalesOrderDto(order: any) {
     cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
     deliverySummary: toSalesOrderDeliverySummary(order.items),
     logisticsMethod: order.logisticsMethod || null,
+    logisticsProviderCode: normalizeLogisticsProviderCode(
+      order.logisticsProviderCode,
+      order.logisticsMethod,
+    ),
     packingStatus: order.packingStatus
       ? String(order.packingStatus).toLowerCase()
       : null,
     packageCount: Number(order.packageCount || 0),
     warehouseRemark: order.warehouseRemark || null,
     logisticsNo: order.logisticsNo || null,
+    trackingState: order.trackingState || null,
+    trackingStateLabel: order.trackingStateLabel || null,
+    trackingLatestLocation: order.trackingLatestLocation || null,
+    trackingLatestDescription: order.trackingLatestDescription || null,
+    trackingEventAt: order.trackingEventAt
+      ? toIsoString(order.trackingEventAt)
+      : null,
+    trackingCheckedAt: order.trackingCheckedAt
+      ? toIsoString(order.trackingCheckedAt)
+      : null,
     logisticsFeeCents: Number(order.logisticsFeeCents || 0),
     invoiceRequired: Boolean(order.invoiceRequired),
     invoiceIssued: Boolean(order.invoiceIssued),
@@ -6354,6 +6777,23 @@ function toSalesOrderItemDto(item: any) {
       DELIVERY_TYPE_FROM_PRISMA[item.deliveryType] || item.deliveryType,
     notes: item.notes || null,
     sortOrder: Number(item.sortOrder || 0),
+    serializedUnitIds: Array.isArray(item.serializedInventoryUnits)
+      ? item.serializedInventoryUnits.map((unit: any) => unit.id)
+      : [],
+    serializedUnits: Array.isArray(item.serializedInventoryUnits)
+      ? item.serializedInventoryUnits.map(toSalesOrderSerializedUnitDto)
+      : [],
+  };
+}
+
+function toSalesOrderSerializedUnitDto(unit: any) {
+  return {
+    id: unit.id,
+    moutaiName: unit.moutaiName || null,
+    logisticsCode: unit.logisticsCode || null,
+    factoryDate: unit.factoryDate ? formatDate(unit.factoryDate) : null,
+    productionBatch: unit.productionBatch || null,
+    batchSerialNo: unit.batchSerialNo || null,
   };
 }
 
@@ -7278,3 +7718,11 @@ function toIsoString(value: unknown) {
   }
   return value ? String(value) : null;
 }
+
+export const serializedInventoryOrderTestHooks = {
+  buildSalesOrderItems,
+  resolveSalesOrderItemSnapshots,
+  synchronizeSerializedInventoryUnits,
+  toSalesOrderItemCreateData,
+  toSalesOrderItemDto,
+};

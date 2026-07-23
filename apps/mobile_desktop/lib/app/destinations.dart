@@ -96,6 +96,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.inventory_2_rounded,
       phase: 10),
   AppDestination(
+      id: 'moutai_inventory',
+      label: '茅台',
+      icon: Icons.qr_code_scanner_rounded,
+      phase: 10),
+  AppDestination(
       id: 'reconciliation_table',
       label: '对账表',
       icon: Icons.table_chart_rounded,
@@ -154,6 +159,12 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       role != UserRole.admin &&
       role != UserRole.finance) {
     ids.remove('product_management');
+  }
+  if (role != UserRole.superAdmin &&
+      role != UserRole.admin &&
+      role != UserRole.finance &&
+      role != UserRole.warehouse) {
+    ids.remove('moutai_inventory');
   }
   switch (role) {
     case UserRole.sales:
@@ -289,6 +300,8 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'commission_rules';
     case 'warehouse_workspace':
       return 'warehouse_packing';
+    case 'serialized_inventory':
+      return 'moutai_inventory';
     case 'own_taster_receptions':
       return 'taster_summary';
     case 'own_commissions':

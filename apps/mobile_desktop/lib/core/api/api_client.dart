@@ -235,6 +235,68 @@ class ApiClient {
     }
   }
 
+  Future<ApiDownloadedFile> postBytes(
+    String path, {
+    required Map<String, dynamic> body,
+    required String defaultFileName,
+    String? token,
+  }) async {
+    try {
+      final request =
+          await _httpClient.openUrl('POST', Uri.parse('$_baseUrl$path'));
+      request.headers.set(HttpHeaders.acceptHeader, '*/*');
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'application/json; charset=utf-8',
+      );
+      if (token != null && token.isNotEmpty) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+      request.add(utf8.encode(jsonEncode(body)));
+
+      final response = await request.close();
+      final bytesBuilder = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        bytesBuilder.add(chunk);
+      }
+      final bytes = bytesBuilder.takeBytes();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final error = apiExceptionFromResponseBytes(response.statusCode, bytes);
+        await _notifySessionRevoked(error);
+        throw error;
+      }
+
+      return ApiDownloadedFile(
+        bytes: bytes,
+        contentType: response.headers.value(HttpHeaders.contentTypeHeader),
+        fileName: parseContentDispositionFileName(
+              response.headers.value(_contentDispositionHeader),
+            ) ??
+            defaultFileName,
+      );
+    } on ApiException {
+      rethrow;
+    } on SocketException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'NETWORK_ERROR',
+        message: '无法连接服务器，请检查服务器地址和网络。',
+      );
+    } on FormatException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_RESPONSE',
+        message: '服务器返回格式异常。',
+      );
+    } on ArgumentError {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_SERVER_URL',
+        message: '服务器地址格式不正确。',
+      );
+    }
+  }
+
   void close({bool force = false}) {
     _httpClient.close(force: force);
   }
@@ -285,16 +347,22 @@ class ApiClient {
   Future<Map<String, dynamic>> _decodeJsonResponse(
     HttpClientResponse response,
   ) async {
-    final text = await utf8.decoder.bind(response).join();
-    final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
-    final payload =
-        decoded is Map ? _stringKeyMap(decoded) : <String, dynamic>{};
+    final bytesBuilder = BytesBuilder(copy: false);
+    await for (final chunk in response) {
+      bytesBuilder.add(chunk);
+    }
+    final bytes = bytesBuilder.takeBytes();
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final error = ApiException.fromPayload(response.statusCode, payload);
+      final error = apiExceptionFromResponseBytes(response.statusCode, bytes);
       await _notifySessionRevoked(error);
       throw error;
     }
+
+    final text = utf8.decode(bytes);
+    final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
+    final payload =
+        decoded is Map ? _stringKeyMap(decoded) : <String, dynamic>{};
 
     return payload;
   }

@@ -190,12 +190,14 @@ export class TravelGroupFinanceSummaryNestService {
       payload?.totalAgencyDeductionCents,
       'totalAgencyDeductionCents',
     );
-    const totalSalesAmountCents = toInteger(current.totalSalesAmountCents);
-    if (totalAgencyDeductionCents > totalSalesAmountCents) {
+    const effectiveSalesAmountCents = toInteger(
+      current.effectiveSalesAmountCents,
+    );
+    if (totalAgencyDeductionCents > effectiveSalesAmountCents) {
       throw createHttpError(
         400,
         'VALIDATION_FAILED',
-        'totalAgencyDeductionCents cannot exceed totalSalesAmountCents.',
+        'totalAgencyDeductionCents cannot exceed effectiveSalesAmountCents.',
       );
     }
 
@@ -223,7 +225,7 @@ export class TravelGroupFinanceSummaryNestService {
     const nextAmounts = {
       totalAgencyDeductionCents,
       totalAgencyNetAmountCents:
-        totalSalesAmountCents - totalAgencyDeductionCents,
+        effectiveSalesAmountCents - totalAgencyDeductionCents,
       totalDailyRebateCents: rebateCalculation.totalDailyRebateCents,
       totalMonthlyRebateCents: rebateCalculation.totalMonthlyRebateCents,
       ...paymentAmounts,
@@ -467,6 +469,24 @@ export class TravelGroupFinanceSummaryNestService {
     };
   }
 
+  async getRecalculatedTravelGroupFinanceSummary(travelGroupId: string) {
+    const groupId = normalizeRequiredString(travelGroupId, 'travelGroupId');
+    const summary = await this.prisma.travelGroupFinanceSummary.findUnique({
+      where: {
+        travelGroupId: groupId,
+      },
+      include: getTravelGroupFinanceSummaryDetailInclude(),
+    });
+    if (!summary) {
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_FINANCE_SUMMARY_NOT_FOUND',
+        'Travel group finance summary does not exist.',
+      );
+    }
+    return toTravelGroupFinanceSummaryDetailDto(summary);
+  }
+
   private loadSalesOrders(prisma: any, travelGroupId: string) {
     return prisma.salesOrder.findMany({
       where: {
@@ -695,10 +715,18 @@ function buildTravelGroupFinanceCalculation(input: {
     : null;
   const totalDailyRebateCents = manualRebateCalculation
     ? manualRebateCalculation.totalDailyRebateCents
-    : sumBy(agencyRecordSummary.dailyRecords, 'grossRateRebateCents');
+    : sumBy(agencyRecordSummary.dailyRecords, 'pointsCents');
   const totalMonthlyRebateCents = manualRebateCalculation
     ? manualRebateCalculation.totalMonthlyRebateCents
-    : sumBy(agencyRecordSummary.monthlyRecords, 'grossRateRebateCents');
+    : sumBy(agencyRecordSummary.monthlyRecords, 'pointsCents');
+  const confirmedRefundAmountCents = sumBy(
+    orderSummaries,
+    'confirmedRefundAmountCents',
+  );
+  const effectiveSalesAmountCents = sumBy(
+    orderSummaries,
+    'effectiveAmountCents',
+  );
   const paymentAmounts = buildRebatePaymentAmounts({
     totalDailyRebateCents,
     totalMonthlyRebateCents,
@@ -709,17 +737,11 @@ function buildTravelGroupFinanceCalculation(input: {
     totalSalesAmountCents,
     totalCashOnDeliveryCents,
     totalPaidDepositCents,
-    confirmedRefundAmountCents: sumBy(
-      orderSummaries,
-      'confirmedRefundAmountCents',
-    ),
-    effectiveSalesAmountCents: sumBy(
-      orderSummaries,
-      'effectiveAmountCents',
-    ),
+    confirmedRefundAmountCents,
+    effectiveSalesAmountCents,
     totalAgencyDeductionCents,
     totalAgencyNetAmountCents:
-      totalSalesAmountCents - totalAgencyDeductionCents,
+      Math.max(0, effectiveSalesAmountCents - totalAgencyDeductionCents),
     totalDailyRebateCents,
     totalMonthlyRebateCents,
     paidRebateCents: paymentAmounts.paidRebateCents,
@@ -856,9 +878,7 @@ function summarizeAgencyRebateRecords(records: any[]) {
     monthlyRecords,
     perOrderRecords,
     totalAgencyDeductionCents: sumBy(perOrderRecords, 'deductionAmountCents'),
-    totalAgencyNetAmountCents:
-      sumBy(perOrderRecords, 'grossAmountCents') -
-      sumBy(perOrderRecords, 'deductionAmountCents'),
+    totalAgencyNetAmountCents: sumBy(perOrderRecords, 'baseAmountCents'),
     ruleSnapshots: buildRuleSnapshotSummary([...dailyRecords, ...monthlyRecords]),
   };
 }
@@ -893,25 +913,29 @@ function calculateAllocatedRebate(records: any[], deductionCents: number) {
   const candidates = (records || []).map((record: any, index: number) => ({
     record,
     index,
-    grossAmountCents: Math.max(0, toInteger(record.grossAmountCents)),
+    effectiveAmountCents: Math.max(
+      0,
+      toInteger(record.grossAmountCents) -
+        toInteger(record.confirmedRefundAmountCents),
+    ),
     allocatedDeductionCents: 0,
     remainder: BigInt(0),
   }));
-  const totalGrossAmountCents = candidates.reduce(
-    (total: number, item: any) => total + item.grossAmountCents,
+  const totalEffectiveAmountCents = candidates.reduce(
+    (total: number, item: any) => total + item.effectiveAmountCents,
     0,
   );
   const allocatableDeductionCents = Math.min(
     Math.max(0, toInteger(deductionCents)),
-    totalGrossAmountCents,
+    totalEffectiveAmountCents,
   );
 
-  if (totalGrossAmountCents > 0 && allocatableDeductionCents > 0) {
-    const denominator = BigInt(totalGrossAmountCents);
+  if (totalEffectiveAmountCents > 0 && allocatableDeductionCents > 0) {
+    const denominator = BigInt(totalEffectiveAmountCents);
     let allocated = 0;
     for (const item of candidates) {
       const numerator =
-        BigInt(allocatableDeductionCents) * BigInt(item.grossAmountCents);
+        BigInt(allocatableDeductionCents) * BigInt(item.effectiveAmountCents);
       item.allocatedDeductionCents = Number(numerator / denominator);
       item.remainder = numerator % denominator;
       allocated += item.allocatedDeductionCents;
@@ -927,7 +951,7 @@ function calculateAllocatedRebate(records: any[], deductionCents: number) {
       if (remainderCents <= 0) {
         break;
       }
-      if (item.allocatedDeductionCents < item.grossAmountCents) {
+      if (item.allocatedDeductionCents < item.effectiveAmountCents) {
         item.allocatedDeductionCents += 1;
         remainderCents -= 1;
       }
@@ -937,12 +961,12 @@ function calculateAllocatedRebate(records: any[], deductionCents: number) {
   const allocations = candidates.map((item: any) => {
     const netBaseAmountCents = Math.max(
       0,
-      item.grossAmountCents - item.allocatedDeductionCents,
+      item.effectiveAmountCents - item.allocatedDeductionCents,
     );
     return {
       recordId: item.record.id || null,
       salesOrderId: item.record.salesOrderId || null,
-      grossAmountCents: item.grossAmountCents,
+      effectiveAmountCents: item.effectiveAmountCents,
       allocatedDeductionCents: item.allocatedDeductionCents,
       netBaseAmountCents,
       rateSnapshot: item.record.rateSnapshot || null,

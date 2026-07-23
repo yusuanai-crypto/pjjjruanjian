@@ -210,6 +210,11 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey('order-edit-invoice-issued-checkbox')),
     );
+    await _selectDropdownValue(
+      tester,
+      key: const ValueKey('order-edit-logistics-provider-field'),
+      label: '其他',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('order-edit-logistics-method-field')),
       '圆通',
@@ -266,6 +271,7 @@ void main() {
     expect(apiClient.lastOrderFinanceBody?['logisticsFeeCents'], 2550);
     expect(apiClient.lastOrderFinanceBody?['invoiceIssued'], isTrue);
     expect(apiClient.lastOrderPackingBody?['logisticsMethod'], '圆通');
+    expect(apiClient.lastOrderPackingBody?['logisticsProviderCode'], 'other');
     expect(apiClient.lastOrderPackingBody?['packageCount'], 4);
   });
 
@@ -508,6 +514,13 @@ void main() {
     expect(
         apiClient.salesSheetPaths, ['/api/sales-orders/order-1/sales-sheet']);
     expect(find.text('SO20260630001 二维码销售单'), findsOneWidget);
+    expect(find.text('茅台集团茅乡酱酒体验馆'), findsOneWidget);
+    expect(find.text('13800001111'), findsWidgets);
+    expect(find.text('贵州省贵阳市观山湖区测试路 1 号'), findsOneWidget);
+    expect(find.text('顺丰速运'), findsOneWidget);
+    expect(find.text('SF123456789'), findsWidgets);
+    expect(find.text('运输中'), findsOneWidget);
+    expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('尚未生成二维码'), findsWidgets);
     expect(
         find.byKey(const ValueKey('order-qr-generate-button')), findsOneWidget);
@@ -867,6 +880,7 @@ Map<String, dynamic> _orderJson({
     'deliverySummary': 'shipping',
     'packingStatus': 'pending',
     'logisticsMethod': '顺丰',
+    'logisticsProviderCode': 'shunfeng',
     'packageCount': 2,
     'warehouseRemark': '注意防震',
     'logisticsNo': 'SF123456789',
@@ -941,6 +955,8 @@ Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
   return {
     'visibility': 'internal',
     'companyName': '贵州酱酒馆',
+    'venueName': '茅台集团茅乡酱酒体验馆',
+    'afterSalesPhone': '177-8530-5984',
     'order': {
       'id': 'order-1',
       'orderNo': 'SO20260630001',
@@ -995,10 +1011,18 @@ Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
     'delivery': {'summary': 'shipping', 'summaryLabel': '邮寄'},
     'logistics': {
       'method': '顺丰',
+      'providerCode': 'shunfeng',
+      'providerName': '顺丰速运',
       'logisticsNo': 'SF123456789',
       'packingStatus': 'pending',
       'packingStatusLabel': '待打包',
       'packageCount': 2,
+      'trackingState': 'in_transit',
+      'trackingStateLabel': '运输中',
+      'trackingLatestLocation': '贵州省遵义市',
+      'trackingLatestDescription': '快件已发往贵阳市',
+      'trackingEventAt': '2026-07-23T01:00:00.000Z',
+      'trackingCheckedAt': '2026-07-23T01:05:00.000Z',
     },
     'invoice': {
       'required': true,

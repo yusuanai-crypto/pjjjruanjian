@@ -44,6 +44,8 @@ void main() {
     expect(client.lastBody?.containsKey('agencyName'), isFalse);
     expect(client.lastBody?.containsKey('productName'), isFalse);
     expect(client.lastBody?.containsKey('unit'), isFalse);
+    expect(find.textContaining('订单 2 笔'), findsOneWidget);
+    expect(find.textContaining('已确认'), findsOneWidget);
   });
 
   testWidgets('agency deduction effective rate mode does not require product',
@@ -217,6 +219,7 @@ class _FakeAgencyRuleApiClient extends ApiClient {
                 },
             ],
           },
+          'recalculation': _recalculationJson(),
         },
       };
     }
@@ -241,7 +244,31 @@ class _FakeAgencyRuleApiClient extends ApiClient {
           'isActive': body?['isActive'] ?? true,
           'notes': body?['notes'],
         },
+        'recalculation': _recalculationJson(),
       },
     };
   }
+}
+
+Map<String, dynamic> _recalculationJson() {
+  return {
+    'source': 'agency_deduction_rules.create',
+    'orderCount': 2,
+    'travelGroupCount': 1,
+    'successCount': 1,
+    'failureCount': 0,
+    'skippedCount': 1,
+    'skippedConfirmedCount': 1,
+    'skippedManualOverrideCount': 0,
+    'generatedRecords': const [],
+    'updatedRecords': const [],
+    'unchangedRecords': const [],
+    'travelGroupFinanceSummaries': const [],
+    'warnings': const [
+      {
+        'code': 'agency_deduction_confirmed',
+        'message': '该旅行团扣酒成本已确认，规则自动重算已跳过。',
+      },
+    ],
+  };
 }

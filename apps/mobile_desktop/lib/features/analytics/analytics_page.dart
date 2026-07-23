@@ -27,7 +27,7 @@ const _presetOptions = <_PresetOption>[
 const _rankingLimit = 50;
 
 const _rankingSortOptions = <_RankingSortOption>[
-  _RankingSortOption(label: '销售额', sortBy: 'netSalesAmountCents'),
+  _RankingSortOption(label: '净销售额', sortBy: 'netSalesAmountCents'),
   _RankingSortOption(label: '接待团数', sortBy: 'totalGroupCount'),
   _RankingSortOption(label: '接待人数', sortBy: 'totalGuestCount'),
   _RankingSortOption(label: '团均', sortBy: 'averageSalesPerGroupCents'),
@@ -200,7 +200,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
               title: '暂无统计数据',
               message: '当前日期范围暂无可展示的统计数据。',
             ),
-          MetricGrid(metrics: _metricsFor(overview, _openMetricSource)),
+          MetricGrid(
+            key: const ValueKey('analytics-overview-metrics-section'),
+            metrics: _metricsFor(overview, _openMetricSource),
+          ),
           _buildTrendsSection(),
           if (_warningItems(overview).isNotEmpty)
             _WarningsSection(items: _warningItems(overview)),
@@ -1637,7 +1640,11 @@ class _TasterRankingTable extends StatelessWidget {
         columns: const [
           DataColumn(label: Text('排名')),
           DataColumn(label: Text('品鉴师')),
+          DataColumn(label: Text('出单销售额')),
+          DataColumn(label: Text('退单销售额')),
           DataColumn(label: Text('净销售额')),
+          DataColumn(label: Text('团均销售额')),
+          DataColumn(label: Text('人均销售额')),
           DataColumn(label: Text('接待团数')),
           DataColumn(label: Text('接待人数')),
           DataColumn(label: Text('打蛋率')),
@@ -1658,7 +1665,19 @@ class _TasterRankingTable extends StatelessWidget {
                           : null,
                     ),
                   ),
+                  DataCell(Text(formatMoneyCents(
+                    record.grossSalesAmountCents,
+                  ))),
+                  DataCell(Text(formatMoneyCents(
+                    record.refundAmountCents,
+                  ))),
                   DataCell(Text(formatMoneyCents(record.netSalesAmountCents))),
+                  DataCell(Text(formatMoneyCents(
+                    record.averageSalesPerGroupCents,
+                  ))),
+                  DataCell(Text(formatMoneyCents(
+                    record.averageSalesPerGuestCents,
+                  ))),
                   DataCell(Text(_formatCount(record.totalGroupCount))),
                   DataCell(Text(_formatCount(record.totalGuestCount))),
                   DataCell(Text(_formatPercent(record.noOrderRate))),
@@ -1803,8 +1822,24 @@ class _TasterRankingDetailContent extends StatelessWidget {
             runSpacing: 8,
             children: [
               _DetailMetricChip(
+                label: '出单销售额',
+                value: formatMoneyCents(summary.grossSalesAmountCents),
+              ),
+              _DetailMetricChip(
+                label: '退单销售额',
+                value: formatMoneyCents(summary.refundAmountCents),
+              ),
+              _DetailMetricChip(
                 label: '净销售额',
                 value: formatMoneyCents(summary.netSalesAmountCents),
+              ),
+              _DetailMetricChip(
+                label: '团均销售额',
+                value: formatMoneyCents(summary.averageSalesPerGroupCents),
+              ),
+              _DetailMetricChip(
+                label: '人均销售额',
+                value: formatMoneyCents(summary.averageSalesPerGuestCents),
               ),
               _DetailMetricChip(
                 label: '接待团数',

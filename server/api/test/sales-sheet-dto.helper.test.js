@@ -17,6 +17,8 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
 
   assert.equal(salesSheet.visibility, 'internal');
   assert.equal(salesSheet.companyName, '贵州酱酒馆');
+  assert.equal(salesSheet.venueName, '茅台集团茅乡酱酒体验馆');
+  assert.equal(salesSheet.afterSalesPhone, '177-8530-5984');
   assert.equal(salesSheet.order.id, 'order-1');
   assert.equal(salesSheet.order.orderNo, 'SO20260701001');
   assert.equal(salesSheet.order.orderType, 'travel_group');
@@ -51,11 +53,16 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
 
   assert.equal(salesSheet.public.visibility, 'public');
   assert.equal(salesSheet.public.order.orderNo, salesSheet.order.orderNo);
-  assert.equal(salesSheet.public.customer.phoneMasked, '138****0000');
-  assert.equal(
-    salesSheet.public.customer.addressMasked,
-    '贵** 贵** 观*** 测***',
-  );
+  assert.deepEqual(salesSheet.public.customer, {
+    name: '测试客户',
+    phone: '13812340000',
+    fullAddress: '贵州省贵阳市观山湖区测试路 1 号',
+  });
+  assert.equal(salesSheet.public.logistics.providerCode, 'shunfeng');
+  assert.equal(salesSheet.public.logistics.providerName, '顺丰速运');
+  assert.equal(salesSheet.public.logistics.logisticsNo, 'SF123456');
+  assert.equal(salesSheet.public.logistics.trackingState, 'in_transit');
+  assert.equal(salesSheet.public.logistics.trackingStateLabel, '运输中');
   assert.deepEqual(salesSheet.public.items[0], {
     productName: '酱香酒 B',
     quantity: 1,
@@ -85,21 +92,28 @@ test('unit: sales sheet DTO supports orders without a travel group', () => {
   assert.equal(salesSheet.public.qrCode, null);
 });
 
-test('unit: sales sheet public view masks phone and does not leak internal fields', () => {
+test('unit: sales sheet public view exposes only approved customer and logistics fields', () => {
   const salesSheet = buildSalesSheetDto(buildOrderFixture());
   const publicSalesSheet = buildPublicSalesSheetDto(salesSheet);
   const serialized = JSON.stringify(publicSalesSheet);
 
-  assert.equal(publicSalesSheet.customer.phoneMasked, '138****0000');
-  assert.equal(serialized.includes('13812340000'), false);
-  assert.equal(serialized.includes('贵州省贵阳市观山湖区测试路 1 号'), false);
+  assert.equal(publicSalesSheet.customer.phone, '13812340000');
+  assert.equal(
+    publicSalesSheet.customer.fullAddress,
+    '贵州省贵阳市观山湖区测试路 1 号',
+  );
+  assert.deepEqual(Object.keys(publicSalesSheet.customer).sort(), [
+    'fullAddress',
+    'name',
+    'phone',
+  ]);
+  assert.equal('phoneMasked' in publicSalesSheet.customer, false);
+  assert.equal('addressMasked' in publicSalesSheet.customer, false);
 
   for (const forbidden of [
     'amounts',
     'totalAmountCents',
     'cashOnDeliveryAmountCents',
-    'logistics',
-    'SF123456',
     'travelGroup',
     '测试旅行社',
     'invoice',
@@ -119,6 +133,9 @@ test('unit: sales sheet public view masks phone and does not leak internal field
     'internal-user-1',
     '财务内部备注',
     '库管内部备注',
+    'serialized-unit-secret',
+    '000000999',
+    'purchaseCostCents',
   ]) {
     assert.equal(
       serialized.includes(forbidden),
@@ -165,10 +182,17 @@ function buildOrderFixture(overrides = {}) {
     totalAmountCents: 59800,
     cashOnDeliveryAmountCents: 10000,
     logisticsMethod: '顺丰',
+    logisticsProviderCode: 'shunfeng',
     packingStatus: 'PENDING',
     packageCount: 2,
     warehouseRemark: '库管内部备注',
     logisticsNo: 'SF123456',
+    trackingState: 'in_transit',
+    trackingStateLabel: '运输中',
+    trackingLatestLocation: '贵州省遵义市',
+    trackingLatestDescription: '快件已发往贵阳市',
+    trackingEventAt: new Date('2026-07-01T11:00:00.000Z'),
+    trackingCheckedAt: new Date('2026-07-01T11:05:00.000Z'),
     logisticsFeeCents: 1200,
     invoiceRequired: true,
     invoiceIssued: false,
@@ -218,6 +242,14 @@ function buildOrderFixture(overrides = {}) {
         deliveryType: 'SHIPPING',
         notes: '内部明细备注 A',
         sortOrder: 2,
+        serializedInventoryUnits: [
+          {
+            id: 'serialized-unit-secret',
+            logisticsCode: '000000999',
+            purchaseCostCents: 999999,
+            status: 'ALLOCATED',
+          },
+        ],
       },
       {
         id: 'item-2',

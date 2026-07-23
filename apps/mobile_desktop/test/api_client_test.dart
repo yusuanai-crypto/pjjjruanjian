@@ -56,6 +56,28 @@ void main() {
     expect(fallback.message, contains('502'));
   });
 
+  test('getJson preserves an HTML 502 response as an HTTP error', () async {
+    final server = await _startServer((request) async {
+      request.response.statusCode = 502;
+      request.response.headers.contentType = ContentType.html;
+      request.response.write('<html>Bad gateway</html>');
+      await request.response.close();
+    });
+    final client = ApiClient(baseUrl: server.baseUrl);
+    addTearDown(() => client.close(force: true));
+
+    await expectLater(
+      client.getJson('/api/auth/login'),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.statusCode, 'statusCode', 502)
+            .having((error) => error.code, 'code', 'HTTP_ERROR')
+            .having((error) => error.message, 'message', contains('502')),
+      ),
+    );
+    await server.handled;
+  });
+
   test('getBytes downloads bytes, metadata, and filename', () async {
     final server = await _startServer((request) async {
       expect(request.method, 'GET');

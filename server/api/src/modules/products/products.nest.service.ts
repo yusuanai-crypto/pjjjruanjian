@@ -12,6 +12,7 @@ const PRODUCT_OPTION_ROLES = [
   'front_desk',
   'sales',
   'finance',
+  'warehouse',
   'after_sales',
 ];
 const MAX_EFFECTIVE_DATE = new Date('9999-12-31T00:00:00.000Z');
@@ -62,12 +63,16 @@ export class ProductsNestService {
         id: true,
         name: true,
         unit: true,
+        inventoryTrackingMode: true,
       },
     });
     return products.map((product) => ({
       id: product.id,
       name: product.name,
       unit: product.unit,
+      inventoryTrackingMode: toInventoryTrackingMode(
+        product.inventoryTrackingMode,
+      ),
     }));
   }
 
@@ -79,16 +84,25 @@ export class ProductsNestService {
   async createProduct(actor: any, payload: any, metadata: any = {}) {
     requireAnyRole(actor, PRODUCT_MANAGEMENT_ROLES);
     assertObjectPayload(payload);
-    assertAllowedFields(payload, ['name', 'unit', 'isActive', 'notes']);
+    assertAllowedFields(payload, [
+      'name',
+      'unit',
+      'inventoryTrackingMode',
+      'isActive',
+      'notes',
+    ]);
     const now = new Date();
     const name = normalizeLimitedRequiredString(payload.name, 'name', 160);
     const normalizedName = normalizeProductName(name);
     await this.assertUniqueProductName(normalizedName);
-    const data = {
+    const data: any = {
       id: crypto.randomUUID(),
       name,
       normalizedName,
       unit: normalizeLimitedRequiredString(payload.unit, 'unit', 20),
+      inventoryTrackingMode: normalizeInventoryTrackingMode(
+        payload.inventoryTrackingMode,
+      ),
       isActive:
         payload.isActive === undefined
           ? true
@@ -114,7 +128,12 @@ export class ProductsNestService {
   async updateProduct(actor: any, id: string, payload: any, metadata: any = {}) {
     requireAnyRole(actor, PRODUCT_MANAGEMENT_ROLES);
     assertObjectPayload(payload);
-    assertAllowedFields(payload, ['name', 'unit', 'notes']);
+    assertAllowedFields(payload, [
+      'name',
+      'unit',
+      'inventoryTrackingMode',
+      'notes',
+    ]);
     const current = await this.findProductOrThrow(id);
     const data: any = {
       updatedById: actor.id,
@@ -128,6 +147,11 @@ export class ProductsNestService {
     }
     if (hasOwn(payload, 'unit')) {
       data.unit = normalizeLimitedRequiredString(payload.unit, 'unit', 20);
+    }
+    if (hasOwn(payload, 'inventoryTrackingMode')) {
+      data.inventoryTrackingMode = normalizeInventoryTrackingMode(
+        payload.inventoryTrackingMode,
+      );
     }
     if (hasOwn(payload, 'notes')) {
       data.notes = normalizeOptionalString(payload.notes);
@@ -422,6 +446,23 @@ function normalizeProductName(value: unknown) {
     .toLowerCase();
 }
 
+function normalizeInventoryTrackingMode(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return 'NONE';
+  }
+  const normalized = String(value).trim().toUpperCase();
+  if (normalized !== 'NONE' && normalized !== 'SERIALIZED') {
+    throw validationError(
+      'inventoryTrackingMode must be NONE or SERIALIZED.',
+    );
+  }
+  return normalized;
+}
+
+function toInventoryTrackingMode(value: unknown) {
+  return String(value || 'NONE').toLowerCase();
+}
+
 function normalizeCents(value: unknown, fieldName: string) {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw validationError(`${fieldName} must be a non-negative integer in cents.`);
@@ -535,6 +576,9 @@ function toProductDto(product: any) {
     id: product.id,
     name: product.name,
     unit: product.unit,
+    inventoryTrackingMode: toInventoryTrackingMode(
+      product.inventoryTrackingMode,
+    ),
     isActive: Boolean(product.isActive),
     notes: product.notes || null,
     createdById: product.createdById || null,

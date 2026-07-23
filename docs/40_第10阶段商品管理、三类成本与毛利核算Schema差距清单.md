@@ -87,3 +87,37 @@
 ## 6. 结论
 
 Schema 和迁移文件的第 10 阶段代码差距已关闭；当前剩余阻塞是“真实隔离 MySQL 测试库的迁移/seed 演练”和“云端 smoke”，不是 Schema 定义缺失。
+
+## 7. 2026-07-23 茅台逐瓶库存 Schema 扩展
+
+正式迁移：`server/api/prisma/migrations/20260723000200_moutai_serialized_inventory/migration.sql`。
+
+### 7.1 新增枚举和模型
+
+| 对象 | 新增内容 | 兼容原则 |
+| --- | --- | --- |
+| `Product` | `inventoryTrackingMode`：`NONE` / `SERIALIZED` | 旧商品默认 `NONE`；统一“茅台”商品由迁移配置为 `SERIALIZED`，运行时代码不比较商品名称 |
+| `SerializedInventoryStatus` | `PENDING_COST`、`AVAILABLE`、`ALLOCATED`、`VOID` | 只有 `AVAILABLE` 可被新订单占用 |
+| `SerializedInventoryUnit` | 每瓶主数据、订单关联、成本快照、状态和完整审计字段 | 业务资料列在迁移层可空，不伪造历史日期、批次、序号或物流码 |
+
+### 7.2 字段与索引
+
+- `moutaiName` 最大 160 字符，配套 `normalizedMoutaiName` 搜索字段。
+- `factoryDate` 使用数据库 `DATE`。
+- `productionBatch`、`batchSerialNo` 最大 80 字符；`logisticsCode` 保留原值，配套全局唯一 `normalizedLogisticsCode`。
+- `purchaseCostCents` 是当前逐瓶进货价；`orderCostSnapshotCents` 是分配到订单时的不可追溯成本快照。
+- 索引覆盖商品名称、出厂日期、生产批次、批次序号、物流码、状态、商品 + 状态及订单关联。
+- 关联到订单的记录保存 `salesOrderId`、`salesOrderItemId`；审计字段包括创建、更新和资料纠错操作者、原因与时间。
+
+### 7.3 数据约束分层
+
+- 数据库负责枚举、外键、唯一物流码和索引；API 负责长度、必填、日期格式、非负成本、状态迁移和角色权限。
+- 历史空字段被视为“资料不完整”，禁止订单选择和 Word 导出。
+- warehouse 新建固定为 `PENDING_COST` 且不能提交或读取成本；finance/admin 补齐成本后才可成为 `AVAILABLE`。
+- 分配时在订单事务中以当前状态作为条件更新，避免两个订单同时占用同一瓶。
+
+### 7.4 仍需环境验收
+
+- 本地未对真实 MySQL 执行 `migrate deploy`，需在隔离测试库验证迁移、索引、唯一约束和并发占用。
+- 部署包必须包含 `dist/assets/templates/moutai-logistics-sheet.docx`，并验证其 SHA-256。
+- 旧的“完整库存、批次成本属于范围外”结论被本扩展替代；其他普通商品仍保持 `NONE`，不受逐瓶流程影响。

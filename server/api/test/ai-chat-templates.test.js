@@ -16,6 +16,7 @@ test('contract: AI chat templates enforce login and first-version AI roles', asy
     assertErrorContract(missingToken, 401, 'AUTH_TOKEN_REQUIRED');
 
     for (const username of [
+      'stage9-template-super-admin',
       'admin',
       'stage9-template-boss',
       'stage9-template-finance',
@@ -50,9 +51,13 @@ test('contract: AI chat templates enforce login and first-version AI roles', asy
   });
 });
 
-test('contract: AI chat templates return only admin and boss management templates', async () => {
+test('contract: AI chat templates return complete super-admin, admin and boss management templates', async () => {
   await withPhase1Server(async (baseUrl) => {
-    for (const username of ['admin', 'stage9-template-boss']) {
+    for (const username of [
+      'stage9-template-super-admin',
+      'admin',
+      'stage9-template-boss',
+    ]) {
       const session =
         username === 'admin'
           ? await login(baseUrl)
@@ -76,7 +81,11 @@ test('contract: AI chat templates return only admin and boss management template
         '退单金额',
         '经营建议',
       ]);
-      assertRoleScopes(result.body.data, ['admin', 'boss']);
+      assertRoleScopes(result.body.data, [
+        'super_admin',
+        'admin',
+        'boss',
+      ]);
       assertNoTemplateIds(result.body.data, [
         'finance_refund_amount',
         'after_sales_customer_orders',
@@ -198,6 +207,7 @@ function templateTitles(templates) {
 function buildTemplateUsersPrisma() {
   return {
     users: [
+      { username: 'stage9-template-super-admin', role: 'super_admin' },
       { username: 'stage9-template-boss', role: 'boss' },
       { username: 'stage9-template-finance', role: 'finance' },
       { username: 'stage9-template-after-sales', role: 'after_sales' },

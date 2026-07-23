@@ -1,4 +1,8 @@
-const COMPANY_NAME = '贵州酱酒馆';
+import {
+  logisticsProviderName,
+  normalizeLogisticsProviderCode,
+} from './logistics-provider.helper';
+import { SALES_SHEET_BRAND } from './sales-sheet-brand.config';
 
 const ORDER_TYPE_FROM_PRISMA: any = {
   TRAVEL_GROUP: 'travel_group',
@@ -81,10 +85,23 @@ export function buildSalesSheetDto(
   const totalAmountCents = toCents(order?.totalAmountCents);
   const cashOnDeliveryAmountCents = toCents(order?.cashOnDeliveryAmountCents);
   const logisticsFeeCents = toCents(order?.logisticsFeeCents);
+  const logisticsProviderCode = normalizeLogisticsProviderCode(
+    order?.logisticsProviderCode,
+    order?.logisticsMethod,
+  );
+  const providerName =
+    order?.logisticsProviderName ||
+    logisticsProviderName(logisticsProviderCode, order?.logisticsMethod);
+  const trackingMessage =
+    normalizeText(order?.trackingMessage) ||
+    buildDefaultTrackingMessage(
+      logisticsProviderCode,
+      order?.logisticsNo,
+    );
 
   const salesSheet = {
     visibility: 'internal',
-    companyName: COMPANY_NAME,
+    ...SALES_SHEET_BRAND,
     order: {
       id: order?.id || null,
       orderNo: order?.orderNo || null,
@@ -130,10 +147,22 @@ export function buildSalesSheetDto(
     },
     logistics: {
       method: order?.logisticsMethod || null,
-      logisticsNo: order?.logisticsNo || null,
+      providerCode: logisticsProviderCode,
+      providerName,
+      logisticsNo:
+        logisticsProviderCode === 'self_carry'
+          ? null
+          : order?.logisticsNo || null,
       packingStatus,
       packingStatusLabel: labelFor(PACKING_STATUS_LABELS, packingStatus),
       packageCount: Number(order?.packageCount || 0),
+      trackingState: order?.trackingState || null,
+      trackingStateLabel: order?.trackingStateLabel || null,
+      trackingLatestLocation: order?.trackingLatestLocation || null,
+      trackingLatestDescription: order?.trackingLatestDescription || null,
+      trackingEventAt: toIsoString(order?.trackingEventAt),
+      trackingCheckedAt: toIsoString(order?.trackingCheckedAt),
+      trackingMessage,
     },
     invoice: {
       required: Boolean(order?.invoiceRequired),
@@ -178,19 +207,16 @@ export function buildPublicSalesSheetDto(source: any) {
   return {
     visibility: 'public',
     companyName: salesSheet.companyName,
+    venueName: salesSheet.venueName,
+    afterSalesPhone: salesSheet.afterSalesPhone,
     order: {
       orderNo: salesSheet.order.orderNo,
       orderDate: salesSheet.order.orderDate,
     },
     customer: {
       name: salesSheet.customer.name,
-      phoneMasked: salesSheet.customer.phoneMasked,
-      addressMasked: maskCustomerAddress({
-        province: salesSheet.customer.province,
-        city: salesSheet.customer.city,
-        district: salesSheet.customer.district,
-        address: salesSheet.customer.address,
-      }),
+      phone: salesSheet.customer.phone,
+      fullAddress: salesSheet.customer.fullAddress,
     },
     items: salesSheet.items.map((item: any) => ({
       productName: item.productName,
@@ -200,6 +226,21 @@ export function buildPublicSalesSheetDto(source: any) {
     })),
     status: salesSheet.status,
     delivery: salesSheet.delivery,
+    logistics: {
+      providerCode: salesSheet.logistics.providerCode,
+      providerName: salesSheet.logistics.providerName,
+      method: salesSheet.logistics.method,
+      logisticsNo: salesSheet.logistics.logisticsNo,
+      trackingState: salesSheet.logistics.trackingState,
+      trackingStateLabel: salesSheet.logistics.trackingStateLabel,
+      trackingLatestLocation:
+        salesSheet.logistics.trackingLatestLocation,
+      trackingLatestDescription:
+        salesSheet.logistics.trackingLatestDescription,
+      trackingEventAt: salesSheet.logistics.trackingEventAt,
+      trackingCheckedAt: salesSheet.logistics.trackingCheckedAt,
+      trackingMessage: salesSheet.logistics.trackingMessage,
+    },
     qrCode: salesSheet.qrCode
       ? {
           generatedAt: salesSheet.qrCode.generatedAt,
@@ -207,6 +248,22 @@ export function buildPublicSalesSheetDto(source: any) {
         }
       : null,
   };
+}
+
+function buildDefaultTrackingMessage(
+  providerCode: string | null,
+  logisticsNo: unknown,
+) {
+  if (providerCode === 'self_carry') {
+    return '自带，无物流信息';
+  }
+  if (!providerCode) {
+    return '待寄出，快递方式待选择';
+  }
+  if (!normalizeText(logisticsNo)) {
+    return '待寄出，运单号待录入';
+  }
+  return null;
 }
 
 export function maskCustomerPhone(value: unknown) {

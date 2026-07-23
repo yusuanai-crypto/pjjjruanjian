@@ -11,6 +11,7 @@ import '../features/employee_accounts/employee_accounts_page.dart';
 import '../features/finance/finance_query_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
+import '../features/moutai_inventory/moutai_inventory_page.dart';
 import '../features/product_management/product_management_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
@@ -49,7 +50,8 @@ Widget buildPageForDestination({
         onOpenDestination: onOpenDestination,
       );
     case 'travel_group_form':
-      return TravelGroupFormPage(apiClient: apiClient, token: token, role: role);
+      return TravelGroupFormPage(
+          apiClient: apiClient, token: token, role: role);
     case 'travel_group_query':
       return TravelGroupQueryPage(
         apiClient: apiClient,
@@ -96,6 +98,12 @@ Widget buildPageForDestination({
       );
     case 'travel_agency_management':
       return TravelAgencyManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
+    case 'moutai_inventory':
+      return MoutaiInventoryPage(
         apiClient: apiClient,
         token: token,
         role: role,

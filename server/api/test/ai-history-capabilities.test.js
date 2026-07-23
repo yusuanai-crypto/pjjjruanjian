@@ -178,6 +178,24 @@ test('contract: AI capabilities expose role-scoped abilities without sensitive c
       const missingToken = await requestJson(baseUrl, CAPABILITIES_PATH);
       assertErrorContract(missingToken, 401, 'AUTH_TOKEN_REQUIRED');
 
+      const superAdmin = await capabilityFor(
+        baseUrl,
+        'stage9-cap-super-admin',
+      );
+      assertCapabilitiesContract(superAdmin);
+      assert.equal(superAdmin.role, 'super_admin');
+      assert.equal(superAdmin.enabled, true);
+      assert.equal(superAdmin.roleAllowed, true);
+      assert.equal(superAdmin.canUseAi, true);
+      assert.equal(
+        superAdmin.allowedIntents.includes('management_suggestion'),
+        true,
+      );
+      assert.equal(
+        toolNames(superAdmin).includes('analytics.overview'),
+        true,
+      );
+
       const boss = await capabilityFor(baseUrl, 'stage9-cap-boss');
       assertCapabilitiesContract(boss);
       assert.equal(boss.enabled, true);
@@ -385,6 +403,11 @@ function historyUsers() {
 
 function capabilityUsers() {
   return [
+    user(
+      'usr-stage9-cap-super-admin',
+      'stage9-cap-super-admin',
+      'super_admin',
+    ),
     user('usr-stage9-cap-boss', 'stage9-cap-boss', 'boss'),
     user('usr-stage9-cap-finance', 'stage9-cap-finance', 'finance'),
     user('usr-stage9-cap-after-sales', 'stage9-cap-after-sales', 'after_sales'),

@@ -13,6 +13,7 @@ import { OperationLogsModule } from './modules/operation-logs/operation-logs.mod
 import { PreparationConfirmationModule } from './modules/preparation-confirmation/preparation-confirmation.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { SerializedInventoryModule } from './modules/serialized-inventory/serialized-inventory.module';
 import { TravelAgenciesModule } from './modules/travel-agencies/travel-agencies.module';
 import { UsersModule } from './modules/users/users.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -25,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     PreparationConfirmationModule,
     SettingsModule,
+    SerializedInventoryModule,
     AiModule,
     BusinessDataModule,
     AnalyticsModule,

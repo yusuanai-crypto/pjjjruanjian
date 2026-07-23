@@ -172,10 +172,19 @@ export class CommissionRecordsNestService {
       commissionRules,
       travelAgencies,
     });
+    const requestedTargetTypes = normalizeRecalculationTargetTypes(
+      options.targetTypes,
+    );
+    const skippedTargetTypes = new Set(
+      normalizeRecalculationTargetTypes(options.skipTargetTypes, []),
+    );
+    const activeTargetTypes = requestedTargetTypes.filter(
+      (targetType) => !skippedTargetTypes.has(targetType),
+    );
     const lines = [
       ...calculation.commissionLines,
       ...calculation.agencyRebateLines,
-    ];
+    ].filter((line) => activeTargetTypes.includes(line.targetType));
     const lineTargetTypes = new Set(lines.map((line) => line.targetType));
     const generatedRecords: any[] = [];
     const updatedRecords: any[] = [];
@@ -247,7 +256,7 @@ export class CommissionRecordsNestService {
         salesOrderId: orderId,
         manualInput: false,
         targetType: {
-          in: AUTO_TARGET_TYPES,
+          in: activeTargetTypes,
         },
       },
     });
@@ -298,6 +307,8 @@ export class CommissionRecordsNestService {
       updatedRecords,
       unchangedRecords,
       warnings: calculation.warnings,
+      requestedTargetTypes,
+      skippedTargetTypes: Array.from(skippedTargetTypes),
       calculation: {
         calculationVersion: calculation.calculationVersion,
         amounts: calculation.amounts,
@@ -766,6 +777,40 @@ export class CommissionRecordsNestService {
       prisma,
     );
   }
+}
+
+function normalizeRecalculationTargetTypes(
+  value: unknown,
+  fallback: string[] = AUTO_TARGET_TYPES,
+) {
+  if (value === undefined || value === null) {
+    return [...fallback];
+  }
+  if (!Array.isArray(value)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'targetTypes must be an array.',
+    );
+  }
+  const result = Array.from(
+    new Set(
+      value
+        .map((item) => normalizeOptionalString(item)?.toUpperCase())
+        .filter(
+          (item): item is string =>
+            Boolean(item) && AUTO_TARGET_TYPES.includes(item),
+        ),
+    ),
+  );
+  if (result.length !== value.length) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'targetTypes contains an unsupported value.',
+    );
+  }
+  return result;
 }
 
 function buildCommissionRecordBusinessKey(line: any) {

@@ -619,7 +619,7 @@ export class AiToolsService {
   ): Promise<AiToolResult> {
     const refunds = (
       await this.businessDataService!.listAfterSalesOrders(
-        input.actor,
+        buildAiRefundReadActor(input.actor),
         buildRefundQuery(input),
       )
     )
@@ -2029,6 +2029,14 @@ function assertSafeToolName(toolName: string) {
 
 function normalizeToolName(toolName: string): AiToolName {
   return String(toolName || '') as AiToolName;
+}
+
+function buildAiRefundReadActor(actor: AiToolInput['actor']) {
+  const role = String(actor?.role || '').trim().toLowerCase();
+  return {
+    id: actor?.userId ?? null,
+    role: role === 'boss' ? 'admin' : role,
+  };
 }
 
 function throwPolicyError(decision: AiPolicyDecision): never {

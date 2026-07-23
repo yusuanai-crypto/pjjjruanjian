@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   Req,
   Res,
@@ -11,6 +12,7 @@ import {
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
+import { AgencyRuleRecalculationNestService } from './agency-rule-recalculation.nest.service';
 import { CommissionRecordsNestService } from './commission-records.nest.service';
 
 @Controller('commission-records')
@@ -18,6 +20,7 @@ export class CommissionRecordsNestController {
   constructor(
     private readonly authService: AuthNestService,
     private readonly commissionRecordsService: CommissionRecordsNestService,
+    private readonly agencyRuleRecalculationService: AgencyRuleRecalculationNestService,
   ) {}
 
   @Get()
@@ -65,6 +68,18 @@ export class CommissionRecordsNestController {
     );
     response.setHeader('Content-Length', exportResult.buffer.length);
     response.send(exportResult.buffer);
+  }
+
+  @Post('recalculate')
+  async recalculate(@Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.agencyRuleRecalculationService.recalculateExplicit(
+      actor,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Get(':id')

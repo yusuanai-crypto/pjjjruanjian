@@ -122,9 +122,16 @@ void main() {
       'deliverySummary': 'shipping',
       'packingStatus': 'pending',
       'logisticsMethod': '顺丰',
+      'logisticsProviderCode': 'shunfeng',
       'packageCount': 2,
       'warehouseRemark': '库管备注',
       'logisticsNo': 'SF123456',
+      'trackingState': 'in_transit',
+      'trackingStateLabel': '运输中',
+      'trackingLatestLocation': '贵州省遵义市',
+      'trackingLatestDescription': '快件已发往贵阳市',
+      'trackingEventAt': '2026-07-23T01:00:00.000Z',
+      'trackingCheckedAt': '2026-07-23T01:05:00.000Z',
       'logisticsFeeCents': 1888,
       'invoiceRequired': true,
       'invoiceIssued': true,
@@ -172,9 +179,14 @@ void main() {
     expect(order.deliverySummary, 'shipping');
     expect(order.packingStatus, 'pending');
     expect(order.logisticsMethod, '顺丰');
+    expect(order.logisticsProviderCode, 'shunfeng');
     expect(order.packageCount, 2);
     expect(order.warehouseRemark, '库管备注');
     expect(order.logisticsNo, 'SF123456');
+    expect(order.trackingState, 'in_transit');
+    expect(order.trackingStateLabel, '运输中');
+    expect(order.trackingLatestLocation, '贵州省遵义市');
+    expect(order.trackingLatestDescription, '快件已发往贵阳市');
     expect(order.logisticsFeeCents, 1888);
     expect(order.invoiceRequired, isTrue);
     expect(order.invoiceIssued, isTrue);
@@ -513,7 +525,7 @@ void main() {
       'warnings': ['missing_outreach'],
     });
     expect(recalculation.records.single.id, 'commission-1');
-    expect(recalculation.warnings, ['missing_outreach']);
+    expect(recalculation.warnings.single.code, 'missing_outreach');
 
     final summaryJson = {
       'id': 'summary-1',
@@ -609,6 +621,8 @@ void main() {
     final sheet = SalesSheetRecord.fromJson({
       'visibility': 'internal',
       'companyName': '贵州酱酒馆',
+      'venueName': '茅台集团茅乡酱酒体验馆',
+      'afterSalesPhone': '177-8530-5984',
       'order': {
         'id': 'order-1',
         'orderNo': 'SO20260701001',
@@ -672,10 +686,18 @@ void main() {
       'delivery': {'summary': 'shipping', 'summaryLabel': '邮寄'},
       'logistics': {
         'method': '顺丰',
+        'providerCode': 'shunfeng',
+        'providerName': '顺丰速运',
         'logisticsNo': 'SF123456',
         'packingStatus': 'packed',
         'packingStatusLabel': '已打包',
         'packageCount': 2,
+        'trackingState': 'in_transit',
+        'trackingStateLabel': '运输中',
+        'trackingLatestLocation': '贵州省遵义市',
+        'trackingLatestDescription': '快件已发往贵阳市',
+        'trackingEventAt': '2026-07-23T01:00:00.000Z',
+        'trackingCheckedAt': '2026-07-23T01:05:00.000Z',
       },
       'invoice': {
         'required': true,
@@ -698,14 +720,23 @@ void main() {
       'public': {
         'visibility': 'public',
         'companyName': '贵州酱酒馆',
+        'venueName': '茅台集团茅乡酱酒体验馆',
+        'afterSalesPhone': '177-8530-5984',
         'order': {
           'orderNo': 'SO20260701001',
           'orderDate': '2026-07-01',
         },
         'customer': {
           'name': '测试客户',
-          'phoneMasked': '138****0000',
+          'phone': '13800000000',
           'fullAddress': '贵州省贵阳市南明区测试地址',
+        },
+        'logistics': {
+          'providerCode': 'shunfeng',
+          'providerName': '顺丰速运',
+          'logisticsNo': 'SF123456',
+          'trackingState': 'in_transit',
+          'trackingStateLabel': '运输中',
         },
         'items': [
           {
@@ -725,6 +756,8 @@ void main() {
     });
 
     expect(sheet.visibility, 'internal');
+    expect(sheet.venueName, '茅台集团茅乡酱酒体验馆');
+    expect(sheet.afterSalesPhone, '177-8530-5984');
     expect(sheet.order.id, 'order-1');
     expect(sheet.order.orderNo, 'SO20260701001');
     expect(sheet.customer.phone, '13800000000');
@@ -735,12 +768,22 @@ void main() {
     expect(sheet.amounts.totalAmountCents, 79600);
     expect(sheet.amounts.totalAmountYuan, '796.00');
     expect(sheet.logistics.packageCount, 2);
+    expect(sheet.logistics.providerCode, 'shunfeng');
+    expect(sheet.logistics.providerName, '顺丰速运');
+    expect(sheet.logistics.trackingState, 'in_transit');
+    expect(sheet.logistics.trackingStateLabel, '运输中');
+    expect(sheet.logistics.trackingLatestLocation, '贵州省遵义市');
     expect(sheet.invoice.required, isTrue);
     expect(sheet.qrCode?.token, 'token-1');
     expect(sheet.qrCode?.active, isTrue);
     expect(sheet.internalFields['financeRemark'], '内部财务备注');
     expect(sheet.public?.visibility, 'public');
-    expect(sheet.public?.customer.phone, isNull);
+    expect(sheet.public?.customer.phone, '13800000000');
+    expect(
+      sheet.public?.customer.fullAddress,
+      '贵州省贵阳市南明区测试地址',
+    );
+    expect(sheet.public?.logistics.logisticsNo, 'SF123456');
     expect(sheet.public?.qrCode?.token, isNull);
     expect(sheet.public?.internalFields, isEmpty);
 

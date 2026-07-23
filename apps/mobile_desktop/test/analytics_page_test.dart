@@ -37,22 +37,38 @@ void main() {
           'no_order_rate',
         ]));
 
-    expect(find.text('出单销售额'), findsOneWidget);
-    expect(find.text(formatMoneyCents(200000)), findsOneWidget);
-    expect(find.text('退单销售额'), findsOneWidget);
-    expect(find.text(formatMoneyCents(20000)), findsOneWidget);
-    expect(find.text('总销售额'), findsOneWidget);
-    expect(find.text(formatMoneyCents(180000)), findsOneWidget);
-    expect(find.text('接待团数'), findsWidgets);
-    expect(find.text('4'), findsWidgets);
-    expect(find.text('接待人数'), findsWidgets);
-    expect(find.text('60'), findsOneWidget);
-    expect(find.text('团均销售额'), findsOneWidget);
-    expect(find.text(formatMoneyCents(45000)), findsOneWidget);
-    expect(find.text('人均销售额'), findsOneWidget);
-    expect(find.text(formatMoneyCents(3000)), findsOneWidget);
-    expect(find.text('打蛋率'), findsWidgets);
-    expect(find.text('25.0%'), findsWidgets);
+    final overviewMetrics = _overviewMetricsSection();
+    expect(_within(overviewMetrics, find.text('出单销售额')), findsOneWidget);
+    expect(
+      _within(overviewMetrics, find.text(formatMoneyCents(200000))),
+      findsOneWidget,
+    );
+    expect(_within(overviewMetrics, find.text('退单销售额')), findsOneWidget);
+    expect(
+      _within(overviewMetrics, find.text(formatMoneyCents(20000))),
+      findsOneWidget,
+    );
+    expect(_within(overviewMetrics, find.text('总销售额')), findsOneWidget);
+    expect(
+      _within(overviewMetrics, find.text(formatMoneyCents(180000))),
+      findsOneWidget,
+    );
+    expect(_within(overviewMetrics, find.text('接待团数')), findsOneWidget);
+    expect(_within(overviewMetrics, find.text('4')), findsOneWidget);
+    expect(_within(overviewMetrics, find.text('接待人数')), findsOneWidget);
+    expect(_within(overviewMetrics, find.text('60')), findsOneWidget);
+    expect(_within(overviewMetrics, find.text('团均销售额')), findsOneWidget);
+    expect(
+      _within(overviewMetrics, find.text(formatMoneyCents(45000))),
+      findsOneWidget,
+    );
+    expect(_within(overviewMetrics, find.text('人均销售额')), findsOneWidget);
+    expect(
+      _within(overviewMetrics, find.text(formatMoneyCents(3000))),
+      findsOneWidget,
+    );
+    expect(_within(overviewMetrics, find.text('打蛋率')), findsOneWidget);
+    expect(_within(overviewMetrics, find.text('25.0%')), findsOneWidget);
     expect(find.text('未确认退款'), findsOneWidget);
     expect(find.text('退款状态不一致'), findsOneWidget);
     expect(find.byKey(const ValueKey('analytics-overview-warning-list')),
@@ -66,16 +82,55 @@ void main() {
     await tester.pumpWidget(_page(apiClient));
     await tester.pumpAndSettle();
 
-    expect(find.text('品鉴师排名'), findsOneWidget);
-    expect(find.text('排名'), findsOneWidget);
-    expect(find.text('品鉴师'), findsOneWidget);
-    expect(find.text('净销售额'), findsOneWidget);
-    expect(find.text('#1'), findsOneWidget);
-    expect(find.text('测试品鉴师A'), findsOneWidget);
-    expect(find.text(formatMoneyCents(120000)), findsWidgets);
-    expect(find.text('#2'), findsOneWidget);
-    expect(find.text('未分配品鉴师'), findsOneWidget);
-    expect(find.text('未分配'), findsOneWidget);
+    final section = _tasterRankingsSection();
+    expect(_within(section, find.text('品鉴师排名')), findsOneWidget);
+    final table = tester.widget<DataTable>(
+      find.descendant(of: section, matching: find.byType(DataTable)),
+    );
+    expect(
+      table.columns.map((column) => (column.label as Text).data).toList(),
+      const [
+        '排名',
+        '品鉴师',
+        '出单销售额',
+        '退单销售额',
+        '净销售额',
+        '团均销售额',
+        '人均销售额',
+        '接待团数',
+        '接待人数',
+        '打蛋率',
+      ],
+    );
+    expect(_within(section, find.text('#1')), findsOneWidget);
+    expect(_within(section, find.text('测试品鉴师A')), findsOneWidget);
+    expect(
+      _within(section, find.text(formatMoneyCents(150000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(section, find.text(formatMoneyCents(30000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(section, find.text(formatMoneyCents(120000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(section, find.text(formatMoneyCents(41000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(section, find.text(formatMoneyCents(2700))),
+      findsOneWidget,
+    );
+    expect(
+      _within(section, find.text(formatMoneyCents(0))),
+      findsNWidgets(5),
+    );
+    expect(_within(section, find.text('#2')), findsOneWidget);
+    expect(_within(section, find.text('未分配品鉴师')), findsOneWidget);
+    expect(_within(section, find.text('未分配')), findsOneWidget);
   });
 
   testWidgets('sends ranking sort options to rankings API', (tester) async {
@@ -89,6 +144,9 @@ void main() {
           .queryParameters['sortBy'],
       'netSalesAmountCents',
     );
+    final section = _tasterRankingsSection();
+    expect(_within(section, find.text('净销售额')), findsWidgets);
+    expect(_within(section, find.text('销售额')), findsNothing);
 
     const sortKeys = [
       'totalGroupCount',
@@ -125,6 +183,50 @@ void main() {
     expect(detailUri.queryParameters['sortBy'], 'netSalesAmountCents');
 
     expect(find.text('测试品鉴师A 详情'), findsOneWidget);
+    final detailDialog = find.byType(AlertDialog);
+    expect(
+      _within(detailDialog, find.text('出单销售额')),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text(formatMoneyCents(150000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text('退单销售额')),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text(formatMoneyCents(30000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text('净销售额')),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text(formatMoneyCents(120000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text('团均销售额')),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text(formatMoneyCents(41000))),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text('人均销售额')),
+      findsOneWidget,
+    );
+    expect(
+      _within(detailDialog, find.text(formatMoneyCents(2700))),
+      findsOneWidget,
+    );
+    expect(_within(detailDialog, find.text('接待团数')), findsOneWidget);
+    expect(_within(detailDialog, find.text('接待人数')), findsOneWidget);
+    expect(_within(detailDialog, find.text('打蛋率')), findsOneWidget);
     expect(find.text('旅行团明细摘要'), findsOneWidget);
     expect(find.text('TG-DETAIL-001'), findsOneWidget);
     expect(find.text('订单明细摘要'), findsOneWidget);
@@ -133,6 +235,38 @@ void main() {
     expect(find.text('AS-DETAIL-001'), findsOneWidget);
     expect(find.text('无有效订单'), findsOneWidget);
     expect(find.text('已确认'), findsOneWidget);
+  });
+
+  testWidgets('keeps taster rankings horizontally scrollable on narrow screens',
+      (tester) async {
+    tester.view.physicalSize = const Size(520, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeAnalyticsApiClient();
+    await tester.pumpWidget(_page(apiClient));
+    await tester.pumpAndSettle();
+
+    final section = _tasterRankingsSection();
+    final horizontalScroll = find.descendant(
+      of: section,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is SingleChildScrollView &&
+            widget.scrollDirection == Axis.horizontal,
+      ),
+    );
+    expect(horizontalScroll, findsOneWidget);
+    expect(
+      tester
+          .widget<DataTable>(
+            find.descendant(of: section, matching: find.byType(DataTable)),
+          )
+          .columns,
+      hasLength(10),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('loads trend points from analytics trends API', (tester) async {
@@ -173,7 +307,10 @@ void main() {
     await tester.pumpWidget(_page(apiClient));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('出单销售额'));
+    final overviewMetrics = _overviewMetricsSection();
+    await tester.tap(
+      _within(overviewMetrics, find.text('出单销售额')),
+    );
     await tester.pumpAndSettle();
     var uri = _latestUri(apiClient, '/api/analytics/source/orders');
     expect(uri.queryParameters['source'], 'sales');
@@ -183,7 +320,9 @@ void main() {
     await tester.tap(find.text('关闭').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('退单销售额'));
+    await tester.tap(
+      _within(overviewMetrics, find.text('退单销售额')),
+    );
     await tester.pumpAndSettle();
     uri = _latestUri(apiClient, '/api/analytics/source/after-sales');
     expect(uri.queryParameters['source'], 'refund');
@@ -193,7 +332,9 @@ void main() {
     await tester.tap(find.text('关闭').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('接待团数').first);
+    await tester.tap(
+      _within(overviewMetrics, find.text('接待团数')),
+    );
     await tester.pumpAndSettle();
     uri = _latestUri(apiClient, '/api/analytics/source/travel-groups');
     expect(uri.queryParameters['noEffectiveOrder'], isNull);
@@ -203,7 +344,7 @@ void main() {
     await tester.tap(find.text('关闭').last);
     await tester.pumpAndSettle();
 
-    final noOrderRateCard = find.text('打蛋率').first;
+    final noOrderRateCard = _within(overviewMetrics, find.text('打蛋率'));
     await tester.ensureVisible(noOrderRateCard);
     await tester.tap(noOrderRateCard);
     await tester.pumpAndSettle();
@@ -405,7 +546,8 @@ void main() {
     expect(find.text('测试错误：无法读取统计概览。'), findsOneWidget);
   });
 
-  testWidgets('allows admin boss finance and after sales to use analytics and export',
+  testWidgets(
+      'allows admin boss finance and after sales to use analytics and export',
       (tester) async {
     for (final role in [
       UserRole.admin,
@@ -485,6 +627,18 @@ void main() {
           findsNothing);
     }
   });
+}
+
+Finder _tasterRankingsSection() {
+  return find.byKey(const ValueKey('analytics-taster-rankings-section'));
+}
+
+Finder _overviewMetricsSection() {
+  return find.byKey(const ValueKey('analytics-overview-metrics-section'));
+}
+
+Finder _within(Finder parent, Finder matching) {
+  return find.descendant(of: parent, matching: matching);
 }
 
 Future<void> _tapPreset(WidgetTester tester, String label) async {
@@ -617,6 +771,8 @@ List<Map<String, dynamic>> _rankingsJson() {
       grossSalesAmountCents: 150000,
       refundAmountCents: 30000,
       netSalesAmountCents: 120000,
+      averageSalesPerGroupCents: 41000,
+      averageSalesPerGuestCents: 2700,
       noEffectiveOrderGroupCount: 0,
       conversionGroupCount: 3,
       noOrderRate: 0,
@@ -650,6 +806,8 @@ Map<String, dynamic> _rankingJson({
   required int grossSalesAmountCents,
   required int refundAmountCents,
   required int netSalesAmountCents,
+  int? averageSalesPerGroupCents,
+  int? averageSalesPerGuestCents,
   required int noEffectiveOrderGroupCount,
   required int conversionGroupCount,
   required double noOrderRate,
@@ -665,10 +823,10 @@ Map<String, dynamic> _rankingJson({
     'grossSalesAmountCents': grossSalesAmountCents,
     'refundAmountCents': refundAmountCents,
     'netSalesAmountCents': netSalesAmountCents,
-    'averageSalesPerGroupCents':
-        totalGroupCount == 0 ? 0 : netSalesAmountCents ~/ totalGroupCount,
-    'averageSalesPerGuestCents':
-        totalGuestCount == 0 ? 0 : netSalesAmountCents ~/ totalGuestCount,
+    'averageSalesPerGroupCents': averageSalesPerGroupCents ??
+        (totalGroupCount == 0 ? 0 : netSalesAmountCents ~/ totalGroupCount),
+    'averageSalesPerGuestCents': averageSalesPerGuestCents ??
+        (totalGuestCount == 0 ? 0 : netSalesAmountCents ~/ totalGuestCount),
     'noEffectiveOrderGroupCount': noEffectiveOrderGroupCount,
     'conversionGroupCount': conversionGroupCount,
     'noOrderRate': noOrderRate,
@@ -695,6 +853,8 @@ Map<String, dynamic> _tasterDetailJson() {
       grossSalesAmountCents: 150000,
       refundAmountCents: 30000,
       netSalesAmountCents: 120000,
+      averageSalesPerGroupCents: 41000,
+      averageSalesPerGuestCents: 2700,
       noEffectiveOrderGroupCount: 1,
       conversionGroupCount: 2,
       noOrderRate: 0.3333333333,

@@ -22,17 +22,20 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
       assert.match(result.html, /销售单/);
       assert.match(result.html, /SO-PUBLIC-001/);
       assert.equal(result.html.includes('SF-PUBLIC-001'), false);
-      assert.match(result.html, /138\*\*\*\*0000/);
+      assert.match(result.html, /13812340000/);
+      assert.match(result.html, /GuizhouZunyiRenhuaiTest Road 1/);
       assert.match(result.html, /Product A/);
-      assert.match(result.html, /G\*+ Z\*+ R\*+ T\*\*\*/);
+      assert.match(result.html, /顺丰速运/);
+      assert.match(result.html, /SF123456789/);
+      assert.match(result.html, /运输中/);
+      assert.match(result.html, /贵州省遵义市/);
+      assert.match(result.html, /茅台集团茅乡酱酒体验馆/);
+      assert.match(result.html, /177-8530-5984/);
       for (const forbidden of [
         '999.00',
         '200.00',
         'Test Agency',
         'Seller Alpha',
-        'SF123456789',
-        'SF Express',
-        'Test Road 1',
         'Customer visible note',
       ]) {
         assert.equal(result.html.includes(forbidden), false, forbidden);
@@ -90,7 +93,7 @@ test('GET /api/public/sales-sheets/:token escapes HTML and does not leak interna
       assert.equal(result.html.includes('<strong>'), false);
       assert.match(result.html, /Alice &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
       assert.match(result.html, /Product &lt;script&gt;bad\(\)&lt;\/script&gt;/);
-      assert.equal(result.html.includes('Road &lt;b&gt;1'), false);
+      assert.match(result.html, /Road &lt;b&gt;1&lt;\/b&gt; &amp; Lane/);
       assert.equal(result.html.includes('Please &lt;strong&gt;check'), false);
       assertSecurityHeaders(result.response);
 
@@ -131,6 +134,10 @@ function assertSecurityHeaders(response) {
   assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(
+    response.headers.get('x-robots-tag'),
+    'noindex, nofollow, noarchive',
+  );
   const csp = response.headers.get('content-security-policy') || '';
   assert.match(csp, /default-src 'none'/);
   assert.match(csp, /script-src 'none'/);
@@ -241,11 +248,18 @@ function buildPublicSalesSheetOrder(overrides = {}) {
     salesFormNo: 'SF-PUBLIC',
     totalAmountCents: 99900,
     cashOnDeliveryAmountCents: 20000,
-    logisticsMethod: 'SF Express',
+    logisticsMethod: '顺丰速运',
+    logisticsProviderCode: 'shunfeng',
     packingStatus: 'PACKED',
     packageCount: 1,
     warehouseRemark: 'SECRET_WAREHOUSE_REMARK',
     logisticsNo: 'SF123456789',
+    trackingState: 'in_transit',
+    trackingStateLabel: '运输中',
+    trackingLatestLocation: '贵州省遵义市',
+    trackingLatestDescription: '快件已发往贵阳市',
+    trackingEventAt: '2026-07-01T11:00:00.000Z',
+    trackingCheckedAt: new Date().toISOString(),
     logisticsFeeCents: 1200,
     invoiceRequired: true,
     invoiceIssued: false,

@@ -109,12 +109,17 @@ test('contract: product management requires admin or finance and supports paging
         name: 'Stage 10 Reserve',
         unit: 'case',
         notes: null,
+        inventoryTrackingMode: 'serialized',
       },
     });
     assert.equal(updated.response.status, 200);
     assert.equal(updated.body.data.product.name, 'Stage 10 Reserve');
     assert.equal(updated.body.data.product.unit, 'case');
     assert.equal(updated.body.data.product.notes, null);
+    assert.equal(
+      updated.body.data.product.inventoryTrackingMode,
+      'serialized',
+    );
 
     const disabled = await requestJson(
       baseUrl,
@@ -367,12 +372,18 @@ test('contract: product options are active-only and cannot leak costs or audit f
       sessions.boss.token,
       sessions.front_desk.token,
       sessions.sales.token,
+      sessions.warehouse.token,
       sessions.after_sales.token,
     ]) {
       const options = await requestJson(baseUrl, '/api/products/options', { token });
       assert.equal(options.response.status, 200);
       assert.deepEqual(options.body.data.products, [
-        { id: active.id, name: 'Active Option', unit: 'bottle' },
+        {
+          id: active.id,
+          name: 'Active Option',
+          unit: 'bottle',
+          inventoryTrackingMode: 'none',
+        },
       ]);
       const serialized = JSON.stringify(options.body.data);
       for (const forbidden of [
@@ -390,7 +401,7 @@ test('contract: product options are active-only and cannot leak costs or audit f
       }
     }
 
-    for (const role of ['warehouse', 'taster']) {
+    for (const role of ['taster']) {
       const denied = await requestJson(baseUrl, '/api/products/options', {
         token: sessions[role].token,
       });
@@ -433,6 +444,7 @@ function assertProductContract(product) {
     'createdAt',
     'createdById',
     'id',
+    'inventoryTrackingMode',
     'isActive',
     'name',
     'notes',
@@ -443,6 +455,7 @@ function assertProductContract(product) {
   assert.equal(typeof product.id, 'string');
   assert.equal(typeof product.name, 'string');
   assert.equal(typeof product.unit, 'string');
+  assert.equal(product.inventoryTrackingMode, 'none');
   assert.equal(typeof product.isActive, 'boolean');
   assert.equal('normalizedName' in product, false);
 }

@@ -220,6 +220,8 @@ function getRejectionReason(code: AiPolicyDecisionCode): string {
 
 function getScopeDescription(role: string): string {
   const descriptions: Record<string, string> = {
+    super_admin:
+      '超级管理员可在 AI 中读取第一版允许的全局业务数据，仍受只读、安全策略和全局标记过滤约束。',
     admin:
       '管理员可在 AI 中读取第一版允许的全局业务数据，仍受角色权限和全局标记过滤约束。',
     boss:

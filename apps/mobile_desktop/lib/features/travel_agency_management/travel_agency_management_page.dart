@@ -41,6 +41,7 @@ class _TravelAgencyManagementPageState
   bool _loadingRules = false;
   String? _errorMessage;
   String? _ruleErrorMessage;
+  String? _ruleSuccessMessage;
   List<TravelAgencyRecord> _agencies = const <TravelAgencyRecord>[];
   TravelAgencyRecord? _selectedAgency;
   List<AgencyRebateRuleRecord> _rebateRules = const <AgencyRebateRuleRecord>[];
@@ -210,7 +211,7 @@ class _TravelAgencyManagementPageState
     if (agency == null) {
       return;
     }
-    final saved = await showDialog<bool>(
+    final saved = await showDialog<AgencyRebateRuleRecord>(
       context: context,
       builder: (context) => _RebateRuleDialog(
         businessApi: _businessApi,
@@ -218,8 +219,15 @@ class _TravelAgencyManagementPageState
         rule: rule,
       ),
     );
-    if (saved == true) {
+    if (saved != null) {
       await _loadRulesForAgency(agency);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _ruleSuccessMessage =
+            saved.recalculation?.displayMessage ?? '规则已保存。';
+      });
     }
   }
 
@@ -232,7 +240,7 @@ class _TravelAgencyManagementPageState
     if (agency == null) {
       return;
     }
-    final saved = await showDialog<bool>(
+    final saved = await showDialog<AgencyDeductionRuleRecord>(
       context: context,
       builder: (context) => _DeductionRuleDialog(
         businessApi: _businessApi,
@@ -240,8 +248,15 @@ class _TravelAgencyManagementPageState
         rule: rule,
       ),
     );
-    if (saved == true) {
+    if (saved != null) {
       await _loadRulesForAgency(agency);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _ruleSuccessMessage =
+            saved.recalculation?.displayMessage ?? '规则已保存。';
+      });
     }
   }
 
@@ -269,6 +284,10 @@ class _TravelAgencyManagementPageState
     if (!mounted) {
       return;
     }
+    setState(() {
+      _ruleSuccessMessage = result.recalculation?.displayMessage ??
+          '批量导入完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条。';
+    });
     await showDialog<void>(
       context: context,
       builder: (context) => _TravelAgencyRuleImportResultDialog(
@@ -305,10 +324,25 @@ class _TravelAgencyManagementPageState
     Future<Object> Function() action,
     TravelAgencyRecord agency,
   ) async {
-    setState(() => _ruleErrorMessage = null);
+    setState(() {
+      _ruleErrorMessage = null;
+      _ruleSuccessMessage = null;
+    });
     try {
-      await action();
+      final result = await action();
       await _loadRulesForAgency(agency);
+      if (!mounted) {
+        return;
+      }
+      final recalculation = switch (result) {
+        AgencyDeductionRuleRecord value => value.recalculation,
+        AgencyRebateRuleRecord value => value.recalculation,
+        _ => null,
+      };
+      setState(() {
+        _ruleSuccessMessage =
+            recalculation?.displayMessage ?? '规则状态已更新。';
+      });
     } catch (error) {
       if (!mounted) {
         return;
@@ -455,6 +489,13 @@ class _TravelAgencyManagementPageState
             if (_ruleErrorMessage != null) ...[
               _InlineNotice(
                   message: _ruleErrorMessage!, tone: StatusTone.danger),
+              const SizedBox(height: 12),
+            ],
+            if (_ruleSuccessMessage != null) ...[
+              _InlineNotice(
+                message: _ruleSuccessMessage!,
+                tone: StatusTone.success,
+              ),
               const SizedBox(height: 12),
             ],
             Wrap(
@@ -892,7 +933,10 @@ class _RebateRuleDialogState extends State<_RebateRuleDialog> {
                   TextFormField(
                     key: const ValueKey('travel-agency-rebate-from-field'),
                     controller: _effectiveFromController,
-                    decoration: const InputDecoration(labelText: '生效日期'),
+                    decoration: const InputDecoration(
+                      labelText: '生效日期',
+                      helperText: '规则按销售订单日期生效',
+                    ),
                     validator: _requiredValidator('请填写生效日期'),
                   ),
                   TextFormField(
@@ -961,15 +1005,14 @@ class _RebateRuleDialogState extends State<_RebateRuleDialog> {
         'isActive': _isActive,
         'notes': _nullableText(_notesController.text),
       };
-      if (widget.rule == null) {
-        await widget.businessApi.createAgencyRebateRule(body);
-      } else {
-        await widget.businessApi.updateAgencyRebateRule(widget.rule!.id, body);
-      }
+      final saved = widget.rule == null
+          ? await widget.businessApi.createAgencyRebateRule(body)
+          : await widget.businessApi
+              .updateAgencyRebateRule(widget.rule!.id, body);
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(saved);
     } catch (error) {
       if (!mounted) {
         return;
@@ -1146,7 +1189,10 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
                   TextFormField(
                     key: const ValueKey('travel-agency-deduction-from-field'),
                     controller: _effectiveFromController,
-                    decoration: const InputDecoration(labelText: '生效日期'),
+                    decoration: const InputDecoration(
+                      labelText: '生效日期',
+                      helperText: '规则按销售订单日期生效',
+                    ),
                     validator: _requiredValidator('请填写生效日期'),
                   ),
                   TextFormField(
@@ -1230,16 +1276,14 @@ class _DeductionRuleDialogState extends State<_DeductionRuleDialog> {
       } else {
         body['deductionRate'] = _defaultAgencyDeductionRate;
       }
-      if (widget.rule == null) {
-        await widget.businessApi.createAgencyDeductionRule(body);
-      } else {
-        await widget.businessApi
-            .updateAgencyDeductionRule(widget.rule!.id, body);
-      }
+      final saved = widget.rule == null
+          ? await widget.businessApi.createAgencyDeductionRule(body)
+          : await widget.businessApi
+              .updateAgencyDeductionRule(widget.rule!.id, body);
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(saved);
     } catch (error) {
       if (!mounted) {
         return;
@@ -1464,6 +1508,15 @@ class _TravelAgencyRuleImportResultDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text('总行数：${result.totalCount}'),
+            if (result.recalculation != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                result.recalculation!.displayMessage,
+                key: const ValueKey(
+                  'travel-agency-rule-import-recalculation-result',
+                ),
+              ),
+            ],
             if (failures.isNotEmpty) ...[
               const SizedBox(height: 12),
               for (final failure in failures.take(6))

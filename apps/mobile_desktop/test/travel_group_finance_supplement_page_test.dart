@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,66 @@ import 'package:jiangjiu_mobile_desktop/features/travel_group_finance/travel_gro
 void main() {
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
+  });
+
+  test('Windows saver writes under injected Pictures and avoids overwrites',
+      () async {
+    final profile = await Directory.systemTemp.createTemp(
+      'jiangjiu-finance-image-test-',
+    );
+    addTearDown(() => profile.delete(recursive: true));
+    final saver = FinanceImageSaveService(
+      isWindows: true,
+      windowsUserProfile: profile.path,
+    );
+    final bytes = Uint8List.fromList([1, 2, 3, 4]);
+
+    final first = await saver.save(
+      bytes,
+      album: financeImageAlbumName,
+      name: '2026-07-01-测试:积分表',
+    );
+    final second = await saver.save(
+      bytes,
+      album: financeImageAlbumName,
+      name: '2026-07-01-测试:积分表',
+    );
+
+    expect(first.target, FinanceImageSaveTarget.windowsFolder);
+    expect(first.filePath, isNotNull);
+    expect(first.filePath, contains('Pictures'));
+    expect(first.filePath, contains(financeImageAlbumName));
+    expect(first.filePath, isNot(contains(':积分表')));
+    expect(await File(first.filePath!).readAsBytes(), bytes);
+    expect(second.filePath, isNot(first.filePath));
+    expect(second.filePath, endsWith(' (1).png'));
+    expect(await File(second.filePath!).readAsBytes(), bytes);
+  });
+
+  test('mobile saver delegates to Gal-compatible gallery writer', () async {
+    final calls = <({String album, String name})>[];
+    final saver = FinanceImageSaveService(
+      isWindows: false,
+      galleryWriter: (
+        bytes, {
+        required album,
+        required name,
+      }) async {
+        expect(bytes, isNotEmpty);
+        calls.add((album: album, name: name));
+      },
+    );
+
+    final result = await saver.save(
+      Uint8List.fromList([9, 8, 7]),
+      album: financeImageAlbumName,
+      name: '手机积分表',
+    );
+
+    expect(result.target, FinanceImageSaveTarget.systemGallery);
+    expect(result.successMessage, '已保存到系统相册：贵州酱酒馆积分表');
+    expect(calls.single.album, financeImageAlbumName);
+    expect(calls.single.name, '手机积分表');
   });
 
   testWidgets('loads real summaries without showing group number column',
@@ -96,7 +157,7 @@ void main() {
 
     expect(saver.saved.single.album, financeImageAlbumName);
     expect(saver.saved.single.name, contains('导游图片'));
-    expect(find.textContaining('已保存到相册'), findsWidgets);
+    expect(find.textContaining('系统相册：贵州酱酒馆积分表'), findsWidgets);
     expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNotNull);
     expect(
       tester
@@ -357,12 +418,80 @@ void main() {
       isNull,
     );
   });
+
+  testWidgets('Windows save message shows full path and open-folder action',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient();
+    final saver = _FakeImageSaver(
+      resultForCall: (_) => const FinanceImageSaveResult(
+        target: FinanceImageSaveTarget.windowsFolder,
+        album: financeImageAlbumName,
+        filePath:
+            r'C:\Users\Test\Pictures\贵州酱酒馆积分表\积分表.png',
+        directoryPath: r'C:\Users\Test\Pictures\贵州酱酒馆积分表',
+      ),
+    );
+    final opened = <String>[];
+    await _pumpPage(
+      tester,
+      apiClient: apiClient,
+      imageSaver: saver.call,
+      folderOpener: (path) async => opened.add(path),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-guide-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.saved.isNotEmpty);
+
+    expect(
+      find.textContaining(
+        r'C:\Users\Test\Pictures\贵州酱酒馆积分表',
+      ),
+      findsWidgets,
+    );
+    expect(
+      find.byKey(const ValueKey('finance-open-save-folder-button')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('finance-open-save-folder-button')),
+    );
+    await tester.pump();
+    expect(opened.single, r'C:\Users\Test\Pictures\贵州酱酒馆积分表');
+  });
+
+  testWidgets('recalculate selected groups replaces current table row',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient();
+    await _pumpPage(tester, apiClient: apiClient);
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-recalculate-button')),
+    );
+    await _pumpUntil(tester, () => apiClient.postPaths.isNotEmpty);
+
+    expect(apiClient.postPaths.single, '/api/commission-records/recalculate');
+    expect(apiClient.postBodies.single, {
+      'travelGroupIds': ['group-1'],
+      'agencyOnly': true,
+    });
+    expect(find.text('¥70.00'), findsWidgets);
+    expect(find.text('¥2.10'), findsWidgets);
+    expect(find.text('¥1.40'), findsWidgets);
+    expect(find.textContaining('订单 1 笔'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpPage(
   WidgetTester tester, {
   required _FakeFinanceApiClient apiClient,
   FinanceImageSaver? imageSaver,
+  FinanceFolderOpener? folderOpener,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(2200, 1200);
@@ -379,6 +508,7 @@ Future<void> _pumpPage(
           apiClient: apiClient,
           token: 'test-token',
           imageSaver: imageSaver ?? _FakeImageSaver().call,
+          folderOpener: folderOpener ?? (_) async {},
         ),
       ),
     ),
@@ -420,13 +550,14 @@ class _SavedImage {
 }
 
 class _FakeImageSaver {
-  _FakeImageSaver({this.failureForCall});
+  _FakeImageSaver({this.failureForCall, this.resultForCall});
 
   final Object? Function(int call)? failureForCall;
+  final FinanceImageSaveResult Function(int call)? resultForCall;
   final List<_SavedImage> saved = <_SavedImage>[];
   int attempts = 0;
 
-  Future<void> call(
+  Future<FinanceImageSaveResult> call(
     Uint8List bytes, {
     required String album,
     required String name,
@@ -438,6 +569,13 @@ class _FakeImageSaver {
     }
     expect(bytes, isNotEmpty);
     saved.add(_SavedImage(album: album, name: name));
+    return resultForCall?.call(attempts) ??
+        FinanceImageSaveResult(
+          target: FinanceImageSaveTarget.systemGallery,
+          album: album,
+          filePath: null,
+          directoryPath: null,
+        );
   }
 }
 
@@ -455,6 +593,8 @@ class _FakeFinanceApiClient extends ApiClient {
   final getPaths = <String>[];
   final patchPaths = <String>[];
   final patchBodies = <Map<String, dynamic>>[];
+  final postPaths = <String>[];
+  final postBodies = <Map<String, dynamic>>[];
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -525,6 +665,45 @@ class _FakeFinanceApiClient extends ApiClient {
     ];
     return {
       'data': {'travelGroupFinanceSummary': updated},
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    postPaths.add(path);
+    postBodies.add(Map<String, dynamic>.from(body ?? const {}));
+    if (path != '/api/commission-records/recalculate') {
+      throw StateError('Unexpected POST $path');
+    }
+    final updated = Map<String, dynamic>.from(_summaries.first)
+      ..['totalAgencyDeductionCents'] = 3000
+      ..['totalAgencyNetAmountCents'] = 7000
+      ..['totalDailyRebateCents'] = 210
+      ..['totalMonthlyRebateCents'] = 140
+      ..['unpaidRebateCents'] = 350
+      ..['unpaidDailyRebateCents'] = 210
+      ..['unpaidMonthlyRebateCents'] = 140;
+    _summaries = [updated, ..._summaries.skip(1)];
+    return {
+      'data': {
+        'source': 'commission_records.recalculate.api',
+        'orderCount': 1,
+        'travelGroupCount': 1,
+        'successCount': 1,
+        'failureCount': 0,
+        'skippedCount': 0,
+        'skippedConfirmedCount': 0,
+        'skippedManualOverrideCount': 0,
+        'generatedRecords': const [],
+        'updatedRecords': const [],
+        'unchangedRecords': const [],
+        'warnings': const [],
+        'travelGroupFinanceSummaries': [updated],
+      },
     };
   }
 }

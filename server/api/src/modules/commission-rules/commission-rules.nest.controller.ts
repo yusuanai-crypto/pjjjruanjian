@@ -172,42 +172,42 @@ export class AgencyDeductionRulesNestController {
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyDeductionRule:
-        await this.rulesService.createAgencyDeductionRule(actor, body, {
-          ipAddress: getRequestIp(request),
-        }),
-    };
+    const result = await this.rulesService.createAgencyDeductionRule(
+      actor,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyDeductionRule', result);
   }
 
   @Post('batch-import')
   async batchImport(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      importResult: await this.rulesService.batchImportAgencyDeductionRules(
+    const result =
+      await this.rulesService.batchImportAgencyDeductionRules(
         actor,
         body,
         {
           ipAddress: getRequestIp(request),
         },
-      ),
-    };
+      );
+    return buildRuleImportResponse(result);
   }
 
   @Patch()
   async updateFromBody(@Body() body: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyDeductionRule:
-        await this.rulesService.updateAgencyDeductionRule(
-          actor,
-          body?.id,
-          stripId(body),
-          {
-            ipAddress: getRequestIp(request),
-          },
-        ),
-    };
+    const result = await this.rulesService.updateAgencyDeductionRule(
+      actor,
+      body?.id,
+      stripId(body),
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyDeductionRule', result);
   }
 
   @Patch(':id')
@@ -217,12 +217,15 @@ export class AgencyDeductionRulesNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyDeductionRule:
-        await this.rulesService.updateAgencyDeductionRule(actor, id, body, {
-          ipAddress: getRequestIp(request),
-        }),
-    };
+    const result = await this.rulesService.updateAgencyDeductionRule(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyDeductionRule', result);
   }
 }
 
@@ -247,44 +250,41 @@ export class AgencyRebateRulesNestController {
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyRebateRule: await this.rulesService.createAgencyRebateRule(
-        actor,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.createAgencyRebateRule(
+      actor,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyRebateRule', result);
   }
 
   @Post('batch-import')
   async batchImport(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      importResult: await this.rulesService.batchImportAgencyRebateRules(
-        actor,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.batchImportAgencyRebateRules(
+      actor,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleImportResponse(result);
   }
 
   @Patch()
   async updateFromBody(@Body() body: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyRebateRule: await this.rulesService.updateAgencyRebateRule(
-        actor,
-        body?.id,
-        stripId(body),
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.updateAgencyRebateRule(
+      actor,
+      body?.id,
+      stripId(body),
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyRebateRule', result);
   }
 
   @Patch(':id')
@@ -294,16 +294,15 @@ export class AgencyRebateRulesNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      agencyRebateRule: await this.rulesService.updateAgencyRebateRule(
-        actor,
-        id,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.updateAgencyRebateRule(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    return buildRuleMutationResponse('agencyRebateRule', result);
   }
 }
 
@@ -311,4 +310,24 @@ function stripId(body: any) {
   const payload = { ...(body || {}) };
   delete payload.id;
   return payload;
+}
+
+function buildRuleMutationResponse(key: string, result: any) {
+  const rule = { ...(result || {}) };
+  const recalculation = rule.recalculation || null;
+  delete rule.recalculation;
+  return {
+    [key]: rule,
+    recalculation,
+  };
+}
+
+function buildRuleImportResponse(result: any) {
+  const importResult = { ...(result || {}) };
+  const recalculation = importResult.recalculation || null;
+  delete importResult.recalculation;
+  return {
+    importResult,
+    recalculation,
+  };
 }

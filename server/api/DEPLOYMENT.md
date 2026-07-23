@@ -152,6 +152,43 @@ is replaced by a hash. Operators can revoke a code with
 `{"regenerate":true}` rotates the capability and immediately invalidates the
 old token.
 
+Public sales-sheet responses also set `X-Robots-Tag: noindex, nofollow,
+noarchive`, and the HTML contains the equivalent robots meta tag. Keep
+`Cache-Control: no-store, private`, `Referrer-Policy: no-referrer`, and the
+restrictive CSP at the reverse proxy instead of replacing them.
+
+## Logistics tracking
+
+Apply migration `20260723000100_sales_order_logistics_tracking` before enabling
+tracking. It adds the provider code plus normalized cache fields and maps legacy
+`logistics_method` values for SF, Anneng, Yunda, and self-carry. The migration
+does not delete or rewrite the existing display name or tracking number.
+
+Configure:
+
+```dotenv
+LOGISTICS_TRACKING_PROVIDER=kuaidi100
+KUAIDI100_CUSTOMER=
+KUAIDI100_KEY=
+LOGISTICS_TRACKING_TIMEOUT_MS=4000
+LOGISTICS_TRACKING_CACHE_MINUTES=30
+```
+
+`KUAIDI100_CUSTOMER` and `KUAIDI100_KEY` come from the Kuaidi100 enterprise API
+account. Keep both in the deployment secret store. Do not print form bodies,
+signatures, customer phone values, provider responses, or either credential in
+process-manager, proxy, APM, or application logs.
+
+The API can start without these variables. In that state, sales sheets display
+`物流查询服务暂未配置` and no third-party request is made. Self-carry orders,
+orders without a provider, and orders without a tracking number also skip the
+provider call. Successful normalized results are cached in `sales_orders` for
+30 minutes by default. Provider timeouts or errors never make the sales sheet
+unavailable: a prior cache is shown with its check time, or the page displays
+`物流信息暂未查询到，请稍后刷新` when no cache exists. Only the normalized
+state, label, latest location, latest description, event time, and check time
+are stored; the complete provider response is not persisted.
+
 ## API errors, correlation IDs, and diagnostic logs
 
 The API exposes detailed messages only for application errors created through

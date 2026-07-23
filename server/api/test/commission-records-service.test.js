@@ -260,6 +260,67 @@ test('unit: stage7 commission record service keeps agencyName idempotency when a
   });
 });
 
+test('unit: agency-only recalculation uses confirmed refunds and never rewrites employee commissions', async () => {
+  const prisma = createCommissionPrisma();
+  const service = createService(prisma);
+
+  await service.recalculateSalesOrderRecords('order-stage7');
+  prisma.__store.agencyDeductionRules.splice(
+    0,
+    prisma.__store.agencyDeductionRules.length,
+    agencyDeductionRule({
+      id: 'rule-agency-effective-rate',
+      calculationMode: 'effective_sales_rate',
+      productName: '',
+      deductionCostCents: 0,
+      deductionRate: '0.3000',
+    }),
+  );
+  const employeeBefore = prisma.__store.commissionRecords
+    .filter((record) =>
+      [
+        'SALES_COMMISSION',
+        'OUTREACH_COMMISSION',
+        'LEADER_COMMISSION',
+      ].includes(record.targetType),
+    )
+    .map((record) => ({ ...record, isConfirmed: true }));
+  for (const before of employeeBefore) {
+    const stored = prisma.__store.commissionRecords.find(
+      (record) => record.id === before.id,
+    );
+    stored.isConfirmed = true;
+  }
+
+  const result = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'],
+  });
+
+  assert.equal(result.generatedRecords.length, 0);
+  assert.equal(result.updatedRecords.length, 2);
+  assertRecord(prisma, 'AGENCY_DAILY_REBATE', {
+    grossAmountCents: 1000000,
+    confirmedRefundAmountCents: 100000,
+    deductionAmountCents: 270000,
+    baseAmountCents: 630000,
+    pointsCents: 18900,
+  });
+  assertRecord(prisma, 'AGENCY_MONTHLY_REBATE', {
+    deductionAmountCents: 270000,
+    baseAmountCents: 630000,
+    pointsCents: 12600,
+  });
+  for (const before of employeeBefore) {
+    const after = prisma.__store.commissionRecords.find(
+      (record) => record.id === before.id,
+    );
+    assert.equal(after.amountCents, before.amountCents);
+    assert.equal(after.isConfirmed, true);
+    assert.equal(after.updatedAt, before.updatedAt);
+  }
+  assert.equal(prisma.__store.commissionRecords.length, 5);
+});
+
 function createService(prisma) {
   return new CommissionRecordsNestService(
     prisma,
@@ -375,7 +436,12 @@ function createCommissionPrisma(overrides = {}) {
         };
         return copyDeep(store.commissionRecords[index]);
       },
-      findMany: async () => copyDeep(store.commissionRecords),
+      findMany: async ({ where } = {}) =>
+        copyDeep(
+          store.commissionRecords.filter((record) =>
+            matchesWhere(record, where || {}),
+          ),
+        ),
     },
     operationLog: {
       create: async ({ data }) => {
@@ -497,6 +563,9 @@ function agencyDeductionRule(overrides = {}) {
       Object.prototype.hasOwnProperty.call(overrides, 'agencyName')
         ? overrides.agencyName
         : 'stage7 test agency',
+    calculationMode:
+      overrides.calculationMode || 'manual_product_reference',
+    deductionRate: overrides.deductionRate || '0.3000',
   };
 }
 

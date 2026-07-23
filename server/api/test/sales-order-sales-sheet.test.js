@@ -31,10 +31,25 @@ test('GET /api/sales-orders/:id/sales-sheet returns no-token sales sheet for adm
       assert.equal(result.response.status, 200);
       const salesSheet = result.body.data.salesSheet;
       assert.equal(salesSheet.visibility, 'internal');
+      assert.equal(salesSheet.companyName, '贵州酱酒馆');
+      assert.equal(salesSheet.venueName, '茅台集团茅乡酱酒体验馆');
+      assert.equal(salesSheet.afterSalesPhone, '177-8530-5984');
       assert.equal(salesSheet.order.id, 'order_sheet_alpha_no_token');
       assert.equal(salesSheet.order.orderNo, 'SO-SHEET-NO-TOKEN');
       assert.equal(salesSheet.customer.phone, '13812340000');
       assert.equal(salesSheet.customer.phoneMasked, '138****0000');
+      assert.equal(salesSheet.public.customer.phone, '13812340000');
+      assert.equal(
+        salesSheet.public.customer.fullAddress,
+        '贵州省遵义市仁怀市茅台镇测试路 1 号',
+      );
+      assert.equal(salesSheet.logistics.providerCode, 'shunfeng');
+      assert.equal(salesSheet.logistics.providerName, '顺丰速运');
+      assert.equal(salesSheet.logistics.logisticsNo, 'SF123456789');
+      assert.equal(
+        salesSheet.logistics.trackingMessage,
+        '物流查询服务暂未配置',
+      );
       assert.equal(salesSheet.salesUser.name, '销售甲');
       assert.equal(salesSheet.items.length, 2);
       assert.equal(salesSheet.qrCode, null);
@@ -237,6 +252,7 @@ function buildSalesSheetOrder(overrides = {}) {
     totalAmountCents: 99800,
     cashOnDeliveryAmountCents: 20000,
     logisticsMethod: '顺丰',
+    logisticsProviderCode: 'shunfeng',
     packingStatus: 'PACKED',
     packageCount: 1,
     logisticsNo: 'SF123456789',

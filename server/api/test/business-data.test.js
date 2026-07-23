@@ -849,6 +849,7 @@ function createWarehouseOrdersPrismaOptions() {
         customerId: 'cust_wh_marked',
         customerName: 'Warehouse Wrapper Smoke Marked Customer',
         packingStatus: 'PENDING',
+        logisticsNo: 'YD-WH-SMOKE-MARKED',
       }),
       createWarehouseOrderSeed({
         id: 'so_wh_shipping_packed',
@@ -2966,6 +2967,19 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     assert.equal(warehousePatchedOrder.financeMark, false);
     assert.equal(warehousePatchedOrder.logisticsNo, null);
     assert.equal(warehousePatchedOrder.logisticsFeeCents, 0);
+
+    const adminFinancePatch = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/finance`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          logisticsNo: 'SF-ADMIN-TEST-001',
+        },
+      },
+    );
+    assert.equal(adminFinancePatch.response.status, 200);
 
     const adminPatch = await requestJson(
       baseUrl,

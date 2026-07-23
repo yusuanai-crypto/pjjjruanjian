@@ -15,6 +15,8 @@ import {
 } from './finance.nest.controller';
 import { PublicSalesSheetsNestController } from './public-sales-sheets.nest.controller';
 import { SalesOrdersNestController } from './sales-orders.nest.controller';
+import { Kuaidi100LogisticsProviderClient } from './kuaidi100-logistics-provider.client';
+import { LogisticsTrackingService } from './logistics-tracking.service';
 import { WarehouseOrdersNestController } from './warehouse-orders.nest.controller';
 import {
   AttachmentUploadConfigService,
@@ -42,6 +44,8 @@ import {
   ],
   providers: [
     BusinessDataNestService,
+    Kuaidi100LogisticsProviderClient,
+    LogisticsTrackingService,
     AuthUserGuard,
     RolesGuard,
     AttachmentUploadConfigService,

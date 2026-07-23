@@ -1095,10 +1095,19 @@ String _itemSummary(SalesOrderRecord order) {
   }
   final items = [...order.items]
     ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-  return items
-      .map((item) =>
-          '${item.productName} x${item.quantity} · ${_deliveryTypeLabel(item.deliveryType)}')
-      .join('、');
+  return items.map((item) {
+    final heading =
+        '${item.productName} x${item.quantity} · ${_deliveryTypeLabel(item.deliveryType)}';
+    if (item.serializedUnits.isEmpty) return heading;
+    final units = item.serializedUnits.map(
+      (unit) => '${unit.moutaiName ?? item.productName} / '
+          '物流码 ${unit.logisticsCode ?? '-'} / '
+          '出厂日期 ${unit.factoryDate ?? '-'} / '
+          '生产批次 ${unit.productionBatch ?? '-'} / '
+          '批次序号 ${unit.batchSerialNo ?? '-'}',
+    );
+    return '$heading\n${units.join('\n')}';
+  }).join('\n');
 }
 
 String _display(String? value) {

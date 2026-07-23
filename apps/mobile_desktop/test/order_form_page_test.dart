@@ -177,6 +177,57 @@ void main() {
     expect(items.last['sortOrder'], 2);
   });
 
+  testWidgets(
+      'serialized product picker shows production fields without cost and locks quantity',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-moutai');
+
+    expect(
+      find.byKey(const ValueKey('order-select-serialized-units')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('order-select-serialized-units')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('出厂日期 2024-01-02'), findsOneWidget);
+    expect(find.textContaining('生产批次 00001'), findsOneWidget);
+    expect(find.textContaining('批次序号 00002'), findsOneWidget);
+    expect(find.textContaining('00000003'), findsOneWidget);
+    expect(find.textContaining('进货价'), findsNothing);
+    await tester.tap(
+      find.byKey(const ValueKey('serialized-unit-unit-moutai-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('serialized-inventory-confirm')),
+    );
+    await tester.pumpAndSettle();
+
+    final quantity = tester.widget<TextField>(
+      find.byKey(const ValueKey('order-item-quantity-0')),
+    );
+    expect(quantity.readOnly, true);
+    expect(quantity.controller?.text, '1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '3000',
+    );
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存订单'));
+    await tester.pumpAndSettle();
+
+    final item =
+        (apiClient.lastSalesOrderBody!['items'] as List<dynamic>).first;
+    expect(item['quantity'], 1);
+    expect(item['serializedUnitIds'], ['unit-moutai-1']);
+    expect(item.containsKey('purchaseCostCents'), false);
+  });
+
   testWidgets('validates editable order item fields before saving',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -267,8 +318,7 @@ Future<void> _pumpOrderForm(
   WidgetTester tester,
   _FakeApiClient apiClient, {
   String? travelGroupId = 'group-1',
-}
-) async {
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -337,6 +387,32 @@ class _FakeApiClient extends ApiClient {
           'products': const [
             {'id': 'product-1', 'name': '酱香珍藏 53°', 'unit': '瓶'},
             {'id': 'product-2', 'name': '测试小样', 'unit': '盒'},
+            {
+              'id': 'product-moutai',
+              'name': '茅台',
+              'unit': '瓶',
+              'inventoryTrackingMode': 'serialized',
+            },
+          ],
+        },
+      };
+    }
+    if (path.startsWith('/api/serialized-inventory/available')) {
+      return {
+        'data': {
+          'units': const [
+            {
+              'id': 'unit-moutai-1',
+              'productId': 'product-moutai',
+              'productName': '茅台',
+              'moutaiName': '2024年甲辰龙年生肖茅台酒',
+              'factoryDate': '2024-01-02',
+              'productionBatch': '00001',
+              'batchSerialNo': '00002',
+              'logisticsCode': '00000003',
+              'status': 'available',
+              'dataComplete': true,
+            },
           ],
         },
       };

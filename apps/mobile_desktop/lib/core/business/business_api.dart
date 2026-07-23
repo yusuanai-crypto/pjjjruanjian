@@ -258,6 +258,103 @@ class BusinessApi {
         .toList();
   }
 
+  Future<SerializedInventoryPage> listSerializedInventory({
+    int page = 1,
+    int pageSize = 100,
+    String? moutaiName,
+    String? logisticsCode,
+    DateTime? factoryDate,
+    String? productionBatch,
+    String? batchSerialNo,
+    String? status,
+    String? orderNo,
+  }) async {
+    final query = <String, String>{
+      'page': '$page',
+      'pageSize': '$pageSize',
+    };
+    _putNonEmpty(query, 'moutaiName', moutaiName);
+    _putNonEmpty(query, 'logisticsCode', logisticsCode);
+    if (factoryDate != null) {
+      query['factoryDate'] = formatDate(factoryDate);
+    }
+    _putNonEmpty(query, 'productionBatch', productionBatch);
+    _putNonEmpty(query, 'batchSerialNo', batchSerialNo);
+    _putNonEmpty(query, 'status', status);
+    _putNonEmpty(query, 'orderNo', orderNo);
+    final payload = await _apiClient.getJson(
+      _path('/api/serialized-inventory', query),
+      token: _token,
+    );
+    return SerializedInventoryPage.fromJson(_data(payload));
+  }
+
+  Future<List<SerializedInventoryUnitRecord>> listAvailableSerializedInventory({
+    required String productId,
+    String? query,
+  }) async {
+    final parameters = <String, String>{'productId': productId};
+    _putNonEmpty(parameters, 'query', query);
+    final payload = await _apiClient.getJson(
+      _path('/api/serialized-inventory/available', parameters),
+      token: _token,
+    );
+    return _list(_data(payload)['units'])
+        .map(SerializedInventoryUnitRecord.fromJson)
+        .toList();
+  }
+
+  Future<List<SerializedInventoryUnitRecord>> createSerializedInventoryUnits(
+      Map<String, dynamic> body) async {
+    final payload = await _apiClient.postJson(
+      '/api/serialized-inventory/batch',
+      body: body,
+      token: _token,
+    );
+    return _list(_data(payload)['units'])
+        .map(SerializedInventoryUnitRecord.fromJson)
+        .toList();
+  }
+
+  Future<SerializedInventoryUnitRecord> updateSerializedInventoryUnit(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/serialized-inventory/${Uri.encodeComponent(id)}',
+      body: body,
+      token: _token,
+    );
+    return SerializedInventoryUnitRecord.fromJson(
+      _map(_data(payload)['unit']),
+    );
+  }
+
+  Future<SerializedInventoryUnitRecord> correctSerializedInventoryUnit(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/serialized-inventory/${Uri.encodeComponent(id)}/correction',
+      body: body,
+      token: _token,
+    );
+    return SerializedInventoryUnitRecord.fromJson(
+      _map(_data(payload)['unit']),
+    );
+  }
+
+  Future<DownloadedFile> exportMoutaiLogisticsDocx(
+    List<String> unitIds,
+  ) {
+    return _apiClient.postBytes(
+      '/api/serialized-inventory/export-moutai-logistics-docx',
+      body: {'unitIds': unitIds},
+      token: _token,
+      defaultFileName: '茅台物流单.docx',
+    );
+  }
+
   Future<ProductRecord> getProduct(String id) async {
     final payload =
         await _apiClient.getJson('/api/products/$id', token: _token);
@@ -1305,8 +1402,9 @@ class BusinessApi {
       body: body,
       token: _token,
     );
+    final data = _data(payload);
     return AgencyDeductionRuleRecord.fromJson(
-      _map(_data(payload)['agencyDeductionRule']),
+      _withRecalculation(data, 'agencyDeductionRule'),
     );
   }
 
@@ -1319,8 +1417,9 @@ class BusinessApi {
       body: body,
       token: _token,
     );
+    final data = _data(payload);
     return AgencyDeductionRuleRecord.fromJson(
-      _map(_data(payload)['agencyDeductionRule']),
+      _withRecalculation(data, 'agencyDeductionRule'),
     );
   }
 
@@ -1332,8 +1431,10 @@ class BusinessApi {
       body: {'rules': rules},
       token: _token,
     );
+    final data = _data(payload);
     return Stage7RuleImportResult.fromJson(
-        _map(_data(payload)['importResult']));
+      _withRecalculation(data, 'importResult'),
+    );
   }
 
   Future<List<AgencyRebateRuleRecord>> listAgencyRebateRules({
@@ -1371,8 +1472,9 @@ class BusinessApi {
       body: body,
       token: _token,
     );
+    final data = _data(payload);
     return AgencyRebateRuleRecord.fromJson(
-      _map(_data(payload)['agencyRebateRule']),
+      _withRecalculation(data, 'agencyRebateRule'),
     );
   }
 
@@ -1385,8 +1487,9 @@ class BusinessApi {
       body: body,
       token: _token,
     );
+    final data = _data(payload);
     return AgencyRebateRuleRecord.fromJson(
-      _map(_data(payload)['agencyRebateRule']),
+      _withRecalculation(data, 'agencyRebateRule'),
     );
   }
 
@@ -1398,16 +1501,36 @@ class BusinessApi {
       body: {'rules': rules},
       token: _token,
     );
+    final data = _data(payload);
     return Stage7RuleImportResult.fromJson(
-        _map(_data(payload)['importResult']));
+      _withRecalculation(data, 'importResult'),
+    );
   }
 
   Future<CommissionRecalculationResult> recalculateCommissions(
-    String salesOrderId,
+    String salesOrderId, {
+    bool agencyOnly = false,
+  }) async {
+    final payload = await _apiClient.postJson(
+      '/api/commission-records/recalculate',
+      body: {
+        'salesOrderId': salesOrderId,
+        if (agencyOnly) 'agencyOnly': true,
+      },
+      token: _token,
+    );
+    return CommissionRecalculationResult.fromJson(_data(payload));
+  }
+
+  Future<CommissionRecalculationResult> recalculateTravelGroups(
+    List<String> travelGroupIds,
   ) async {
     final payload = await _apiClient.postJson(
       '/api/commission-records/recalculate',
-      body: {'salesOrderId': salesOrderId},
+      body: {
+        'travelGroupIds': travelGroupIds,
+        'agencyOnly': true,
+      },
       token: _token,
     );
     return CommissionRecalculationResult.fromJson(_data(payload));
@@ -2709,10 +2832,17 @@ class SalesOrderRecord {
     required this.status,
     required this.deliverySummary,
     required this.logisticsMethod,
+    required this.logisticsProviderCode,
     required this.packingStatus,
     required this.packageCount,
     required this.warehouseRemark,
     required this.logisticsNo,
+    required this.trackingState,
+    required this.trackingStateLabel,
+    required this.trackingLatestLocation,
+    required this.trackingLatestDescription,
+    required this.trackingEventAt,
+    required this.trackingCheckedAt,
     required this.logisticsFeeCents,
     required this.invoiceRequired,
     required this.invoiceIssued,
@@ -2751,10 +2881,17 @@ class SalesOrderRecord {
   final String status;
   final String? deliverySummary;
   final String? logisticsMethod;
+  final String? logisticsProviderCode;
   final String packingStatus;
   final int packageCount;
   final String? warehouseRemark;
   final String? logisticsNo;
+  final String? trackingState;
+  final String? trackingStateLabel;
+  final String? trackingLatestLocation;
+  final String? trackingLatestDescription;
+  final String? trackingEventAt;
+  final String? trackingCheckedAt;
   final int logisticsFeeCents;
   final bool invoiceRequired;
   final bool invoiceIssued;
@@ -2804,10 +2941,18 @@ class SalesOrderRecord {
       status: '${json['status'] ?? 'valid'}',
       deliverySummary: _stringOrNull(json['deliverySummary']),
       logisticsMethod: _stringOrNull(json['logisticsMethod']),
+      logisticsProviderCode: _stringOrNull(json['logisticsProviderCode']),
       packingStatus: '${json['packingStatus'] ?? 'pending'}',
       packageCount: _intValue(json['packageCount']),
       warehouseRemark: _stringOrNull(json['warehouseRemark']),
       logisticsNo: _stringOrNull(json['logisticsNo']),
+      trackingState: _stringOrNull(json['trackingState']),
+      trackingStateLabel: _stringOrNull(json['trackingStateLabel']),
+      trackingLatestLocation: _stringOrNull(json['trackingLatestLocation']),
+      trackingLatestDescription:
+          _stringOrNull(json['trackingLatestDescription']),
+      trackingEventAt: _stringOrNull(json['trackingEventAt']),
+      trackingCheckedAt: _stringOrNull(json['trackingCheckedAt']),
       logisticsFeeCents: _intValue(json['logisticsFeeCents']),
       invoiceRequired: _boolValue(json['invoiceRequired']),
       invoiceIssued: _boolValue(json['invoiceIssued']),
@@ -2842,6 +2987,8 @@ class SalesOrderItemRecord {
     required this.deliveryType,
     required this.notes,
     required this.sortOrder,
+    required this.serializedUnitIds,
+    required this.serializedUnits,
   });
 
   final String? id;
@@ -2855,6 +3002,8 @@ class SalesOrderItemRecord {
   final String deliveryType;
   final String? notes;
   final int sortOrder;
+  final List<String> serializedUnitIds;
+  final List<SalesOrderSerializedUnitRecord> serializedUnits;
 
   factory SalesOrderItemRecord.fromJson(Map<String, dynamic> json) {
     final quantity = _intValue(json['quantity']);
@@ -2873,6 +3022,44 @@ class SalesOrderItemRecord {
       deliveryType: '${json['deliveryType'] ?? 'shipping'}',
       notes: _stringOrNull(json['notes']),
       sortOrder: _intValue(json['sortOrder']),
+      serializedUnitIds: _list(json['serializedUnitIds'])
+          .map((value) => '$value')
+          .where((value) => value.isNotEmpty)
+          .toList(),
+      serializedUnits: _list(json['serializedUnits'])
+          .map(SalesOrderSerializedUnitRecord.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class SalesOrderSerializedUnitRecord {
+  const SalesOrderSerializedUnitRecord({
+    required this.id,
+    required this.moutaiName,
+    required this.logisticsCode,
+    required this.factoryDate,
+    required this.productionBatch,
+    required this.batchSerialNo,
+  });
+
+  final String id;
+  final String? moutaiName;
+  final String? logisticsCode;
+  final String? factoryDate;
+  final String? productionBatch;
+  final String? batchSerialNo;
+
+  factory SalesOrderSerializedUnitRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SalesOrderSerializedUnitRecord(
+      id: '${json['id'] ?? ''}',
+      moutaiName: _stringOrNull(json['moutaiName']),
+      logisticsCode: _stringOrNull(json['logisticsCode']),
+      factoryDate: _stringOrNull(json['factoryDate']),
+      productionBatch: _stringOrNull(json['productionBatch']),
+      batchSerialNo: _stringOrNull(json['batchSerialNo']),
     );
   }
 }
@@ -3089,6 +3276,7 @@ class ProductRecord {
     required this.id,
     required this.name,
     required this.unit,
+    required this.inventoryTrackingMode,
     required this.isActive,
     required this.notes,
     required this.createdById,
@@ -3100,6 +3288,7 @@ class ProductRecord {
   final String id;
   final String name;
   final String unit;
+  final String inventoryTrackingMode;
   final bool isActive;
   final String? notes;
   final String? createdById;
@@ -3112,6 +3301,8 @@ class ProductRecord {
       id: '${json['id'] ?? ''}',
       name: '${json['name'] ?? ''}',
       unit: '${json['unit'] ?? ''}',
+      inventoryTrackingMode:
+          '${json['inventoryTrackingMode'] ?? 'none'}'.toLowerCase(),
       isActive: _boolValue(json['isActive']),
       notes: _stringOrNull(json['notes']),
       createdById: _stringOrNull(json['createdById']),
@@ -3127,11 +3318,15 @@ class ProductOptionRecord {
     required this.id,
     required this.name,
     required this.unit,
+    required this.inventoryTrackingMode,
   });
 
   final String id;
   final String name;
   final String unit;
+  final String inventoryTrackingMode;
+
+  bool get usesSerializedInventory => inventoryTrackingMode == 'serialized';
 
   String get label => '$name · $unit';
 
@@ -3140,6 +3335,97 @@ class ProductOptionRecord {
       id: '${json['id'] ?? ''}',
       name: '${json['name'] ?? ''}',
       unit: '${json['unit'] ?? ''}',
+      inventoryTrackingMode:
+          '${json['inventoryTrackingMode'] ?? 'none'}'.toLowerCase(),
+    );
+  }
+}
+
+class SerializedInventoryPage {
+  const SerializedInventoryPage({
+    required this.units,
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final List<SerializedInventoryUnitRecord> units;
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory SerializedInventoryPage.fromJson(Map<String, dynamic> json) {
+    final pagination = _map(json['pagination']);
+    return SerializedInventoryPage(
+      units: _list(json['units'])
+          .map(SerializedInventoryUnitRecord.fromJson)
+          .toList(),
+      page: _intValue(pagination['page']),
+      pageSize: _intValue(pagination['pageSize']),
+      total: _intValue(pagination['total']),
+      totalPages: _intValue(pagination['totalPages']),
+    );
+  }
+}
+
+class SerializedInventoryUnitRecord {
+  const SerializedInventoryUnitRecord({
+    required this.id,
+    required this.productId,
+    required this.productName,
+    required this.moutaiName,
+    required this.factoryDate,
+    required this.productionBatch,
+    required this.batchSerialNo,
+    required this.logisticsCode,
+    required this.purchaseCostCents,
+    required this.status,
+    required this.dataComplete,
+    required this.salesOrderId,
+    required this.salesOrderNo,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String productId;
+  final String? productName;
+  final String? moutaiName;
+  final String? factoryDate;
+  final String? productionBatch;
+  final String? batchSerialNo;
+  final String? logisticsCode;
+  final int? purchaseCostCents;
+  final String status;
+  final bool dataComplete;
+  final String? salesOrderId;
+  final String? salesOrderNo;
+  final String? createdAt;
+  final String? updatedAt;
+
+  factory SerializedInventoryUnitRecord.fromJson(Map<String, dynamic> json) {
+    final salesOrder = _map(json['salesOrder']);
+    return SerializedInventoryUnitRecord(
+      id: '${json['id'] ?? ''}',
+      productId: '${json['productId'] ?? ''}',
+      productName: _stringOrNull(json['productName']),
+      moutaiName: _stringOrNull(json['moutaiName']),
+      factoryDate: _stringOrNull(json['factoryDate']),
+      productionBatch: _stringOrNull(json['productionBatch']),
+      batchSerialNo: _stringOrNull(json['batchSerialNo']),
+      logisticsCode: _stringOrNull(json['logisticsCode']),
+      purchaseCostCents: json.containsKey('purchaseCostCents') &&
+              json['purchaseCostCents'] != null
+          ? _intValue(json['purchaseCostCents'])
+          : null,
+      status: '${json['status'] ?? 'pending_cost'}',
+      dataComplete: _boolValue(json['dataComplete']),
+      salesOrderId: _stringOrNull(salesOrder['id']),
+      salesOrderNo: _stringOrNull(salesOrder['orderNo']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
     );
   }
 }
@@ -3253,6 +3539,7 @@ class AgencyDeductionRuleRecord {
     required this.updatedById,
     required this.createdAt,
     required this.updatedAt,
+    required this.recalculation,
   });
 
   final String id;
@@ -3271,6 +3558,7 @@ class AgencyDeductionRuleRecord {
   final String? updatedById;
   final String? createdAt;
   final String? updatedAt;
+  final CommissionRecalculationResult? recalculation;
 
   factory AgencyDeductionRuleRecord.fromJson(Map<String, dynamic> json) {
     return AgencyDeductionRuleRecord(
@@ -3291,6 +3579,11 @@ class AgencyDeductionRuleRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      recalculation: json['recalculation'] is Map
+          ? CommissionRecalculationResult.fromJson(
+              _map(json['recalculation']),
+            )
+          : null,
     );
   }
 }
@@ -3311,6 +3604,7 @@ class AgencyRebateRuleRecord {
     required this.updatedById,
     required this.createdAt,
     required this.updatedAt,
+    required this.recalculation,
   });
 
   final String id;
@@ -3327,6 +3621,7 @@ class AgencyRebateRuleRecord {
   final String? updatedById;
   final String? createdAt;
   final String? updatedAt;
+  final CommissionRecalculationResult? recalculation;
 
   factory AgencyRebateRuleRecord.fromJson(Map<String, dynamic> json) {
     return AgencyRebateRuleRecord(
@@ -3344,6 +3639,11 @@ class AgencyRebateRuleRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      recalculation: json['recalculation'] is Map
+          ? CommissionRecalculationResult.fromJson(
+              _map(json['recalculation']),
+            )
+          : null,
     );
   }
 }
@@ -3356,6 +3656,7 @@ class Stage7RuleImportResult {
     required this.createdIdsSample,
     required this.failureSamples,
     required this.results,
+    required this.recalculation,
   });
 
   final int totalCount;
@@ -3364,6 +3665,7 @@ class Stage7RuleImportResult {
   final List<String> createdIdsSample;
   final List<Stage7RuleImportFailureSample> failureSamples;
   final List<Stage7RuleImportRowResult> results;
+  final CommissionRecalculationResult? recalculation;
 
   factory Stage7RuleImportResult.fromJson(Map<String, dynamic> json) {
     return Stage7RuleImportResult(
@@ -3377,6 +3679,11 @@ class Stage7RuleImportResult {
       results: _list(json['results'])
           .map((item) => Stage7RuleImportRowResult.fromJson(item))
           .toList(),
+      recalculation: json['recalculation'] is Map
+          ? CommissionRecalculationResult.fromJson(
+              _map(json['recalculation']),
+            )
+          : null,
     );
   }
 }
@@ -3572,22 +3879,55 @@ class CommissionRecord {
 
 class CommissionRecalculationResult {
   const CommissionRecalculationResult({
+    required this.source,
+    required this.orderCount,
+    required this.travelGroupCount,
+    required this.successCount,
+    required this.failureCount,
+    required this.skippedCount,
+    required this.skippedConfirmedCount,
+    required this.skippedManualOverrideCount,
     required this.generatedRecords,
     required this.updatedRecords,
     required this.unchangedRecords,
     required this.warnings,
+    required this.travelGroupFinanceSummaries,
   });
 
+  final String? source;
+  final int orderCount;
+  final int travelGroupCount;
+  final int successCount;
+  final int failureCount;
+  final int skippedCount;
+  final int skippedConfirmedCount;
+  final int skippedManualOverrideCount;
   final List<CommissionRecord> generatedRecords;
   final List<CommissionRecord> updatedRecords;
   final List<CommissionRecord> unchangedRecords;
-  final List<String> warnings;
+  final List<CommissionRecalculationWarning> warnings;
+  final List<TravelGroupFinanceSummaryRecord> travelGroupFinanceSummaries;
 
   List<CommissionRecord> get records => [
         ...generatedRecords,
         ...updatedRecords,
         ...unchangedRecords,
       ];
+
+  String get displayMessage {
+    final base =
+        '自动重算：订单 $orderCount 笔，成功 $successCount 笔，更新 $updatedCountOrRecords 条，跳过 $skippedCount 项';
+    final warningMessages = warnings
+        .map((warning) => warning.message.trim())
+        .where((message) => message.isNotEmpty)
+        .toSet()
+        .take(3)
+        .join('；');
+    return warningMessages.isEmpty ? base : '$base；$warningMessages';
+  }
+
+  int get updatedCountOrRecords =>
+      generatedRecords.length + updatedRecords.length;
 
   factory CommissionRecalculationResult.fromJson(Map<String, dynamic> json) {
     final directRecords = _list(json['commissionRecords'])
@@ -3597,6 +3937,14 @@ class CommissionRecalculationResult {
         .map((item) => CommissionRecord.fromJson(item))
         .toList();
     return CommissionRecalculationResult(
+      source: _stringOrNull(json['source']),
+      orderCount: _intValue(json['orderCount']),
+      travelGroupCount: _intValue(json['travelGroupCount']),
+      successCount: _intValue(json['successCount']),
+      failureCount: _intValue(json['failureCount']),
+      skippedCount: _intValue(json['skippedCount']),
+      skippedConfirmedCount: _intValue(json['skippedConfirmedCount']),
+      skippedManualOverrideCount: _intValue(json['skippedManualOverrideCount']),
       generatedRecords:
           generatedRecords.isNotEmpty ? generatedRecords : directRecords,
       updatedRecords: _list(json['updatedRecords'])
@@ -3605,7 +3953,32 @@ class CommissionRecalculationResult {
       unchangedRecords: _list(json['unchangedRecords'])
           .map((item) => CommissionRecord.fromJson(item))
           .toList(),
-      warnings: _stringList(json['warnings']),
+      warnings: _recalculationWarnings(json['warnings']),
+      travelGroupFinanceSummaries: _list(json['travelGroupFinanceSummaries'])
+          .map((item) => TravelGroupFinanceSummaryRecord.fromJson(item))
+          .toList(),
+    );
+  }
+}
+
+class CommissionRecalculationWarning {
+  const CommissionRecalculationWarning({
+    required this.code,
+    required this.message,
+    required this.context,
+  });
+
+  final String code;
+  final String message;
+  final Map<String, dynamic>? context;
+
+  factory CommissionRecalculationWarning.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return CommissionRecalculationWarning(
+      code: '${json['code'] ?? 'recalculation_warning'}',
+      message: '${json['message'] ?? '重算产生待处理提示。'}',
+      context: json['context'] is Map ? _map(json['context']) : null,
     );
   }
 }
@@ -4441,6 +4814,8 @@ class SalesSheetRecord {
   const SalesSheetRecord({
     required this.visibility,
     required this.companyName,
+    required this.venueName,
+    required this.afterSalesPhone,
     required this.order,
     required this.customer,
     required this.travelGroup,
@@ -4458,6 +4833,8 @@ class SalesSheetRecord {
 
   final String visibility;
   final String companyName;
+  final String? venueName;
+  final String? afterSalesPhone;
   final SalesSheetOrderRecord order;
   final SalesSheetCustomerRecord customer;
   final SalesSheetTravelGroupRecord? travelGroup;
@@ -4476,6 +4853,8 @@ class SalesSheetRecord {
     return SalesSheetRecord(
       visibility: '${json['visibility'] ?? 'internal'}',
       companyName: '${json['companyName'] ?? ''}',
+      venueName: _stringOrNull(json['venueName']),
+      afterSalesPhone: _stringOrNull(json['afterSalesPhone']),
       order: SalesSheetOrderRecord.fromJson(_map(json['order'])),
       customer: SalesSheetCustomerRecord.fromJson(_map(json['customer'])),
       travelGroup: json['travelGroup'] is Map
@@ -4508,6 +4887,8 @@ class SalesSheetRecord {
     return SalesSheetRecord(
       visibility: visibility,
       companyName: companyName,
+      venueName: venueName,
+      afterSalesPhone: afterSalesPhone,
       order: order,
       customer: customer,
       travelGroup: travelGroup,
@@ -4763,25 +5144,53 @@ class SalesSheetDeliveryRecord {
 class SalesSheetLogisticsRecord {
   const SalesSheetLogisticsRecord({
     required this.method,
+    required this.providerCode,
+    required this.providerName,
     required this.logisticsNo,
     required this.packingStatus,
     required this.packingStatusLabel,
     required this.packageCount,
+    required this.trackingState,
+    required this.trackingStateLabel,
+    required this.trackingLatestLocation,
+    required this.trackingLatestDescription,
+    required this.trackingEventAt,
+    required this.trackingCheckedAt,
+    required this.trackingMessage,
   });
 
   final String? method;
+  final String? providerCode;
+  final String? providerName;
   final String? logisticsNo;
   final String? packingStatus;
   final String? packingStatusLabel;
   final int packageCount;
+  final String? trackingState;
+  final String? trackingStateLabel;
+  final String? trackingLatestLocation;
+  final String? trackingLatestDescription;
+  final String? trackingEventAt;
+  final String? trackingCheckedAt;
+  final String? trackingMessage;
 
   factory SalesSheetLogisticsRecord.fromJson(Map<String, dynamic> json) {
     return SalesSheetLogisticsRecord(
       method: _stringOrNull(json['method']),
+      providerCode: _stringOrNull(json['providerCode']),
+      providerName: _stringOrNull(json['providerName']),
       logisticsNo: _stringOrNull(json['logisticsNo']),
       packingStatus: _stringOrNull(json['packingStatus']),
       packingStatusLabel: _stringOrNull(json['packingStatusLabel']),
       packageCount: _intValue(json['packageCount']),
+      trackingState: _stringOrNull(json['trackingState']),
+      trackingStateLabel: _stringOrNull(json['trackingStateLabel']),
+      trackingLatestLocation: _stringOrNull(json['trackingLatestLocation']),
+      trackingLatestDescription:
+          _stringOrNull(json['trackingLatestDescription']),
+      trackingEventAt: _stringOrNull(json['trackingEventAt']),
+      trackingCheckedAt: _stringOrNull(json['trackingCheckedAt']),
+      trackingMessage: _stringOrNull(json['trackingMessage']),
     );
   }
 }
@@ -5551,6 +5960,17 @@ Map<String, dynamic> _data(Map<String, dynamic> payload) {
   return _map(payload['data']);
 }
 
+Map<String, dynamic> _withRecalculation(
+  Map<String, dynamic> data,
+  String recordKey,
+) {
+  final record = _map(data[recordKey]);
+  if (data['recalculation'] is Map) {
+    record['recalculation'] = _map(data['recalculation']);
+  }
+  return record;
+}
+
 Map<String, dynamic> _map(Object? value) {
   if (value is Map) {
     return value.map((key, mapValue) => MapEntry('$key', mapValue));
@@ -5593,6 +6013,26 @@ List<AnalyticsWarning> _analyticsWarnings(Object? value) {
         .toList();
   }
   return const <AnalyticsWarning>[];
+}
+
+List<CommissionRecalculationWarning> _recalculationWarnings(Object? value) {
+  if (value is! List) {
+    return const <CommissionRecalculationWarning>[];
+  }
+  return value
+      .map((item) {
+        if (item is Map) {
+          return CommissionRecalculationWarning.fromJson(_map(item));
+        }
+        final code = _stringOrNull(item) ?? '';
+        return CommissionRecalculationWarning(
+          code: code,
+          message: code,
+          context: null,
+        );
+      })
+      .where((warning) => warning.code.isNotEmpty)
+      .toList();
 }
 
 List<AiWarning> _aiWarnings(Object? value) {

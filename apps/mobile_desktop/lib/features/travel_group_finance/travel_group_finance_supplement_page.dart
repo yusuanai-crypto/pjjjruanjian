@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
@@ -16,11 +17,41 @@ import '../../shared/widgets/status_tag.dart';
 
 const financeImageAlbumName = '贵州酱酒馆积分表';
 
-typedef FinanceImageSaver = Future<void> Function(
+typedef FinanceImageSaver = Future<FinanceImageSaveResult> Function(
   Uint8List bytes, {
   required String album,
   required String name,
 });
+typedef FinanceFolderOpener = Future<void> Function(String directoryPath);
+typedef FinanceGalleryWriter = Future<void> Function(
+  Uint8List bytes, {
+  required String album,
+  required String name,
+});
+
+enum FinanceImageSaveTarget {
+  windowsFolder,
+  systemGallery,
+}
+
+class FinanceImageSaveResult {
+  const FinanceImageSaveResult({
+    required this.target,
+    required this.album,
+    required this.filePath,
+    required this.directoryPath,
+  });
+
+  final FinanceImageSaveTarget target;
+  final String album;
+  final String? filePath;
+  final String? directoryPath;
+
+  String get successMessage => switch (target) {
+        FinanceImageSaveTarget.windowsFolder => '已保存到：$filePath',
+        FinanceImageSaveTarget.systemGallery => '已保存到系统相册：$album',
+      };
+}
 
 class FinanceImageSaveException implements Exception {
   const FinanceImageSaveException(this.message);
@@ -31,7 +62,113 @@ class FinanceImageSaveException implements Exception {
   String toString() => message;
 }
 
-Future<void> saveFinanceImageToGallery(
+class FinanceImageSaveService {
+  FinanceImageSaveService({
+    bool? isWindows,
+    String? windowsUserProfile,
+    FinanceGalleryWriter? galleryWriter,
+  })  : _isWindows = isWindows ?? Platform.isWindows,
+        _windowsUserProfile = windowsUserProfile,
+        _galleryWriter = galleryWriter ?? _saveFinanceImageToGallery;
+
+  final bool _isWindows;
+  final String? _windowsUserProfile;
+  final FinanceGalleryWriter _galleryWriter;
+
+  Future<FinanceImageSaveResult> save(
+    Uint8List bytes, {
+    required String album,
+    required String name,
+  }) async {
+    if (_isWindows) {
+      return _saveToWindowsPictures(bytes, album: album, name: name);
+    }
+    await _galleryWriter(bytes, album: album, name: name);
+    return FinanceImageSaveResult(
+      target: FinanceImageSaveTarget.systemGallery,
+      album: album,
+      filePath: null,
+      directoryPath: null,
+    );
+  }
+
+  Future<FinanceImageSaveResult> _saveToWindowsPictures(
+    Uint8List bytes, {
+    required String album,
+    required String name,
+  }) async {
+    final userProfile =
+        (_windowsUserProfile ?? Platform.environment['USERPROFILE'] ?? '')
+            .trim();
+    if (userProfile.isEmpty) {
+      throw const FinanceImageSaveException(
+        '无法读取当前 Windows 用户目录，图片未保存。',
+      );
+    }
+    try {
+      final directory = Directory(
+        _joinPath([userProfile, 'Pictures', financeImageAlbumName]),
+      );
+      await directory.create(recursive: true);
+      final safeName = _safeExportFileName(name);
+      final baseName = safeName.toLowerCase().endsWith('.png')
+          ? safeName.substring(0, safeName.length - 4)
+          : safeName;
+      var sequence = 0;
+      File target;
+      do {
+        final suffix = sequence == 0 ? '' : ' ($sequence)';
+        target = File(_joinPath([directory.path, '$baseName$suffix.png']));
+        sequence += 1;
+      } while (await target.exists());
+      await target.writeAsBytes(bytes, flush: true);
+      return FinanceImageSaveResult(
+        target: FinanceImageSaveTarget.windowsFolder,
+        album: album,
+        filePath: target.absolute.path,
+        directoryPath: directory.absolute.path,
+      );
+    } on FinanceImageSaveException {
+      rethrow;
+    } on FileSystemException catch (error) {
+      throw FinanceImageSaveException(
+        '保存图片失败：${error.osError?.message ?? error.message}',
+      );
+    }
+  }
+}
+
+final FinanceImageSaveService _defaultFinanceImageSaveService =
+    FinanceImageSaveService();
+
+Future<FinanceImageSaveResult> saveFinanceImage(
+  Uint8List bytes, {
+  required String album,
+  required String name,
+}) {
+  return _defaultFinanceImageSaveService.save(
+    bytes,
+    album: album,
+    name: name,
+  );
+}
+
+Future<void> openFinanceImageFolder(String directoryPath) async {
+  if (!Platform.isWindows) {
+    throw const FinanceImageSaveException('当前平台不支持打开 Windows 文件夹。');
+  }
+  try {
+    await Process.start(
+      'explorer.exe',
+      [directoryPath],
+      mode: ProcessStartMode.detached,
+    );
+  } on ProcessException catch (error) {
+    throw FinanceImageSaveException('无法打开保存文件夹：${error.message}');
+  }
+}
+
+Future<void> _saveFinanceImageToGallery(
   Uint8List bytes, {
   required String album,
   required String name,
@@ -63,17 +200,25 @@ Future<void> saveFinanceImageToGallery(
   }
 }
 
+String _joinPath(List<String> parts) {
+  return parts
+      .where((part) => part.isNotEmpty)
+      .join(Platform.pathSeparator);
+}
+
 class TravelGroupFinanceSupplementPage extends StatefulWidget {
   const TravelGroupFinanceSupplementPage({
     super.key,
     required this.apiClient,
     required this.token,
-    this.imageSaver = saveFinanceImageToGallery,
+    this.imageSaver = saveFinanceImage,
+    this.folderOpener = openFinanceImageFolder,
   });
 
   final ApiClient apiClient;
   final String token;
   final FinanceImageSaver imageSaver;
+  final FinanceFolderOpener folderOpener;
 
   @override
   State<TravelGroupFinanceSupplementPage> createState() =>
@@ -106,8 +251,10 @@ class _TravelGroupFinanceSupplementPageState
   String _travelAgencyInfoSentFilter = _allFilter;
   String _statusFilter = _allFilter;
   bool _loading = true;
+  bool _recalculating = false;
   String? _errorMessage;
   String? _successMessage;
+  String? _lastWindowsSaveDirectory;
 
   @override
   void initState() {
@@ -438,6 +585,40 @@ class _TravelGroupFinanceSupplementPageState
     ];
   }
 
+  Future<void> _recalculateSelected() async {
+    if (_recalculating || _selectedTravelGroupIds.isEmpty) {
+      return;
+    }
+    setState(() {
+      _recalculating = true;
+      _errorMessage = null;
+      _successMessage = null;
+    });
+    try {
+      final result = await _businessApi.recalculateTravelGroups(
+        _selectedTravelGroupIds.toList(),
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _recalculating = false;
+        for (final summary in result.travelGroupFinanceSummaries) {
+          _replaceSummary(summary);
+        }
+        _successMessage = result.displayMessage;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _recalculating = false;
+        _errorMessage = '重新计算失败：${_messageForError(error)}';
+      });
+    }
+  }
+
   Future<void> _exportSelectedImages(_FinanceImageType type) async {
     final selected = _summaries
         .where(
@@ -445,6 +626,7 @@ class _TravelGroupFinanceSupplementPageState
         )
         .toList();
     var successCount = 0;
+    _lastWindowsSaveDirectory = null;
     for (final summary in selected) {
       if (await _exportImage(summary, type, showSnackBar: false)) {
         successCount += 1;
@@ -454,9 +636,11 @@ class _TravelGroupFinanceSupplementPageState
       return;
     }
     final failureCount = selected.length - successCount;
-    final message = failureCount == 0
-        ? '已保存到相册：成功 $successCount 张，失败 0 张'
-        : '已保存到相册：成功 $successCount 张，失败 $failureCount 张';
+    final destination = _lastWindowsSaveDirectory == null
+        ? '系统相册：$financeImageAlbumName'
+        : _lastWindowsSaveDirectory!;
+    final message =
+        '批量导出完成：成功 $successCount 张，失败 $failureCount 张；保存位置：$destination';
     setState(() {
       if (failureCount == 0) {
         _successMessage = message;
@@ -493,7 +677,7 @@ class _TravelGroupFinanceSupplementPageState
       final imageName = fileName.toLowerCase().endsWith('.png')
           ? fileName.substring(0, fileName.length - 4)
           : fileName;
-      await widget.imageSaver(
+      final saveResult = await widget.imageSaver(
         bytes,
         album: financeImageAlbumName,
         name: imageName,
@@ -508,12 +692,22 @@ class _TravelGroupFinanceSupplementPageState
         } else {
           _travelAgencyImageReadyIds.add(summary.travelGroupId);
         }
-        _successMessage = '${type.label}已保存到相册';
+        _lastWindowsSaveDirectory = saveResult.directoryPath;
+        _successMessage = saveResult.successMessage;
       });
       if (showSnackBar) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${type.label}已保存到相册')),
+          SnackBar(
+            content: Text(saveResult.successMessage),
+            action: saveResult.directoryPath == null
+                ? null
+                : SnackBarAction(
+                    label: '打开文件夹',
+                    onPressed: () =>
+                        _openSavedDirectory(saveResult.directoryPath!),
+                  ),
+          ),
         );
       }
       return true;
@@ -526,6 +720,17 @@ class _TravelGroupFinanceSupplementPageState
         _errorMessage = _messageForError(error);
       });
       return false;
+    }
+  }
+
+  Future<void> _openSavedDirectory(String directoryPath) async {
+    try {
+      await widget.folderOpener(directoryPath);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _errorMessage = _messageForError(error));
     }
   }
 
@@ -706,7 +911,19 @@ class _TravelGroupFinanceSupplementPageState
         if (_errorMessage != null)
           _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
         if (_successMessage != null)
-          _InlineNotice(message: _successMessage!, tone: StatusTone.success),
+          _InlineNotice(
+            message: _successMessage!,
+            tone: StatusTone.success,
+            action: _lastWindowsSaveDirectory == null
+                ? null
+                : TextButton.icon(
+                    key: const ValueKey('finance-open-save-folder-button'),
+                    onPressed: () =>
+                        _openSavedDirectory(_lastWindowsSaveDirectory!),
+                    icon: const Icon(Icons.folder_open_rounded),
+                    label: const Text('打开文件夹'),
+                  ),
+          ),
         _FinanceSummaryStrip(
           visibleCount: visibleSummaries.length,
           totalCount: _summaries.length,
@@ -728,6 +945,19 @@ class _TravelGroupFinanceSupplementPageState
                 tone: selectedVisibleCount == 0
                     ? StatusTone.neutral
                     : StatusTone.info,
+              ),
+              FilledButton.icon(
+                key: const ValueKey('finance-recalculate-button'),
+                onPressed: selectedVisibleCount == 0 || _recalculating
+                    ? null
+                    : _recalculateSelected,
+                icon: _recalculating
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.calculate_rounded),
+                label: Text(_recalculating ? '计算中' : '重新计算'),
               ),
               OutlinedButton.icon(
                 key: const ValueKey('finance-export-guide-images-button'),
@@ -1675,10 +1905,12 @@ class _InlineNotice extends StatelessWidget {
   const _InlineNotice({
     required this.message,
     required this.tone,
+    this.action,
   });
 
   final String message;
   final StatusTone tone;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -1695,9 +1927,19 @@ class _InlineNotice extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Text(
-          message,
-          style: TextStyle(color: color, fontWeight: FontWeight.w700),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: color, fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (action != null) ...[
+              const SizedBox(width: 12),
+              action!,
+            ],
+          ],
         ),
       ),
     );

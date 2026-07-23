@@ -26,16 +26,16 @@ test('unit: stage7 travel group finance summary service creates summary', async 
     confirmedRefundAmountCents: 100000,
     effectiveSalesAmountCents: 1400000,
     totalAgencyDeductionCents: 170000,
-    totalAgencyNetAmountCents: 1330000,
-    totalDailyRebateCents: 45000,
-    totalMonthlyRebateCents: 30000,
+    totalAgencyNetAmountCents: 1230000,
+    totalDailyRebateCents: 36900,
+    totalMonthlyRebateCents: 24600,
     paidRebateCents: 0,
-    unpaidRebateCents: 75000,
+    unpaidRebateCents: 61500,
   });
   assert.equal(result.summary.paidDailyRebateCents, 0);
-  assert.equal(result.summary.unpaidDailyRebateCents, 45000);
+  assert.equal(result.summary.unpaidDailyRebateCents, 36900);
   assert.equal(result.summary.paidMonthlyRebateCents, 0);
-  assert.equal(result.summary.unpaidMonthlyRebateCents, 30000);
+  assert.equal(result.summary.unpaidMonthlyRebateCents, 24600);
   assert.equal(
     prisma.__store.summaries[0].calculationVersion,
     'stage7_v1',
@@ -79,12 +79,12 @@ test('unit: stage7 travel group finance summary refreshes existing row and prese
   assert.equal(prisma.__store.summaries[0].id, 'summary-existing');
   assert.equal(prisma.__store.summaries[0].dailyRebatePaid, true);
   assert.equal(prisma.__store.summaries[0].dailyRebatePaidById, 'user-finance');
-  assert.equal(prisma.__store.summaries[0].paidRebateCents, 45000);
-  assert.equal(prisma.__store.summaries[0].unpaidRebateCents, 30000);
-  assert.equal(result.summary.paidDailyRebateCents, 45000);
+  assert.equal(prisma.__store.summaries[0].paidRebateCents, 36900);
+  assert.equal(prisma.__store.summaries[0].unpaidRebateCents, 24600);
+  assert.equal(result.summary.paidDailyRebateCents, 36900);
   assert.equal(result.summary.unpaidDailyRebateCents, 0);
   assert.equal(result.summary.paidMonthlyRebateCents, 0);
-  assert.equal(result.summary.unpaidMonthlyRebateCents, 30000);
+  assert.equal(result.summary.unpaidMonthlyRebateCents, 24600);
   assert.equal(
     prisma.__store.summaries[0].notes,
     'stage7 test existing paid rebate note',
@@ -186,14 +186,14 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
 
   await service.refreshTravelGroupFinanceSummary('group-stage7');
 
-  assert.equal(prisma.__store.travelGroup.points, 75000);
-  assert.equal(prisma.__store.travelGroup.returnedPoints, 45000);
-  assert.equal(prisma.__store.travelGroup.unreturnedPoints, 30000);
+  assert.equal(prisma.__store.travelGroup.points, 61500);
+  assert.equal(prisma.__store.travelGroup.returnedPoints, 36900);
+  assert.equal(prisma.__store.travelGroup.unreturnedPoints, 24600);
   assert.equal(prisma.__store.travelGroup.salesAmountCents, 1500000);
   assert.equal(prisma.__store.travelGroup.paidDepositCents, 1200000);
   assert.equal(prisma.__store.travelGroup.cashOnDeliveryCents, 300000);
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 170000);
-  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1330000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1230000);
 });
 
 test('unit: manual agency deduction recalculates rebates by proportional order allocation and survives refresh', async () => {
@@ -208,8 +208,9 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
       id: 'summary-manual-deduction',
       travelGroupId: 'group-stage7',
       totalSalesAmountCents: 1500000,
+      effectiveSalesAmountCents: 1400000,
       totalAgencyDeductionCents: 170000,
-      totalAgencyNetAmountCents: 1330000,
+      totalAgencyNetAmountCents: 1230000,
       totalDailyRebateCents: 55000,
       totalMonthlyRebateCents: 30000,
       unpaidRebateCents: 85000,
@@ -229,11 +230,11 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
 
   assertSummaryAmounts(updated, {
     totalAgencyDeductionCents: 300000,
-    totalAgencyNetAmountCents: 1200000,
-    totalDailyRebateCents: 44000,
-    totalMonthlyRebateCents: 24000,
+    totalAgencyNetAmountCents: 1100000,
+    totalDailyRebateCents: 40857,
+    totalMonthlyRebateCents: 22000,
     paidRebateCents: 0,
-    unpaidRebateCents: 68000,
+    unpaidRebateCents: 62857,
   });
   assert.equal(updated.agencyDeductionConfirmed, false);
   assert.equal(updated.agencyDeductionConfirmedById, null);
@@ -248,7 +249,7 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
     'gross_sales_proportional_largest_remainder',
   );
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 300000);
-  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1200000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1100000);
 
   const log = prisma.__store.operationLogs.at(-1);
   assertStage7SummaryServiceLog(log, {
@@ -267,9 +268,9 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
   await service.refreshTravelGroupFinanceSummary('group-stage7');
 
   assert.equal(prisma.__store.summaries[0].totalAgencyDeductionCents, 300000);
-  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1200000);
-  assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 44000);
-  assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 24000);
+  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1100000);
+  assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 40857);
+  assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 22000);
 });
 
 function createService(prisma) {

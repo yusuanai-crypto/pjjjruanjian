@@ -4,8 +4,9 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
     body: `
       <header class="sheet-header">
         <div class="company">${text(salesSheet?.companyName, '贵州酱酒馆')}</div>
+        <div class="venue">${text(salesSheet?.venueName, '茅台集团茅乡酱酒体验馆')}</div>
         <h1>销售单</h1>
-        <p>请核对订单、脱敏收货信息和酒品数量</p>
+        <p>请核对订单、收货信息和酒品数量</p>
       </header>
       <main>
         <section>
@@ -20,8 +21,8 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
           <h2>客户信息</h2>
           ${renderRows([
             ['客户姓名', salesSheet?.customer?.name],
-            ['客户电话', salesSheet?.customer?.phoneMasked],
-            ['收货地址', salesSheet?.customer?.addressMasked],
+            ['客户电话', salesSheet?.customer?.phone],
+            ['收货地址', salesSheet?.customer?.fullAddress],
           ])}
         </section>
         <section>
@@ -32,10 +33,27 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
           <h2>配送</h2>
           ${renderRows([
             ['配送方式', salesSheet?.delivery?.summaryLabel],
+            ['快递方式', salesSheet?.logistics?.providerName],
+            ['快递单号', salesSheet?.logistics?.logisticsNo],
+            [
+              '最新运输状态',
+              salesSheet?.logistics?.trackingStateLabel,
+            ],
+            [
+              '当前所在地点',
+              salesSheet?.logistics?.trackingLatestLocation,
+            ],
+            [
+              '最新物流动态',
+              salesSheet?.logistics?.trackingLatestDescription,
+            ],
+            ['轨迹发生时间', salesSheet?.logistics?.trackingEventAt],
+            ['查询更新时间', salesSheet?.logistics?.trackingCheckedAt],
+            ['物流提示', salesSheet?.logistics?.trackingMessage],
           ])}
         </section>
       </main>
-      <footer>此链接包含订单核对信息且会过期。如信息有误，请联系销售人员处理。</footer>
+      <footer>如需售后服务，请联系：${text(salesSheet?.afterSalesPhone, '177-8530-5984')}</footer>
     `,
   });
 }
@@ -104,6 +122,7 @@ function renderDocument(input: any) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
   <title>${text(input.title)}</title>
   <style>
     * { box-sizing: border-box; }
@@ -124,7 +143,12 @@ function renderDocument(input: any) {
       color: #7a1f1f;
       font-size: 15px;
       font-weight: 700;
-      margin-bottom: 6px;
+    }
+    .venue {
+      color: #7a1f1f;
+      font-size: 17px;
+      font-weight: 700;
+      margin: 4px 0 6px;
     }
     h1, h2, p, dl, dd { margin: 0; }
     h1 { font-size: 28px; letter-spacing: 0; }

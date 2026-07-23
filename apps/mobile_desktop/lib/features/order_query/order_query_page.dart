@@ -14,6 +14,7 @@ import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
+import '../../shared/widgets/serialized_inventory_picker_dialog.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -57,8 +58,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   final Set<String> _busyOrderIds = <String>{};
   final Set<String> _busyCustomerIds = <String>{};
 
-  bool get _canMark =>
-      canViewFinanceMark(widget.role);
+  bool get _canMark => canViewFinanceMark(widget.role);
 
   bool get _canEditBasics =>
       widget.role == UserRole.superAdmin ||
@@ -202,8 +202,9 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final selected =
-                _selectedOrder?.id == order.id ? _selectedOrder! : _orderById(order.id) ?? order;
+            final selected = _selectedOrder?.id == order.id
+                ? _selectedOrder!
+                : _orderById(order.id) ?? order;
             Future<void> runAction(Future<void> Function() action) async {
               await action();
               if (mounted) {
@@ -620,7 +621,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         FormSection(
           title: '订单列表',
           trailing: StatusTag(
-            label: selectedOrder == null ? '未选择' : '已选 ${selectedOrder.orderNo}',
+            label:
+                selectedOrder == null ? '未选择' : '已选 ${selectedOrder.orderNo}',
             tone: selectedOrder == null ? StatusTone.neutral : StatusTone.info,
           ),
           children: [
@@ -1321,13 +1323,41 @@ class _SalesSheetDialogDetails extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionTitle('销售单预览'),
+        Text(
+          _display(sheet.companyName),
+          style: Theme.of(context)
+              .textTheme
+              .titleLarge
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        Text(
+          _display(sheet.venueName),
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        Text(
+          '销售单',
+          style: Theme.of(context)
+              .textTheme
+              .titleLarge
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 10),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
         _InfoRow(
-          label: '客户',
-          value:
-              '${_display(sheet.customer.name)} · ${_display(sheet.customer.phoneMasked ?? sheet.customer.phone)}',
+          label: '客户姓名',
+          value: _display(sheet.customer.name),
+        ),
+        _InfoRow(
+          label: '客户电话',
+          value: _display(sheet.customer.phone),
+        ),
+        _InfoRow(
+          label: '收货地址',
+          value: _display(sheet.customer.fullAddress),
         ),
         _InfoRow(label: '旅行团', value: _salesSheetTravelGroupLabel(sheet)),
         _InfoRow(
@@ -1352,6 +1382,47 @@ class _SalesSheetDialogDetails extends StatelessWidget {
               ),
             ),
         const Divider(height: 20),
+        const _SectionTitle('配送与物流'),
+        _InfoRow(
+          label: '配送方式',
+          value: _display(sheet.delivery.summaryLabel),
+        ),
+        _InfoRow(
+          label: '快递方式',
+          value: _display(
+            sheet.logistics.providerName ?? sheet.logistics.method,
+          ),
+        ),
+        _InfoRow(
+          label: '快递单号',
+          value: _display(sheet.logistics.logisticsNo),
+        ),
+        _InfoRow(
+          label: '最新运输状态',
+          value: _display(sheet.logistics.trackingStateLabel),
+        ),
+        _InfoRow(
+          label: '当前所在地点',
+          value: _display(sheet.logistics.trackingLatestLocation),
+        ),
+        _InfoRow(
+          label: '最新物流动态',
+          value: _display(sheet.logistics.trackingLatestDescription),
+        ),
+        _InfoRow(
+          label: '轨迹发生时间',
+          value: _display(sheet.logistics.trackingEventAt),
+        ),
+        _InfoRow(
+          label: '查询更新时间',
+          value: _display(sheet.logistics.trackingCheckedAt),
+        ),
+        if (sheet.logistics.trackingMessage != null)
+          _InfoRow(
+            label: '物流提示',
+            value: _display(sheet.logistics.trackingMessage),
+          ),
+        const Divider(height: 20),
         Row(
           children: [
             const Expanded(child: Text('订单金额')),
@@ -1364,6 +1435,11 @@ class _SalesSheetDialogDetails extends StatelessWidget {
             const Expanded(child: Text('货到付款')),
             MoneyText(cents: sheet.amounts.cashOnDeliveryAmountCents),
           ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '如需售后服务，请联系：${_display(sheet.afterSalesPhone)}',
+          textAlign: TextAlign.center,
         ),
       ],
     );
@@ -1420,7 +1496,8 @@ class _SalesSheetQrPreview extends StatelessWidget {
         if (localUrl) ...[
           const SizedBox(height: 8),
           const StatusTag(
-            label: '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
+            label:
+                '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
             tone: StatusTone.warning,
           ),
         ],
@@ -1510,6 +1587,20 @@ class _OrderItemLine extends StatelessWidget {
                 if (item.notes != null) Text('备注：${item.notes}'),
               ],
             ),
+            if (item.serializedUnits.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              for (final unit in item.serializedUnits)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '${unit.moutaiName ?? item.productName} · '
+                    '物流码 ${unit.logisticsCode ?? '-'} · '
+                    '出厂日期 ${unit.factoryDate ?? '-'} · '
+                    '生产批次 ${unit.productionBatch ?? '-'} · '
+                    '批次序号 ${unit.batchSerialNo ?? '-'}',
+                  ),
+                ),
+            ],
           ],
         ),
       ),
@@ -1551,6 +1642,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   late String _orderType;
   late String _status;
   late String _packingStatus;
+  late String _logisticsProviderCode;
   late final TextEditingController _salesFormNoController;
   late final TextEditingController _salesUserIdController;
   late final TextEditingController _codController;
@@ -1584,6 +1676,10 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     _orderType = _knownOrderTypeValue(widget.order.orderType);
     _status = _knownOrderStatusValue(widget.order.status);
     _packingStatus = _knownPackingStatusValue(widget.order.packingStatus);
+    _logisticsProviderCode = _knownLogisticsProviderCode(
+      widget.order.logisticsProviderCode,
+      widget.order.logisticsMethod,
+    );
     _salesFormNoController =
         TextEditingController(text: widget.order.salesFormNo ?? '');
     _salesUserIdController =
@@ -1613,8 +1709,11 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     );
     _financeRemarkController =
         TextEditingController(text: widget.order.financeRemark ?? '');
-    _logisticsMethodController =
-        TextEditingController(text: widget.order.logisticsMethod ?? '');
+    _logisticsMethodController = TextEditingController(
+      text: _logisticsProviderCode == 'other'
+          ? widget.order.logisticsMethod ?? ''
+          : '',
+    );
     _packageCountController =
         TextEditingController(text: '${widget.order.packageCount}');
     _warehouseRemarkController =
@@ -1645,6 +1744,13 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       if (!mounted) return;
       setState(() {
         _productOptions = options;
+        for (final item in _items) {
+          final matches =
+              options.where((option) => option.id == item.productId);
+          if (matches.isNotEmpty) {
+            item.applyProductMetadata(matches.first);
+          }
+        }
         _loadingProductOptions = false;
       });
     } catch (error) {
@@ -1734,6 +1840,22 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     setState(() => _items[index].selectProduct(product));
   }
 
+  Future<void> _selectSerializedUnits(int index) async {
+    final item = _items[index];
+    final productId = item.productId;
+    if (productId == null || !item.usesSerializedInventory) return;
+    final selected = await showDialog<List<SerializedUnitSelection>>(
+      context: context,
+      builder: (context) => SerializedInventoryPickerDialog(
+        businessApi: widget.businessApi,
+        productId: productId,
+        initialUnits: item.serializedUnits,
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() => item.selectSerializedUnits(selected));
+  }
+
   void _submit() {
     final codCents = _moneyCentsOrNull(_codController.text);
     if (codCents == null) {
@@ -1776,6 +1898,22 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       setState(() => _errorMessage = '旅行团订单必须关联旅行团。');
       return;
     }
+    final shippingOrder = itemPayloads.any(
+      (item) => item['deliveryType'] == DeliveryType.shipping.value,
+    );
+    final customLogisticsMethod = _logisticsMethodController.text.trim();
+    if (_logisticsProviderCode == 'other' && customLogisticsMethod.isEmpty) {
+      setState(() => _errorMessage = '选择“其他”时必须填写具体快递名称。');
+      return;
+    }
+    final logisticsNo = _logisticsNoController.text.trim();
+    if (shippingOrder &&
+        _packingStatus == PackingStatus.packed.value &&
+        (_logisticsProviderCode.isEmpty ||
+            (_logisticsProviderCode != 'self_carry' && logisticsNo.isEmpty))) {
+      setState(() => _errorMessage = '订单进入已寄出状态前，必须填写快递方式和快递单号。');
+      return;
+    }
 
     orderPayload.addAll({
       'orderType': _orderType,
@@ -1797,18 +1935,26 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       orderPayload['customerId'] = customerId;
     }
 
+    final financePayload = <String, dynamic>{
+      if (_logisticsProviderCode != 'self_carry') 'logisticsNo': logisticsNo,
+      'logisticsFeeCents': logisticsFeeCents,
+      'invoiceIssued': _invoiceIssued,
+      'financeRemark': _financeRemarkController.text.trim(),
+      'status': _status,
+    };
+    final logisticsMethod = _logisticsMethodForProvider(
+      _logisticsProviderCode,
+      customLogisticsMethod,
+    );
+
     Navigator.of(context).pop(
       _OrderEditResult(
         orderPayload: orderPayload,
-        financePayload: {
-          'logisticsNo': _logisticsNoController.text.trim(),
-          'logisticsFeeCents': logisticsFeeCents,
-          'invoiceIssued': _invoiceIssued,
-          'financeRemark': _financeRemarkController.text.trim(),
-          'status': _status,
-        },
+        financePayload: financePayload,
         packingPayload: {
-          'logisticsMethod': _logisticsMethodController.text.trim(),
+          'logisticsProviderCode':
+              _logisticsProviderCode.isEmpty ? null : _logisticsProviderCode,
+          'logisticsMethod': logisticsMethod,
           'packingStatus': _packingStatus,
           'packageCount': packageCount,
           'warehouseRemark': _warehouseRemarkController.text.trim(),
@@ -1829,6 +1975,10 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         setState(() => _errorMessage = '第 ${index + 1} 条明细数量必须大于 0。');
         return null;
       }
+      if (item.usesSerializedInventory && item.serializedUnits.isEmpty) {
+        setState(() => _errorMessage = '第 ${index + 1} 条明细请选择物流码。');
+        return null;
+      }
       final subtotalCents = item.subtotalCentsOrNull;
       if (subtotalCents == null) {
         setState(() => _errorMessage = '第 ${index + 1} 条明细总价格式不正确。');
@@ -1842,6 +1992,10 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         'deliveryType': item.deliveryType.value,
         'notes': item.notes,
         'sortOrder': index + 1,
+        if (item.usesSerializedInventory)
+          'serializedUnitIds': [
+            for (final unit in item.serializedUnits) unit.id,
+          ],
       });
     }
     if (payloads.isEmpty) {
@@ -2101,6 +2255,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                   onChanged: () => setState(() {}),
                   onDeliveryTypeChanged: _updateItemDeliveryType,
                   onProductChanged: _updateItemProduct,
+                  onSelectSerializedUnits: _selectSerializedUnits,
                 ),
                 const Divider(height: 26),
                 const _SectionTitle('财务与物流'),
@@ -2125,11 +2280,54 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                         }
                       },
                     ),
-                    TextField(
-                      key: const ValueKey('order-edit-logistics-no-field'),
-                      controller: _logisticsNoController,
-                      decoration: const InputDecoration(labelText: '物流单号'),
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey(
+                        'order-edit-logistics-provider-field',
+                      ),
+                      initialValue: _logisticsProviderCode,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '快递方式'),
+                      items: [
+                        for (final provider in _logisticsProviderEntries)
+                          DropdownMenuItem(
+                            value: provider.key,
+                            child: Text(provider.value),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() {
+                          _logisticsProviderCode = value;
+                          if (value == 'self_carry') {
+                            _logisticsNoController.clear();
+                          }
+                        });
+                      },
                     ),
+                    if (_logisticsProviderCode == 'other')
+                      TextField(
+                        key: const ValueKey(
+                          'order-edit-logistics-method-field',
+                        ),
+                        controller: _logisticsMethodController,
+                        decoration: const InputDecoration(
+                          labelText: '具体快递名称',
+                        ),
+                      ),
+                    if (_hasShippingItems(_items) &&
+                        _logisticsProviderCode != 'self_carry')
+                      TextField(
+                        key: const ValueKey('order-edit-logistics-no-field'),
+                        controller: _logisticsNoController,
+                        decoration: InputDecoration(
+                          labelText: '快递单号',
+                          helperText: _logisticsNoController.text.trim().isEmpty
+                              ? '待寄出 / 运单号待录入'
+                              : null,
+                        ),
+                      ),
                     TextField(
                       key: const ValueKey('order-edit-logistics-fee-field'),
                       controller: _logisticsFeeController,
@@ -2149,11 +2347,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
                       title: const Text('财务已开票'),
-                    ),
-                    TextField(
-                      key: const ValueKey('order-edit-logistics-method-field'),
-                      controller: _logisticsMethodController,
-                      decoration: const InputDecoration(labelText: '物流方式'),
                     ),
                     DropdownButtonFormField<String>(
                       key: const ValueKey('order-edit-packing-status-field'),
@@ -2229,6 +2422,7 @@ class _OrderItemsEditSection extends StatelessWidget {
     required this.onChanged,
     required this.onDeliveryTypeChanged,
     required this.onProductChanged,
+    required this.onSelectSerializedUnits,
   });
 
   final List<_EditableOrderItemDraft> items;
@@ -2243,6 +2437,7 @@ class _OrderItemsEditSection extends StatelessWidget {
   final void Function(int index, DeliveryType deliveryType)
       onDeliveryTypeChanged;
   final void Function(int index, ProductOptionRecord product) onProductChanged;
+  final ValueChanged<int> onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -2276,6 +2471,7 @@ class _OrderItemsEditSection extends StatelessWidget {
             productOptionsError: productOptionsError,
             onRetryProductOptions: onRetryProductOptions,
             onProductChanged: (product) => onProductChanged(index, product),
+            onSelectSerializedUnits: () => onSelectSerializedUnits(index),
           ),
           if (index != items.length - 1) const Divider(height: 20),
         ],
@@ -2296,6 +2492,7 @@ class _OrderItemEditRow extends StatelessWidget {
     required this.productOptionsError,
     required this.onRetryProductOptions,
     required this.onProductChanged,
+    required this.onSelectSerializedUnits,
   });
 
   final int index;
@@ -2308,6 +2505,7 @@ class _OrderItemEditRow extends StatelessWidget {
   final String? productOptionsError;
   final VoidCallback onRetryProductOptions;
   final ValueChanged<ProductOptionRecord> onProductChanged;
+  final VoidCallback onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -2362,10 +2560,26 @@ class _OrderItemEditRow extends StatelessWidget {
                 TextField(
                   key: ValueKey('order-edit-item-quantity-$index'),
                   controller: item.quantityController,
+                  readOnly: item.usesSerializedInventory,
                   onChanged: (_) => onChanged(),
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: '数量'),
+                  decoration: InputDecoration(
+                    labelText: '数量',
+                    helperText:
+                        item.usesSerializedInventory ? '由所选物流码数量自动生成' : null,
+                  ),
                 ),
+                if (item.usesSerializedInventory)
+                  OutlinedButton.icon(
+                    key: ValueKey('order-edit-select-serialized-$index'),
+                    onPressed: onSelectSerializedUnits,
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: Text(
+                      item.serializedUnits.isEmpty
+                          ? '选择物流码'
+                          : '已选 ${item.serializedUnits.length} 瓶',
+                    ),
+                  ),
                 TextField(
                   key: ValueKey('order-edit-item-subtotal-$index'),
                   controller: item.subtotalController,
@@ -2415,6 +2629,8 @@ class _EditableOrderItemDraft {
     required int quantity,
     required int subtotalCents,
     required this.deliveryType,
+    this.inventoryTrackingMode = 'none',
+    this.serializedUnits = const [],
     String? notes,
   })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
@@ -2432,6 +2648,10 @@ class _EditableOrderItemDraft {
       quantity: item.quantity,
       subtotalCents: item.subtotalCents,
       deliveryType: _deliveryTypeFromValue(item.deliveryType),
+      inventoryTrackingMode:
+          item.serializedUnits.isEmpty ? 'none' : 'serialized',
+      serializedUnits:
+          item.serializedUnits.map(SerializedUnitSelection.fromOrder).toList(),
       notes: item.notes,
     );
   }
@@ -2454,11 +2674,32 @@ class _EditableOrderItemDraft {
   final TextEditingController subtotalController;
   final TextEditingController notesController;
   DeliveryType deliveryType;
+  String inventoryTrackingMode;
+  List<SerializedUnitSelection> serializedUnits;
+
+  bool get usesSerializedInventory => inventoryTrackingMode == 'serialized';
 
   void selectProduct(ProductOptionRecord product) {
+    if (productId != product.id) {
+      serializedUnits = const [];
+      quantityController.text = product.usesSerializedInventory ? '0' : '1';
+    }
     productId = product.id;
     snapshotName = product.name;
     snapshotUnit = product.unit;
+    inventoryTrackingMode = product.inventoryTrackingMode;
+  }
+
+  void applyProductMetadata(ProductOptionRecord product) {
+    if (product.id == productId) {
+      inventoryTrackingMode = product.inventoryTrackingMode;
+    }
+  }
+
+  void selectSerializedUnits(List<SerializedUnitSelection> units) {
+    serializedUnits = List.unmodifiable(units);
+    quantityController.text = '${units.length}';
+    if (units.isNotEmpty) snapshotName = units.first.moutaiName;
   }
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
@@ -2512,6 +2753,59 @@ String _knownPackingStatusValue(String value) {
   return PackingStatus.pending.value;
 }
 
+String _knownLogisticsProviderCode(
+  String? providerCode,
+  String? logisticsMethod,
+) {
+  final explicit = providerCode?.trim().toLowerCase() ?? '';
+  if (_logisticsProviderEntries.any((entry) => entry.key == explicit)) {
+    return explicit;
+  }
+  final method = logisticsMethod?.trim() ?? '';
+  switch (method.toLowerCase()) {
+    case '顺丰':
+    case '顺丰速运':
+    case 'sf':
+      return 'shunfeng';
+    case '安能':
+    case '安能物流':
+    case '安能快运':
+      return 'annengwuliu';
+    case '韵达':
+    case '韵达快递':
+      return 'yunda';
+    case '自带':
+    case '自提':
+      return 'self_carry';
+    default:
+      return method.isEmpty ? '' : 'other';
+  }
+}
+
+String? _logisticsMethodForProvider(
+  String providerCode,
+  String customMethod,
+) {
+  switch (providerCode) {
+    case 'shunfeng':
+      return '顺丰速运';
+    case 'annengwuliu':
+      return '安能快运';
+    case 'yunda':
+      return '韵达快递';
+    case 'self_carry':
+      return '自带';
+    case 'other':
+      return customMethod;
+    default:
+      return null;
+  }
+}
+
+bool _hasShippingItems(List<_EditableOrderItemDraft> items) {
+  return items.any((item) => item.deliveryType == DeliveryType.shipping);
+}
+
 DeliveryType _deliveryTypeFromValue(String value) {
   for (final type in DeliveryType.values) {
     if (type.value == value) {
@@ -2547,6 +2841,15 @@ const _orderTypeEntries = <MapEntry<String, String>>[
   MapEntry('external', '外销订单'),
   MapEntry('internal', '内购订单'),
   MapEntry('after_sales', '售后订单'),
+];
+
+const _logisticsProviderEntries = <MapEntry<String, String>>[
+  MapEntry('', '尚未选择'),
+  MapEntry('shunfeng', '顺丰速运'),
+  MapEntry('annengwuliu', '安能快运'),
+  MapEntry('yunda', '韵达快递'),
+  MapEntry('self_carry', '自带'),
+  MapEntry('other', '其他'),
 ];
 
 class _NullableDropdown extends StatelessWidget {
@@ -2846,7 +3149,9 @@ bool _isLocalhostUrl(String value) {
       host.endsWith('.local')) {
     return true;
   }
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+  if (host.startsWith('fc') ||
+      host.startsWith('fd') ||
+      host.startsWith('fe80')) {
     return true;
   }
   final octets = host.split('.').map(int.tryParse).toList();

@@ -12,6 +12,7 @@ export interface AiChatTemplate {
 }
 
 const ROLE_TEMPLATE_GROUPS: Record<string, AiChatTemplate[]> = {
+  super_admin: buildManagementTemplates(),
   admin: buildManagementTemplates(),
   boss: buildManagementTemplates(),
   finance: [
@@ -93,41 +94,42 @@ export class AiTemplatesService {
 }
 
 function buildManagementTemplates(): AiChatTemplate[] {
+  const managementRoleScopes = ['super_admin', 'admin', 'boss'];
   return [
     {
       id: 'management_sales_amount',
       title: '销售额',
       question: '今天销售额是多少？',
       intent: 'analytics_overview',
-      roleScopes: ['admin', 'boss'],
+      roleScopes: managementRoleScopes,
     },
     {
       id: 'management_taster_ranking',
       title: '品鉴师排名',
       question: '本月哪个品鉴师排名第一？',
       intent: 'taster_ranking',
-      roleScopes: ['admin', 'boss'],
+      roleScopes: managementRoleScopes,
     },
     {
       id: 'management_no_order_rate',
       title: '打蛋率',
       question: '近 10 天打蛋率是多少？',
       intent: 'analytics_overview',
-      roleScopes: ['admin', 'boss'],
+      roleScopes: managementRoleScopes,
     },
     {
       id: 'management_refund_amount',
       title: '退单金额',
       question: '本月退单金额是多少？',
       intent: 'refund_query',
-      roleScopes: ['admin', 'boss'],
+      roleScopes: managementRoleScopes,
     },
     {
       id: 'management_suggestion',
       title: '经营建议',
       question: '最近经营情况有什么风险？',
       intent: 'management_suggestion',
-      roleScopes: ['admin', 'boss'],
+      roleScopes: managementRoleScopes,
     },
   ];
 }

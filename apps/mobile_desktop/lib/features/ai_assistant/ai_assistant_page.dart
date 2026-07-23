@@ -34,9 +34,11 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
   List<AiChatTemplate> _templates = const <AiChatTemplate>[];
   List<AiChatHistoryItem> _history = const <AiChatHistoryItem>[];
   bool _loadingInitial = true;
+  bool _loadingTemplates = false;
   bool _loadingHistory = false;
   bool _sending = false;
   String? _initialError;
+  String? _templatesError;
   String? _historyError;
   String? _sendError;
   String? _lastFailedQuestion;
@@ -60,7 +62,10 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         _templates = const <AiChatTemplate>[];
         _history = const <AiChatHistoryItem>[];
         _messages.clear();
+        _loadingTemplates = false;
+        _loadingHistory = false;
         _initialError = null;
+        _templatesError = null;
         _historyError = null;
         _sendError = null;
         _lastFailedQuestion = null;
@@ -89,27 +94,66 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
 
     try {
       final capabilities = await _businessApi.getAiCapabilities();
-      final templates = capabilities.canUseAi
-          ? await _businessApi.getAiChatTemplates()
-          : const <AiChatTemplate>[];
       if (!mounted) {
         return;
       }
       setState(() {
         _capabilities = capabilities;
-        _templates = templates;
         _loadingInitial = false;
       });
       if (capabilities.canUseAi) {
-        await _loadHistory(silent: true);
+        await Future.wait([
+          _loadTemplates(),
+          _loadHistory(silent: true),
+        ]);
+      } else {
+        setState(() {
+          _templates = const <AiChatTemplate>[];
+          _history = const <AiChatHistoryItem>[];
+          _templatesError = null;
+          _historyError = null;
+        });
       }
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
+        _capabilities = null;
+        _loadingTemplates = false;
+        _loadingHistory = false;
         _initialError = _friendlyAiError(error);
         _loadingInitial = false;
+      });
+    }
+  }
+
+  Future<void> _loadTemplates() async {
+    final capabilities = _capabilities;
+    if (capabilities == null || !capabilities.canUseAi || !mounted) {
+      return;
+    }
+    setState(() {
+      _loadingTemplates = true;
+      _templatesError = null;
+    });
+    try {
+      final templates = await _businessApi.getAiChatTemplates();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _templates = templates;
+        _loadingTemplates = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _templates = const <AiChatTemplate>[];
+        _templatesError = _friendlyAiError(error);
+        _loadingTemplates = false;
       });
     }
   }
@@ -307,11 +351,14 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
             templates: _templates,
             history: _history,
             loading: _loadingInitial,
+            loadingTemplates: _loadingTemplates,
             loadingHistory: _loadingHistory,
             error: _initialError,
+            templatesError: _templatesError,
             historyError: _historyError,
             availabilityMessage: _availabilityMessage(_capabilities),
             onRetryLoad: _loadInitial,
+            onRetryTemplates: _loadTemplates,
             onRetryHistory: _loadHistory,
             onSendTemplate: _canSend ? _sendTemplate : null,
             onOpenHistory: _openHistoryDetail,
@@ -469,11 +516,14 @@ class _AiSidePanel extends StatelessWidget {
     required this.templates,
     required this.history,
     required this.loading,
+    required this.loadingTemplates,
     required this.loadingHistory,
     required this.error,
+    required this.templatesError,
     required this.historyError,
     required this.availabilityMessage,
     required this.onRetryLoad,
+    required this.onRetryTemplates,
     required this.onRetryHistory,
     required this.onSendTemplate,
     required this.onOpenHistory,
@@ -484,11 +534,14 @@ class _AiSidePanel extends StatelessWidget {
   final List<AiChatTemplate> templates;
   final List<AiChatHistoryItem> history;
   final bool loading;
+  final bool loadingTemplates;
   final bool loadingHistory;
   final String? error;
+  final String? templatesError;
   final String? historyError;
   final String? availabilityMessage;
   final VoidCallback onRetryLoad;
+  final VoidCallback onRetryTemplates;
   final VoidCallback onRetryHistory;
   final ValueChanged<AiChatTemplate>? onSendTemplate;
   final ValueChanged<AiChatHistoryItem> onOpenHistory;
@@ -505,7 +558,11 @@ class _AiSidePanel extends StatelessWidget {
             if (loading)
               const _LoadingLine(text: '正在读取当前角色可用能力...')
             else if (error != null)
-              _RetryBox(message: error!, onRetry: onRetryLoad)
+              _RetryBox(
+                message: error!,
+                onRetry: onRetryLoad,
+                buttonKey: const ValueKey('ai-retry-capabilities'),
+              )
             else if (caps == null)
               _NoticeBox(
                 icon: Icons.info_outline_rounded,
@@ -553,8 +610,16 @@ class _AiSidePanel extends StatelessWidget {
         FormSection(
           title: '常用问题',
           children: [
-            if (loading)
+            if (loading || loadingTemplates)
               const _LoadingLine(text: '正在加载常用问题...')
+            else if (capabilities?.canUseAi != true)
+              const Text('当前角色不可使用常用问题。')
+            else if (templatesError != null)
+              _RetryBox(
+                message: templatesError!,
+                onRetry: onRetryTemplates,
+                buttonKey: const ValueKey('ai-retry-templates'),
+              )
             else if (templates.isEmpty)
               const Text('暂无可用模板。')
             else
@@ -596,7 +661,11 @@ class _AiSidePanel extends StatelessWidget {
             else if (loadingHistory)
               const _LoadingLine(text: '正在读取最近问答...')
             else if (historyError != null)
-              _RetryBox(message: historyError!, onRetry: onRetryHistory)
+              _RetryBox(
+                message: historyError!,
+                onRetry: onRetryHistory,
+                buttonKey: const ValueKey('ai-retry-history'),
+              )
             else if (history.isEmpty)
               const Text('暂无最近问答。')
             else
@@ -940,10 +1009,12 @@ class _RetryBox extends StatelessWidget {
   const _RetryBox({
     required this.message,
     required this.onRetry,
+    this.buttonKey = const ValueKey('ai-retry-send'),
   });
 
   final String message;
   final VoidCallback onRetry;
+  final Key buttonKey;
 
   @override
   Widget build(BuildContext context) {
@@ -952,7 +1023,7 @@ class _RetryBox extends StatelessWidget {
       text: message,
       tone: StatusTone.danger,
       action: OutlinedButton.icon(
-        key: const ValueKey('ai-retry-send'),
+        key: buttonKey,
         onPressed: onRetry,
         icon: const Icon(Icons.refresh_rounded),
         label: const Text('重试'),
@@ -1148,7 +1219,13 @@ String _friendlyAiError(Object error) {
       return '登录已失效，请重新登录后再使用 AI 助手。';
     }
     if (error.statusCode == 403 || code == 'FORBIDDEN') {
-      return '当前角色没有使用 AI 助手的权限，或问题超出可访问范围。';
+      if (code == 'AI_ROLE_NOT_ALLOWED') {
+        return '当前角色没有使用 AI 助手的权限。';
+      }
+      if (code == 'AI_PERMISSION_DENIED') {
+        return '当前问题超出该角色可访问的 AI 数据范围。';
+      }
+      return 'AI 请求被拒绝，请确认当前账号权限或联系管理员。';
     }
     if (error.statusCode == 429) {
       return 'AI 请求过于频繁，请稍后再试。';
