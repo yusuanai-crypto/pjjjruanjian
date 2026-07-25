@@ -217,6 +217,50 @@ test('GET /api/travel-group-finance-summaries/export exports filtered stage7 reb
   });
 });
 
+test('GET /api/travel-group-finance-summaries/export includes no-order travel groups with zero amounts', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const download = await requestBinary(
+      baseUrl,
+      '/api/travel-group-finance-summaries/export'
+        + '?query=SUMMARY-ZERO&dateFrom=2026-07-03&dateTo=2026-07-03',
+      {
+        token: admin.token,
+      },
+    );
+
+    assert.equal(download.response.status, 200);
+    const worksheet = await loadWorksheet(download.buffer, '返积分汇总');
+    assert.equal(worksheet.actualRowCount, 2);
+    const row = readRowObject(worksheet, 2);
+    assert.equal(row['团号'], 'TG-STAGE7-SUMMARY-ZERO');
+    assert.equal(row['日期'], '2026-07-03');
+    assert.equal(row['旅行社'], 'Stage7 Zero Agency');
+    assert.equal(row['导游'], 'Stage7 Zero Guide');
+    assert.equal(row['车牌'], '贵A-ZERO');
+    assert.equal(row['人数'], 30);
+    assert.equal(row['品鉴师'], 'Stage7 Zero Taster');
+    for (const header of [
+      '销售额',
+      '货到付款',
+      '已付定金',
+      '扣酒成本',
+      '上单金额',
+      '积分/日返积分',
+      '未返积分',
+      '月返积分',
+      '未返月返积分',
+    ]) {
+      assert.equal(row[header], 0, header);
+    }
+    assert.equal(row['扣酒确认状态'], '否');
+    assert.equal(row['已返积分'], '否');
+    assert.equal(row['已返月返积分'], '否');
+  }, {
+    prisma: buildStage7ExportPrisma(),
+  });
+});
+
 test('stage7 export endpoints enforce read roles', async () => {
   await withPhase1Server(async (baseUrl) => {
     const finance = await login(baseUrl, 'stage7-export-finance', 'Password123');
@@ -321,7 +365,13 @@ test('stage7 export endpoints obey global mark filtering', async () => {
     );
     assert.deepEqual(
       readColumnValues(openSummaryWorksheet, 1).sort(),
-      ['TG-STAGE7-SUMMARY-MARKED', 'TG-STAGE7-SUMMARY-UNMARKED'],
+      [
+        'TG-STAGE7-EXPORT-MARKED',
+        'TG-STAGE7-EXPORT-UNMARKED',
+        'TG-STAGE7-SUMMARY-MARKED',
+        'TG-STAGE7-SUMMARY-UNMARKED',
+        'TG-STAGE7-SUMMARY-ZERO',
+      ],
     );
 
     const enabled = await requestJson(
@@ -363,7 +413,11 @@ test('stage7 export endpoints obey global mark filtering', async () => {
     );
     assert.deepEqual(
       summaryRows.map((row) => row['团号']).sort(),
-      ['TG-STAGE7-SUMMARY-MARKED'],
+      [
+        'TG-STAGE7-EXPORT-MARKED',
+        'TG-STAGE7-SUMMARY-MARKED',
+        'TG-STAGE7-SUMMARY-ZERO',
+      ],
     );
   }, {
     prisma: buildStage7ExportPrisma(),
@@ -509,6 +563,17 @@ function buildStage7ExportPrisma() {
         groupNo: 'TG-STAGE7-SUMMARY-UNMARKED',
         visitDate: '2026-07-02',
         financeMark: false,
+      }),
+      travelGroup({
+        id: 'tg-stage7-summary-zero',
+        groupNo: 'TG-STAGE7-SUMMARY-ZERO',
+        visitDate: '2026-07-03',
+        travelAgency: 'Stage7 Zero Agency',
+        guideName: 'Stage7 Zero Guide',
+        licensePlate: '贵A-ZERO',
+        guestCount: 30,
+        tasterName: 'Stage7 Zero Taster',
+        financeMark: true,
       }),
     ],
     salesOrders: [

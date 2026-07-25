@@ -25,6 +25,8 @@ class TravelGroupDetailPanel extends StatelessWidget {
     this.onPreviewAttachment,
     this.onDownloadAttachment,
     this.onDeleteAttachment,
+    this.onUploadKeyCustomerPhotos,
+    this.onUploadGuestInfoAttachments,
   });
 
   final TravelGroupRecord group;
@@ -38,6 +40,8 @@ class TravelGroupDetailPanel extends StatelessWidget {
   final TravelGroupAttachmentAction? onPreviewAttachment;
   final TravelGroupAttachmentAction? onDownloadAttachment;
   final TravelGroupAttachmentAction? onDeleteAttachment;
+  final VoidCallback? onUploadKeyCustomerPhotos;
+  final VoidCallback? onUploadGuestInfoAttachments;
 
   @override
   Widget build(BuildContext context) {
@@ -52,8 +56,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
       trailing: showFinanceMark
           ? StatusTag(
               label: group.financeMark ? '已标记' : '未标记',
-              tone:
-                  group.financeMark ? StatusTone.success : StatusTone.warning,
+              tone: group.financeMark ? StatusTone.success : StatusTone.warning,
             )
           : null,
       children: [
@@ -145,6 +148,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
           title: '重点客户照片',
           emptyText: '暂无重点客户照片',
           attachments: group.keyCustomerPhotos,
+          onUpload: onUploadKeyCustomerPhotos,
           onPreview: onPreviewAttachment,
           onDownload: onDownloadAttachment,
           onDelete: onDeleteAttachment,
@@ -154,6 +158,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
           title: '客人信息附件',
           emptyText: '暂无客人信息附件',
           attachments: group.guestInfoAttachments,
+          onUpload: onUploadGuestInfoAttachments,
           onPreview: onPreviewAttachment,
           onDownload: onDownloadAttachment,
           onDelete: onDeleteAttachment,
@@ -262,6 +267,7 @@ class _AttachmentSection extends StatelessWidget {
     required this.title,
     required this.emptyText,
     required this.attachments,
+    required this.onUpload,
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
@@ -270,6 +276,7 @@ class _AttachmentSection extends StatelessWidget {
   final String title;
   final String emptyText;
   final List<TravelGroupAttachmentRecord> attachments;
+  final VoidCallback? onUpload;
   final TravelGroupAttachmentAction? onPreview;
   final TravelGroupAttachmentAction? onDownload;
   final TravelGroupAttachmentAction? onDelete;
@@ -279,7 +286,17 @@ class _AttachmentSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SectionTitle(title),
+        Row(
+          children: [
+            Expanded(child: _SectionTitle(title)),
+            if (onUpload != null)
+              TextButton.icon(
+                onPressed: onUpload,
+                icon: const Icon(Icons.upload_file_rounded),
+                label: const Text('上传'),
+              ),
+          ],
+        ),
         if (attachments.isEmpty)
           Text(emptyText)
         else
@@ -589,6 +606,8 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
       return '缺少导游手机号';
     case 'missing_travel_agency':
       return '缺少旅行社';
+    case 'missing_cigarette_fee':
+      return '缺少香烟费用';
     case 'missing_guest_count':
       return '缺少人数';
     case 'invalid_guest_count_zero':

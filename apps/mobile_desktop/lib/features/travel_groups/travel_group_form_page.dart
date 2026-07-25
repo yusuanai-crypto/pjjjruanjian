@@ -41,6 +41,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   late final TextEditingController _travelAgencyController;
   late final TextEditingController _licensePlateController;
   late final TextEditingController _guestCountController;
+  late final TextEditingController _cigaretteFeeController;
   late final TextEditingController _tastingRoomNoController;
   late final TextEditingController _arrivalTimeController;
   late final TextEditingController _sourceRegionController;
@@ -76,6 +77,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _travelAgencyController = TextEditingController();
     _licensePlateController = TextEditingController();
     _guestCountController = TextEditingController();
+    _cigaretteFeeController = TextEditingController();
     _tastingRoomNoController = TextEditingController();
     _arrivalTimeController = TextEditingController();
     _sourceRegionController = TextEditingController();
@@ -101,6 +103,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _travelAgencyController.dispose();
     _licensePlateController.dispose();
     _guestCountController.dispose();
+    _cigaretteFeeController.dispose();
     _tastingRoomNoController.dispose();
     _arrivalTimeController.dispose();
     _sourceRegionController.dispose();
@@ -230,6 +233,9 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
         (int.tryParse(guestCount) == null || int.parse(guestCount) <= 0)) {
       return '人数必须大于 0';
     }
+    if ((_parseYuanCents(_cigaretteFeeController.text) ?? 0) <= 0) {
+      return '香烟费用必须大于 0';
+    }
     return '请检查已填写的信息。';
   }
 
@@ -275,6 +281,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       'visitDate': formatDate(_visitDate!),
       'travelAgency': _travelAgencyController.text.trim(),
       'guideId': _selectedGuide!.id,
+      'cigaretteFeeCents': _parseYuanCents(_cigaretteFeeController.text)!,
     };
     _putNonEmpty(body, 'licensePlate', _licensePlateController.text);
     _putNonEmpty(body, 'tastingRoomNo', _tastingRoomNoController.text);
@@ -406,6 +413,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _travelAgencyController.clear();
     _licensePlateController.clear();
     _guestCountController.clear();
+    _cigaretteFeeController.clear();
     _tastingRoomNoController.clear();
     _arrivalTimeController.clear();
     _sourceRegionController.clear();
@@ -692,6 +700,17 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           validator: _optionalPositiveIntValidator('人数必须大于 0'),
                         ),
                         TextFormField(
+                          key: const ValueKey('cigarette-fee-field'),
+                          controller: _cigaretteFeeController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: '香烟费用（元）',
+                          ),
+                          validator: _requiredPositiveMoneyValidator,
+                        ),
+                        TextFormField(
                           controller: _tastingRoomNoController,
                           decoration:
                               const InputDecoration(labelText: '品鉴馆号（选填）'),
@@ -896,6 +915,32 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       ],
     );
   }
+}
+
+int? _parseYuanCents(String value) {
+  final text = value.trim();
+  final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(text);
+  if (match == null) {
+    return null;
+  }
+  final yuan = int.tryParse(match.group(1)!);
+  if (yuan == null || yuan > 21474836) {
+    return null;
+  }
+  final fraction = (match.group(2) ?? '').padRight(2, '0');
+  final cents = yuan * 100 + (int.tryParse(fraction) ?? 0);
+  return cents <= 2147483647 ? cents : null;
+}
+
+String? _requiredPositiveMoneyValidator(String? value) {
+  final cents = _parseYuanCents(value ?? '');
+  if (cents == null) {
+    return '请输入最多两位小数的非负金额';
+  }
+  if (cents <= 0) {
+    return '香烟费用必须大于 0';
+  }
+  return null;
 }
 
 class _SelectionField extends StatelessWidget {

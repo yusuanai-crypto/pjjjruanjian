@@ -5,7 +5,7 @@ import 'package:jiangjiu_mobile_desktop/features/travel_group_query/travel_group
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
-  testWidgets('opens edit dialog and saves query page changes', (tester) async {
+  testWidgets('sales travel group query is read-only', (tester) async {
     final apiClient = _FakeApiClient();
 
     await tester.pumpWidget(
@@ -22,18 +22,10 @@ void main() {
     );
 
     await tester.pumpAndSettle();
-    await _openEditDialog(tester);
+    await _openDetailDialog(tester);
 
-    expect(find.text('TG20260629001 编辑'), findsOneWidget);
-    expect(find.textContaining('预留编辑入口'), findsNothing);
-
-    await tester.enterText(find.widgetWithText(TextFormField, '人数'), '30');
-    await tester.tap(find.widgetWithText(FilledButton, '保存修改'));
-    await tester.pumpAndSettle();
-
-    expect(apiClient.lastPatchPath, '/api/travel-groups/group-1');
-    expect(apiClient.lastPatchBody?['guestCount'], 30);
-    expect(find.text('30 人'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
+    expect(apiClient.lastPatchPath, isNull);
   });
 
   testWidgets('uses management title and ID based taster quick filters',
@@ -70,6 +62,8 @@ void main() {
     expect(query.containsKey('liaisonTasterId'), isFalse);
     expect(query.containsKey('financeMark'), isFalse);
     expect(query.containsKey('pendingStatus'), isFalse);
+    expect(query.containsKey('dateFrom'), isFalse);
+    expect(query.containsKey('dateTo'), isFalse);
 
     await tester.tap(find.byKey(const ValueKey('旅行社-__all__-2')));
     await tester.pumpAndSettle();
@@ -164,14 +158,14 @@ void main() {
     expect(_dialogText(dialog, '重点客户信息'), findsOneWidget);
     expect(_dialogText(dialog, '进店日期'), findsNothing);
     expect(_dialogText(dialog, '导游'), findsNothing);
-    expect(_dialogText(dialog, '预计进店时间'), findsNothing);
+    expect(_dialogText(dialog, '预计进店时间'), findsOneWidget);
     expect(_dialogText(dialog, '品鉴馆号'), findsNothing);
     expect(_dialogText(dialog, '实际进店时间'), findsNothing);
     expect(_dialogText(dialog, '团型'), findsNothing);
+    expect(_dialogText(dialog, '香烟费用（元）'), findsNothing);
   });
 
-  testWidgets('liaison taster gets date guide and expected time union',
-      (tester) async {
+  testWidgets('liaison taster cannot edit date or guide', (tester) async {
     final apiClient = _FakeApiClient(
       tasterId: 'actor-1',
       liaisonTasterId: 'actor-1',
@@ -186,8 +180,8 @@ void main() {
     await _openEditDialog(tester);
 
     final dialog = find.byType(AlertDialog);
-    expect(_dialogText(dialog, '进店日期'), findsOneWidget);
-    expect(_dialogText(dialog, '导游'), findsOneWidget);
+    expect(_dialogText(dialog, '进店日期'), findsNothing);
+    expect(_dialogText(dialog, '导游'), findsNothing);
     expect(_dialogText(dialog, '预计进店时间'), findsOneWidget);
     expect(_dialogText(dialog, '客源地'), findsOneWidget);
     expect(_dialogText(dialog, '旅行社'), findsNothing);
@@ -229,6 +223,79 @@ void main() {
     expect(_dialogText(dialog, '品鉴师'), findsOneWidget);
     expect(_dialogText(dialog, '对接品鉴师'), findsOneWidget);
     expect(_dialogText(dialog, '预计进店时间'), findsNothing);
+    expect(_dialogText(dialog, '香烟费用（元）'), findsOneWidget);
+
+    final cigaretteField =
+        find.byKey(const ValueKey('travel-group-edit-cigarette-fee'));
+    await tester.ensureVisible(cigaretteField);
+    await tester.enterText(cigaretteField, '20.50');
+    await tester.tap(find.widgetWithText(FilledButton, '保存修改'));
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastPatchBody?['cigaretteFeeCents'], 2050);
+    expect(apiClient.lastPatchBody?.containsKey('parkingFeeCents'), isFalse);
+  });
+
+  testWidgets('finance cannot see or submit cigarette fee', (tester) async {
+    final apiClient = _FakeApiClient();
+
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.finance,
+      currentUserId: 'finance-1',
+    );
+    await _openEditDialog(tester);
+
+    final dialog = find.byType(AlertDialog);
+    expect(_dialogText(dialog, '香烟费用（元）'), findsNothing);
+    await tester.tap(find.widgetWithText(FilledButton, '保存修改'));
+    await tester.pumpAndSettle();
+    expect(apiClient.lastPatchBody?.containsKey('cigaretteFeeCents'), isFalse);
+    expect(apiClient.lastPatchBody?.containsKey('parkingFeeCents'), isFalse);
+  });
+
+  testWidgets('future taster group explains read-only state', (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'actor-1',
+      visitDate: _tomorrowDate(),
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(
+      find.byKey(
+        const ValueKey('travel-group-taster-read-only-reason'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('未来旅行团仅可查看'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
+    expect(find.text('上传'), findsNothing);
+  });
+
+  testWidgets('taster group hides writes when shared edits are exhausted',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'actor-1',
+      tasterEditCount: 2,
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(find.textContaining('两次共享修改机会已用完'), findsOneWidget);
+    expect(find.text('共享剩余修改次数：0'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
   });
 }
 
@@ -284,10 +351,14 @@ class _FakeApiClient extends ApiClient {
   _FakeApiClient({
     this.tasterId = 'taster-1',
     this.liaisonTasterId = 'liaison-1',
+    this.visitDate,
+    this.tasterEditCount = 0,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final String? tasterId;
   final String? liaisonTasterId;
+  final String? visitDate;
+  final int tasterEditCount;
   final List<String> travelGroupGetPaths = [];
 
   String? lastPatchPath;
@@ -312,6 +383,8 @@ class _FakeApiClient extends ApiClient {
             _travelGroupJson(
               tasterId: tasterId,
               liaisonTasterId: liaisonTasterId,
+              visitDate: visitDate,
+              tasterEditCount: tasterEditCount,
             ),
           ],
         },
@@ -348,6 +421,8 @@ class _FakeApiClient extends ApiClient {
           ..._travelGroupJson(
             tasterId: tasterId,
             liaisonTasterId: liaisonTasterId,
+            visitDate: visitDate,
+            tasterEditCount: tasterEditCount,
           ),
           ...?body,
         },
@@ -377,12 +452,16 @@ Map<String, dynamic> _tasterJson() {
 Map<String, dynamic> _travelGroupJson({
   String? tasterId = 'taster-1',
   String? liaisonTasterId = 'liaison-1',
+  String? visitDate,
+  int tasterEditCount = 0,
 }) {
+  final resolvedVisitDate = visitDate ?? _todayDate();
+  final associated = tasterId == 'actor-1' || liaisonTasterId == 'actor-1';
   return {
     'id': 'group-1',
     'kind': 'travel',
     'groupNo': 'TG20260629001',
-    'visitDate': '2026-06-29',
+    'visitDate': resolvedVisitDate,
     'travelAgency': '876',
     'licensePlate': '743',
     'guideId': 'guide-1',
@@ -393,6 +472,11 @@ Map<String, dynamic> _travelGroupJson({
     'tasterId': tasterId,
     'tasterName': '王莉',
     'liaisonTasterId': liaisonTasterId,
+    'tasterEditCount': tasterEditCount,
+    'tasterEditLimit': 2,
+    'tasterEditRemaining': (2 - tasterEditCount).clamp(0, 2),
+    'canEditByCurrentUser':
+        associated && resolvedVisitDate == _todayDate() && tasterEditCount < 2,
     'liaisonTasterName': '赵对接',
     'sourceRegion': '遵义',
     'ageInfo': '40-55 岁',
@@ -408,6 +492,8 @@ Map<String, dynamic> _travelGroupJson({
     'departureTime': '',
     'remarks': '',
     'status': 'unmarked',
+    'parkingFeeCents': 500,
+    'cigaretteFeeCents': 1000,
     'financeMark': false,
     'pendingStatus': 'pending_taster',
     'pendingReasons': ['no_order_and_missing_taster_summary'],
@@ -429,4 +515,18 @@ Map<String, dynamic> _travelGroupJson({
       'cashOnDeliveryAmountCents': 0,
     },
   };
+}
+
+String _todayDate() {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 8));
+  return '${now.year.toString().padLeft(4, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-'
+      '${now.day.toString().padLeft(2, '0')}';
+}
+
+String _tomorrowDate() {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 8, days: 1));
+  return '${now.year.toString().padLeft(4, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-'
+      '${now.day.toString().padLeft(2, '0')}';
 }

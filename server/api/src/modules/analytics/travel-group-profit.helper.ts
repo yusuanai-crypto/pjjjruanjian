@@ -103,15 +103,33 @@ export function calculateTravelGroupProfit(
   const actualProductCostCents = nonNegativeInteger(
     productProfit.actualProductCostCents,
   );
+  const parkingFeeCents =
+    travelGroup?.parkingFeeCents === undefined ||
+    travelGroup?.parkingFeeCents === null
+      ? 500
+      : nonNegativeInteger(travelGroup.parkingFeeCents);
+  const cigaretteFeeCents =
+    travelGroup?.cigaretteFeeCents === undefined ||
+    travelGroup?.cigaretteFeeCents === null
+      ? null
+      : nonNegativeInteger(travelGroup.cigaretteFeeCents);
   const totalExpenseCents =
     actualProductCostCents +
     logisticsFeeCents +
+    parkingFeeCents +
+    (cigaretteFeeCents ?? 0) +
     employeeCommissionCents +
     tasterCommissionCents +
     dailyAgencyRebateCents +
     monthlyAgencyRebateCents;
   const warnings = normalizeWarnings(productProfit.warnings);
 
+  if (cigaretteFeeCents === null) {
+    addWarning(warnings, {
+      code: 'CIGARETTE_FEE_MISSING',
+      message: '香烟费用未填写，请前台补录后再核算利润。',
+    });
+  }
   if (pendingRefundAmountCents > 0) {
     addWarning(warnings, {
       code: 'PENDING_REFUND_CONFIRMATION',
@@ -130,12 +148,13 @@ export function calculateTravelGroupProfit(
     effectiveSalesAmountCents,
     costCoverageStatus: productProfit.costCoverageStatus,
     warnings,
+    cigaretteFeeMissing: cigaretteFeeCents === null,
   });
   const estimatedProfitCents =
     calculationStatus === 'incomplete'
       ? null
       : calculationStatus === 'no_sales'
-        ? 0
+        ? -totalExpenseCents
         : effectiveSalesAmountCents - totalExpenseCents;
   const estimatedProfitRate =
     estimatedProfitCents === null || effectiveSalesAmountCents === 0
@@ -156,6 +175,8 @@ export function calculateTravelGroupProfit(
     pendingRefundAmountCents,
     actualProductCostCents,
     logisticsFeeCents,
+    parkingFeeCents,
+    cigaretteFeeCents,
     salesCommissionCents,
     outreachCommissionCents,
     leaderCommissionCents,
@@ -175,7 +196,11 @@ function resolveCalculationStatus(input: {
   effectiveSalesAmountCents: number;
   costCoverageStatus: string;
   warnings: TravelGroupProfitWarning[];
+  cigaretteFeeMissing: boolean;
 }): TravelGroupProfitCalculationStatus {
+  if (input.cigaretteFeeMissing) {
+    return 'incomplete';
+  }
   if (input.effectiveSalesAmountCents <= 0) {
     return 'no_sales';
   }

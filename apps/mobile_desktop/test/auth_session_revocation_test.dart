@@ -177,8 +177,10 @@ Future<void> _expectTerminalSessionErrorClears(String errorCode) async {
 
 Map<String, Object> _sessionPayload() {
   return <String, Object>{
-    'token': 'test-session-token',
-    'expiresAt': '2030-01-01T00:00:00.000Z',
+    'accessToken': 'test-session-token',
+    'accessTokenExpiresAt': '2030-01-01T00:00:00.000Z',
+    'refreshToken': 'test-refresh-token',
+    'refreshTokenExpiresAt': '2030-01-30T00:00:00.000Z',
     'user': <String, Object>{
       'id': 'usr-test-session',
       'name': 'Test User',

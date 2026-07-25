@@ -270,6 +270,104 @@ void main() {
 
     expect(((payload['data'] as Map)['attachment'] as Map)['id'], 'file-1');
   });
+
+  test('expired access token refreshes and retries a JSON request once',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var requestCount = 0;
+    var refreshCount = 0;
+    final handled = Completer<void>();
+    server.listen((request) async {
+      requestCount += 1;
+      request.response.headers.contentType = ContentType.json;
+      if (requestCount == 1) {
+        request.response.statusCode = HttpStatus.unauthorized;
+        request.response.write(
+          jsonEncode(<String, Object>{
+            'error': <String, String>{
+              'code': 'AUTH_TOKEN_EXPIRED',
+              'message': 'expired',
+            },
+          }),
+        );
+      } else {
+        request.response.write(
+          jsonEncode(<String, Object>{
+            'data': <String, bool>{'ok': true},
+          }),
+        );
+        handled.complete();
+      }
+      await request.response.close();
+    });
+    addTearDown(() => server.close(force: true));
+    final client = ApiClient(
+      baseUrl: 'http://${server.address.host}:${server.port}',
+      onAccessTokenExpired: () async {
+        refreshCount += 1;
+        return 'rotated-access';
+      },
+    );
+    addTearDown(() => client.close(force: true));
+
+    final payload = await client.getJson(
+      '/api/protected',
+      token: 'expired-access',
+    );
+    await handled.future;
+
+    expect((payload['data'] as Map)['ok'], isTrue);
+    expect(refreshCount, 1);
+    expect(requestCount, 2);
+  });
+
+  test('a retried access-token failure never causes an infinite refresh loop',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var requestCount = 0;
+    var refreshCount = 0;
+    final handled = Completer<void>();
+    server.listen((request) async {
+      requestCount += 1;
+      request.response.statusCode = HttpStatus.unauthorized;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode(<String, Object>{
+          'error': <String, String>{
+            'code': 'AUTH_TOKEN_EXPIRED',
+            'message': 'expired',
+          },
+        }),
+      );
+      await request.response.close();
+      if (requestCount == 2) {
+        handled.complete();
+      }
+    });
+    addTearDown(() => server.close(force: true));
+    final client = ApiClient(
+      baseUrl: 'http://${server.address.host}:${server.port}',
+      onAccessTokenExpired: () async {
+        refreshCount += 1;
+        return 'still-expired-access';
+      },
+    );
+    addTearDown(() => client.close(force: true));
+
+    await expectLater(
+      client.getJson('/api/protected', token: 'expired-access'),
+      throwsA(
+        isA<ApiException>().having(
+          (error) => error.code,
+          'code',
+          'AUTH_TOKEN_EXPIRED',
+        ),
+      ),
+    );
+    await handled.future;
+    expect(refreshCount, 1);
+    expect(requestCount, 2);
+  });
 }
 
 Future<_TestServer> _startServer(

@@ -901,7 +901,7 @@ test('unit: AI refund query returns confirmed and pending refund summaries safel
   assert.deepEqual(calls, [
     {
       method: 'listAfterSalesOrders',
-      actor: { userId: 'u-admin', role: 'admin' },
+      actor: { id: 'u-admin', role: 'admin' },
       query: {
         customerId: 'customer-1',
         dateFrom: '2026-07-01',

@@ -31,7 +31,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   late final TextEditingController _warehouseRemarkController;
 
   PackingStatus _filter = PackingStatus.pending;
-  PackingStatus _packingStatus = PackingStatus.pending;
   String _logisticsMethodFilter = _allLogisticsMethodFilter;
   String _logisticsMethod = logisticsMethods.first;
 
@@ -133,7 +132,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   }
 
   Future<bool> _savePacking({
-    PackingStatus? overrideStatus,
     VoidCallback? closeEditor,
     VoidCallback? refreshEditor,
   }) async {
@@ -160,10 +158,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       return false;
     }
 
-    final nextStatus = overrideStatus ?? _packingStatus;
     updateFormState(() {
       _saving = true;
-      _packingStatus = nextStatus;
       _formErrorMessage = null;
     });
 
@@ -172,7 +168,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         order.id,
         {
           'logisticsMethod': _logisticsMethod.trim(),
-          'packingStatus': nextStatus.value,
+          'packingStatus': PackingStatus.packed.value,
           'packageCount': packageCount,
           'warehouseRemark': _warehouseRemarkController.text.trim(),
         },
@@ -224,7 +220,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   void _fillDraft(SalesOrderRecord? order) {
     if (order == null) {
       _logisticsMethod = logisticsMethods.first;
-      _packingStatus = _filter;
       _packageCountController.text = '0';
       _warehouseRemarkController.clear();
       return;
@@ -234,7 +229,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     _logisticsMethod = logisticsMethod == null || logisticsMethod.isEmpty
         ? logisticsMethods.first
         : logisticsMethod;
-    _packingStatus = _packingStatusFromValue(order.packingStatus);
     _packageCountController.text = '${order.packageCount}';
     _warehouseRemarkController.text = order.warehouseRemark ?? '';
   }
@@ -614,8 +608,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         FormSection(
           title: '打包处理',
           trailing: StatusTag(
-            label: _packingStatusLabel(_packingStatus.value),
-            tone: _packingTone(_packingStatus.value),
+            label: _packingStatusLabel(order.packingStatus),
+            tone: _packingTone(order.packingStatus),
           ),
           children: [
             if (_formErrorMessage != null) ...[
@@ -650,20 +644,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                         }
                       : null,
                 ),
-                _DropdownField<PackingStatus>(
-                  key: const ValueKey('warehouse-packing-status-field'),
-                  label: '打包状态',
-                  value: _packingStatus,
-                  items: PackingStatus.values,
-                  itemLabel: (value) => _packingStatusLabel(value.value),
-                  onChanged: _canEditPacking
-                      ? (value) {
-                          if (value != null) {
-                            updateDraft(() => _packingStatus = value);
-                          }
-                        }
-                      : null,
-                ),
                 TextField(
                   key: const ValueKey('warehouse-package-count-field'),
                   controller: _packageCountController,
@@ -690,13 +670,6 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
               onSave: _saving
                   ? null
                   : () => _savePacking(
-                        closeEditor: closeEditor,
-                        refreshEditor: refreshEditor,
-                      ),
-              onMarkAbnormal: _saving
-                  ? null
-                  : () => _savePacking(
-                        overrideStatus: PackingStatus.abnormal,
                         closeEditor: closeEditor,
                         refreshEditor: refreshEditor,
                       ),
@@ -840,14 +813,12 @@ class _PackingActionBar extends StatelessWidget {
     required this.canEdit,
     required this.onCancel,
     required this.onSave,
-    required this.onMarkAbnormal,
   });
 
   final bool saving;
   final bool canEdit;
   final VoidCallback? onCancel;
   final VoidCallback? onSave;
-  final VoidCallback? onMarkAbnormal;
 
   @override
   Widget build(BuildContext context) {
@@ -860,12 +831,6 @@ class _PackingActionBar extends StatelessWidget {
           onPressed: onCancel,
           child: const Text('取消'),
         ),
-        if (canEdit)
-          OutlinedButton.icon(
-            onPressed: onMarkAbnormal,
-            icon: const Icon(Icons.report_problem_rounded),
-            label: const Text('标记异常'),
-          ),
         if (canEdit)
           FilledButton.icon(
             key: const ValueKey('warehouse-packing-save-button'),
@@ -1037,15 +1002,6 @@ SalesOrderRecord? _selectedFrom(
     return fallback;
   }
   return orders.isEmpty ? null : orders.first;
-}
-
-PackingStatus _packingStatusFromValue(String value) {
-  for (final status in PackingStatus.values) {
-    if (status.value == value) {
-      return status;
-    }
-  }
-  return PackingStatus.pending;
 }
 
 StatusTone _packingTone(String value) {

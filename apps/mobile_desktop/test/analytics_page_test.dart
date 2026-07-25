@@ -547,6 +547,191 @@ void main() {
   });
 
   testWidgets(
+      'admin loads sales performance columns, nullable average, and unassigned row',
+      (tester) async {
+    final apiClient = _FakeAnalyticsApiClient();
+
+    await tester.pumpWidget(_page(apiClient, role: UserRole.admin));
+    await tester.pumpAndSettle();
+
+    final uri = _latestUri(apiClient, '/api/analytics/sales-performance');
+    expect(uri.queryParameters['preset'], 'this_month');
+    expect(uri.queryParameters['sortBy'], 'netSalesAmountCents');
+    expect(uri.queryParameters['sortDirection'], 'desc');
+
+    final section = _salesPerformanceSection();
+    expect(_within(section, find.text('销售出单情况')), findsOneWidget);
+    final table = tester.widget<DataTable>(
+      find.descendant(of: section, matching: find.byType(DataTable)),
+    );
+    expect(
+      table.columns.map((column) => (column.label as Text).data).toList(),
+      const [
+        '销售人员',
+        '状态',
+        '出单数',
+        '出单销售额',
+        '退单销售额',
+        '总销售额',
+        '单均销售额',
+        '详情',
+      ],
+    );
+    expect(_within(section, find.text('测试销售A')), findsOneWidget);
+    expect(_within(section, find.text('未分配销售')), findsOneWidget);
+    expect(_within(section, find.text('未分配')), findsOneWidget);
+    expect(_within(section, find.text('—')), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('analytics-sales-performance-export-button'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('sales performance date refresh and detail show order contribution',
+      (tester) async {
+    final apiClient = _FakeAnalyticsApiClient();
+
+    await tester.pumpWidget(_page(apiClient, role: UserRole.boss));
+    await tester.pumpAndSettle();
+    final initialCount =
+        _uris(apiClient, '/api/analytics/sales-performance').length;
+
+    await _tapPreset(tester, '今日');
+    final refreshed = _latestUri(
+      apiClient,
+      '/api/analytics/sales-performance',
+    );
+    expect(
+      _uris(apiClient, '/api/analytics/sales-performance').length,
+      greaterThan(initialCount),
+    );
+    expect(refreshed.queryParameters['preset'], 'today');
+
+    final detailButton =
+        find.byKey(const ValueKey('analytics-sales-detail-sales-1'));
+    await tester.ensureVisible(detailButton);
+    await tester.tap(detailButton);
+    await tester.pumpAndSettle();
+
+    final detailUri = _latestUri(
+      apiClient,
+      '/api/analytics/sales-performance/sales-1',
+    );
+    expect(detailUri.queryParameters['preset'], 'today');
+    expect(find.text('测试销售A 详情'), findsOneWidget);
+    expect(find.text('订单贡献明细'), findsOneWidget);
+    expect(find.text('SO-SALES-DETAIL-001'), findsOneWidget);
+    expect(find.text('计入出单数'), findsOneWidget);
+  });
+
+  testWidgets('sales performance export blocks duplicate taps and reports errors',
+      (tester) async {
+    final completer = Completer<ApiDownloadedFile>();
+    final apiClient = _FakeAnalyticsApiClient(
+      pendingSalesPerformanceExportResponse: completer,
+    );
+    final documentsDirectory =
+        Directory.systemTemp.createTempSync('sales-performance-export-test-');
+    addTearDown(() {
+      if (documentsDirectory.existsSync()) {
+        documentsDirectory.deleteSync(recursive: true);
+      }
+    });
+
+    await tester.pumpWidget(
+      _page(
+        apiClient,
+        role: UserRole.admin,
+        documentsDirectory: documentsDirectory,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final button = find.byKey(
+      const ValueKey('analytics-sales-performance-export-button'),
+    );
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.tap(button);
+    await tester.pump();
+    expect(
+      _downloadUris(
+        apiClient,
+        '/api/analytics/sales-performance/export',
+      ),
+      hasLength(1),
+    );
+    expect(find.text('导出中'), findsOneWidget);
+
+    completer.complete(
+      ApiDownloadedFile(
+        bytes: Uint8List.fromList([0x50, 0x4B, 0x03, 0x04]),
+        fileName: 'sales-performance-test.xlsx',
+      ),
+    );
+    for (var index = 0;
+        index < 20 &&
+            find
+                .textContaining('销售出单统计已导出：')
+                .evaluate()
+                .isEmpty;
+        index += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+    }
+    expect(find.textContaining('销售出单统计已导出：'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    final errorClient = _FakeAnalyticsApiClient(
+      salesPerformanceExportError: const ApiException(
+        statusCode: 500,
+        code: 'SALES_EXPORT_FAILED',
+        message: '测试错误：导出销售出单统计失败。',
+      ),
+    );
+    await tester.pumpWidget(
+      _page(
+        errorClient,
+        role: UserRole.admin,
+        documentsDirectory: documentsDirectory,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final errorButton = find.byKey(
+      const ValueKey('analytics-sales-performance-export-button'),
+    );
+    await tester.ensureVisible(errorButton);
+    await tester.tap(errorButton);
+    await tester.pumpAndSettle();
+    expect(find.text('测试错误：导出销售出单统计失败。'), findsWidgets);
+  });
+
+  testWidgets('sales performance uses non-overflowing cards on narrow screens',
+      (tester) async {
+    tester.view.physicalSize = const Size(520, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeAnalyticsApiClient();
+    await tester.pumpWidget(_page(apiClient, role: UserRole.admin));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey('analytics-sales-performance-mobile-cards'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
       'allows admin boss finance and after sales to use analytics and export',
       (tester) async {
     for (final role in [
@@ -570,6 +755,31 @@ void main() {
           findsOneWidget);
       expect(find.byKey(const ValueKey('analytics-rankings-export-button')),
           findsOneWidget);
+      if (role == UserRole.admin || role == UserRole.boss) {
+        expect(
+          _uris(apiClient, '/api/analytics/sales-performance'),
+          isNotEmpty,
+        );
+        expect(find.text('销售出单情况'), findsOneWidget);
+        expect(
+          find.byKey(
+            const ValueKey('analytics-sales-performance-export-button'),
+          ),
+          findsOneWidget,
+        );
+      } else {
+        expect(
+          _uris(apiClient, '/api/analytics/sales-performance'),
+          isEmpty,
+        );
+        expect(find.text('销售出单情况'), findsNothing);
+        expect(
+          find.byKey(
+            const ValueKey('analytics-sales-performance-export-button'),
+          ),
+          findsNothing,
+        );
+      }
 
       final detailButton =
           find.byKey(const ValueKey('analytics-ranking-detail-taster-1'));
@@ -637,6 +847,10 @@ Finder _overviewMetricsSection() {
   return find.byKey(const ValueKey('analytics-overview-metrics-section'));
 }
 
+Finder _salesPerformanceSection() {
+  return find.byKey(const ValueKey('analytics-sales-performance-section'));
+}
+
 Finder _within(Finder parent, Finder matching) {
   return find.descendant(of: parent, matching: matching);
 }
@@ -677,6 +891,16 @@ Uri _latestDownloadUri(_FakeAnalyticsApiClient apiClient, String path) {
       (value) => Uri.parse(value).path == path,
     ),
   );
+}
+
+List<Uri> _downloadUris(
+  _FakeAnalyticsApiClient apiClient,
+  String path,
+) {
+  return apiClient.downloadPaths
+      .map(Uri.parse)
+      .where((uri) => uri.path == path)
+      .toList();
 }
 
 Widget _page(
@@ -795,6 +1019,65 @@ List<Map<String, dynamic>> _rankingsJson() {
       ],
     ),
   ];
+}
+
+List<Map<String, dynamic>> _salesPerformanceJson() {
+  return [
+    {
+      'salesUserId': 'sales-1',
+      'salesUserName': '测试销售A',
+      'isActive': true,
+      'isUnassigned': false,
+      'orderCount': 2,
+      'grossSalesAmountCents': 180000,
+      'refundAmountCents': 30000,
+      'netSalesAmountCents': 150000,
+      'averageSalesPerOrderCents': 75000,
+    },
+    {
+      'salesUserId': null,
+      'salesUserName': '未分配销售',
+      'isActive': false,
+      'isUnassigned': true,
+      'orderCount': 0,
+      'grossSalesAmountCents': 0,
+      'refundAmountCents': 20000,
+      'netSalesAmountCents': -20000,
+      'averageSalesPerOrderCents': null,
+    },
+  ];
+}
+
+Map<String, dynamic> _salesPerformanceDetailJson() {
+  return {
+    'range': {
+      'preset': 'this_month',
+      'dateFrom': '2026-07-01',
+      'dateTo': '2026-07-04',
+      'timezone': 'Asia/Shanghai',
+    },
+    'salesUser': {
+      'id': 'sales-1',
+      'name': '测试销售A',
+      'isActive': true,
+      'isUnassigned': false,
+    },
+    'summary': _salesPerformanceJson().first,
+    'orders': [
+      {
+        'id': 'sales-detail-order-1',
+        'orderNo': 'SO-SALES-DETAIL-001',
+        'orderDate': '2026-07-01',
+        'customerName': '销售测试客户',
+        'status': 'PARTIAL_REFUND',
+        'grossSalesAmountCents': 100000,
+        'refundAmountCents': 30000,
+        'netSalesAmountCents': 70000,
+        'contributesToOrderCount': true,
+        'afterSalesOrderIds': const ['sales-detail-refund-1'],
+      },
+    ],
+  };
 }
 
 Map<String, dynamic> _rankingJson({
@@ -1114,22 +1397,35 @@ class _FakeAnalyticsApiClient extends ApiClient {
   _FakeAnalyticsApiClient({
     this.overviewError,
     this.rankingsExportError,
+    this.salesPerformanceExportError,
     this.pendingOverviewResponse,
     this.pendingOverviewExportResponse,
+    this.pendingSalesPerformanceExportResponse,
     this.emptyTrends = false,
     List<Map<String, dynamic>>? rankings,
     Map<String, dynamic>? detail,
+    List<Map<String, dynamic>>? salesPerformance,
+    Map<String, dynamic>? salesPerformanceDetail,
   })  : rankings = rankings ?? _rankingsJson(),
         detail = detail ?? _tasterDetailJson(),
+        salesPerformance =
+            salesPerformance ?? _salesPerformanceJson(),
+        salesPerformanceDetail =
+            salesPerformanceDetail ?? _salesPerformanceDetailJson(),
         super(baseUrl: 'http://127.0.0.1:3000');
 
   final ApiException? overviewError;
   final ApiException? rankingsExportError;
+  final ApiException? salesPerformanceExportError;
   final Completer<Map<String, dynamic>>? pendingOverviewResponse;
   final Completer<ApiDownloadedFile>? pendingOverviewExportResponse;
+  final Completer<ApiDownloadedFile>?
+      pendingSalesPerformanceExportResponse;
   final bool emptyTrends;
   final List<Map<String, dynamic>> rankings;
   final Map<String, dynamic> detail;
+  final List<Map<String, dynamic>> salesPerformance;
+  final Map<String, dynamic> salesPerformanceDetail;
   final paths = <String>[];
   final tokens = <String?>[];
   final downloadPaths = <String>[];
@@ -1153,6 +1449,25 @@ class _FakeAnalyticsApiClient extends ApiClient {
       case '/api/analytics/taster-rankings':
         return {
           'data': {'rankings': rankings},
+        };
+      case '/api/analytics/sales-performance':
+        return {
+          'data': {'salesPerformance': salesPerformance},
+        };
+      case '/api/analytics/sales-performance/sales-1':
+        return {'data': salesPerformanceDetail};
+      case '/api/analytics/sales-performance/unassigned':
+        return {
+          'data': {
+            ...salesPerformanceDetail,
+            'salesUser': {
+              'id': null,
+              'name': '未分配销售',
+              'isActive': false,
+              'isUnassigned': true,
+            },
+            'summary': salesPerformance.last,
+          },
         };
       case '/api/analytics/taster-rankings/taster-1':
         return {'data': detail};
@@ -1207,6 +1522,17 @@ class _FakeAnalyticsApiClient extends ApiClient {
         return ApiDownloadedFile(
           bytes: Uint8List.fromList([0x50, 0x4B, 0x03, 0x04]),
           fileName: 'analytics-taster-rankings-test.xlsx',
+        );
+      case '/api/analytics/sales-performance/export':
+        if (pendingSalesPerformanceExportResponse != null) {
+          return pendingSalesPerformanceExportResponse!.future;
+        }
+        if (salesPerformanceExportError != null) {
+          throw salesPerformanceExportError!;
+        }
+        return ApiDownloadedFile(
+          bytes: Uint8List.fromList([0x50, 0x4B, 0x03, 0x04]),
+          fileName: 'analytics-sales-performance-test.xlsx',
         );
       default:
         throw StateError('Unexpected BYTES $path');

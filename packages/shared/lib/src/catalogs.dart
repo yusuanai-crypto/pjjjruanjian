@@ -70,7 +70,7 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'qr_sales_sheet', label: '二维码销售单', phase: 5),
   SharedMenuEntry(id: 'taster_summary', label: '我的接待', phase: 3),
   SharedMenuEntry(id: 'taster_commissions', label: '我的提成', phase: 7),
-  SharedMenuEntry(id: 'finance_query', label: '财务查询', phase: 6),
+  SharedMenuEntry(id: 'finance_query', label: '物流单号与品鉴师提成填写', phase: 6),
   SharedMenuEntry(id: 'commission_rules', label: '提成规则', phase: 7),
   SharedMenuEntry(id: 'product_management', label: '商品管理', phase: 10),
   SharedMenuEntry(id: 'reconciliation_table', label: '对账表', phase: 6),
@@ -79,12 +79,14 @@ const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'analytics', label: '数据分析', phase: 8),
   SharedMenuEntry(id: 'profit_analysis', label: '利润分析', phase: 10),
   SharedMenuEntry(id: 'ai_assistant', label: 'AI 助手', phase: 9),
+  SharedMenuEntry(id: 'operation_logs', label: '操作日志', phase: 1),
 ];
 
 const roleMenuIds = <UserRole, List<String>>{
   UserRole.superAdmin: [
     'dashboard',
     'role_menu',
+    'operation_logs',
     'employee_accounts',
     'travel_group_form',
     'travel_group_query',
@@ -108,6 +110,7 @@ const roleMenuIds = <UserRole, List<String>>{
   UserRole.admin: [
     'dashboard',
     'role_menu',
+    'operation_logs',
     'employee_accounts',
     'travel_group_form',
     'travel_group_query',
@@ -178,7 +181,6 @@ const roleMenuIds = <UserRole, List<String>>{
     'dashboard',
     'role_menu',
     'travel_group_query',
-    'order_form',
     'order_query',
     'after_sales_form',
     'analytics',

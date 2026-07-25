@@ -473,6 +473,8 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
       return '缺少导游手机号';
     case 'missing_travel_agency':
       return '缺少旅行社';
+    case 'missing_cigarette_fee':
+      return '缺少香烟费用';
     case 'missing_guest_count':
       return '缺少人数';
     case 'invalid_guest_count_zero':
@@ -507,7 +509,7 @@ String _handlingLabel(String? status, {bool showFinanceMark = true}) {
 String _handlingDescription(String? status, {bool showFinanceMark = true}) {
   switch (status) {
     case 'pending_front_desk':
-      return '补齐导游、旅行社、人数、品鉴师等基础信息。';
+      return '补齐导游、旅行社、人数、香烟费用等基础信息。';
     case 'pending_taster':
       return '进入品鉴师总结表单，补充本团接待总结。';
     case 'pending_finance':

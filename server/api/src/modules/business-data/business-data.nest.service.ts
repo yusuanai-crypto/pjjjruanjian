@@ -130,16 +130,11 @@ const TRAVEL_GROUP_INTAKE_PATCH_FIELDS = [
 const TRAVEL_GROUP_TASTER_PATCH_FIELDS = [
   'licensePlate',
   'guestCount',
+  'expectedArrivalTime',
   'remarks',
   'wineDetails',
   'tasterSummary',
   ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
-];
-
-const TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS = [
-  'visitDate',
-  'guideId',
-  'expectedArrivalTime',
 ];
 
 const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
@@ -164,7 +159,8 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'tastingItems',
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
-    ...TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS,
+    'expectedArrivalTime',
+    'cigaretteFeeCents',
     ...TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
   ],
   admin: [
@@ -189,6 +185,7 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
     'expectedArrivalTime',
+    'cigaretteFeeCents',
     ...TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
   ],
   front_desk: [
@@ -205,8 +202,8 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'tastingItems',
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
+    'cigaretteFeeCents',
   ],
-  sales: ['guestCount', 'departureTime', 'remarks', 'tastingItems'],
   taster: TRAVEL_GROUP_TASTER_PATCH_FIELDS,
   finance: TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
 };
@@ -475,21 +472,6 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'items',
     'status',
   ],
-  sales: [
-    'orderType',
-    'salesUserId',
-    'outreachUserId',
-    'salesFormNo',
-    'orderDate',
-    'customerId',
-    'customer',
-    'travelGroupId',
-    'cashOnDeliveryAmountCents',
-    'invoiceRequired',
-    'remark',
-    'items',
-    'status',
-  ],
   finance: [
     'orderType',
     'salesUserId',
@@ -524,6 +506,23 @@ const SALES_ORDER_PACKING_PATCH_FIELDS = [
 ];
 
 const SALES_ORDER_STATUS_PATCH_FIELDS = ['status', 'remark', 'statusReason'];
+
+const SALES_ORDER_SALES_EDIT_FIELDS = new Set([
+  'orderType',
+  'outreachUserId',
+  'salesFormNo',
+  'orderDate',
+  'customerId',
+  'customer',
+  'travelGroupId',
+  'cashOnDeliveryAmountCents',
+  'invoiceRequired',
+  'remark',
+  'items',
+  'status',
+  ...SALES_ORDER_FINANCE_PATCH_FIELDS,
+  ...SALES_ORDER_PACKING_PATCH_FIELDS,
+]);
 
 const SALES_ORDER_CUSTOMER_PATCH_FIELDS = [
   'name',
@@ -610,7 +609,7 @@ export class BusinessDataNestService {
     });
     return filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, kind),
+        toGroupDto(group, kind, actor),
       ),
       filters,
     ).slice(0, take);
@@ -633,7 +632,7 @@ export class BusinessDataNestService {
 
     const groupDtos = filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, 'travel'),
+        toGroupDto(group, 'travel', actor),
       ),
       filters,
     );
@@ -715,6 +714,12 @@ export class BusinessDataNestService {
     let updated: any;
     try {
       updated = await this.prisma.$transaction(async (tx: any) => {
+        await claimTravelGroupTasterEditOpportunity(
+          tx,
+          actor,
+          id,
+          new Date(),
+        );
         const updatedGroup = await tx.travelGroup.update({
           where: { id },
           data: {
@@ -760,7 +765,7 @@ export class BusinessDataNestService {
       attachments: storedAttachments.map((attachment: any) =>
         toTravelGroupAttachmentDto(attachment, category),
       ),
-      travelGroup: toGroupDto(updated, 'travel'),
+      travelGroup: toGroupDto(updated, 'travel', actor),
     };
   }
 
@@ -779,7 +784,7 @@ export class BusinessDataNestService {
     ]);
     const current = await this.findGroupOrThrow('travel', id, true);
     await this.assertCanReadGroup('travel', actor, current);
-    await this.assertPassesGlobalGroupMarkScope(current);
+    await this.assertPassesGlobalGroupMarkScope(actor, current);
     const located = findTravelGroupAttachment(current, attachmentId);
     if (!located || !isSafeAttachmentStorageKey(located.attachment.storageKey)) {
       throw attachmentNotFoundError();
@@ -847,6 +852,12 @@ export class BusinessDataNestService {
     let updated: any;
     try {
       updated = await this.prisma.$transaction(async (tx: any) => {
+        await claimTravelGroupTasterEditOpportunity(
+          tx,
+          actor,
+          id,
+          new Date(),
+        );
         const updatedGroup = await tx.travelGroup.update({
           where: { id },
           data: {
@@ -909,7 +920,7 @@ export class BusinessDataNestService {
         located.attachment,
         located.category,
       ),
-      travelGroup: toGroupDto(updated, 'travel'),
+      travelGroup: toGroupDto(updated, 'travel', actor),
     };
   }
 
@@ -937,7 +948,7 @@ export class BusinessDataNestService {
     });
     return filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, 'travel'),
+        toGroupDto(group, 'travel', actor),
       ),
       filters,
     )
@@ -958,8 +969,8 @@ export class BusinessDataNestService {
     requireAnyRole(actor, readRoles);
     const group = await this.findGroupOrThrow(kind, id, true);
     await this.assertCanReadGroup(kind, actor, group);
-    await this.assertPassesGlobalGroupMarkScope(group);
-    return toGroupDto(group, kind);
+    await this.assertPassesGlobalGroupMarkScope(actor, group);
+    return toGroupDto(group, kind, actor);
   }
 
   async createGroup(
@@ -1081,7 +1092,7 @@ export class BusinessDataNestService {
       );
     });
 
-    return toGroupDto(created, 'travel');
+    return toGroupDto(created, 'travel', actor);
   }
 
   async updateGroup(
@@ -1133,7 +1144,7 @@ export class BusinessDataNestService {
       afterData: toGroupDto(updated, kind),
       ipAddress: metadata.ipAddress || null,
     });
-    return toGroupDto(updated, kind);
+    return toGroupDto(updated, kind, actor);
   }
 
   private async updateTravelGroup(
@@ -1145,7 +1156,6 @@ export class BusinessDataNestService {
     requireAnyRole(actor, [
       'admin',
       'front_desk',
-      'sales',
       'taster',
       'finance',
     ]);
@@ -1221,6 +1231,12 @@ export class BusinessDataNestService {
         };
       }
 
+      await claimTravelGroupTasterEditOpportunity(
+        tx,
+        actor,
+        id,
+        new Date(),
+      );
       const updatedGroup = await tx.travelGroup.update({
         where: {
           id,
@@ -1243,7 +1259,7 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
-    return toGroupDto(updated, 'travel');
+    return toGroupDto(updated, 'travel', actor);
   }
 
   async setGroupFinanceMark(
@@ -1289,7 +1305,7 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
-    return toGroupDto(updated, kind);
+    return toGroupDto(updated, kind, actor);
   }
 
   async submitTravelGroupTasterSummary(
@@ -1300,6 +1316,7 @@ export class BusinessDataNestService {
   ) {
     requireAnyRole(actor, ['admin', 'taster']);
     const current = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, current);
     assertTasterCanEditTravelGroup(actor, current);
 
     const now = new Date();
@@ -1308,6 +1325,7 @@ export class BusinessDataNestService {
       'tasterSummary',
     );
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      await claimTravelGroupTasterEditOpportunity(tx, actor, id, now);
       const updatedGroup = await tx.travelGroup.update({
         where: {
           id,
@@ -1335,7 +1353,7 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
-    return toGroupDto(updated, 'travel');
+    return toGroupDto(updated, 'travel', actor);
   }
 
   async listSalesOrders(actor: any, filters: any = {}) {
@@ -1571,7 +1589,7 @@ export class BusinessDataNestService {
   }
 
   async createSalesOrder(actor: any, payload: any, metadata: any = {}) {
-    requireAnyRole(actor, ['admin', 'sales', 'finance', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'sales', 'finance']);
     const itemInputs = buildSalesOrderItems(payload?.items);
     const data = buildSalesOrderData(payload, actor, itemInputs);
     const order = await this.prisma.$transaction(async (tx: any) => {
@@ -1617,6 +1635,7 @@ export class BusinessDataNestService {
             'Related travel group does not exist.',
           );
         }
+        assertSalesCanUseTravelGroup(actor, travelGroup);
       }
       if (data.salesUserId) {
         await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
@@ -1734,7 +1753,230 @@ export class BusinessDataNestService {
       );
     });
 
-    return toSalesOrderDto(order);
+    return toSalesOrderDtoForActor(order, actor);
+  }
+
+  async salesEditSalesOrder(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['sales']);
+    assertSalesOrderSalesEditAllowedFields(payload);
+    const current = await this.findReadableSalesOrderOrThrow(actor, id);
+    const submittedItemInputs = hasOwn(payload, 'items')
+      ? buildSalesOrderItems(payload.items)
+      : null;
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const data = {
+        ...buildSalesOrderUpdateData(payload, actor),
+        ...buildSalesOrderFinanceUpdateData(payload, actor),
+        ...buildSalesOrderPackingUpdateData(payload, actor),
+      };
+      const customerResult = await resolveSalesOrderPatchCustomer(
+        tx,
+        payload,
+        current,
+        actor,
+      );
+
+      if (customerResult.customer) {
+        Object.assign(
+          data,
+          buildSalesOrderCustomerSnapshotData(customerResult.customer),
+        );
+      }
+
+      if (customerResult.created) {
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'customers.create',
+            entityType: 'customer',
+            entityId: customerResult.customer.id,
+            afterData: toSalesOrderCustomerDto(customerResult.customer),
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+      } else if (customerResult.updated) {
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'customers.update',
+            entityType: 'customer',
+            entityId: customerResult.customer.id,
+            beforeData: toSalesOrderCustomerDto(customerResult.beforeCustomer),
+            afterData: toSalesOrderCustomerDto(customerResult.customer),
+            ipAddress: metadata.ipAddress || null,
+          },
+          tx,
+        );
+      }
+
+      const finalOrderType = data.orderType || current.orderType;
+      const finalTravelGroupId =
+        data.travelGroupId !== undefined
+          ? data.travelGroupId
+          : current.travelGroupId;
+      if (finalOrderType === 'TRAVEL_GROUP' && !finalTravelGroupId) {
+        throw createHttpError(
+          400,
+          'VALIDATION_FAILED',
+          'travelGroupId is required for travel_group orders.',
+        );
+      }
+      if (finalTravelGroupId) {
+        const travelGroup = await tx.travelGroup.findUnique({
+          where: { id: finalTravelGroupId },
+        });
+        if (!travelGroup) {
+          throw createHttpError(
+            404,
+            'TRAVEL_GROUP_NOT_FOUND',
+            'Related travel group does not exist.',
+          );
+        }
+        assertSalesCanUseTravelGroup(actor, travelGroup);
+      }
+      if (data.outreachUserId) {
+        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
+          'SALES',
+          'sales',
+        ]);
+      }
+
+      const finalOrderDate = data.orderDate || current.orderDate;
+      const orderDateChanged =
+        data.orderDate !== undefined &&
+        formatDate(data.orderDate) !== formatDate(current.orderDate);
+      let resolvedOrderItems: any[] | null = null;
+      if (submittedItemInputs) {
+        resolvedOrderItems = await resolveSalesOrderItemSnapshots(
+          tx,
+          submittedItemInputs,
+          finalOrderDate,
+          current.items || [],
+          orderDateChanged,
+        );
+        data.totalAmountCents =
+          sumSalesOrderItemSubtotals(resolvedOrderItems);
+        data.items = {
+          deleteMany: {},
+          create: resolvedOrderItems.map(toSalesOrderItemCreateData),
+        };
+      } else if (orderDateChanged) {
+        const existingItemInputs = (current.items || []).map(
+          salesOrderItemToSnapshotInput,
+        );
+        resolvedOrderItems = await resolveSalesOrderItemSnapshots(
+          tx,
+          existingItemInputs,
+          finalOrderDate,
+          current.items || [],
+          true,
+        );
+        data.totalAmountCents =
+          sumSalesOrderItemSubtotals(resolvedOrderItems);
+        data.items = {
+          deleteMany: {},
+          create: resolvedOrderItems.map(toSalesOrderItemCreateData),
+        };
+      }
+
+      if (
+        hasOwn(payload, 'logisticsNo') &&
+        normalizeOptionalString(current.logisticsNo) !==
+          normalizeOptionalString(data.logisticsNo)
+      ) {
+        Object.assign(data, clearTrackingCacheData());
+      }
+      if (packingUpdateChangesProvider(current, data)) {
+        Object.assign(data, clearTrackingCacheData());
+      }
+      const validationCurrent = {
+        ...current,
+        logisticsNo: hasOwn(data, 'logisticsNo')
+          ? data.logisticsNo
+          : current.logisticsNo,
+        items: resolvedOrderItems || current.items,
+      };
+      assertPackedLogisticsNoPresent(current, data);
+      assertPackingProviderDetails(current, data);
+      assertShippedLogisticsComplete(validationCurrent, data);
+
+      await claimSalesOrderEditOpportunity(tx, actor, id, new Date());
+      const updatedOrder = await tx.salesOrder.update({
+        where: { id },
+        data,
+        include: getSalesOrderInclude(),
+      });
+      if (resolvedOrderItems) {
+        await synchronizeSerializedInventoryUnits(
+          tx,
+          id,
+          resolvedOrderItems,
+          current.items || [],
+        );
+      }
+
+      for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
+        current,
+        updatedOrder,
+      )) {
+        await this.refreshTravelGroupOrderSummary(
+          tx,
+          travelGroupId,
+          actor.id,
+        );
+      }
+
+      const orderForLog =
+        (await tx.salesOrder.findUnique({
+          where: { id },
+          include: getSalesOrderInclude(),
+        })) || updatedOrder;
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.sales_edit',
+          entityType: 'sales_order',
+          entityId: orderForLog.id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(orderForLog),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      if (
+        shouldRecalculateStage7ForSalesOrderUpdate(
+          current,
+          orderForLog,
+          payload,
+        )
+      ) {
+        await this.refreshStage7SalesOrderCommissionAndSummary(
+          tx,
+          orderForLog.id,
+          actor,
+          metadata,
+          {
+            trigger: 'sales_order_sales_edit',
+            entityType: 'sales_order',
+            entityId: orderForLog.id,
+            affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
+              current,
+              orderForLog,
+            ),
+          },
+        );
+      }
+      return orderForLog;
+    });
+
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async updateSalesOrder(
@@ -1743,7 +1985,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'sales', 'finance']);
+    requireAnyRole(actor, ['admin', 'finance']);
     assertSalesOrderPatchAllowedFields(actor, payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -1951,7 +2193,7 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
-    return toSalesOrderDto(updated);
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async updateSalesOrderFinance(
@@ -1960,7 +2202,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'finance', 'sales']);
+    requireAnyRole(actor, ['admin', 'finance']);
     assertSalesOrderFinancePatchAllowedFields(payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -1977,7 +2219,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, current);
-    await this.assertPassesGlobalSalesOrderMarkScope(current);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const financeData = buildSalesOrderFinanceUpdateData(payload, actor);
       if (
@@ -2030,7 +2272,7 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
-    return toSalesOrderDto(updated);
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async updateSalesOrderPacking(
@@ -2039,7 +2281,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'warehouse', 'finance', 'sales']);
+    requireAnyRole(actor, ['admin', 'warehouse', 'finance']);
     assertSalesOrderPackingPatchAllowedFields(payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -2056,7 +2298,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, current);
-    await this.assertPassesGlobalSalesOrderMarkScope(current);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const packingData = buildSalesOrderPackingUpdateData(payload, actor);
@@ -2088,7 +2330,7 @@ export class BusinessDataNestService {
       return updatedOrder;
     });
 
-    return toSalesOrderDto(updated);
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async updateSalesOrderStatus(
@@ -2097,7 +2339,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'finance', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'finance']);
     assertSalesOrderStatusPatchAllowedFields(payload);
 
     const current = await this.prisma.salesOrder.findUnique({
@@ -2172,7 +2414,7 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
-    return toSalesOrderDto(updated);
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async setSalesOrderFinanceMark(
@@ -2217,7 +2459,7 @@ export class BusinessDataNestService {
       afterData: toSalesOrderDto(updated),
       ipAddress: metadata.ipAddress || null,
     });
-    return toSalesOrderDto(updated);
+    return toSalesOrderDtoForActor(updated, actor);
   }
 
   async listAfterSalesOrders(actor: any, filters: any = {}) {
@@ -2334,7 +2576,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, order.salesOrder);
-    await this.assertPassesGlobalSalesOrderMarkScope(order.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, order.salesOrder);
     return toAfterSalesOrderDto(order);
   }
 
@@ -2359,7 +2601,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const updatedOrder = await tx.afterSalesOrder.update({
@@ -2430,7 +2672,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
 
     const effectiveResolution = hasOwn(body, 'resolution')
       ? normalizeOptionalString(body.resolution)
@@ -2550,7 +2792,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     if (!['WAITING_RECEIVE', 'WAITING_RESEND'].includes(current.status)) {
       throw createHttpError(
         400,
@@ -2623,7 +2865,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     if (current.status !== 'WAITING_REFUND') {
       throw createHttpError(
         400,
@@ -2754,7 +2996,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     const attachment = findAfterSalesRefundProofAttachment(
       current,
       attachmentId,
@@ -2811,7 +3053,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
-    await this.assertPassesGlobalSalesOrderMarkScope(current.salesOrder);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     if (Number(current.refundAmountCents || 0) <= 0) {
       throw createHttpError(
         400,
@@ -3000,7 +3242,9 @@ export class BusinessDataNestService {
         ).length,
         cashOnDeliveryAmountCents,
       },
-      recentOrders: orders.slice(0, 10).map(toSalesOrderDto),
+      recentOrders: orders
+        .slice(0, 10)
+        .map((order: any) => toSalesOrderDtoForActor(order, actor)),
     };
   }
 
@@ -3081,7 +3325,9 @@ export class BusinessDataNestService {
 
     return {
       metrics: overview.metrics,
-      recentOrders: orders.slice(0, limit).map(toSalesOrderDto),
+      recentOrders: orders
+        .slice(0, limit)
+        .map((order: any) => toSalesOrderDtoForActor(order, actor)),
       pendingAfterSales,
       pendingMarks: buildFinancePendingMarks(effectiveOrders, limit),
       pendingLogistics: effectiveOrders
@@ -3104,7 +3350,7 @@ export class BusinessDataNestService {
       },
       take: normalizeTake(filters.limit, 50),
     });
-    return orders.map(toSalesOrderDto);
+    return orders.map((order: any) => toSalesOrderDtoForActor(order, actor));
   }
 
   async updateWarehouseOrderPacking(
@@ -3129,7 +3375,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, current);
-    await this.assertPassesGlobalSalesOrderMarkScope(current);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
     return this.updateSalesOrderPacking(actor, id, payload, metadata);
   }
 
@@ -3748,7 +3994,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, order);
-    await this.assertPassesGlobalSalesOrderMarkScope(order);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, order);
     return order;
   }
 
@@ -3759,7 +4005,7 @@ export class BusinessDataNestService {
   ) {
     return andWhere(
       andWhere(baseWhere, await this.buildGroupDataScope(kind, actor)),
-      await this.buildGlobalGroupMarkScope(),
+      await this.buildGlobalGroupMarkScope(actor),
     );
   }
 
@@ -3773,7 +4019,7 @@ export class BusinessDataNestService {
   private async buildScopedSalesOrderWhere(actor: any, baseWhere: any) {
     return andWhere(
       andWhere(baseWhere, buildSalesOrderDataScope(actor)),
-      await this.buildGlobalSalesOrderMarkScope(),
+      await this.buildGlobalSalesOrderMarkScope(actor),
     );
   }
 
@@ -3795,7 +4041,9 @@ export class BusinessDataNestService {
 
   private async buildGroupDataScope(kind: string, actor: any) {
     if (actor?.role === 'taster') {
-      return kind === 'travel' ? null : { tasterId: actor.id };
+      return kind === 'travel'
+        ? { visitDate: { gte: getShanghaiTodayDate() } }
+        : { tasterId: actor.id };
     }
 
     if (actor?.role === 'front_desk' && kind === 'travel') {
@@ -3804,7 +4052,7 @@ export class BusinessDataNestService {
 
     if (actor?.role === 'sales') {
       if (kind === 'travel') {
-        return null;
+        return { visitDate: getShanghaiTodayDate() };
       }
       return { createdById: actor.id };
     }
@@ -3813,17 +4061,15 @@ export class BusinessDataNestService {
   }
 
   private async buildPendingTravelGroupDataScope(actor: any) {
+    if (actor?.role === 'taster') {
+      return { visitDate: { gte: getShanghaiTodayDate() } };
+    }
     if (actor?.role === 'front_desk') {
       return { createdById: actor.id };
     }
 
     if (actor?.role === 'sales') {
-      const scopeOr: any[] = [{ createdById: actor.id }];
-      const travelGroupIds = await this.findSalesRelatedTravelGroupIds(actor);
-      if (travelGroupIds.length > 0) {
-        scopeOr.push({ id: { in: travelGroupIds } });
-      }
-      return { OR: scopeOr };
+      return { visitDate: getShanghaiTodayDate() };
     }
 
     return null;
@@ -3847,7 +4093,13 @@ export class BusinessDataNestService {
 
   private async assertCanReadGroup(kind: string, actor: any, group: any) {
     if (actor?.role === 'taster') {
-      if (kind === 'travel' || group.tasterId === actor.id) {
+      if (
+        kind === 'travel' &&
+        formatDate(group.visitDate) >= getShanghaiTodayBusinessDate()
+      ) {
+        return;
+      }
+      if (kind !== 'travel' && group.tasterId === actor.id) {
         return;
       }
       throw createHttpError(
@@ -3870,7 +4122,14 @@ export class BusinessDataNestService {
 
     if (actor?.role === 'sales') {
       if (kind === 'travel') {
-        return;
+        if (formatDate(group.visitDate) === getShanghaiTodayBusinessDate()) {
+          return;
+        }
+        throw createHttpError(
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+          'Travel group does not exist.',
+        );
       }
       if (group.createdById === actor.id) {
         return;
@@ -3883,13 +4142,19 @@ export class BusinessDataNestService {
     }
   }
 
-  private async buildGlobalGroupMarkScope() {
+  private async buildGlobalGroupMarkScope(actor: any) {
+    if (actor?.role === 'sales' || actor?.role === 'taster') {
+      return null;
+    }
     return buildSharedGlobalTravelGroupMarkScope(
       await this.onlyShowMarkedRecords(),
     );
   }
 
-  private async buildGlobalSalesOrderMarkScope() {
+  private async buildGlobalSalesOrderMarkScope(actor: any) {
+    if (actor?.role === 'sales' || actor?.role === 'taster') {
+      return null;
+    }
     return buildSharedGlobalSalesOrderMarkScope(
       await this.onlyShowMarkedRecords(),
     );
@@ -3901,7 +4166,10 @@ export class BusinessDataNestService {
     );
   }
 
-  private async assertPassesGlobalGroupMarkScope(group: any) {
+  private async assertPassesGlobalGroupMarkScope(actor: any, group: any) {
+    if (actor?.role === 'sales' || actor?.role === 'taster') {
+      return;
+    }
     if ((await this.onlyShowMarkedRecords()) && !group.financeMark) {
       throw createHttpError(
         404,
@@ -3911,7 +4179,10 @@ export class BusinessDataNestService {
     }
   }
 
-  private async assertPassesGlobalSalesOrderMarkScope(order: any) {
+  private async assertPassesGlobalSalesOrderMarkScope(actor: any, order: any) {
+    if (actor?.role === 'sales' || actor?.role === 'taster') {
+      return;
+    }
     if (!(await this.onlyShowMarkedRecords())) {
       return;
     }
@@ -4260,8 +4531,13 @@ function buildAfterSalesOrderWhere(filters: any = {}) {
 
 function buildSalesOrderDataScope(actor: any): any {
   if (actor?.role === 'sales') {
+    const range = getShanghaiTodayCreatedAtRange();
     return {
-      OR: [{ salesUserId: actor.id }, { createdById: actor.id }],
+      salesUserId: actor.id,
+      createdAt: {
+        gte: range.start,
+        lt: range.end,
+      },
     };
   }
   if (actor?.role === 'warehouse') {
@@ -4287,6 +4563,9 @@ function buildSalesOrderDataScope(actor: any): any {
       travelGroup: {
         is: {
           tasterId: actor.id,
+          visitDate: {
+            gte: getShanghaiTodayDate(),
+          },
         },
       },
     };
@@ -4324,6 +4603,29 @@ function assertSalesOrderPatchAllowedFields(actor: any, payload: any) {
       403,
       'FIELD_PERMISSION_DENIED',
       `Fields are not allowed for ${actor.role}: ${deniedFields.join(', ')}.`,
+    );
+  }
+  if (hasOwn(payload, 'customer')) {
+    assertSalesOrderCustomerPatchAllowedFields(payload.customer);
+  }
+}
+
+function assertSalesOrderSalesEditAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !SALES_ORDER_SALES_EDIT_FIELDS.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for sales edit: ${deniedFields.join(', ')}.`,
     );
   }
   if (hasOwn(payload, 'customer')) {
@@ -4522,12 +4824,6 @@ function assertCanUpdateSalesOrder(actor: any, order: any) {
   if (actor?.role === 'super_admin' || actor?.role === 'admin' || actor?.role === 'finance') {
     return;
   }
-  if (
-    actor?.role === 'sales' &&
-    (order.salesUserId === actor.id || order.createdById === actor.id)
-  ) {
-    return;
-  }
   throw createHttpError(
     404,
     'SALES_ORDER_NOT_FOUND',
@@ -4537,7 +4833,10 @@ function assertCanUpdateSalesOrder(actor: any, order: any) {
 
 function assertCanReadSalesOrder(actor: any, order: any) {
   if (actor?.role === 'sales') {
-    if (order.salesUserId === actor.id || order.createdById === actor.id) {
+    if (
+      order.salesUserId === actor.id &&
+      isWithinShanghaiToday(order.createdAt)
+    ) {
       return;
     }
     throw createHttpError(
@@ -4557,7 +4856,11 @@ function assertCanReadSalesOrder(actor: any, order: any) {
     );
   }
   if (actor?.role === 'taster') {
-    if (order.travelGroup?.tasterId === actor.id) {
+    if (
+      order.travelGroup?.tasterId === actor.id &&
+      formatDate(order.travelGroup?.visitDate) >=
+        getShanghaiTodayBusinessDate()
+    ) {
       return;
     }
     throw createHttpError(
@@ -4717,6 +5020,12 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
     createdById: actor.id,
     updatedById: actor.id,
     financeMark: false,
+    parkingFeeCents: 500,
+    cigaretteFeeCents: normalizeCentsAmount(
+      payload?.cigaretteFeeCents,
+      'cigaretteFeeCents',
+      1,
+    ),
     createdAt: now,
     updatedAt: now,
     status: 'UNMARKED',
@@ -4811,6 +5120,13 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
   assignNullableString(data, 'wineDetails', payload?.wineDetails);
   assignNullableString(data, 'departureTime', payload?.departureTime);
   assignNullableString(data, 'remarks', payload?.remarks);
+  if (payload?.cigaretteFeeCents !== undefined) {
+    data.cigaretteFeeCents = normalizeCentsAmount(
+      payload.cigaretteFeeCents,
+      'cigaretteFeeCents',
+      0,
+    );
+  }
   if (payload?.status !== undefined) {
     data.status = toPrismaGroupStatus(payload.status);
   }
@@ -6089,11 +6405,13 @@ function buildStrikeBonusAwardData(payload: any) {
   };
 }
 
-function toGroupDto(group: any, kind: string) {
+function toGroupDto(group: any, kind: string, actor: any = null) {
   const pending = calculateGroupPendingState(group, kind);
-  const rawSalesOrders = Array.isArray(group.salesOrders)
-    ? group.salesOrders
-    : [];
+  const rawSalesOrders = filterGroupSalesOrdersForActor(
+    Array.isArray(group.salesOrders) ? group.salesOrders : [],
+    group,
+    actor,
+  );
   const salesOrders = rawSalesOrders.map(toTravelGroupOrderSummaryDto);
   const effectiveSalesOrders = getEffectiveSalesOrders(rawSalesOrders).map(
     toTravelGroupOrderSummaryDto,
@@ -6136,6 +6454,15 @@ function toGroupDto(group: any, kind: string) {
     departureTime: group.departureTime || null,
     remarks: group.remarks || null,
     status: GROUP_STATUS_FROM_PRISMA[group.status] || group.status,
+    parkingFeeCents:
+      group.parkingFeeCents === undefined || group.parkingFeeCents === null
+        ? 500
+        : Number(group.parkingFeeCents),
+    cigaretteFeeCents:
+      group.cigaretteFeeCents === undefined ||
+      group.cigaretteFeeCents === null
+        ? null
+        : Number(group.cigaretteFeeCents),
     salesAmountCents: Number(group.salesAmountCents || 0),
     paidDepositCents: Number(group.paidDepositCents || 0),
     cashOnDeliveryCents: Number(group.cashOnDeliveryCents || 0),
@@ -6157,6 +6484,16 @@ function toGroupDto(group: any, kind: string) {
     tasterSummaryAt: group.tasterSummaryAt
       ? toIsoString(group.tasterSummaryAt)
       : null,
+    tasterEditCount: Number(group.tasterEditCount || 0),
+    tasterEditLimit: 2,
+    tasterEditRemaining: Math.max(
+      0,
+      2 - Number(group.tasterEditCount || 0),
+    ),
+    tasterLastEditedAt: group.tasterLastEditedAt
+      ? toIsoString(group.tasterLastEditedAt)
+      : null,
+    canEditByCurrentUser: canEditTravelGroupForActor(group, actor),
     tastingItems: Array.isArray(group.tastingItems)
       ? group.tastingItems
           .slice()
@@ -6173,6 +6510,46 @@ function toGroupDto(group: any, kind: string) {
     createdAt: toIsoString(group.createdAt),
     updatedAt: toIsoString(group.updatedAt),
   };
+}
+
+function filterGroupSalesOrdersForActor(
+  orders: any[],
+  group: any,
+  actor: any,
+) {
+  if (actor?.role === 'sales') {
+    return orders.filter(
+      (order: any) =>
+        order?.salesUserId === actor.id &&
+        isWithinShanghaiToday(order?.createdAt),
+    );
+  }
+  if (actor?.role === 'taster') {
+    if (
+      group?.tasterId !== actor.id ||
+      formatDate(group?.visitDate) < getShanghaiTodayBusinessDate()
+    ) {
+      return [];
+    }
+  }
+  return orders;
+}
+
+function canEditTravelGroupForActor(group: any, actor: any) {
+  if (actor?.role === 'taster') {
+    return (
+      formatDate(group?.visitDate) === getShanghaiTodayBusinessDate() &&
+      (group?.tasterId === actor.id ||
+        group?.liaisonTasterId === actor.id) &&
+      Number(group?.tasterEditCount || 0) < 2
+    );
+  }
+  return [
+    'super_admin',
+    'admin',
+    'front_desk',
+    'finance',
+  ].includes(actor?.role);
 }
 
 function buildGuideSnapshotDto(group: any) {
@@ -6525,6 +6902,12 @@ function calculateGroupPendingState(group: any, kind: string) {
   if (!hasText(group.travelAgency)) {
     addFinding('pending_front_desk', 'missing_travel_agency');
   }
+  if (
+    group.cigaretteFeeCents === undefined ||
+    group.cigaretteFeeCents === null
+  ) {
+    addFinding('pending_front_desk', 'missing_cigarette_fee');
+  }
 
   const guestCount = Number(group.guestCount || 0);
   if (!Number.isFinite(guestCount) || guestCount < 0) {
@@ -6661,17 +7044,22 @@ function getSalesOrderProfitInclude(): any {
 }
 
 function getSalesOrderTravelGroupInclude(): any {
-  return {
-    include: {
-      commissionRecords: getSalesOrderTasterCommissionInclude(),
-    },
-  };
+  return {};
 }
 
 function getSalesOrderTasterCommissionInclude(): any {
   return {
     where: {
       targetType: TASTER_COMMISSION_TARGET_TYPE,
+      manualInput: true,
+    },
+    include: {
+      confirmedBy: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
     },
   };
 }
@@ -6769,7 +7157,8 @@ function toAfterSalesOrderMutationResult(order: any) {
 }
 
 function toSalesOrderDto(order: any) {
-  const tasterCommissionCents = calculateSalesOrderTasterCommissionCents(order);
+  const tasterCommission = toSalesOrderTasterCommissionDto(order);
+  const tasterCommissionCents = tasterCommission?.amountCents ?? 0;
   return {
     id: order.id,
     orderNo: order.orderNo,
@@ -6793,6 +7182,7 @@ function toSalesOrderDto(order: any) {
       order.entryAmountCents ?? order.totalAmountCents ?? 0,
     ),
     tasterCommissionCents,
+    tasterCommission,
     tasterId: order.travelGroup?.tasterId || null,
     tasterName: order.travelGroup?.tasterName || null,
     cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
@@ -6829,6 +7219,16 @@ function toSalesOrderDto(order: any) {
     markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
     outreachUserId: order.outreachUserId || null,
     salesUserId: order.salesUserId || null,
+    salesEditCount: Number(order.salesEditCount || 0),
+    salesEditLimit: 1,
+    salesEditRemaining: Math.max(
+      0,
+      1 - Number(order.salesEditCount || 0),
+    ),
+    salesEditedAt: order.salesEditedAt
+      ? toIsoString(order.salesEditedAt)
+      : null,
+    canEditByCurrentUser: false,
     items: Array.isArray(order.items)
       ? order.items.map(toSalesOrderItemDto)
       : [],
@@ -6838,7 +7238,13 @@ function toSalesOrderDto(order: any) {
 }
 
 function toSalesOrderDtoForActor(order: any, actor: any) {
-  const dto = toSalesOrderDto(order);
+  const dto = {
+    ...toSalesOrderDto(order),
+    travelGroup: order.travelGroup
+      ? toGroupDto(order.travelGroup, 'travel', actor)
+      : null,
+    canEditByCurrentUser: canEditSalesOrderForActor(order, actor),
+  };
   if (actor?.role !== 'taster') {
     return dto;
   }
@@ -6846,6 +7252,7 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
     ...dto,
     entryAmountCents: 0,
     tasterCommissionCents: 0,
+    tasterCommission: null,
     financeRemark: null,
     financeMark: false,
     markedById: null,
@@ -6861,36 +7268,51 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
   };
 }
 
-function calculateSalesOrderTasterCommissionCents(order: any) {
-  const records = collectSalesOrderTasterCommissionRecords(order);
-  return records.reduce(
-    (sum: number, record: any) => sum + Number(record.amountCents || 0),
-    0,
+function canEditSalesOrderForActor(order: any, actor: any) {
+  if (
+    actor?.role === 'super_admin' ||
+    actor?.role === 'admin' ||
+    actor?.role === 'finance'
+  ) {
+    return true;
+  }
+  return (
+    actor?.role === 'sales' &&
+    order?.salesUserId === actor.id &&
+    isWithinShanghaiToday(order?.createdAt) &&
+    Number(order?.salesEditCount || 0) < 1
   );
 }
 
-function collectSalesOrderTasterCommissionRecords(order: any) {
-  const seen = new Set<string>();
-  const records: any[] = [];
-  for (const record of [
-    ...(Array.isArray(order.commissionRecords) ? order.commissionRecords : []),
-    ...(Array.isArray(order.travelGroup?.commissionRecords)
-      ? order.travelGroup.commissionRecords
-      : []),
-  ]) {
-    if (record?.targetType !== TASTER_COMMISSION_TARGET_TYPE) {
-      continue;
-    }
-    const id =
-      record.id ||
-      `${record.salesOrderId || ''}:${record.travelGroupId || ''}:${records.length}`;
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    records.push(record);
+function toSalesOrderTasterCommissionDto(order: any) {
+  const records = (
+    Array.isArray(order.commissionRecords) ? order.commissionRecords : []
+  )
+    .filter(
+      (record: any) =>
+        record?.salesOrderId === order.id &&
+        record?.targetType === TASTER_COMMISSION_TARGET_TYPE &&
+        Boolean(record?.manualInput) &&
+        (!order.travelGroup?.tasterId ||
+          record?.targetUserId === order.travelGroup.tasterId),
+    )
+    .sort(
+      (left: any, right: any) =>
+        new Date(right.updatedAt || right.createdAt || 0).getTime() -
+        new Date(left.updatedAt || left.createdAt || 0).getTime(),
+    );
+  const record = records[0];
+  if (!record) {
+    return null;
   }
-  return records;
+  return {
+    recordId: record.id,
+    amountCents: Number(record.amountCents || 0),
+    isConfirmed: Boolean(record.isConfirmed),
+    confirmedById: record.confirmedById || null,
+    confirmedByName: record.confirmedBy?.name || null,
+    confirmedAt: record.confirmedAt ? toIsoString(record.confirmedAt) : null,
+  };
 }
 
 function toSalesOrderDeliverySummary(items: any[]) {
@@ -7408,9 +7830,137 @@ function requireAnyRole(actor: any, roles: string[]) {
   }
 }
 
+function getShanghaiTodayBusinessDate(now = new Date()) {
+  return formatShanghaiBusinessDate(now)!;
+}
+
+function getShanghaiTodayDate(now = new Date()) {
+  return new Date(`${getShanghaiTodayBusinessDate(now)}T00:00:00.000Z`);
+}
+
+function getShanghaiTodayCreatedAtRange(now = new Date()) {
+  const range = buildShanghaiNaturalDayRange(
+    getShanghaiTodayBusinessDate(now),
+  )!;
+  return {
+    start: range.start,
+    end: new Date(range.end.getTime() + 1),
+  };
+}
+
+function isWithinShanghaiToday(value: unknown, now = new Date()) {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+  const range = getShanghaiTodayCreatedAtRange(now);
+  return date >= range.start && date < range.end;
+}
+
+function assertSalesCanUseTravelGroup(actor: any, travelGroup: any) {
+  if (actor?.role !== 'sales') {
+    return;
+  }
+  if (
+    formatDate(travelGroup?.visitDate) === getShanghaiTodayBusinessDate()
+  ) {
+    return;
+  }
+  throw createHttpError(
+    403,
+    'SALES_ORDER_TRAVEL_GROUP_DATE_NOT_ALLOWED',
+    'Sales can only create or edit orders for today travel groups.',
+  );
+}
+
+async function claimSalesOrderEditOpportunity(
+  tx: any,
+  actor: any,
+  id: string,
+  now: Date,
+) {
+  const range = getShanghaiTodayCreatedAtRange(now);
+  const result = await tx.salesOrder.updateMany({
+    where: {
+      id,
+      salesUserId: actor.id,
+      createdAt: {
+        gte: range.start,
+        lt: range.end,
+      },
+      salesEditCount: {
+        lt: 1,
+      },
+    },
+    data: {
+      salesEditCount: {
+        increment: 1,
+      },
+      salesEditedAt: now,
+      updatedById: actor.id,
+      updatedAt: now,
+    },
+  });
+  if (Number(result?.count || 0) !== 1) {
+    throw createHttpError(
+      409,
+      'SALES_ORDER_EDIT_LIMIT_REACHED',
+      'The sales order edit opportunity has already been used.',
+    );
+  }
+}
+
+async function claimTravelGroupTasterEditOpportunity(
+  tx: any,
+  actor: any,
+  id: string,
+  now: Date,
+) {
+  if (actor?.role !== 'taster') {
+    return;
+  }
+  const result = await tx.travelGroup.updateMany({
+    where: {
+      id,
+      visitDate: getShanghaiTodayDate(now),
+      tasterEditCount: {
+        lt: 2,
+      },
+      OR: [
+        { tasterId: actor.id },
+        { liaisonTasterId: actor.id },
+      ],
+    },
+    data: {
+      tasterEditCount: {
+        increment: 1,
+      },
+      tasterLastEditedAt: now,
+      updatedById: actor.id,
+      updatedAt: now,
+    },
+  });
+  if (Number(result?.count || 0) !== 1) {
+    throw createHttpError(
+      409,
+      'TRAVEL_GROUP_TASTER_EDIT_LIMIT_REACHED',
+      'The travel group taster edit opportunities have been used.',
+    );
+  }
+}
+
 function assertTasterCanEditTravelGroup(actor: any, current: any) {
   if (actor?.role !== 'taster') {
     return;
+  }
+  if (
+    formatDate(current?.visitDate) !== getShanghaiTodayBusinessDate()
+  ) {
+    throw createHttpError(
+      403,
+      'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
+      'Tasters can only edit travel groups scheduled for today.',
+    );
   }
   if (
     current?.tasterId === actor.id ||
@@ -7426,6 +7976,18 @@ function assertTasterCanEditTravelGroup(actor: any, current: any) {
 }
 
 function assertTravelGroupCreateAllowedFields(actor: any, payload: any) {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    Object.prototype.hasOwnProperty.call(payload, 'parkingFeeCents')
+  ) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      'parkingFeeCents is managed by the server.',
+    );
+  }
   const serverManagedAttachmentFields = [
     'keyCustomerPhotos',
     'guestInfoAttachments',
@@ -7469,14 +8031,6 @@ function assertTravelGroupPatchAllowedFields(
   const allowedFields = new Set(
     TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE[actor?.role] || [],
   );
-  if (
-    actor?.role === 'taster' &&
-    current?.liaisonTasterId === actor.id
-  ) {
-    for (const field of TRAVEL_GROUP_LIAISON_TASTER_EXTRA_PATCH_FIELDS) {
-      allowedFields.add(field);
-    }
-  }
   const deniedFields = Object.keys(payload).filter(
     (field) => !allowedFields.has(field),
   );
@@ -7705,6 +8259,33 @@ function normalizeNonNegativeInt(
     );
   }
   return normalized;
+}
+
+function normalizeCentsAmount(
+  value: unknown,
+  fieldName: string,
+  minimum: number,
+) {
+  if (value === undefined || value === null || value === '') {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} is required.`,
+    );
+  }
+  const numberValue = Number(value);
+  if (
+    !Number.isSafeInteger(numberValue) ||
+    numberValue < minimum ||
+    numberValue > 2147483647
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be an integer between ${minimum} and 2147483647.`,
+    );
+  }
+  return numberValue;
 }
 
 function toPrismaGroupStatus(value: unknown) {

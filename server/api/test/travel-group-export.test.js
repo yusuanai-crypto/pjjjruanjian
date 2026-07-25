@@ -357,6 +357,7 @@ function buildTravelGroupExportPrismaOptions() {
         wineDetails: '茅台迎宾 2 瓶；红缨子 1 瓶',
         remarks: 'Alpha remarks',
         tasterSummary: 'Alpha summary',
+        cigaretteFeeCents: 100,
         financeMark: true,
         createdAt: '2026-07-01T08:00:00.000Z',
         updatedAt: '2026-07-01T12:00:00.000Z',
@@ -367,6 +368,7 @@ function buildTravelGroupExportPrismaOptions() {
         visitDate: '2026-07-01T00:00:00.000Z',
         travelAgency: 'Beta Travel Agency',
         groupType: 'vip',
+        cigaretteFeeCents: 100,
         financeMark: true,
       },
       {
@@ -380,6 +382,7 @@ function buildTravelGroupExportPrismaOptions() {
         tastingRoomNo: 'B201',
         tasterName: 'Pending Taster',
         groupType: 'pending',
+        cigaretteFeeCents: 100,
         financeMark: true,
       },
       {
@@ -387,6 +390,7 @@ function buildTravelGroupExportPrismaOptions() {
         groupNo: 'TG-GLOBAL-MARKED',
         visitDate: '2026-07-01T00:00:00.000Z',
         travelAgency: 'Global Marked Agency',
+        cigaretteFeeCents: 100,
         financeMark: true,
       },
       {
@@ -394,6 +398,7 @@ function buildTravelGroupExportPrismaOptions() {
         groupNo: 'TG-GLOBAL-UNMARKED',
         visitDate: '2026-07-01T00:00:00.000Z',
         travelAgency: 'Global Unmarked Agency',
+        cigaretteFeeCents: 100,
         financeMark: false,
       },
     ],

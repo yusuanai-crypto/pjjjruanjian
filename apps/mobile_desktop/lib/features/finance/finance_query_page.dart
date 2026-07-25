@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -260,7 +261,7 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
         if (_errorMessage != null)
           _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
         FormSection(
-          title: '财务工作台筛选',
+          title: '物流单号与品鉴师提成填写',
           trailing: StatusTag(
             label: _loading ? '加载中' : '${recentOrders.length} 笔订单',
             tone: _loading ? StatusTone.warning : StatusTone.info,
@@ -485,26 +486,22 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
       return _SectionState(message: emptyMessage);
     }
 
-    return AppRecordList(
-      items: [
-        for (final order in orders)
-          AppRecordItem(
-            onTap:
-                _canEditFinanceOrders ? () => _openFinanceEditor(order) : null,
-            title: order.orderNo,
-            subtitle:
-                '${order.customerName} · ${order.travelGroup?.groupNo ?? _orderTypeLabel(order.orderType)}',
-            meta: [
-              _orderTypeLabel(order.orderType),
-              _orderStatusLabel(order.status),
-              _customerMarkLabel(order),
-              '物流单号 ${_fieldValue(order.logisticsNo)}',
-              '运费 ${formatMoneyCents(order.logisticsFeeCents)}',
-              _invoiceLabel(order),
-            ],
-            icon: Icons.receipt_long_rounded,
-            trailing: MoneyText(cents: order.totalAmountCents),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var index = 0; index < orders.length; index++) ...[
+          _FinanceOrderInlineEditor(
+            key: ValueKey('finance-order-inline-${orders[index].id}'),
+            businessApi: _businessApi,
+            order: orders[index],
+            canEdit: _canEditFinanceOrders,
+            onOpenMore: _canEditFinanceOrders
+                ? () => _openFinanceEditor(orders[index])
+                : null,
+            onSaved: _replaceRecentOrder,
           ),
+          if (index < orders.length - 1) const SizedBox(height: 12),
+        ],
       ],
     );
   }
@@ -702,6 +699,12 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     if (record.targetType != 'taster_commission' ||
         !_canManageTasterCommission) {
       return const Text('-');
+    }
+    if (!record.manualInput || record.salesOrderId == null) {
+      return const StatusTag(
+        label: '历史团级记录',
+        tone: StatusTone.info,
+      );
     }
     final updating = _updatingCommissionId == record.id;
     return Wrap(
@@ -948,6 +951,12 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     required bool isPaid,
   }) {
     final updating = _updatingSummaryTravelGroupId == summary.travelGroupId;
+    if (!summary.summaryExists) {
+      return const StatusTag(
+        label: '未生成汇总',
+        tone: StatusTone.neutral,
+      );
+    }
     if (!_canManageTravelGroupFinanceSummary) {
       return StatusTag(
         label: isPaid ? '已返' : '未返',
@@ -1001,6 +1010,12 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
   }
 
   Widget _summaryConfirmTag(TravelGroupFinanceSummaryRecord summary) {
+    if (!summary.summaryExists) {
+      return const StatusTag(
+        label: '暂无出单',
+        tone: StatusTone.neutral,
+      );
+    }
     return StatusTag(
       label: summary.agencyDeductionConfirmed ? '已确认' : '待确认',
       tone: summary.agencyDeductionConfirmed
@@ -1014,13 +1029,15 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
       return const Text('-');
     }
     final updating = _updatingSummaryTravelGroupId == summary.travelGroupId;
+    final summaryActionEnabled = summary.summaryExists && !updating;
     return Wrap(
       spacing: 6,
       children: [
         IconButton(
           key: ValueKey('finance-summary-edit-${summary.travelGroupId}'),
-          tooltip: '编辑备注和发送状态',
-          onPressed: updating ? null : () => _openSummaryEditor(summary),
+          tooltip: summary.summaryExists ? '编辑备注和发送状态' : '未生成汇总，重新计算后可编辑',
+          onPressed:
+              summaryActionEnabled ? () => _openSummaryEditor(summary) : null,
           icon: const Icon(Icons.edit_note_rounded),
         ),
         IconButton(
@@ -1030,7 +1047,7 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
                 : 'finance-summary-confirm-${summary.travelGroupId}',
           ),
           tooltip: summary.agencyDeductionConfirmed ? '取消扣酒确认' : '确认扣酒成本',
-          onPressed: updating
+          onPressed: !summaryActionEnabled
               ? null
               : () => _setAgencyDeductionConfirmed(
                     summary,
@@ -1044,7 +1061,7 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
         ),
         IconButton(
           key: ValueKey('finance-summary-refresh-${summary.travelGroupId}'),
-          tooltip: '刷新单团汇总',
+          tooltip: summary.summaryExists ? '重新计算单团汇总' : '重新计算并生成汇总',
           onPressed:
               updating ? null : () => _refreshTravelGroupSummary(summary),
           icon: const Icon(Icons.sync_rounded),
@@ -1502,6 +1519,9 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
   Future<void> _openSummaryEditor(
     TravelGroupFinanceSummaryRecord summary,
   ) async {
+    if (!summary.summaryExists) {
+      return;
+    }
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => _TravelGroupFinanceSummaryEditorDialog(
@@ -1524,6 +1544,9 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     TravelGroupFinanceSummaryRecord summary,
     bool isConfirmed,
   ) async {
+    if (!summary.summaryExists) {
+      return;
+    }
     setState(() {
       _updatingSummaryTravelGroupId = summary.travelGroupId;
       _summaryErrorMessage = null;
@@ -1561,6 +1584,9 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     required String rebateType,
     required bool isPaid,
   }) async {
+    if (!summary.summaryExists) {
+      return;
+    }
     setState(() {
       _updatingSummaryTravelGroupId = summary.travelGroupId;
       _summaryErrorMessage = null;
@@ -1657,6 +1683,330 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
         pendingLogistics: updatedLogistics,
       );
     });
+  }
+}
+
+class _FinanceOrderInlineEditor extends StatefulWidget {
+  const _FinanceOrderInlineEditor({
+    super.key,
+    required this.businessApi,
+    required this.order,
+    required this.canEdit,
+    required this.onSaved,
+    this.onOpenMore,
+  });
+
+  final BusinessApi businessApi;
+  final SalesOrderRecord order;
+  final bool canEdit;
+  final ValueChanged<SalesOrderRecord> onSaved;
+  final VoidCallback? onOpenMore;
+
+  @override
+  State<_FinanceOrderInlineEditor> createState() =>
+      _FinanceOrderInlineEditorState();
+}
+
+class _FinanceOrderInlineEditorState extends State<_FinanceOrderInlineEditor> {
+  late final TextEditingController _logisticsNoController;
+  late final TextEditingController _commissionController;
+  bool _logisticsDirty = false;
+  bool _commissionDirty = false;
+  bool _saving = false;
+  bool _confirming = false;
+  String? _errorMessage;
+
+  bool get _hasTaster =>
+      widget.order.travelGroupId?.isNotEmpty == true &&
+      widget.order.tasterId?.isNotEmpty == true;
+
+  @override
+  void initState() {
+    super.initState();
+    _logisticsNoController = TextEditingController(
+      text: widget.order.logisticsNo ?? '',
+    );
+    _commissionController = TextEditingController(
+      text: widget.order.tasterCommission == null
+          ? ''
+          : _moneyInputText(widget.order.tasterCommission!.amountCents),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _FinanceOrderInlineEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.order.id != widget.order.id) {
+      _logisticsNoController.text = widget.order.logisticsNo ?? '';
+      _commissionController.text = widget.order.tasterCommission == null
+          ? ''
+          : _moneyInputText(widget.order.tasterCommission!.amountCents);
+      _logisticsDirty = false;
+      _commissionDirty = false;
+      _errorMessage = null;
+      return;
+    }
+    if (!_logisticsDirty &&
+        oldWidget.order.logisticsNo != widget.order.logisticsNo) {
+      _logisticsNoController.text = widget.order.logisticsNo ?? '';
+    }
+    if (!_commissionDirty &&
+        (oldWidget.order.tasterCommission?.recordId !=
+                widget.order.tasterCommission?.recordId ||
+            oldWidget.order.tasterCommission?.amountCents !=
+                widget.order.tasterCommission?.amountCents)) {
+      _commissionController.text = widget.order.tasterCommission == null
+          ? ''
+          : _moneyInputText(widget.order.tasterCommission!.amountCents);
+    }
+  }
+
+  @override
+  void dispose() {
+    _logisticsNoController.dispose();
+    _commissionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final commissionText = _commissionController.text.trim();
+    int? amountCents;
+    if (_hasTaster && _commissionDirty && commissionText.isNotEmpty) {
+      amountCents = _moneyCentsOrNull(commissionText);
+      if (amountCents == null || amountCents < 0) {
+        setState(() {
+          _errorMessage = '品鉴师提成须为非负金额，且最多保留两位小数';
+        });
+        return;
+      }
+    }
+
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+    try {
+      if (amountCents != null) {
+        await widget.businessApi.saveSalesOrderTasterCommission(
+          salesOrderId: widget.order.id,
+          recordId: widget.order.tasterCommission?.recordId,
+          amountCents: amountCents,
+        );
+      }
+      await widget.businessApi.updateSalesOrderFinance(
+        widget.order.id,
+        {
+          'logisticsNo': _logisticsNoController.text.trim(),
+        },
+      );
+      final updated = await widget.businessApi.getSalesOrder(widget.order.id);
+      if (!mounted) {
+        return;
+      }
+      _logisticsNoController.text = updated.logisticsNo ?? '';
+      _commissionController.text = updated.tasterCommission == null
+          ? ''
+          : _moneyInputText(updated.tasterCommission!.amountCents);
+      setState(() {
+        _saving = false;
+        _logisticsDirty = false;
+        _commissionDirty = false;
+      });
+      widget.onSaved(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.orderNo} 已保存')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _setConfirmed(bool isConfirmed) async {
+    final recordId = widget.order.tasterCommission?.recordId;
+    if (recordId == null || recordId.isEmpty || _commissionDirty) {
+      return;
+    }
+    setState(() {
+      _confirming = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.businessApi.confirmTasterCommission(recordId, isConfirmed);
+      final updated = await widget.businessApi.getSalesOrder(widget.order.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _confirming = false);
+      widget.onSaved(updated);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _confirming = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final commission = widget.order.tasterCommission;
+    final isConfirmed = !_commissionDirty && commission?.isConfirmed == true;
+    final disabled = !widget.canEdit || _saving || _confirming;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton.icon(
+                  key: ValueKey('finance-order-more-${widget.order.id}'),
+                  onPressed: widget.onOpenMore,
+                  icon: const Icon(Icons.receipt_long_rounded),
+                  label: Text(widget.order.orderNo),
+                ),
+                Text(widget.order.customerName),
+                Text(
+                  widget.order.travelGroup?.groupNo ??
+                      _orderTypeLabel(widget.order.orderType),
+                ),
+                Text(_orderStatusLabel(widget.order.status)),
+                Text(_customerMarkLabel(widget.order)),
+                Text(
+                  _hasTaster
+                      ? '品鉴师 ${widget.order.tasterName ?? widget.order.tasterId}'
+                      : '无关联品鉴师',
+                ),
+                StatusTag(
+                  label: commission == null
+                      ? '尚未填写'
+                      : isConfirmed
+                          ? '已确认'
+                          : '待确认',
+                  tone: isConfirmed ? StatusTone.success : StatusTone.warning,
+                ),
+                MoneyText(cents: widget.order.totalAmountCents),
+              ],
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final fieldWidth =
+                    constraints.maxWidth >= 720 ? 260.0 : constraints.maxWidth;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: fieldWidth,
+                      child: TextField(
+                        key: ValueKey(
+                          'finance-order-logistics-no-${widget.order.id}',
+                        ),
+                        controller: _logisticsNoController,
+                        enabled: !disabled,
+                        onChanged: (_) => setState(() {
+                          _logisticsDirty = true;
+                          _errorMessage = null;
+                        }),
+                        decoration: const InputDecoration(
+                          labelText: '物流单号',
+                          prefixIcon: Icon(Icons.local_shipping_rounded),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: fieldWidth,
+                      child: TextField(
+                        key: ValueKey(
+                          'finance-order-taster-commission-${widget.order.id}',
+                        ),
+                        controller: _commissionController,
+                        enabled: !disabled && _hasTaster,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: const [_MoneyTextInputFormatter()],
+                        onChanged: (_) => setState(() {
+                          _commissionDirty = true;
+                          _errorMessage = null;
+                        }),
+                        decoration: InputDecoration(
+                          labelText: '品鉴师提成（元）',
+                          helperText: _hasTaster
+                              ? '空白表示尚未填写；0 表示明确填写为零'
+                              : '无关联品鉴师，不能填写提成',
+                          prefixIcon: const Icon(Icons.payments_rounded),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              _InlineNotice(
+                message: _errorMessage!,
+                tone: StatusTone.danger,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  key: ValueKey('finance-order-save-${widget.order.id}'),
+                  onPressed: disabled ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_rounded),
+                  label: const Text('保存当前订单'),
+                ),
+                OutlinedButton.icon(
+                  key: ValueKey(
+                    isConfirmed
+                        ? 'finance-order-unconfirm-${widget.order.id}'
+                        : 'finance-order-confirm-${widget.order.id}',
+                  ),
+                  onPressed: disabled || commission == null || _commissionDirty
+                      ? null
+                      : () => _setConfirmed(!isConfirmed),
+                  icon: Icon(
+                    isConfirmed
+                        ? Icons.remove_done_rounded
+                        : Icons.verified_rounded,
+                  ),
+                  label: Text(isConfirmed ? '取消确认' : '确认提成'),
+                ),
+                Text('物流单号 ${_fieldValue(widget.order.logisticsNo)}'),
+                Text('运费 ${formatMoneyCents(widget.order.logisticsFeeCents)}'),
+                Text(_invoiceLabel(widget.order)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -2228,6 +2578,13 @@ class _TravelGroupFinanceSummaryDetailDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!summary.summaryExists) ...[
+                const _InlineNotice(
+                  message: '该旅行团暂无出单，尚未生成返积分汇总；可返回列表执行重新计算。',
+                  tone: StatusTone.neutral,
+                ),
+                const SizedBox(height: 12),
+              ],
               _DetailLine(label: '旅行团', value: _summaryTravelGroupNo(summary)),
               _DetailLine(
                 label: '日期',
@@ -3155,12 +3512,16 @@ String _moneyInputText(int cents) {
   if (cents == 0) {
     return '0';
   }
-  final yuan = cents ~/ 100;
+  final negative = cents < 0;
+  final absoluteCents = cents.abs();
+  final yuan = absoluteCents ~/ 100;
   final fen = cents.abs() % 100;
   if (fen == 0) {
-    return '$yuan';
+    return '${negative ? '-' : ''}$yuan';
   }
-  return '${cents / 100}';
+  final fraction =
+      fen % 10 == 0 ? '${fen ~/ 10}' : fen.toString().padLeft(2, '0');
+  return '${negative ? '-' : ''}$yuan.$fraction';
 }
 
 int? _moneyCentsOrNull(String value) {
@@ -3168,9 +3529,35 @@ int? _moneyCentsOrNull(String value) {
   if (normalized.isEmpty) {
     return 0;
   }
-  final parsed = double.tryParse(normalized);
-  if (parsed == null) {
+  if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(normalized)) {
     return null;
   }
-  return (parsed * 100).round();
+  final parts = normalized.split('.');
+  final yuan = int.tryParse(parts[0]);
+  if (yuan == null) {
+    return null;
+  }
+  final fractionText = parts.length == 1 ? '00' : parts[1].padRight(2, '0');
+  final fen = int.tryParse(fractionText);
+  if (fen == null || yuan > 21474836) {
+    return null;
+  }
+  final cents = yuan * 100 + fen;
+  return cents <= 2147483647 ? cents : null;
+}
+
+class _MoneyTextInputFormatter extends TextInputFormatter {
+  const _MoneyTextInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text;
+    if (text.isEmpty || RegExp(r'^\d*(?:\.\d{0,2})?$').hasMatch(text)) {
+      return newValue;
+    }
+    return oldValue;
+  }
 }

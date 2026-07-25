@@ -340,7 +340,18 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       },
     );
     assert.equal(logs.response.status, 200);
-    const actions = logs.body.data.logs.map((log) => log.action).sort();
+    const writeActions = new Set([
+      'guides.create',
+      'guides.disable',
+      'guides.enable',
+      'guides.update',
+    ]);
+    const actions = logs.body.data.logs
+      .filter(
+        (log) => log.result === 'SUCCESS' && writeActions.has(log.action),
+      )
+      .map((log) => log.action)
+      .sort();
     assert.deepEqual(actions, [
       'guides.create',
       'guides.create',
@@ -349,6 +360,16 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       'guides.enable',
       'guides.update',
     ]);
+    assert.equal(
+      logs.body.data.logs.some(
+        (log) => log.action === 'guides.list' && log.result === 'SUCCESS',
+      ),
+      true,
+    );
+    assert.equal(
+      logs.body.data.logs.some((log) => log.result === 'FAILURE'),
+      true,
+    );
   });
 });
 

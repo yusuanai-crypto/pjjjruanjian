@@ -3,11 +3,11 @@ import 'package:jiangjiu_mobile_desktop/app/destinations.dart';
 import 'package:jiangjiu_mobile_desktop/app/page_factory.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
-import 'package:jiangjiu_mobile_desktop/features/pending_travel_groups/pending_travel_group_table_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
-  test('maps backend pending travel group menu to Flutter destination', () {
+  test('does not expose the retired pending travel group destination', () {
     final destinations = destinationsForBackendMenus(
       const [
         AuthMenu(
@@ -19,12 +19,13 @@ void main() {
       UserRole.admin,
     );
 
-    expect(destinations, hasLength(1));
-    expect(destinations.single.id, 'pending_travel_groups');
-    expect(destinations.single.label, '待处理旅行团');
+    expect(
+      destinations.any((item) => item.id == 'pending_travel_groups'),
+      isFalse,
+    );
   });
 
-  test('builds pending travel group page for destination id', () {
+  test('unknown retired destination falls back to the dashboard', () {
     final page = buildPageForDestination(
       destinationId: 'pending_travel_groups',
       apiClient: ApiClient(baseUrl: 'http://127.0.0.1:3000'),
@@ -34,6 +35,6 @@ void main() {
       onOpenDestination: (_) {},
     );
 
-    expect(page, isA<PendingTravelGroupTablePage>());
+    expect(page, isA<DashboardPage>());
   });
 }

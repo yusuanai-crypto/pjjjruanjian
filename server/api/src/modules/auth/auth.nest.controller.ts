@@ -22,6 +22,23 @@ export class AuthNestController {
     });
   }
 
+  @Post('refresh')
+  @HttpCode(200)
+  async refresh(@Body() body: any, @Req() request: any) {
+    return this.authService.refresh(body?.refreshToken, {
+      ipAddress: getRequestIp(request),
+    });
+  }
+
+  @Post('logout')
+  @HttpCode(200)
+  async logout(@Body() body: any, @Req() request: any) {
+    await this.authService.logout(body?.refreshToken, {
+      ipAddress: getRequestIp(request),
+    });
+    return { loggedOut: true };
+  }
+
   @Get('me')
   async me(@Req() request: any) {
     const user = await this.authService.authenticateRequest(request);

@@ -202,6 +202,51 @@ test('unit: finance summary list DTO exposes stable agency and guide identifiers
   assert.equal(summaries[0].travelGroup.agencyId, 'agency-1');
   assert.equal(summaries[0].travelGroup.guideId, 'guide-stage7');
   assert.equal(summaries[0].travelGroup.guidePhone, '18800000000');
+  assert.equal(summaries[0].summaryExists, true);
+});
+
+test('unit: finance summary GET paths synthesize zero rows without creating summaries', async () => {
+  const prisma = createSummaryPrisma({
+    salesOrders: [],
+    commissionRecords: [],
+  });
+  const service = createService(prisma);
+  const actor = {
+    id: 'user-finance',
+    role: 'finance',
+  };
+
+  const listed = await service.listTravelGroupFinanceSummaries(actor, {
+    agencyDeductionConfirmed: false,
+  });
+  const detail = await service.getTravelGroupFinanceSummary(
+    actor,
+    'group-stage7',
+  );
+
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, null);
+  assert.equal(listed[0].summaryExists, false);
+  assert.equal(detail.id, null);
+  assert.equal(detail.summaryExists, false);
+  for (const field of [
+    'totalSalesAmountCents',
+    'totalCashOnDeliveryCents',
+    'totalPaidDepositCents',
+    'confirmedRefundAmountCents',
+    'effectiveSalesAmountCents',
+    'totalAgencyDeductionCents',
+    'totalAgencyNetAmountCents',
+    'totalDailyRebateCents',
+    'totalMonthlyRebateCents',
+    'paidRebateCents',
+    'unpaidRebateCents',
+  ]) {
+    assert.equal(listed[0][field], 0, field);
+    assert.equal(detail[field], 0, field);
+  }
+  assert.equal(prisma.__store.summaries.length, 0);
+  assert.equal(prisma.__store.operationLogs.length, 0);
 });
 
 test('unit: stage7 travel group finance summary syncs compatibility fields', async () => {
@@ -398,8 +443,12 @@ function createSummaryPrisma(overrides = {}) {
   return {
     __store: store,
     travelGroup: {
-      findUnique: async ({ where }) =>
-        where.id === store.travelGroup.id ? copyDeep(store.travelGroup) : null,
+      findUnique: async ({ where, include }) =>
+        where.id === store.travelGroup.id
+          ? travelGroupWithSummary(store, include)
+          : null,
+      findMany: async ({ include, take } = {}) =>
+        [travelGroupWithSummary(store, include)].slice(0, take || 1),
       update: async ({ where, data }) => {
         assert.equal(where.id, store.travelGroup.id);
         store.travelGroup = {
@@ -474,6 +523,23 @@ function createSummaryPrisma(overrides = {}) {
       findMany: async () => copyDeep(store.operationLogs),
     },
   };
+}
+
+function travelGroupWithSummary(store, include) {
+  const travelGroup = copyDeep(store.travelGroup);
+  if (include?.financeSummary) {
+    const summary = store.summaries[0];
+    travelGroup.financeSummary = summary
+      ? {
+          ...copyDeep(summary),
+          agencyDeductionConfirmedBy: null,
+          dailyRebatePaidBy: null,
+          monthlyRebatePaidBy: null,
+          updatedBy: null,
+        }
+      : null;
+  }
+  return travelGroup;
 }
 
 function buildSalesOrders() {

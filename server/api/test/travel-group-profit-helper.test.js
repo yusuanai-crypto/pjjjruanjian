@@ -49,6 +49,8 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
   assert.equal(result.effectiveSalesAmountCents, 10000);
   assert.equal(result.actualProductCostCents, 3000);
   assert.equal(result.logisticsFeeCents, 500);
+  assert.equal(result.parkingFeeCents, 500);
+  assert.equal(result.cigaretteFeeCents, 200);
   assert.equal(result.salesCommissionCents, 100);
   assert.equal(result.outreachCommissionCents, 200);
   assert.equal(result.leaderCommissionCents, 300);
@@ -56,12 +58,12 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
   assert.equal(result.tasterCommissionCents, 400);
   assert.equal(result.dailyAgencyRebateCents, 500);
   assert.equal(result.monthlyAgencyRebateCents, 600);
-  assert.equal(result.totalExpenseCents, 5600);
-  assert.equal(result.estimatedProfitCents, 4400);
-  assert.equal(result.estimatedProfitRate, 0.44);
+  assert.equal(result.totalExpenseCents, 6300);
+  assert.equal(result.estimatedProfitCents, 3700);
+  assert.equal(result.estimatedProfitRate, 0.37);
   assert.equal(
     result.estimatedProfitCents,
-    10000 - 3000 - 500 - 100 - 200 - 300 - 400 - 500 - 600,
+    10000 - 3000 - 500 - 500 - 200 - 100 - 200 - 300 - 400 - 500 - 600,
   );
 });
 
@@ -112,7 +114,7 @@ test('unit: missing cost snapshots make profit incomplete instead of treating co
   );
 });
 
-test('unit: no effective sales returns zero profit and no profit rate', () => {
+test('unit: no effective sales still subtracts parking and cigarette expenses', () => {
   const result = calculateTravelGroupProfit({
     travelGroup: group('group-no-sales'),
     salesOrders: [
@@ -126,8 +128,28 @@ test('unit: no effective sales returns zero profit and no profit rate', () => {
   assert.equal(result.calculationStatus, 'no_sales');
   assert.equal(result.orderCount, 0);
   assert.equal(result.effectiveSalesAmountCents, 0);
-  assert.equal(result.estimatedProfitCents, 0);
+  assert.equal(result.totalExpenseCents, 700);
+  assert.equal(result.estimatedProfitCents, -700);
   assert.equal(result.estimatedProfitRate, null);
+});
+
+test('unit: missing cigarette fee takes precedence over no-sales and leaves profit incomplete', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-missing-cigarette', {
+      cigaretteFeeCents: null,
+    }),
+    salesOrders: [],
+  });
+
+  assert.equal(result.parkingFeeCents, 500);
+  assert.equal(result.cigaretteFeeCents, null);
+  assert.equal(result.calculationStatus, 'incomplete');
+  assert.equal(result.estimatedProfitCents, null);
+  assert.ok(
+    result.warnings.some(
+      (warning) => warning.code === 'CIGARETTE_FEE_MISSING',
+    ),
+  );
 });
 
 test('unit: confirmed and pending refunds produce estimates and agency fallback warnings', () => {
@@ -167,7 +189,7 @@ test('unit: confirmed and pending refunds produce estimates and agency fallback 
   assert.equal(result.pendingRefundAmountCents, 500);
   assert.equal(result.dailyAgencyRebateCents, 100);
   assert.equal(result.monthlyAgencyRebateCents, 200);
-  assert.equal(result.estimatedProfitCents, 5700);
+  assert.equal(result.estimatedProfitCents, 5000);
   assert.deepEqual(
     result.warnings.map((warning) => warning.code).sort(),
     [
@@ -198,12 +220,12 @@ test('unit: travel group estimated profit preserves negative values', () => {
   });
 
   assert.equal(result.calculationStatus, 'complete');
-  assert.equal(result.totalExpenseCents, 2000);
-  assert.equal(result.estimatedProfitCents, -1000);
-  assert.equal(result.estimatedProfitRate, -1);
+  assert.equal(result.totalExpenseCents, 2700);
+  assert.equal(result.estimatedProfitCents, -1700);
+  assert.equal(result.estimatedProfitRate, -1.7);
 });
 
-function group(id) {
+function group(id, overrides = {}) {
   return {
     id,
     groupNo: `TG-${id}`,
@@ -212,6 +234,9 @@ function group(id) {
     guideName: 'Test Guide',
     tasterName: 'Test Taster',
     guestCount: 20,
+    parkingFeeCents: 500,
+    cigaretteFeeCents: 200,
+    ...overrides,
   };
 }
 

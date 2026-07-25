@@ -27,21 +27,33 @@ export class TravelGroupFinanceSummaryNestService {
 
   async listTravelGroupFinanceSummaries(actor: any, filters: any = {}) {
     requireAnyRole(actor, READ_SUMMARY_ROLES);
-    const summaries = await this.prisma.travelGroupFinanceSummary.findMany({
-      where: await this.buildSummaryQueryWhere(filters),
-      include: getTravelGroupFinanceSummaryListInclude(),
-      orderBy: {
-        updatedAt: 'desc',
-      },
+    const travelGroups = await this.prisma.travelGroup.findMany({
+      where: await this.buildTravelGroupQueryWhere(filters),
+      include: getTravelGroupWithFinanceSummaryInclude(),
+      orderBy: [
+        {
+          visitDate: 'desc',
+        },
+        {
+          groupNo: 'asc',
+        },
+      ],
       take: normalizeTake(filters?.limit),
     });
-    return summaries.map(toTravelGroupFinanceSummaryListDto);
+    return travelGroups.map((travelGroup: any) =>
+      toTravelGroupFinanceSummaryListDto(
+        buildDisplayFinanceSummary(travelGroup),
+      ),
+    );
   }
 
   async getTravelGroupFinanceSummary(actor: any, travelGroupId: string) {
     requireAnyRole(actor, READ_SUMMARY_ROLES);
-    const summary = await this.findSummaryVisibleForApi(travelGroupId);
-    return toTravelGroupFinanceSummaryDetailDto(summary);
+    const travelGroup =
+      await this.findTravelGroupWithSummaryVisibleForApi(travelGroupId);
+    return toTravelGroupFinanceSummaryDetailDto(
+      buildDisplayFinanceSummary(travelGroup),
+    );
   }
 
   async exportTravelGroupFinanceSummariesXlsx(
@@ -54,15 +66,20 @@ export class TravelGroupFinanceSummaryNestService {
       filters?.limit,
       TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS,
     );
-    const summaries = await this.prisma.travelGroupFinanceSummary.findMany({
-      where: await this.buildSummaryQueryWhere(filters),
-      include: getTravelGroupFinanceSummaryListInclude(),
-      orderBy: {
-        updatedAt: 'desc',
-      },
+    const travelGroups = await this.prisma.travelGroup.findMany({
+      where: await this.buildTravelGroupQueryWhere(filters),
+      include: getTravelGroupWithFinanceSummaryInclude(),
+      orderBy: [
+        {
+          visitDate: 'desc',
+        },
+        {
+          groupNo: 'asc',
+        },
+      ],
       take: exportLimit + 1,
     });
-    if (summaries.length > exportLimit) {
+    if (travelGroups.length > exportLimit) {
       throw createHttpError(
         400,
         'EXPORT_LIMIT_EXCEEDED',
@@ -78,11 +95,14 @@ export class TravelGroupFinanceSummaryNestService {
       beforeData: null,
       afterData: {
         filters: summarizeExportFilters(filters),
-        rowCount: summaries.length,
+        rowCount: travelGroups.length,
       },
       ipAddress: metadata.ipAddress || null,
     });
 
+    const summaries = travelGroups.map((travelGroup: any) =>
+      buildDisplayFinanceSummary(travelGroup),
+    );
     const workbook =
       buildTravelGroupFinanceSummariesExportWorkbook(summaries);
     const xlsxData = await workbook.xlsx.writeBuffer();
@@ -608,48 +628,59 @@ export class TravelGroupFinanceSummaryNestService {
     });
   }
 
-  private async buildSummaryQueryWhere(filters: any = {}) {
+  private async buildTravelGroupQueryWhere(filters: any = {}) {
     const clauses: any[] = [
-      {
-        travelGroup: {
-          is: (await this.buildGlobalGroupMarkScope()) || {},
-        },
-      },
+      (await this.buildGlobalGroupMarkScope()) || {},
     ];
 
     const travelGroupId = normalizeOptionalString(filters?.travelGroupId);
     if (travelGroupId) {
-      clauses.push({ travelGroupId });
+      clauses.push({ id: travelGroupId });
     }
 
     const agencyDeductionConfirmed = normalizeOptionalBooleanFilter(
       filters?.agencyDeductionConfirmed,
       'agencyDeductionConfirmed',
     );
-    if (agencyDeductionConfirmed !== null) {
-      clauses.push({ agencyDeductionConfirmed });
+    if (agencyDeductionConfirmed === true) {
+      clauses.push({
+        financeSummary: {
+          is: {
+            agencyDeductionConfirmed: true,
+          },
+        },
+      });
+    } else if (agencyDeductionConfirmed === false) {
+      clauses.push({
+        OR: [
+          {
+            financeSummary: {
+              is: null,
+            },
+          },
+          {
+            financeSummary: {
+              is: {
+                agencyDeductionConfirmed: false,
+              },
+            },
+          },
+        ],
+      });
     }
 
     const dateRange = buildDateRange(filters?.dateFrom, filters?.dateTo);
     if (dateRange) {
       clauses.push({
-        travelGroup: {
-          is: {
-            visitDate: dateRange,
-          },
-        },
+        visitDate: dateRange,
       });
     }
 
     const agencyName = normalizeOptionalString(filters?.agencyName);
     if (agencyName) {
       clauses.push({
-        travelGroup: {
-          is: {
-            travelAgency: {
-              contains: agencyName,
-            },
-          },
+        travelAgency: {
+          contains: agencyName,
         },
       });
     }
@@ -657,22 +688,41 @@ export class TravelGroupFinanceSummaryNestService {
     const guideName = normalizeOptionalString(filters?.guideName);
     if (guideName) {
       clauses.push({
-        travelGroup: {
-          is: {
-            guideName: {
-              contains: guideName,
-            },
-          },
+        guideName: {
+          contains: guideName,
         },
       });
     }
 
     const query = normalizeOptionalString(filters?.query);
     if (query) {
-      clauses.push(buildSummarySearchWhere(query));
+      clauses.push(buildTravelGroupSummarySearchWhere(query));
     }
 
     return andWhere(...clauses);
+  }
+
+  private async findTravelGroupWithSummaryVisibleForApi(
+    travelGroupId: string,
+  ) {
+    const groupId = normalizeRequiredString(travelGroupId, 'travelGroupId');
+    const travelGroup = await this.prisma.travelGroup.findUnique({
+      where: {
+        id: groupId,
+      },
+      include: getTravelGroupWithFinanceSummaryInclude(),
+    });
+    if (
+      !travelGroup ||
+      ((await this.onlyShowMarkedRecords()) && !travelGroup.financeMark)
+    ) {
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
+    }
+    return travelGroup;
   }
 
   private async findSummaryVisibleForApi(travelGroupId: string) {
@@ -1547,6 +1597,68 @@ function getTravelGroupFinanceSummaryDetailInclude(): any {
   return getTravelGroupFinanceSummaryListInclude();
 }
 
+function getTravelGroupWithFinanceSummaryInclude(): any {
+  return {
+    financeSummary: {
+      include: {
+        agencyDeductionConfirmedBy: true,
+        dailyRebatePaidBy: true,
+        monthlyRebatePaidBy: true,
+        updatedBy: true,
+      },
+    },
+  };
+}
+
+function buildDisplayFinanceSummary(travelGroup: any) {
+  const financeSummary = travelGroup?.financeSummary || null;
+  if (financeSummary) {
+    return {
+      ...financeSummary,
+      travelGroup,
+      summaryExists: true,
+    };
+  }
+  return {
+    id: null,
+    travelGroupId: travelGroup.id,
+    travelGroup,
+    totalSalesAmountCents: 0,
+    totalCashOnDeliveryCents: 0,
+    totalPaidDepositCents: 0,
+    confirmedRefundAmountCents: 0,
+    effectiveSalesAmountCents: 0,
+    totalAgencyDeductionCents: 0,
+    agencyDeductionConfirmed: false,
+    agencyDeductionConfirmedById: null,
+    agencyDeductionConfirmedBy: null,
+    agencyDeductionConfirmedAt: null,
+    totalAgencyNetAmountCents: 0,
+    totalDailyRebateCents: 0,
+    totalMonthlyRebateCents: 0,
+    paidRebateCents: 0,
+    unpaidRebateCents: 0,
+    dailyRebatePaid: false,
+    dailyRebatePaidById: null,
+    dailyRebatePaidBy: null,
+    dailyRebatePaidAt: null,
+    monthlyRebatePaid: false,
+    monthlyRebatePaidById: null,
+    monthlyRebatePaidBy: null,
+    monthlyRebatePaidAt: null,
+    notes: null,
+    guideInfoSent: false,
+    travelAgencyInfoSent: false,
+    calculationVersion: null,
+    sourceSnapshot: null,
+    updatedById: null,
+    updatedBy: null,
+    createdAt: null,
+    updatedAt: null,
+    summaryExists: false,
+  };
+}
+
 const TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS = [
   { header: '团号', key: 'travelGroup', width: 20 },
   { header: '日期', key: 'visitDate', width: 14 },
@@ -1660,45 +1772,33 @@ function toTravelGroupFinanceSummaryExportRow(summary: any) {
   };
 }
 
-function buildSummarySearchWhere(query: string) {
+function buildTravelGroupSummarySearchWhere(query: string) {
   return {
     OR: [
       {
-        notes: {
+        groupNo: {
           contains: query,
         },
       },
       {
-        travelGroup: {
-          is: {
-            groupNo: {
-              contains: query,
-            },
-          },
+        travelAgency: {
+          contains: query,
         },
       },
       {
-        travelGroup: {
-          is: {
-            travelAgency: {
-              contains: query,
-            },
-          },
+        guideName: {
+          contains: query,
         },
       },
       {
-        travelGroup: {
-          is: {
-            guideName: {
-              contains: query,
-            },
-          },
+        tasterName: {
+          contains: query,
         },
       },
       {
-        travelGroup: {
+        financeSummary: {
           is: {
-            tasterName: {
+            notes: {
               contains: query,
             },
           },
@@ -1778,6 +1878,7 @@ function toTravelGroupFinanceSummaryListDto(summary: any) {
   );
   return {
     id: summary.id,
+    summaryExists: summary.summaryExists !== false,
     travelGroupId: summary.travelGroupId,
     travelGroup: summarizeTravelGroup(
       summary.travelGroup,
@@ -1844,6 +1945,7 @@ function toTravelGroupFinanceSummaryDto(summary: any) {
   );
   return {
     id: summary.id,
+    summaryExists: summary.summaryExists !== false,
     travelGroupId: summary.travelGroupId,
     totalSalesAmountCents: toInteger(summary.totalSalesAmountCents),
     totalCashOnDeliveryCents: toInteger(

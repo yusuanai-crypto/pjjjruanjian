@@ -83,6 +83,8 @@ class AuthSession {
     required this.dataScope,
     this.token,
     this.expiresAt,
+    this.refreshToken,
+    this.refreshTokenExpiresAt,
   });
 
   final AuthUser user;
@@ -91,6 +93,12 @@ class AuthSession {
   final Map<String, dynamic> dataScope;
   final String? token;
   final String? expiresAt;
+  final String? refreshToken;
+  final String? refreshTokenExpiresAt;
+
+  String? get accessToken => token;
+
+  String? get accessTokenExpiresAt => expiresAt;
 
   factory AuthSession.fromJson(Map<String, dynamic> json) {
     final user = _asMap(json['user']);
@@ -98,8 +106,12 @@ class AuthSession {
     final permissions = json['permissions'];
 
     return AuthSession(
-      token: _nullableString(json['token']),
-      expiresAt: _nullableString(json['expiresAt']),
+      token: _nullableString(json['accessToken']) ??
+          _nullableString(json['token']),
+      expiresAt: _nullableString(json['accessTokenExpiresAt']) ??
+          _nullableString(json['expiresAt']),
+      refreshToken: _nullableString(json['refreshToken']),
+      refreshTokenExpiresAt: _nullableString(json['refreshTokenExpiresAt']),
       user: AuthUser.fromJson(user),
       permissions: permissions is List
           ? permissions.map((item) => '$item').toList()
@@ -116,15 +128,85 @@ class AuthSession {
     );
   }
 
-  AuthSession withToken(String token) {
+  AuthSession withCredentials({
+    required String accessToken,
+    required String accessTokenExpiresAt,
+    required String refreshToken,
+    required String refreshTokenExpiresAt,
+  }) {
     return AuthSession(
-      token: token,
-      expiresAt: expiresAt,
+      token: accessToken,
+      expiresAt: accessTokenExpiresAt,
+      refreshToken: refreshToken,
+      refreshTokenExpiresAt: refreshTokenExpiresAt,
       user: user,
       permissions: permissions,
       menus: menus,
       dataScope: dataScope,
     );
+  }
+
+  AuthSession withTokensFrom(AuthSession source) {
+    return AuthSession(
+      token: source.token,
+      expiresAt: source.expiresAt,
+      refreshToken: source.refreshToken,
+      refreshTokenExpiresAt: source.refreshTokenExpiresAt,
+      user: user,
+      permissions: permissions,
+      menus: menus,
+      dataScope: dataScope,
+    );
+  }
+
+  AuthSession withToken(String accessToken) {
+    return AuthSession(
+      token: accessToken,
+      expiresAt: expiresAt,
+      refreshToken: refreshToken,
+      refreshTokenExpiresAt: refreshTokenExpiresAt,
+      user: user,
+      permissions: permissions,
+      menus: menus,
+      dataScope: dataScope,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      if (token != null) 'accessToken': token,
+      if (expiresAt != null) 'accessTokenExpiresAt': expiresAt,
+      if (refreshToken != null) 'refreshToken': refreshToken,
+      if (refreshTokenExpiresAt != null)
+        'refreshTokenExpiresAt': refreshTokenExpiresAt,
+      'user': <String, dynamic>{
+        'id': user.id,
+        'name': user.name,
+        'username': user.username,
+        'role': user.role.value,
+        'phone': user.phone,
+        'leaderId': user.leaderId,
+        'isActive': user.isActive,
+        'mustChangePassword': user.mustChangePassword,
+        'statusReason': user.statusReason,
+        'statusChangedAt': user.statusChangedAt,
+        'statusChangedBy': user.statusChangedBy,
+        'createdAt': user.createdAt,
+        'updatedAt': user.updatedAt,
+      },
+      'permissions': permissions,
+      'menus': menus
+          .map(
+            (menu) => <String, dynamic>{
+              'id': menu.id,
+              'title': menu.title,
+              'phase': menu.phase,
+              if (menu.dataScope != null) 'dataScope': menu.dataScope,
+            },
+          )
+          .toList(),
+      'dataScope': dataScope,
+    };
   }
 }
 
@@ -144,9 +226,8 @@ class UnsupportedUserRoleException implements Exception {
   final String value;
 
   String get displayValue {
-    final sanitized = value
-        .replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ')
-        .trim();
+    final sanitized =
+        value.replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ').trim();
     if (sanitized.isEmpty) {
       return '空值';
     }

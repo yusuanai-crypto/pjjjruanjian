@@ -27,6 +27,7 @@ void main() {
     expect(find.text('均单'), findsOneWidget);
     expect(find.text('熊猫'), findsOneWidget);
     expect(find.text('重点客户信息（选填）'), findsOneWidget);
+    expect(find.text('香烟费用（元）'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('key-customer-photo-picker')),
       findsOneWidget,
@@ -87,7 +88,7 @@ void main() {
     expect(find.text('人数必须大于 0'), findsWidgets);
   });
 
-  testWidgets('optional fields may stay empty and server group number is used',
+  testWidgets('other optional fields may stay empty and yuan is sent as cents',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpPage(tester, apiClient);
@@ -95,6 +96,7 @@ void main() {
     await _selectVisitDate(tester);
     await _selectTravelAgency(tester);
     await _selectGuide(tester);
+    await _fillCigaretteFee(tester, '20.50');
     await _submit(tester);
 
     expect(apiClient.createCalls, 1);
@@ -102,6 +104,7 @@ void main() {
     expect(body['visitDate'], isNotEmpty);
     expect(body['travelAgency'], '测试旅行社');
     expect(body['guideId'], 'guide-1');
+    expect(body['cigaretteFeeCents'], 2050);
     for (final optionalField in [
       'licensePlate',
       'guestCount',
@@ -124,6 +127,27 @@ void main() {
     expect(find.textContaining('SERVER-TG-001'), findsWidgets);
   });
 
+  testWidgets('cigarette fee is required, positive, and limited to two decimals',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await _submit(tester);
+
+    expect(apiClient.createCalls, 0);
+    expect(find.text('香烟费用必须大于 0'), findsWidgets);
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+
+    await _fillCigaretteFee(tester, '20.123');
+    await _submit(tester);
+    expect(apiClient.createCalls, 0);
+    expect(find.text('请输入最多两位小数的非负金额'), findsWidgets);
+  });
+
   testWidgets('API failure shows the friendly backend reason in a dialog',
       (tester) async {
     final apiClient = _FakeApiClient()..failCreate = true;
@@ -132,6 +156,7 @@ void main() {
     await _selectVisitDate(tester);
     await _selectTravelAgency(tester);
     await _selectGuide(tester);
+    await _fillCigaretteFee(tester, '20');
     await _submit(tester);
 
     expect(apiClient.createCalls, 1);
@@ -147,6 +172,7 @@ void main() {
     await _selectVisitDate(tester);
     await _selectTravelAgency(tester);
     await _selectGuide(tester);
+    await _fillCigaretteFee(tester, '20.5');
     await _selectTasterField(tester, const ValueKey('taster-field'));
     await _selectTasterField(tester, const ValueKey('liaison-taster-field'));
     await _submit(tester);
@@ -175,6 +201,7 @@ void main() {
     await _selectVisitDate(tester);
     await _selectTravelAgency(tester);
     await _selectGuide(tester);
+    await _fillCigaretteFee(tester, '20');
     final picker = find.byKey(const ValueKey('key-customer-photo-picker'));
     await tester.ensureVisible(picker);
     await tester.tap(picker);
@@ -262,6 +289,13 @@ Future<void> _selectTasterField(WidgetTester tester, Key key) async {
   await tester.pumpAndSettle();
   await tester.tap(find.byType(ListTile).last);
   await tester.pumpAndSettle();
+}
+
+Future<void> _fillCigaretteFee(WidgetTester tester, String value) async {
+  final field = find.byKey(const ValueKey('cigarette-fee-field'));
+  await tester.ensureVisible(field);
+  await tester.enterText(field, value);
+  await tester.pump();
 }
 
 Future<void> _submit(WidgetTester tester) async {

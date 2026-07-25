@@ -334,32 +334,61 @@ export class CommissionRecordsNestService {
       id,
       payload,
     );
-    const context = current
-      ? await this.loadTasterManualContext(
-          prisma,
-          current.travelGroupId,
-          current.targetUserId,
-        )
-      : await this.loadTasterManualContext(
-          prisma,
-          normalizeRequiredString(payload?.travelGroupId, 'travelGroupId'),
-          normalizeRequiredString(payload?.tasterId, 'tasterId'),
-        );
-    assertTravelGroupTasterMatches(context.travelGroup, context.taster);
+    const salesOrderId = current
+      ? normalizeRequiredString(current.salesOrderId, 'salesOrderId')
+      : normalizeRequiredString(payload?.salesOrderId, 'salesOrderId');
+    const context = await this.loadTasterManualOrderContext(
+      prisma,
+      salesOrderId,
+    );
+    assertTasterManualPayloadMatchesOrder(payload, context);
 
     if (!current) {
-      const created = await prisma.commissionRecord.create({
-        data: buildTasterManualCreateData({
-          amountCents,
+      let created: any;
+      try {
+        created = await prisma.commissionRecord.create({
+          data: buildTasterManualCreateData({
+            amountCents,
+            actor,
+            payload,
+            context,
+          }),
+        });
+      } catch (error) {
+        if (!isOrderTasterManualUniqueConstraintError(error)) {
+          throw error;
+        }
+        const concurrentRecord =
+          await this.findOrderTasterManualRecord(prisma, context);
+        if (!concurrentRecord) {
+          throw error;
+        }
+        const updated = await prisma.commissionRecord.update({
+          where: {
+            id: concurrentRecord.id,
+          },
+          data: buildTasterManualUpdateData({
+            amountCents,
+            actor,
+            payload,
+            context,
+            current: concurrentRecord,
+          }),
+        });
+        await this.appendRecordLog(
+          prisma,
           actor,
-          payload,
-          context,
-        }),
-      });
+          'commission_records.taster_manual_amount.update',
+          concurrentRecord,
+          updated,
+          metadata,
+        );
+        return toCommissionRecordDto(updated);
+      }
       await this.appendRecordLog(
         prisma,
         actor,
-        'commission_records.taster_manual_amount.update',
+        'commission_records.taster_manual_amount.create',
         null,
         created,
         metadata,
@@ -368,6 +397,7 @@ export class CommissionRecordsNestService {
     }
 
     assertTasterManualRecord(current);
+    assertTasterManualRecordMatchesOrder(current, context);
     const updated = await prisma.commissionRecord.update({
       where: {
         id: current.id,
@@ -417,11 +447,12 @@ export class CommissionRecordsNestService {
       );
     }
     assertTasterManualRecord(current);
-    const context = await this.loadTasterManualContext(
+    const context = await this.loadTasterManualOrderContext(
       prisma,
-      current.travelGroupId,
-      current.targetUserId,
+      normalizeRequiredString(current.salesOrderId, 'salesOrderId'),
     );
+    assertTasterManualPayloadMatchesOrder(payload, context);
+    assertTasterManualRecordMatchesOrder(current, context);
     const now = new Date();
     const updated = await prisma.commissionRecord.update({
       where: {
@@ -683,64 +714,72 @@ export class CommissionRecordsNestService {
           id: recordId,
         },
       });
-      if (current) {
-        return current;
-      }
-      if (!payload?.travelGroupId || !payload?.tasterId) {
+      if (!current) {
         throw createHttpError(
           404,
           'COMMISSION_RECORD_NOT_FOUND',
           'Commission record does not exist.',
         );
       }
+      return current;
     }
 
-    const travelGroupId = normalizeOptionalString(payload?.travelGroupId);
-    const tasterId = normalizeOptionalString(payload?.tasterId);
-    if (!travelGroupId || !tasterId) {
-      return null;
-    }
+    const salesOrderId = normalizeRequiredString(
+      payload?.salesOrderId,
+      'salesOrderId',
+    );
+    const context = await this.loadTasterManualOrderContext(
+      prisma,
+      salesOrderId,
+    );
     return prisma.commissionRecord.findFirst({
       where: {
-        travelGroupId,
-        targetUserId: tasterId,
+        salesOrderId,
         targetType: TASTER_COMMISSION_TARGET_TYPE,
+        targetUserId: context.taster.id,
         manualInput: true,
       },
     });
   }
 
-  private async loadTasterManualContext(
+  private async loadTasterManualOrderContext(
     prisma: any,
-    travelGroupId: string,
-    tasterId: string,
+    salesOrderId: string,
   ) {
-    const groupId = normalizeRequiredString(travelGroupId, 'travelGroupId');
-    const targetUserId = normalizeRequiredString(tasterId, 'tasterId');
-    const [travelGroup, taster] = await Promise.all([
-      prisma.travelGroup.findUnique({
-        where: {
-          id: groupId,
+    const orderId = normalizeRequiredString(salesOrderId, 'salesOrderId');
+    const salesOrder = await prisma.salesOrder.findUnique({
+      where: {
+        id: orderId,
+      },
+      include: {
+        travelGroup: {
+          include: {
+            taster: true,
+          },
         },
-      }),
-      prisma.user.findUnique({
-        where: {
-          id: targetUserId,
-        },
-      }),
-    ]);
-    if (!travelGroup) {
+      },
+    });
+    if (!salesOrder) {
       throw createHttpError(
         404,
-        'TRAVEL_GROUP_NOT_FOUND',
-        'Travel group does not exist.',
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
       );
     }
-    if (!taster) {
+    const travelGroup = salesOrder.travelGroup;
+    if (!salesOrder.travelGroupId || !travelGroup) {
       throw createHttpError(
-        404,
-        'TASTER_NOT_FOUND',
-        'Taster user does not exist.',
+        400,
+        'SALES_ORDER_TASTER_NOT_AVAILABLE',
+        'Sales order must reference a travel group before entering taster commission.',
+      );
+    }
+    const taster = travelGroup.taster;
+    if (!travelGroup.tasterId || !taster) {
+      throw createHttpError(
+        400,
+        'SALES_ORDER_TASTER_NOT_AVAILABLE',
+        'Sales order travel group has no associated taster.',
       );
     }
     if (normalizeRole(taster.role) !== 'taster' || !taster.isActive) {
@@ -751,9 +790,21 @@ export class CommissionRecordsNestService {
       );
     }
     return {
+      salesOrder,
       travelGroup,
       taster,
     };
+  }
+
+  private async findOrderTasterManualRecord(prisma: any, context: any) {
+    return prisma.commissionRecord.findFirst({
+      where: {
+        salesOrderId: context.salesOrder.id,
+        targetType: TASTER_COMMISSION_TARGET_TYPE,
+        targetUserId: context.taster.id,
+        manualInput: true,
+      },
+    });
   }
 
   private async appendRecordLog(
@@ -977,7 +1028,7 @@ function buildTasterManualCreateData(options: {
   });
   return {
     id: crypto.randomUUID(),
-    salesOrderId: normalizeOptionalString(options.payload?.salesOrderId),
+    salesOrderId: options.context.salesOrder.id,
     travelGroupId: options.context.travelGroup.id,
     afterSalesOrderId: null,
     commissionRuleId: null,
@@ -1065,6 +1116,9 @@ function buildTasterManualSourceSnapshot(options: {
     operatedAt: options.operatedAt.toISOString(),
     amountCents: options.amountCents,
     calculationVersion: 'stage7_v1',
+    salesOrder: summarizeSalesOrderForTasterManual(
+      options.context.salesOrder,
+    ),
     travelGroup: summarizeTravelGroupForTasterManual(
       options.context.travelGroup,
     ),
@@ -1152,6 +1206,17 @@ function summarizeTravelGroupForTasterManual(travelGroup: any) {
       travelGroup.financeMark === undefined
         ? null
         : Boolean(travelGroup.financeMark),
+  };
+}
+
+function summarizeSalesOrderForTasterManual(salesOrder: any) {
+  return {
+    id: salesOrder.id,
+    orderNo: salesOrder.orderNo || null,
+    orderDate: toDateOnly(salesOrder.orderDate),
+    travelGroupId: salesOrder.travelGroupId || null,
+    customerName: salesOrder.customerName || null,
+    status: targetStatusToApi(salesOrder.status),
   };
 }
 
@@ -1743,14 +1808,64 @@ function assertTasterManualRecord(record: any) {
   }
 }
 
-function assertTravelGroupTasterMatches(travelGroup: any, taster: any) {
-  if (travelGroup.tasterId && travelGroup.tasterId !== taster.id) {
+function assertTasterManualPayloadMatchesOrder(payload: any, context: any) {
+  const payloadSalesOrderId = normalizeOptionalString(payload?.salesOrderId);
+  if (
+    payloadSalesOrderId &&
+    payloadSalesOrderId !== context.salesOrder.id
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'salesOrderId does not match the commission record order.',
+    );
+  }
+  const payloadTravelGroupId = normalizeOptionalString(payload?.travelGroupId);
+  if (
+    payloadTravelGroupId &&
+    payloadTravelGroupId !== context.travelGroup.id
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'travelGroupId does not match the sales order travel group.',
+    );
+  }
+  const payloadTasterId = normalizeOptionalString(payload?.tasterId);
+  if (payloadTasterId && payloadTasterId !== context.taster.id) {
     throw createHttpError(
       400,
       'VALIDATION_FAILED',
       'tasterId does not match the travel group taster.',
     );
   }
+}
+
+function assertTasterManualRecordMatchesOrder(record: any, context: any) {
+  if (
+    record.salesOrderId !== context.salesOrder.id ||
+    record.travelGroupId !== context.travelGroup.id ||
+    record.targetUserId !== context.taster.id
+  ) {
+    throw createHttpError(
+      409,
+      'COMMISSION_RECORD_ORDER_MISMATCH',
+      'Commission record is not the manual taster commission for this sales order.',
+    );
+  }
+}
+
+function isOrderTasterManualUniqueConstraintError(error: unknown) {
+  if (!error || typeof error !== 'object' || (error as any).code !== 'P2002') {
+    return false;
+  }
+  const target = (error as any).meta?.target;
+  const targetText = Array.isArray(target) ? target.join(',') : String(target || '');
+  return (
+    targetText.includes('salesOrderId') ||
+    targetText.includes('sales_order_id') ||
+    targetText.includes('commission_records_order_target_user_manual_key')
+  );
 }
 
 function requireAnyRole(actor: any, roles: string[]) {
@@ -1948,6 +2063,13 @@ function normalizeNonNegativeInteger(value: unknown, fieldName: string) {
       400,
       'VALIDATION_FAILED',
       `${fieldName} cannot be negative.`,
+    );
+  }
+  if (numberValue > 2147483647) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} exceeds the supported amount range.`,
     );
   }
   return numberValue;

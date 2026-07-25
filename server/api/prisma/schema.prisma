@@ -89,11 +89,35 @@ model User {
   createdSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitCreatedBy")
   updatedSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitUpdatedBy")
   correctedSerializedInventoryUnits SerializedInventoryUnit[]  @relation("SerializedInventoryUnitCorrectedBy")
+  refreshSessions                  RefreshSession[]
 
   @@index([role])
   @@index([leaderId])
   @@index([statusChangedBy])
   @@map("users")
+}
+
+model RefreshSession {
+  id                  String    @id @default(uuid()) @db.Char(36)
+  userId              String    @map("user_id") @db.Char(36)
+  tokenHash           String    @unique @map("token_hash") @db.Char(64)
+  familyId            String    @map("family_id") @db.Char(36)
+  tokenVersion        Int       @map("token_version")
+  expiresAt           DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt           DateTime? @map("revoked_at") @db.DateTime(3)
+  replacedBySessionId String?   @map("replaced_by_session_id") @db.Char(36)
+  revokeReason        String?   @map("revoke_reason") @db.VarChar(64)
+  lastUsedAt          DateTime? @map("last_used_at") @db.DateTime(3)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@map("refresh_sessions")
 }
 
 enum SmsVerificationPurpose {
@@ -150,23 +174,108 @@ model SystemSetting {
 }
 
 model OperationLog {
-  id         String   @id @default(uuid()) @db.Char(36)
-  userId     String?  @map("user_id") @db.Char(36)
-  action     String   @db.VarChar(100)
-  entityType String   @map("entity_type") @db.VarChar(100)
-  entityId   String?  @map("entity_id") @db.Char(36)
-  beforeData Json?    @map("before_data")
-  afterData  Json?    @map("after_data")
-  sanitizationSummary Json? @map("sanitization_summary")
-  ipAddress  String?  @map("ip_address") @db.VarChar(45)
-  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  id                    String           @id @default(uuid()) @db.Char(36)
+  userId                String?          @map("user_id") @db.Char(36)
+  actorNameSnapshot     String?          @map("actor_name_snapshot") @db.VarChar(100)
+  actorUsernameSnapshot String?          @map("actor_username_snapshot") @db.VarChar(100)
+  actorRoleSnapshot     String?          @map("actor_role_snapshot") @db.VarChar(32)
+  module                String?          @db.VarChar(100)
+  operationType         OperationLogType? @map("operation_type")
+  action                String           @db.VarChar(100)
+  entityType            String           @map("entity_type") @db.VarChar(100)
+  entityId              String?          @map("entity_id") @db.VarChar(100)
+  result                OperationLogResult?
+  beforeData            Json?            @map("before_data")
+  afterData             Json?            @map("after_data")
+  requestSummary        Json?            @map("request_summary")
+  sanitizationSummary   Json?            @map("sanitization_summary")
+  httpMethod            String?          @map("http_method") @db.VarChar(10)
+  requestPath           String?          @map("request_path") @db.VarChar(255)
+  requestId             String?          @map("request_id") @db.VarChar(64)
+  statusCode            Int?             @map("status_code")
+  errorCode             String?          @map("error_code") @db.VarChar(100)
+  errorMessage          String?          @map("error_message") @db.VarChar(512)
+  userAgent             String?          @map("user_agent") @db.VarChar(512)
+  durationMs            Int?             @map("duration_ms")
+  ipAddress             String?          @map("ip_address") @db.VarChar(45)
+  archivedAt            DateTime?        @map("archived_at") @db.DateTime(3)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.DateTime(0)
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([userId, createdAt], map: "operation_logs_user_created_idx")
+  @@index([module, createdAt], map: "operation_logs_module_created_idx")
+  @@index([operationType, createdAt], map: "operation_logs_type_created_idx")
+  @@index([result, createdAt], map: "operation_logs_result_created_idx")
   @@index([entityType, entityId])
+  @@index([requestId])
   @@index([createdAt])
   @@map("operation_logs")
+}
+
+model OperationLogArchive {
+  id                    String              @id @db.Char(36)
+  userId                String?             @map("user_id") @db.Char(36)
+  actorNameSnapshot     String?             @map("actor_name_snapshot") @db.VarChar(100)
+  actorUsernameSnapshot String?             @map("actor_username_snapshot") @db.VarChar(100)
+  actorRoleSnapshot     String?             @map("actor_role_snapshot") @db.VarChar(32)
+  module                String?             @db.VarChar(100)
+  operationType         OperationLogType?   @map("operation_type")
+  action                String              @db.VarChar(100)
+  entityType            String              @map("entity_type") @db.VarChar(100)
+  entityId              String?             @map("entity_id") @db.VarChar(100)
+  result                OperationLogResult?
+  beforeData            Json?               @map("before_data")
+  afterData             Json?               @map("after_data")
+  requestSummary        Json?               @map("request_summary")
+  sanitizationSummary   Json?               @map("sanitization_summary")
+  httpMethod            String?             @map("http_method") @db.VarChar(10)
+  requestPath           String?             @map("request_path") @db.VarChar(255)
+  requestId             String?             @map("request_id") @db.VarChar(64)
+  statusCode            Int?                @map("status_code")
+  errorCode             String?             @map("error_code") @db.VarChar(100)
+  errorMessage          String?             @map("error_message") @db.VarChar(512)
+  userAgent             String?             @map("user_agent") @db.VarChar(512)
+  durationMs            Int?                @map("duration_ms")
+  ipAddress             String?             @map("ip_address") @db.VarChar(45)
+  archivedAt            DateTime            @default(now()) @map("archived_at") @db.DateTime(3)
+  createdAt             DateTime            @map("created_at") @db.DateTime(0)
+
+  @@index([userId, createdAt], map: "operation_log_archives_user_created_idx")
+  @@index([module, createdAt], map: "operation_log_archives_module_created_idx")
+  @@index([operationType, createdAt], map: "operation_log_archives_type_created_idx")
+  @@index([result, createdAt], map: "operation_log_archives_result_created_idx")
+  @@index([entityType, entityId], map: "operation_log_archives_entity_idx")
+  @@index([requestId], map: "operation_log_archives_request_id_idx")
+  @@index([createdAt], map: "operation_log_archives_created_idx")
+  @@index([archivedAt], map: "operation_log_archives_archived_idx")
+  @@map("operation_log_archives")
+}
+
+enum OperationLogType {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  IMPORT
+  EXPORT
+  UPLOAD
+  DOWNLOAD
+  REVIEW
+  STATUS_CHANGE
+  OTHER
+
+  @@map("operation_log_type")
+}
+
+enum OperationLogResult {
+  SUCCESS
+  FAILURE
+
+  @@map("operation_log_result")
 }
 
 model AiChatMessage {
@@ -479,6 +588,8 @@ model TravelGroup {
   departureTime            String?           @map("departure_time") @db.VarChar(30)
   remarks                  String?           @db.Text
   status                   TravelGroupStatus @default(UNMARKED)
+  parkingFeeCents          Int               @default(500) @map("parking_fee_cents")
+  cigaretteFeeCents        Int?              @map("cigarette_fee_cents")
   salesAmountCents         Int               @default(0) @map("sales_amount_cents")
   paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
   cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
@@ -496,6 +607,8 @@ model TravelGroup {
   tasterId                 String?           @map("taster_id") @db.Char(36)
   tasterSummary            String?           @map("taster_summary") @db.Text
   tasterSummaryAt          DateTime?         @map("taster_summary_at") @db.DateTime(0)
+  tasterEditCount          Int               @default(0) @map("taster_edit_count")
+  tasterLastEditedAt       DateTime?         @map("taster_last_edited_at") @db.DateTime(0)
   postMarkEditedAt         DateTime?         @map("post_mark_edited_at") @db.DateTime(0)
   postMarkEditedById       String?           @map("post_mark_edited_by_id") @db.Char(36)
   createdById              String?           @map("created_by_id") @db.Char(36)
@@ -524,6 +637,7 @@ model TravelGroup {
   @@index([groupType])
   @@index([status])
   @@index([visitDate, tasterId])
+  @@index([visitDate, liaisonTasterId])
   @@index([visitDate, financeMark])
   @@index([visitDate, groupType])
   @@map("travel_groups")
@@ -722,6 +836,8 @@ model SalesOrder {
   markedById                String?                 @map("marked_by") @db.Char(36)
   markedAt                  DateTime?               @map("marked_at") @db.DateTime(0)
   salesUserId               String?                 @map("sales_user_id") @db.Char(36)
+  salesEditCount            Int                     @default(0) @map("sales_edit_count")
+  salesEditedAt             DateTime?               @map("sales_edited_at") @db.DateTime(0)
   outreachUserId            String?                 @map("outreach_user_id") @db.Char(36)
   createdById               String?                 @map("created_by_id") @db.Char(36)
   updatedById               String?                 @map("updated_by_id") @db.Char(36)
@@ -741,6 +857,7 @@ model SalesOrder {
   @@index([customerId])
   @@index([travelGroupId])
   @@index([salesUserId])
+  @@index([salesUserId, createdAt])
   @@index([outreachUserId])
   @@index([financeMark])
   @@index([markedById])
@@ -1015,6 +1132,7 @@ model CommissionRecord {
   createdBy        User?             @relation("CommissionRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy        User?             @relation("CommissionRecordUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
+  @@unique([salesOrderId, targetType, targetUserId, manualInput], map: "commission_records_order_target_user_manual_key")
   @@index([salesOrderId])
   @@index([travelGroupId])
   @@index([afterSalesOrderId])

@@ -275,6 +275,14 @@ export class UsersNestService {
             updatedAt: now,
           },
         });
+        if (!isActive) {
+          await revokeRefreshSessions(
+            transaction,
+            id,
+            now,
+            'account_disabled',
+          );
+        }
         return {
           current,
           nextUser,
@@ -448,6 +456,12 @@ export class UsersNestService {
             updatedAt: new Date(),
           },
         });
+        await revokeRefreshSessions(
+          transaction,
+          current.id,
+          new Date(),
+          'password_reset',
+        );
 
         await this.operationLogsService.appendLog(
           {
@@ -490,20 +504,30 @@ export class UsersNestService {
   }
 
   async updatePassword(userId: string, passwordHash: string, options: any = {}) {
-    const user = await this.prisma.user.update({
-      where: {
-        id: userId,
-      },
-      data: {
-        passwordHash,
-        ...(options.mustChangePassword !== undefined
-          ? { mustChangePassword: Boolean(options.mustChangePassword) }
-          : {}),
-        tokenVersion: {
-          increment: 1,
+    const user = await this.prisma.$transaction(async (transaction: any) => {
+      const now = new Date();
+      const updated = await transaction.user.update({
+        where: {
+          id: userId,
         },
-        updatedAt: new Date(),
-      },
+        data: {
+          passwordHash,
+          ...(options.mustChangePassword !== undefined
+            ? { mustChangePassword: Boolean(options.mustChangePassword) }
+            : {}),
+          tokenVersion: {
+            increment: 1,
+          },
+          updatedAt: now,
+        },
+      });
+      await revokeRefreshSessions(
+        transaction,
+        userId,
+        now,
+        'password_changed',
+      );
+      return updated;
     });
     return toAppUser(user);
   }
@@ -734,6 +758,12 @@ export class UsersNestService {
             updatedAt: now,
           },
         });
+        await revokeRefreshSessions(
+          transaction,
+          target.id,
+          now,
+          'password_reset',
+        );
         return {
           kind: 'success',
           user,
@@ -1085,6 +1115,25 @@ async function invalidateVerificationCode(
     data: {
       activeKey: null,
       consumedAt: now,
+      updatedAt: now,
+    },
+  });
+}
+
+async function revokeRefreshSessions(
+  transaction: any,
+  userId: string,
+  now: Date,
+  reason: string,
+) {
+  await transaction.refreshSession.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+    },
+    data: {
+      revokedAt: now,
+      revokeReason: reason,
       updatedAt: now,
     },
   });

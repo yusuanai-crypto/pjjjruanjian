@@ -1089,6 +1089,80 @@ test('smoke: travel group intake migration is additive and nullable', () => {
   );
 });
 
+test('smoke: order-level taster commissions have a duplicate-safe unique migration', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const commissionRecord = extractPrismaBlock(
+    schema,
+    'model CommissionRecord {',
+  );
+  assert.match(
+    commissionRecord,
+    /@@unique\(\[salesOrderId, targetType, targetUserId, manualInput\], map: "commission_records_order_target_user_manual_key"\)/,
+  );
+
+  const migrationName =
+    '20260724000300_order_taster_commission_uniqueness';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX `commission_records_order_target_user_manual_key`/,
+  );
+  assert.match(migration, /`legacy`\.`sales_order_id` IS NULL/);
+  assert.match(migration, /`other_order`\.`id` IS NULL/);
+  assert.match(migration, /`other_legacy`\.`id` IS NULL/);
+  assert.doesNotMatch(migration, /\b(DELETE|DROP TABLE|TRUNCATE)\b/i);
+
+  const preflight = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '..',
+      'scripts',
+      'preflight-order-taster-commission-migration.sql',
+    ),
+    'utf8',
+  );
+  assert.match(preflight, /HAVING COUNT\(\*\) > 1/);
+  assert.match(preflight, /effective_order_count/);
+  assert.match(preflight, /candidate_sales_order_ids/);
+  assert.doesNotMatch(preflight, /\b(UPDATE|DELETE|INSERT|ALTER)\b/i);
+});
+
+test('smoke: travel groups persist parking snapshots and nullable cigarette fees', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+  assert.match(
+    travelGroup,
+    /parkingFeeCents\s+Int\s+@default\(500\)\s+@map\("parking_fee_cents"\)/,
+  );
+  assert.match(
+    travelGroup,
+    /cigaretteFeeCents\s+Int\?\s+@map\("cigarette_fee_cents"\)/,
+  );
+  assert.doesNotMatch(
+    travelGroup,
+    /@@index\(\[(?:parkingFeeCents|cigaretteFeeCents)\]\)/,
+  );
+
+  const migrationName =
+    '20260724000400_travel_group_parking_cigarette_fees';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /`parking_fee_cents` INTEGER NOT NULL DEFAULT 500/,
+  );
+  assert.match(migration, /`cigarette_fee_cents` INTEGER NULL/);
+  assert.doesNotMatch(migration, /cigarette_fee_cents[^;]*DEFAULT 0/i);
+  assert.doesNotMatch(migration, /CREATE (?:UNIQUE )?INDEX/i);
+});
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

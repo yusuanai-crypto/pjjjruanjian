@@ -86,23 +86,34 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
     assert.equal(complete.effectiveSalesAmountCents, 10000);
     assert.equal(complete.actualProductCostCents, 3000);
     assert.equal(complete.logisticsFeeCents, 500);
+    assert.equal(complete.parkingFeeCents, 500);
+    assert.equal(complete.cigaretteFeeCents, 200);
+    assert.equal(complete.salesCommissionCents, 100);
+    assert.equal(complete.outreachCommissionCents, 200);
+    assert.equal(complete.leaderCommissionCents, 300);
     assert.equal(complete.employeeCommissionCents, 600);
     assert.equal(complete.tasterCommissionCents, 400);
     assert.equal(complete.dailyAgencyRebateCents, 500);
     assert.equal(complete.monthlyAgencyRebateCents, 600);
-    assert.equal(complete.totalExpenseCents, 5600);
-    assert.equal(complete.estimatedProfitCents, 4400);
-    assert.equal(complete.estimatedProfitRate, 0.44);
+    assert.equal(complete.totalExpenseCents, 6300);
+    assert.equal(complete.estimatedProfitCents, 3700);
+    assert.equal(complete.estimatedProfitRate, 0.37);
     assert.equal(complete.calculationStatus, 'complete');
 
     const incomplete = result.body.data.items.find(
       (item) => item.groupNo === 'TG-INCOMPLETE',
     );
     assert.equal(incomplete.calculationStatus, 'incomplete');
+    assert.equal(incomplete.cigaretteFeeCents, null);
     assert.equal(incomplete.estimatedProfitCents, null);
+    assert.ok(
+      incomplete.warnings.some(
+        (warning) => warning.code === 'CIGARETTE_FEE_MISSING',
+      ),
+    );
     assert.equal(result.body.data.summary.incompleteGroupCount, 1);
     assert.equal(result.body.data.summary.estimatedProfitCents, null);
-    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 8600);
+    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 5100);
 
     const encoded = JSON.stringify(result.body.data);
     for (const forbiddenField of [
@@ -351,6 +362,8 @@ function group(id, groupNo, visitDate, financeMark, travelAgency) {
     tasterName: `Taster ${id}`,
     guestCount: 10,
     financeMark,
+    parkingFeeCents: 500,
+    cigaretteFeeCents: id === 'incomplete' ? null : 200,
   };
 }
 

@@ -12,6 +12,7 @@ import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rul
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/operation_logs/operation_logs_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/profit_analysis/profit_analysis_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_table_page.dart';
@@ -45,6 +46,12 @@ void main() {
     final sharedOrderNotesEntry = sharedMenuEntries.singleWhere(
       (item) => item.id == 'travel_group_order_notes',
     );
+    final financeDestination = appDestinations.singleWhere(
+      (item) => item.id == 'finance_query',
+    );
+    final sharedFinanceEntry = sharedMenuEntries.singleWhere(
+      (item) => item.id == 'finance_query',
+    );
 
     expect(managementDestination.label, '旅行团管理');
     expect(intakeDestination.label, '旅行团录入');
@@ -52,6 +59,9 @@ void main() {
     expect(commissionDestination.label, '我的提成');
     expect(orderNotesDestination.label, '损耗与离店备注');
     expect(sharedOrderNotesEntry.label, '损耗与离店备注');
+    expect(financeDestination.label, '物流单号与品鉴师提成填写');
+    expect(sharedFinanceEntry.label, '物流单号与品鉴师提成填写');
+    expect(financeDestination.id, 'finance_query');
     expect(
       appDestinations.any(
         (item) => item.label == '旅行团查询' || item.label == '待处理旅行团',
@@ -229,6 +239,7 @@ void main() {
         'analytics',
       ]),
     );
+    expect(afterSalesIds, isNot(contains('order_form')));
 
     final tasterIds = _destinationIds(
       ['travel_group_query', 'order_query', 'own_taster_receptions'],
@@ -288,6 +299,7 @@ void main() {
     expect(_roleIds(UserRole.afterSales), contains('travel_group_query'));
     expect(_roleIds(UserRole.afterSales), contains('analytics'));
     expect(_roleIds(UserRole.afterSales), contains('order_query'));
+    expect(_roleIds(UserRole.afterSales), isNot(contains('order_form')));
     expect(_roleIds(UserRole.finance), contains('finance_query'));
     expect(_roleIds(UserRole.finance), contains('after_sales_form'));
     expect(_roleIds(UserRole.finance), contains('commission_rules'));
@@ -529,6 +541,7 @@ void main() {
   test('builds core pages for routed destination ids', () {
     expect(_page('dashboard'), isA<DashboardPage>());
     expect(_page('role_menu'), isA<RoleMenuPage>());
+    expect(_page('operation_logs'), isA<OperationLogsPage>());
     expect(_page('travel_group_form'), isA<TravelGroupFormPage>());
     expect(_page('travel_group_query'), isA<TravelGroupQueryPage>());
     expect(_page('travel_group_order_notes'), isA<TravelGroupOrderNotesPage>());

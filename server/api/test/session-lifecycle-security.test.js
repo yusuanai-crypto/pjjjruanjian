@@ -56,7 +56,7 @@ async function sendResetCode(baseUrl, token, userId) {
   return code;
 }
 
-test('password change revokes the old JWT and returns a replacement session', async () => {
+test('password change revokes the current access and refresh session', async () => {
   await withNestApiServer(async (baseUrl) => {
     const session = await login(baseUrl);
     const changed = await requestJson(
@@ -73,21 +73,123 @@ test('password change revokes the old JWT and returns a replacement session', as
       },
     );
     assert.equal(changed.response.status, 200);
-    assert.equal(typeof changed.body.data.token, 'string');
+    assert.deepEqual(changed.body.data, { passwordChanged: true });
 
     const oldSession = await requestJson(baseUrl, '/api/auth/me', {
       token: session.token,
     });
     assertErrorContract(oldSession, 401, 'SESSION_REVOKED');
 
-    const replacementSession = await requestJson(
+    const revokedRefresh = await requestJson(
       baseUrl,
-      '/api/auth/me',
+      '/api/auth/refresh',
       {
-        token: changed.body.data.token,
+        method: 'POST',
+        body: { refreshToken: session.refreshToken },
       },
     );
-    assert.equal(replacementSession.response.status, 200);
+    assertErrorContract(revokedRefresh, 401, 'REFRESH_TOKEN_REUSED');
+  });
+});
+
+test('login stores only a refresh-token hash with a 30-day default lifetime', async () => {
+  await withNestApiServer(async (baseUrl, context) => {
+    const session = await login(baseUrl);
+    const rows = context.prisma.__store.refreshSessions;
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].tokenHash, /^[a-f0-9]{64}$/);
+    assert.equal(Object.values(rows[0]).includes(session.refreshToken), false);
+    const lifetime =
+      new Date(session.refreshTokenExpiresAt).getTime() -
+      rows[0].createdAt.getTime();
+    assert.equal(lifetime >= 29 * 24 * 60 * 60 * 1000, true);
+    assert.equal(lifetime <= 31 * 24 * 60 * 60 * 1000, true);
+  });
+});
+
+test('refresh rotates both tokens and immediately invalidates the old token', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const session = await login(baseUrl);
+    const refreshed = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(refreshed.body.data.accessToken, refreshed.body.data.token);
+    assert.equal(
+      refreshed.body.data.accessTokenExpiresAt,
+      refreshed.body.data.expiresAt,
+    );
+    assert.equal(typeof refreshed.body.data.refreshToken, 'string');
+
+    const oldAccess = await requestJson(baseUrl, '/api/auth/me', {
+      token: session.accessToken,
+    });
+    assertErrorContract(oldAccess, 401, 'SESSION_REVOKED');
+  });
+});
+
+test('refresh-token reuse revokes the replacement session family', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const session = await login(baseUrl);
+    const refreshed = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assert.equal(refreshed.response.status, 200);
+
+    const reused = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assertErrorContract(reused, 401, 'REFRESH_TOKEN_REUSED');
+
+    const replacement = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: refreshed.body.data.refreshToken },
+    });
+    assertErrorContract(replacement, 401, 'REFRESH_TOKEN_REUSED');
+    const replacementAccess = await requestJson(baseUrl, '/api/auth/me', {
+      token: refreshed.body.data.accessToken,
+    });
+    assertErrorContract(replacementAccess, 401, 'SESSION_REVOKED');
+  });
+});
+
+test('expired refresh tokens require a new login and are marked revoked', async () => {
+  await withNestApiServer(async (baseUrl, context) => {
+    const session = await login(baseUrl);
+    context.prisma.__store.refreshSessions[0].expiresAt = new Date(
+      Date.now() - 1000,
+    );
+
+    const expired = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assertErrorContract(expired, 401, 'REFRESH_TOKEN_EXPIRED');
+    assert.equal(
+      context.prisma.__store.refreshSessions[0].revokeReason,
+      'expired',
+    );
+  });
+});
+
+test('logout revokes the persistent session without requiring an access token', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const session = await login(baseUrl);
+    const loggedOut = await requestJson(baseUrl, '/api/auth/logout', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assert.equal(loggedOut.response.status, 200);
+    assert.deepEqual(loggedOut.body.data, { loggedOut: true });
+
+    const revoked = await requestJson(baseUrl, '/api/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: session.refreshToken },
+    });
+    assertErrorContract(revoked, 401, 'REFRESH_TOKEN_REUSED');
   });
 });
 
@@ -119,6 +221,14 @@ test('freeze, unfreeze, and reset never reactivate an older JWT', async () => {
         }),
         401,
         'SESSION_REVOKED',
+      );
+      assertErrorContract(
+        await requestJson(baseUrl, '/api/auth/refresh', {
+          method: 'POST',
+          body: { refreshToken: target.refreshToken },
+        }),
+        401,
+        'REFRESH_TOKEN_REUSED',
       );
 
       const enabled = await requestJson(
@@ -169,6 +279,14 @@ test('freeze, unfreeze, and reset never reactivate an older JWT', async () => {
         }),
         401,
         'SESSION_REVOKED',
+      );
+      assertErrorContract(
+        await requestJson(baseUrl, '/api/auth/refresh', {
+          method: 'POST',
+          body: { refreshToken: beforeReset.refreshToken },
+        }),
+        401,
+        'REFRESH_TOKEN_REUSED',
       );
       const afterReset = await login(
         baseUrl,
@@ -362,11 +480,22 @@ test('schema migration adds session versioning and a unique active SMS key', () 
     ),
     'utf8',
   );
+  const refreshMigration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '../prisma/migrations/20260724000200_persistent_refresh_sessions/migration.sql',
+    ),
+    'utf8',
+  );
   assert.match(schema, /tokenVersion\s+Int\s+@default\(0\)/);
+  assert.match(schema, /model RefreshSession/);
+  assert.match(schema, /tokenHash\s+String\s+@unique/);
   assert.match(schema, /activeKey\s+String\?\s+@unique/);
   assert.match(migration, /ADD COLUMN `token_version`/);
   assert.match(
     migration,
     /sms_verification_codes_active_key_key/,
   );
+  assert.match(refreshMigration, /CREATE TABLE `refresh_sessions`/);
+  assert.match(refreshMigration, /`token_hash` CHAR\(64\) NOT NULL/);
 });

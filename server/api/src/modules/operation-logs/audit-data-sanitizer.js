@@ -53,24 +53,53 @@ function sanitizeAuditDataWithReport(value, options = {}) {
 function sanitizeOperationLogData(log, options = {}) {
   const before = sanitizeAuditDataWithReport(log?.beforeData ?? null, options);
   const after = sanitizeAuditDataWithReport(log?.afterData ?? null, options);
+  const request = sanitizeAuditDataWithReport(
+    log?.requestSummary ?? null,
+    options,
+  );
+  const errorMessage = sanitizeAuditDataWithReport(
+    log?.errorMessage ?? null,
+    {
+      ...options,
+      maxStringLength: Math.min(
+        Number(options.maxStringLength) || 512,
+        512,
+      ),
+      maxSerializedBytes: Math.min(
+        Number(options.maxSerializedBytes) || 2048,
+        2048,
+      ),
+    },
+  );
   return {
     beforeData: before.data,
     afterData: after.data,
+    requestSummary: request.data,
+    errorMessage:
+      typeof errorMessage.data === 'string' ? errorMessage.data : null,
     sanitizationSummary: {
       version: 1,
       redactedCategories: Array.from(
         new Set([
           ...before.report.redactedCategories,
           ...after.report.redactedCategories,
+          ...request.report.redactedCategories,
+          ...errorMessage.report.redactedCategories,
         ]),
       ).sort(),
       limitations: Array.from(
         new Set([
           ...before.report.limitations,
           ...after.report.limitations,
+          ...request.report.limitations,
+          ...errorMessage.report.limitations,
         ]),
       ).sort(),
-      truncated: before.report.truncated || after.report.truncated,
+      truncated:
+        before.report.truncated ||
+        after.report.truncated ||
+        request.report.truncated ||
+        errorMessage.report.truncated,
     },
   };
 }
@@ -333,6 +362,9 @@ function maskAiIdentifiers(value, reportState) {
 function classifyField(key) {
   const rawKey = String(key || '').toLowerCase();
   const normalized = normalizeKey(key);
+  if (normalized === 'ipaddress') {
+    return 'normal';
+  }
   if (
     /(?:手机|电话|联系电话)/.test(rawKey) ||
     normalized.includes('phone') ||

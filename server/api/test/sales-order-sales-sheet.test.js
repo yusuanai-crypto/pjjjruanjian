@@ -9,7 +9,7 @@ const {
   withPhase1Server,
 } = require('./helpers/phase1-api');
 
-test('GET /api/sales-orders/:id/sales-sheet returns no-token sales sheet for admin without writing logs', async (t) => {
+test('GET /api/sales-orders/:id/sales-sheet returns no-token sales sheet and writes a safe read log', async (t) => {
   setPublicSalesSheetBaseUrl(t, undefined);
 
   await withPhase1Server(
@@ -59,10 +59,22 @@ test('GET /api/sales-orders/:id/sales-sheet returns no-token sales sheet for adm
         token: admin.token,
       });
       assert.equal(afterLogs.response.status, 200);
-      assert.equal(
-        afterLogs.body.data.logs.length,
-        beforeLogs.body.data.logs.length,
+      const beforeIds = new Set(
+        beforeLogs.body.data.logs.map((log) => log.id),
       );
+      const newBusinessLogs = afterLogs.body.data.logs.filter(
+        (log) =>
+          !beforeIds.has(log.id) &&
+          log.action !== 'operation_logs.list',
+      );
+      assert.equal(newBusinessLogs.length, 1);
+      assert.equal(
+        newBusinessLogs[0].action,
+        'sales_orders.sales_sheet.read',
+      );
+      assert.equal(newBusinessLogs[0].result, 'SUCCESS');
+      assert.equal(newBusinessLogs[0].beforeData, null);
+      assert.equal(newBusinessLogs[0].afterData, null);
     },
     {
       prisma: buildSalesSheetPrismaOptions(),

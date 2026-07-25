@@ -8,11 +8,16 @@ import {
 } from '../analytics/analytics-scope.helper';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import {
+  buildShanghaiNaturalDayRange,
+  formatShanghaiBusinessDate,
+} from '../business-data/reconciliation-calculation.helper';
 
 const CUSTOMER_READ_ROLES = ['admin', 'boss', 'sales', 'finance', 'after_sales'];
 const CUSTOMER_CREATE_ROLES = ['admin', 'sales', 'after_sales'];
 const CUSTOMER_UPDATE_ROLES = ['admin', 'sales', 'after_sales', 'finance'];
 const CUSTOMER_FINANCE_MARK_ROLES = ['admin', 'finance'];
+const TASTER_COMMISSION_TARGET_TYPE = 'TASTER_COMMISSION';
 const CUSTOMER_PATCH_FIELDS = [
   'name',
   'phone',
@@ -96,6 +101,20 @@ export class CustomersNestService {
       include: {
         items: true,
         travelGroup: true,
+        commissionRecords: {
+          where: {
+            targetType: TASTER_COMMISSION_TARGET_TYPE,
+            manualInput: true,
+          },
+          include: {
+            confirmedBy: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',
@@ -332,15 +351,14 @@ function buildSalesOrderDataScope(actor: any) {
   if (actor?.role !== 'sales') {
     return null;
   }
+  const businessDate = formatShanghaiBusinessDate(new Date());
+  const range = buildShanghaiNaturalDayRange(businessDate)!;
   return {
-    OR: [
-      {
-        salesUserId: actor.id,
-      },
-      {
-        createdById: actor.id,
-      },
-    ],
+    salesUserId: actor.id,
+    createdAt: {
+      gte: range.start,
+      lt: new Date(range.end.getTime() + 1),
+    },
   };
 }
 
@@ -505,6 +523,7 @@ function toCustomerDto(customer: any, recentOrders?: any[]) {
 }
 
 function toCustomerOrderSummaryDto(order: any) {
+  const tasterCommission = toCustomerOrderTasterCommissionDto(order);
   return {
     id: order.id,
     orderNo: order.orderNo,
@@ -522,6 +541,8 @@ function toCustomerOrderSummaryDto(order: any) {
         }
       : null,
     totalAmountCents: Number(order.totalAmountCents || 0),
+    tasterCommissionCents: tasterCommission?.amountCents ?? 0,
+    tasterCommission,
     cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
     status: ORDER_STATUS_FROM_PRISMA[order.status] || order.status,
     packingStatus:
@@ -532,6 +553,37 @@ function toCustomerOrderSummaryDto(order: any) {
     deliverySummary: buildDeliverySummary(order),
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
+  };
+}
+
+function toCustomerOrderTasterCommissionDto(order: any) {
+  const records = (
+    Array.isArray(order.commissionRecords) ? order.commissionRecords : []
+  )
+    .filter(
+      (record: any) =>
+        record?.salesOrderId === order.id &&
+        record?.targetType === TASTER_COMMISSION_TARGET_TYPE &&
+        Boolean(record?.manualInput) &&
+        (!order.travelGroup?.tasterId ||
+          record?.targetUserId === order.travelGroup.tasterId),
+    )
+    .sort(
+      (left: any, right: any) =>
+        new Date(right.updatedAt || right.createdAt || 0).getTime() -
+        new Date(left.updatedAt || left.createdAt || 0).getTime(),
+    );
+  const record = records[0];
+  if (!record) {
+    return null;
+  }
+  return {
+    recordId: record.id,
+    amountCents: Number(record.amountCents || 0),
+    isConfirmed: Boolean(record.isConfirmed),
+    confirmedById: record.confirmedById || null,
+    confirmedByName: record.confirmedBy?.name || null,
+    confirmedAt: record.confirmedAt ? toIsoString(record.confirmedAt) : null,
   };
 }
 

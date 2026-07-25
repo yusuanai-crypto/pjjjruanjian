@@ -275,6 +275,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                   SizedBox(
                     width: 180,
                     child: DropdownButtonFormField<UserRole?>(
+                      isExpanded: true,
                       initialValue: _roleFilter,
                       decoration: const InputDecoration(
                         labelText: '角色',
@@ -308,6 +309,7 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                   SizedBox(
                     width: 160,
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: _statusFilter,
                       decoration: const InputDecoration(
                         labelText: '状态',
@@ -345,6 +347,8 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                   : SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: DataTable(
+                        dataRowMinHeight: 48,
+                        dataRowMaxHeight: 72,
                         columns: const [
                           DataColumn(label: Text('姓名')),
                           DataColumn(label: Text('手机号/用户名')),
@@ -380,40 +384,56 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
                                   ),
                                 )),
                                 DataCell(
-                                  Wrap(
-                                    spacing: 6,
-                                    children: [
-                                      IconButton(
-                                        tooltip: user.isActive ? '冻结' : '解冻',
-                                        onPressed: _canManage(user)
-                                            ? () => _setUserActive(
-                                                  user,
-                                                  !user.isActive,
-                                                )
-                                            : null,
-                                        icon: Icon(user.isActive
-                                            ? Icons.lock_rounded
-                                            : Icons.lock_open_rounded),
-                                      ),
-                                      IconButton(
-                                        tooltip: '修改密码',
-                                        onPressed: _canManage(user)
-                                            ? () => _changePassword(user)
-                                            : null,
-                                        icon:
-                                            const Icon(Icons.password_rounded),
-                                      ),
-                                      IconButton(
-                                        tooltip: '重置密码',
-                                        onPressed: _canManage(user)
-                                            ? () =>
-                                                _resetPasswordToDefault(user)
-                                            : null,
-                                        icon: const Icon(
-                                          Icons.lock_reset_rounded,
+                                  SizedBox(
+                                    width: 156,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          key: ValueKey(
+                                            'employee-action-toggle-${user.id}',
+                                          ),
+                                          tooltip: user.isActive ? '冻结' : '解冻',
+                                          onPressed: _canManage(user)
+                                              ? () => _setUserActive(
+                                                    user,
+                                                    !user.isActive,
+                                                  )
+                                              : null,
+                                          icon: Icon(user.isActive
+                                              ? Icons.lock_rounded
+                                              : Icons.lock_open_rounded),
                                         ),
-                                      ),
-                                    ],
+                                        const SizedBox(width: 6),
+                                        IconButton(
+                                          key: ValueKey(
+                                            'employee-action-change-password-${user.id}',
+                                          ),
+                                          tooltip: '修改密码',
+                                          onPressed: _canManage(user)
+                                              ? () => _changePassword(user)
+                                              : null,
+                                          icon: const Icon(
+                                            Icons.password_rounded,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        IconButton(
+                                          key: ValueKey(
+                                            'employee-action-reset-password-${user.id}',
+                                          ),
+                                          tooltip: '重置密码',
+                                          onPressed: _canManage(user)
+                                              ? () => _resetPasswordToDefault(
+                                                    user,
+                                                  )
+                                              : null,
+                                          icon: const Icon(
+                                            Icons.lock_reset_rounded,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ],

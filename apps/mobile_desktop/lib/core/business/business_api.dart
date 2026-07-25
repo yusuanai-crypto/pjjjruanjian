@@ -889,6 +889,18 @@ class BusinessApi {
     return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
   }
 
+  Future<SalesOrderRecord> salesEditSalesOrder(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/$id/sales-edit',
+      body: body,
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
   Future<SalesOrderRecord> updateSalesOrderStatus(
     String id,
     Map<String, dynamic> body,
@@ -1626,6 +1638,34 @@ class BusinessApi {
     return CommissionRecord.fromJson(_map(_data(payload)['commissionRecord']));
   }
 
+  Future<CommissionRecord> saveSalesOrderTasterCommission({
+    required String salesOrderId,
+    required int amountCents,
+    String? recordId,
+  }) async {
+    if (salesOrderId.trim().isEmpty) {
+      throw ArgumentError.value(
+        salesOrderId,
+        'salesOrderId',
+        'salesOrderId cannot be blank',
+      );
+    }
+    if (amountCents < 0 || amountCents > 2147483647) {
+      throw ArgumentError.value(
+        amountCents,
+        'amountCents',
+        'amountCents is outside the supported range',
+      );
+    }
+    return updateTasterCommissionManualAmount(
+      recordId?.trim().isNotEmpty == true ? recordId!.trim() : 'new',
+      {
+        'salesOrderId': salesOrderId.trim(),
+        'amountCents': amountCents,
+      },
+    );
+  }
+
   Future<CommissionRecord> confirmTasterCommission(
     String id,
     bool isConfirmed,
@@ -1854,6 +1894,81 @@ class BusinessApi {
       token: _token,
     );
     return AnalyticsOverview.fromJson(_data(payload));
+  }
+
+  Future<List<SalesPerformanceRecord>> listSalesPerformance({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/sales-performance',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['salesPerformance'])
+        .map(SalesPerformanceRecord.fromJson)
+        .toList();
+  }
+
+  Future<SalesPerformanceDetail> getSalesPerformanceDetail(
+    String? salesUserId, {
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+  }) async {
+    final target = salesUserId?.trim().isNotEmpty == true
+        ? salesUserId!.trim()
+        : 'unassigned';
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/sales-performance/${Uri.encodeComponent(target)}',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+        ),
+      ),
+      token: _token,
+    );
+    return SalesPerformanceDetail.fromJson(_data(payload));
+  }
+
+  Future<DownloadedFile> exportSalesPerformance({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? sortBy,
+    String? sortDirection,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/analytics/sales-performance/export',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'analytics-sales-performance.xlsx',
+    );
   }
 
   Future<ProfitAnalysisResponse> getTravelGroupProfits({
@@ -2528,6 +2643,8 @@ class TravelGroupRecord {
     required this.departureTime,
     required this.remarks,
     required this.status,
+    required this.parkingFeeCents,
+    required this.cigaretteFeeCents,
     required this.salesAmountCents,
     required this.paidDepositCents,
     required this.cashOnDeliveryCents,
@@ -2543,6 +2660,10 @@ class TravelGroupRecord {
     required this.markedAt,
     required this.tasterSummary,
     required this.tasterSummaryAt,
+    this.tasterEditCount = 0,
+    this.tasterEditLimit = 2,
+    this.tasterEditRemaining = 2,
+    this.canEditByCurrentUser = false,
     required this.tastingItems,
     required this.salesOrders,
     required this.orderSummary,
@@ -2582,6 +2703,8 @@ class TravelGroupRecord {
   final String? departureTime;
   final String? remarks;
   final String status;
+  final int parkingFeeCents;
+  final int? cigaretteFeeCents;
   final int salesAmountCents;
   final int paidDepositCents;
   final int cashOnDeliveryCents;
@@ -2597,6 +2720,10 @@ class TravelGroupRecord {
   final String? markedAt;
   final String? tasterSummary;
   final String? tasterSummaryAt;
+  final int tasterEditCount;
+  final int tasterEditLimit;
+  final int tasterEditRemaining;
+  final bool canEditByCurrentUser;
   final List<TravelGroupTastingItemRecord> tastingItems;
   final List<TravelGroupOrderRecord> salesOrders;
   final TravelGroupOrderSummary orderSummary;
@@ -2654,6 +2781,12 @@ class TravelGroupRecord {
       departureTime: _stringOrNull(json['departureTime']),
       remarks: _stringOrNull(json['remarks']),
       status: '${json['status'] ?? 'unmarked'}',
+      parkingFeeCents: json.containsKey('parkingFeeCents')
+          ? _intValue(json['parkingFeeCents'])
+          : 500,
+      cigaretteFeeCents: json['cigaretteFeeCents'] == null
+          ? null
+          : _intValue(json['cigaretteFeeCents']),
       salesAmountCents: _intValue(json['salesAmountCents']),
       paidDepositCents: _intValue(json['paidDepositCents']),
       cashOnDeliveryCents: _intValue(json['cashOnDeliveryCents']),
@@ -2669,6 +2802,14 @@ class TravelGroupRecord {
       markedAt: _stringOrNull(json['markedAt']),
       tasterSummary: _stringOrNull(json['tasterSummary']),
       tasterSummaryAt: _stringOrNull(json['tasterSummaryAt']),
+      tasterEditCount: _intValue(json['tasterEditCount']),
+      tasterEditLimit: json.containsKey('tasterEditLimit')
+          ? _intValue(json['tasterEditLimit'])
+          : 2,
+      tasterEditRemaining: json.containsKey('tasterEditRemaining')
+          ? _intValue(json['tasterEditRemaining'])
+          : 2,
+      canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
       tastingItems: _list(json['tastingItems'])
           .map((item) => TravelGroupTastingItemRecord.fromJson(item))
           .toList(),
@@ -2734,6 +2875,10 @@ class TravelGroupOrderRecord {
     required this.markedById,
     required this.markedAt,
     required this.salesUserId,
+    this.salesEditCount = 0,
+    this.salesEditLimit = 1,
+    this.salesEditRemaining = 1,
+    this.canEditByCurrentUser = false,
   });
 
   final String id;
@@ -2749,6 +2894,10 @@ class TravelGroupOrderRecord {
   final String? markedById;
   final String? markedAt;
   final String? salesUserId;
+  final int salesEditCount;
+  final int salesEditLimit;
+  final int salesEditRemaining;
+  final bool canEditByCurrentUser;
 
   factory TravelGroupOrderRecord.fromJson(Map<String, dynamic> json) {
     return TravelGroupOrderRecord(
@@ -2765,6 +2914,14 @@ class TravelGroupOrderRecord {
       markedById: _stringOrNull(json['markedById']),
       markedAt: _stringOrNull(json['markedAt']),
       salesUserId: _stringOrNull(json['salesUserId']),
+      salesEditCount: _intValue(json['salesEditCount']),
+      salesEditLimit: json.containsKey('salesEditLimit')
+          ? _intValue(json['salesEditLimit'])
+          : 1,
+      salesEditRemaining: json.containsKey('salesEditRemaining')
+          ? _intValue(json['salesEditRemaining'])
+          : 1,
+      canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
     );
   }
 }
@@ -2875,6 +3032,7 @@ class SalesOrderRecord {
     required this.totalAmountCents,
     required this.entryAmountCents,
     required this.tasterCommissionCents,
+    this.tasterCommission,
     required this.tasterId,
     required this.tasterName,
     required this.cashOnDeliveryAmountCents,
@@ -2907,6 +3065,10 @@ class SalesOrderRecord {
     required this.items,
     required this.createdAt,
     required this.updatedAt,
+    this.salesEditCount = 0,
+    this.salesEditLimit = 1,
+    this.salesEditRemaining = 1,
+    this.canEditByCurrentUser = false,
   });
 
   final String id;
@@ -2924,6 +3086,7 @@ class SalesOrderRecord {
   final int totalAmountCents;
   final int entryAmountCents;
   final int tasterCommissionCents;
+  final SalesOrderTasterCommissionRecord? tasterCommission;
   final String? tasterId;
   final String? tasterName;
   final int cashOnDeliveryAmountCents;
@@ -2956,6 +3119,10 @@ class SalesOrderRecord {
   final List<SalesOrderItemRecord> items;
   final String? createdAt;
   final String? updatedAt;
+  final int salesEditCount;
+  final int salesEditLimit;
+  final int salesEditRemaining;
+  final bool canEditByCurrentUser;
 
   factory SalesOrderRecord.fromJson(Map<String, dynamic> json) {
     final customer = json['customer'] is Map
@@ -2963,6 +3130,11 @@ class SalesOrderRecord {
         : null;
     final travelGroup = json['travelGroup'] is Map
         ? TravelGroupRecord.fromJson(_map(json['travelGroup']))
+        : null;
+    final tasterCommission = json['tasterCommission'] is Map
+        ? SalesOrderTasterCommissionRecord.fromJson(
+            _map(json['tasterCommission']),
+          )
         : null;
     return SalesOrderRecord(
       id: '${json['id'] ?? ''}',
@@ -2983,7 +3155,10 @@ class SalesOrderRecord {
             json['orderEntryAmountCents'] ??
             json['totalAmountCents'],
       ),
-      tasterCommissionCents: _intValue(json['tasterCommissionCents']),
+      tasterCommissionCents: json.containsKey('tasterCommissionCents')
+          ? _intValue(json['tasterCommissionCents'])
+          : tasterCommission?.amountCents ?? 0,
+      tasterCommission: tasterCommission,
       tasterId: _stringOrNull(json['tasterId'] ?? travelGroup?.tasterId),
       tasterName: _stringOrNull(json['tasterName'] ?? travelGroup?.tasterName),
       cashOnDeliveryAmountCents: _intValue(json['cashOnDeliveryAmountCents']),
@@ -3019,6 +3194,45 @@ class SalesOrderRecord {
           .toList(),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      salesEditCount: _intValue(json['salesEditCount']),
+      salesEditLimit: json.containsKey('salesEditLimit')
+          ? _intValue(json['salesEditLimit'])
+          : 1,
+      salesEditRemaining: json.containsKey('salesEditRemaining')
+          ? _intValue(json['salesEditRemaining'])
+          : 1,
+      canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
+    );
+  }
+}
+
+class SalesOrderTasterCommissionRecord {
+  const SalesOrderTasterCommissionRecord({
+    required this.recordId,
+    required this.amountCents,
+    required this.isConfirmed,
+    required this.confirmedById,
+    required this.confirmedByName,
+    required this.confirmedAt,
+  });
+
+  final String recordId;
+  final int amountCents;
+  final bool isConfirmed;
+  final String? confirmedById;
+  final String? confirmedByName;
+  final String? confirmedAt;
+
+  factory SalesOrderTasterCommissionRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SalesOrderTasterCommissionRecord(
+      recordId: '${json['recordId'] ?? ''}',
+      amountCents: _intValue(json['amountCents']),
+      isConfirmed: _boolValue(json['isConfirmed']),
+      confirmedById: _stringOrNull(json['confirmedById']),
+      confirmedByName: _stringOrNull(json['confirmedByName']),
+      confirmedAt: _stringOrNull(json['confirmedAt']),
     );
   }
 }
@@ -4035,6 +4249,7 @@ class CommissionRecalculationWarning {
 class TravelGroupFinanceSummaryRecord {
   const TravelGroupFinanceSummaryRecord({
     required this.id,
+    required this.summaryExists,
     required this.travelGroupId,
     required this.travelGroup,
     required this.totalSalesAmountCents,
@@ -4082,7 +4297,8 @@ class TravelGroupFinanceSummaryRecord {
     required this.updatedAt,
   });
 
-  final String id;
+  final String? id;
+  final bool summaryExists;
   final String travelGroupId;
   final Stage7TravelGroupSummaryRecord? travelGroup;
   final int totalSalesAmountCents;
@@ -4133,7 +4349,8 @@ class TravelGroupFinanceSummaryRecord {
     Map<String, dynamic> json,
   ) {
     return TravelGroupFinanceSummaryRecord(
-      id: '${json['id'] ?? ''}',
+      id: _stringOrNull(json['id']),
+      summaryExists: _boolValue(json['summaryExists'] ?? true),
       travelGroupId: '${json['travelGroupId'] ?? ''}',
       travelGroup: json['travelGroup'] is Map
           ? Stage7TravelGroupSummaryRecord.fromJson(_map(json['travelGroup']))
@@ -4361,6 +4578,126 @@ class AnalyticsOverview {
   }
 }
 
+class SalesPerformanceRecord {
+  const SalesPerformanceRecord({
+    required this.salesUserId,
+    required this.salesUserName,
+    required this.isActive,
+    required this.isUnassigned,
+    required this.orderCount,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.netSalesAmountCents,
+    required this.averageSalesPerOrderCents,
+  });
+
+  final String? salesUserId;
+  final String salesUserName;
+  final bool isActive;
+  final bool isUnassigned;
+  final int orderCount;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int netSalesAmountCents;
+  final int? averageSalesPerOrderCents;
+
+  factory SalesPerformanceRecord.fromJson(Map<String, dynamic> json) {
+    return SalesPerformanceRecord(
+      salesUserId: _stringOrNull(json['salesUserId']),
+      salesUserName: '${json['salesUserName'] ?? ''}',
+      isActive: _boolValue(json['isActive']),
+      isUnassigned: _boolValue(json['isUnassigned']),
+      orderCount: _intValue(json['orderCount']),
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      averageSalesPerOrderCents: json['averageSalesPerOrderCents'] == null
+          ? null
+          : _intValue(json['averageSalesPerOrderCents']),
+    );
+  }
+}
+
+class SalesPerformanceOrder {
+  const SalesPerformanceOrder({
+    required this.id,
+    required this.orderNo,
+    required this.orderDate,
+    required this.customerName,
+    required this.status,
+    required this.grossSalesAmountCents,
+    required this.refundAmountCents,
+    required this.netSalesAmountCents,
+    required this.contributesToOrderCount,
+    required this.afterSalesOrderIds,
+  });
+
+  final String id;
+  final String orderNo;
+  final String? orderDate;
+  final String customerName;
+  final String status;
+  final int grossSalesAmountCents;
+  final int refundAmountCents;
+  final int netSalesAmountCents;
+  final bool contributesToOrderCount;
+  final List<String> afterSalesOrderIds;
+
+  factory SalesPerformanceOrder.fromJson(Map<String, dynamic> json) {
+    return SalesPerformanceOrder(
+      id: '${json['id'] ?? ''}',
+      orderNo: '${json['orderNo'] ?? ''}',
+      orderDate: _stringOrNull(json['orderDate']),
+      customerName: '${json['customerName'] ?? ''}',
+      status: '${json['status'] ?? ''}',
+      grossSalesAmountCents: _intValue(json['grossSalesAmountCents']),
+      refundAmountCents: _intValue(json['refundAmountCents']),
+      netSalesAmountCents: _intValue(json['netSalesAmountCents']),
+      contributesToOrderCount: _boolValue(json['contributesToOrderCount']),
+      afterSalesOrderIds: _stringList(json['afterSalesOrderIds']),
+    );
+  }
+}
+
+class SalesPerformanceDetail {
+  const SalesPerformanceDetail({
+    required this.range,
+    required this.salesUserId,
+    required this.salesUserName,
+    required this.isActive,
+    required this.isUnassigned,
+    required this.summary,
+    required this.orders,
+  });
+
+  final AnalyticsDateRange range;
+  final String? salesUserId;
+  final String salesUserName;
+  final bool isActive;
+  final bool isUnassigned;
+  final SalesPerformanceRecord summary;
+  final List<SalesPerformanceOrder> orders;
+
+  factory SalesPerformanceDetail.fromJson(Map<String, dynamic> json) {
+    final salesUser = _map(json['salesUser']);
+    final summary = SalesPerformanceRecord.fromJson(_map(json['summary']));
+    return SalesPerformanceDetail(
+      range: AnalyticsDateRange.fromJson(_map(json['range'])),
+      salesUserId: _stringOrNull(salesUser['id']) ?? summary.salesUserId,
+      salesUserName: _stringOrNull(salesUser['name']) ?? summary.salesUserName,
+      isActive: salesUser.containsKey('isActive')
+          ? _boolValue(salesUser['isActive'])
+          : summary.isActive,
+      isUnassigned: salesUser.containsKey('isUnassigned')
+          ? _boolValue(salesUser['isUnassigned'])
+          : summary.isUnassigned,
+      summary: summary,
+      orders:
+          _list(json['orders']).map(SalesPerformanceOrder.fromJson).toList(),
+    );
+  }
+}
+
 class ProfitAnalysisResponse {
   const ProfitAnalysisResponse({
     required this.range,
@@ -4451,6 +4788,11 @@ class TravelGroupProfitRecord {
     required this.pendingRefundAmountCents,
     required this.actualProductCostCents,
     required this.logisticsFeeCents,
+    required this.parkingFeeCents,
+    required this.cigaretteFeeCents,
+    required this.salesCommissionCents,
+    required this.leaderCommissionCents,
+    required this.outreachCommissionCents,
     required this.employeeCommissionCents,
     required this.tasterCommissionCents,
     required this.dailyAgencyRebateCents,
@@ -4475,6 +4817,11 @@ class TravelGroupProfitRecord {
   final int pendingRefundAmountCents;
   final int actualProductCostCents;
   final int logisticsFeeCents;
+  final int parkingFeeCents;
+  final int? cigaretteFeeCents;
+  final int salesCommissionCents;
+  final int leaderCommissionCents;
+  final int outreachCommissionCents;
   final int employeeCommissionCents;
   final int tasterCommissionCents;
   final int dailyAgencyRebateCents;
@@ -4503,6 +4850,13 @@ class TravelGroupProfitRecord {
       pendingRefundAmountCents: _intValue(json['pendingRefundAmountCents']),
       actualProductCostCents: _intValue(json['actualProductCostCents']),
       logisticsFeeCents: _intValue(json['logisticsFeeCents']),
+      parkingFeeCents: _intValue(json['parkingFeeCents']),
+      cigaretteFeeCents: json['cigaretteFeeCents'] == null
+          ? null
+          : _intValue(json['cigaretteFeeCents']),
+      salesCommissionCents: _intValue(json['salesCommissionCents']),
+      leaderCommissionCents: _intValue(json['leaderCommissionCents']),
+      outreachCommissionCents: _intValue(json['outreachCommissionCents']),
       employeeCommissionCents: _intValue(json['employeeCommissionCents']),
       tasterCommissionCents: _intValue(json['tasterCommissionCents']),
       dailyAgencyRebateCents: _intValue(json['dailyAgencyRebateCents']),

@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/storage/session_storage.dart';
+import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/auth/auth_controller.dart';
+import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jiangjiu_mobile_desktop/app/app.dart';
@@ -134,6 +137,38 @@ void main() {
     expect(find.byKey(const ValueKey('bootstrap-error-page')), findsOneWidget);
     expect(find.textContaining('启动超时'), findsOneWidget);
   });
+
+  testWidgets('pauses background polling and validates once when resumed',
+      (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final preferences = await SharedPreferences.getInstance();
+    final storage = await SessionStorage.create(
+      preferences: preferences,
+      secureStorage: FakeSecureTokenStorage(),
+    );
+    late _LifecycleAuthController controller;
+
+    await tester.pumpWidget(
+      JiangjiuApp(
+        sessionStorageFactory: () async => storage,
+        authControllerFactory: (storage, onSessionRevoked) {
+          controller = _LifecycleAuthController(storage: storage);
+          return controller;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(controller.refreshCount, 0);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.refreshCount, 1);
+    controller.apiClient.close(force: true);
+  });
 }
 
 String _textFieldValue(WidgetTester tester, String label) {
@@ -141,4 +176,41 @@ String _textFieldValue(WidgetTester tester, String label) {
     (widget) => widget is TextField && widget.decoration?.labelText == label,
   );
   return tester.widget<TextField>(finder).controller?.text ?? '';
+}
+
+class _LifecycleAuthController extends AuthController {
+  _LifecycleAuthController({required super.storage})
+      : super(
+          apiClient: ApiClient(baseUrl: 'https://api.example.invalid'),
+        );
+
+  int refreshCount = 0;
+
+  @override
+  Future<void> restore() async {
+    session = AuthSession.fromJson(<String, dynamic>{
+      'accessToken': 'test-access',
+      'accessTokenExpiresAt': '2099-01-01T00:00:00.000Z',
+      'refreshToken': 'test-refresh',
+      'refreshTokenExpiresAt': '2099-02-01T00:00:00.000Z',
+      'user': <String, dynamic>{
+        'id': 'user-1',
+        'name': '测试用户',
+        'username': 'test.user',
+        'role': 'admin',
+        'isActive': true,
+        'mustChangePassword': false,
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'updatedAt': '2026-01-01T00:00:00.000Z',
+      },
+      'permissions': <String>[],
+      'menus': <Map<String, dynamic>>[],
+      'dataScope': <String, dynamic>{},
+    });
+  }
+
+  @override
+  Future<void> refreshSession() async {
+    refreshCount += 1;
+  }
 }

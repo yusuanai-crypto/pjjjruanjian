@@ -4,12 +4,14 @@ import { createHttpError } from '../../common/errors';
 import { getBearerToken } from '../../common/http';
 import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
+import { AuditContextService } from '../operation-logs/audit-context.service';
 import { UsersNestService, toPublicUser } from '../users/users.nest.service';
 import { getAuthTokenSecret } from './auth-token-secret';
 import { createToken, verifyToken } from './token';
 import { getRoleCatalog, getRoleDataScope, getRoleMenus, getRolePermissions } from './roles';
 import { hashPassword, verifyPassword } from './password';
 import { normalizeUsername } from '../users/users.repository';
+import { RefreshSessionNestService } from './refresh-session.nest.service';
 
 @Injectable()
 export class AuthNestService {
@@ -17,6 +19,8 @@ export class AuthNestService {
     private readonly usersService: UsersNestService,
     private readonly operationLogsService: OperationLogsNestService,
     private readonly rateLimitService: RateLimitService,
+    private readonly refreshSessionsService: RefreshSessionNestService,
+    private readonly auditContext?: AuditContextService,
   ) {
     getAuthTokenSecret();
   }
@@ -41,7 +45,8 @@ export class AuthNestService {
       throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
     }
 
-    const tokenResult = this.issueToken(user);
+    const sessionResult = await this.issueSession(user);
+    this.auditContext?.setActor(user);
 
     await this.operationLogsService.appendLog({
       userId: user.id,
@@ -53,10 +58,53 @@ export class AuthNestService {
     });
 
     return {
-      token: tokenResult.token,
-      expiresAt: tokenResult.expiresAt,
+      ...sessionResult,
       ...this.buildSessionPayload(user),
     };
+  }
+
+  async refresh(refreshToken: unknown, metadata: any = {}) {
+    const rotated = await this.refreshSessionsService.rotate(refreshToken);
+    this.auditContext?.setActor(rotated.user);
+    const accessToken = this.issueAccessToken(
+      rotated.user,
+      rotated.sessionId,
+    );
+    await this.operationLogsService.appendLog({
+      userId: rotated.user.id,
+      action: 'auth.refresh',
+      entityType: 'user',
+      entityId: rotated.user.id,
+      afterData: {
+        sessionRefreshed: true,
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+    return {
+      accessToken: accessToken.token,
+      accessTokenExpiresAt: accessToken.expiresAt,
+      refreshToken: rotated.refreshToken,
+      refreshTokenExpiresAt: rotated.refreshTokenExpiresAt,
+      token: accessToken.token,
+      expiresAt: accessToken.expiresAt,
+      ...this.buildSessionPayload(rotated.user),
+    };
+  }
+
+  async logout(refreshToken: unknown, metadata: any = {}) {
+    const result = await this.refreshSessionsService.logout(refreshToken);
+    if (result?.userId) {
+      await this.operationLogsService.appendLog({
+        userId: result.userId,
+        action: 'auth.logout',
+        entityType: 'user',
+        entityId: result.userId,
+        afterData: {
+          sessionLoggedOut: true,
+        },
+        ipAddress: metadata.ipAddress || null,
+      });
+    }
   }
 
   async authenticateRequest(request: any) {
@@ -80,12 +128,21 @@ export class AuthNestService {
         'The session has been revoked. Sign in again.',
       );
     }
+    if (payload.sessionId !== undefined) {
+      await this.refreshSessionsService.assertAccessSessionActive(
+        payload.sessionId,
+        user.id,
+        user.tokenVersion,
+      );
+    }
     if (!user.isActive) {
       throw createHttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
     }
     if (user.mustChangePassword && !isPasswordChangeAllowedPath(request)) {
       throw createHttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Password change is required before continuing.');
     }
+    request.currentUser = user;
+    this.auditContext?.setActor(user);
     return user;
   }
 
@@ -98,7 +155,7 @@ export class AuthNestService {
       throw createHttpError(400, 'CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
     }
 
-    const nextUser = await this.usersService.updatePassword(user.id, hashPassword(patch.newPassword), {
+    await this.usersService.updatePassword(user.id, hashPassword(patch.newPassword), {
       mustChangePassword: false,
     });
 
@@ -112,11 +169,8 @@ export class AuthNestService {
       ipAddress: metadata.ipAddress || null,
     });
 
-    const tokenResult = this.issueToken(nextUser);
     return {
-      token: tokenResult.token,
-      expiresAt: tokenResult.expiresAt,
-      ...this.buildSessionPayload(nextUser),
+      passwordChanged: true,
     };
   }
 
@@ -139,13 +193,30 @@ export class AuthNestService {
     };
   }
 
-  private issueToken(user: any) {
+  private async issueSession(user: any) {
+    const refreshSession = await this.refreshSessionsService.create(user);
+    const accessToken = this.issueAccessToken(
+      user,
+      refreshSession.sessionId,
+    );
+    return {
+      accessToken: accessToken.token,
+      accessTokenExpiresAt: accessToken.expiresAt,
+      refreshToken: refreshSession.refreshToken,
+      refreshTokenExpiresAt: refreshSession.refreshTokenExpiresAt,
+      token: accessToken.token,
+      expiresAt: accessToken.expiresAt,
+    };
+  }
+
+  private issueAccessToken(user: any, sessionId: string) {
     return createToken(
       {
         sub: user.id,
         username: user.username,
         role: user.role,
         tokenVersion: user.tokenVersion,
+        sessionId,
       },
       {
         expiresInSeconds: process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS

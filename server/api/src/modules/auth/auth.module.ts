@@ -5,6 +5,7 @@ import { OperationLogsModule } from '../operation-logs/operation-logs.module';
 import { UsersModule } from '../users/users.module';
 import { AuthNestController } from './auth.nest.controller';
 import { AuthNestService } from './auth.nest.service';
+import { RefreshSessionNestService } from './refresh-session.nest.service';
 
 @Module({
   imports: [
@@ -13,7 +14,7 @@ import { AuthNestService } from './auth.nest.service';
     OperationLogsModule,
   ],
   controllers: [AuthNestController],
-  providers: [AuthNestService],
-  exports: [AuthNestService],
+  providers: [AuthNestService, RefreshSessionNestService],
+  exports: [AuthNestService, RefreshSessionNestService],
 })
 export class AuthModule {}

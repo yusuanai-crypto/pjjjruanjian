@@ -228,7 +228,9 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                     loading: _detailLoading,
                     errorMessage: _detailErrorMessage,
                     canMark: _canMark,
-                    canEditBasics: _canEditBasics,
+                    canEditBasics: _canEditBasics &&
+                        (widget.role != UserRole.sales ||
+                            selected.canEditByCurrentUser),
                     orderBusy: _busyOrderIds.contains(selected.id),
                     customerBusy: _busyCustomerIds.contains(
                       selected.customerId ?? selected.customer?.id ?? '',
@@ -316,6 +318,35 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   }
 
   Future<void> _openBasicEditDialog(SalesOrderRecord order) async {
+    if (widget.role == UserRole.sales) {
+      if (!order.canEditByCurrentUser || order.salesEditRemaining <= 0) {
+        setState(() {
+          _detailErrorMessage = '本订单的唯一一次完整修改机会已用完。';
+        });
+        return;
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('确认使用修改机会'),
+          content: const Text('保存后将用完本订单唯一一次完整修改机会，是否继续？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const ValueKey('sales-order-edit-confirm-button'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('继续修改'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) {
+        return;
+      }
+    }
     final result = await showDialog<_OrderEditResult>(
       context: context,
       builder: (context) => _OrderEditDialog(
@@ -334,21 +365,33 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       _detailErrorMessage = null;
     });
     try {
-      var updated = await _businessApi.updateSalesOrder(
-        order.id,
-        result.orderPayload,
-      );
-      if (result.financePayload.isNotEmpty) {
-        updated = await _businessApi.updateSalesOrderFinance(
+      late SalesOrderRecord updated;
+      if (widget.role == UserRole.sales) {
+        updated = await _businessApi.salesEditSalesOrder(
           order.id,
-          result.financePayload,
+          {
+            ...result.orderPayload,
+            ...result.financePayload,
+            ...result.packingPayload,
+          },
         );
-      }
-      if (result.packingPayload.isNotEmpty) {
-        updated = await _businessApi.updateSalesOrderPacking(
+      } else {
+        updated = await _businessApi.updateSalesOrder(
           order.id,
-          result.packingPayload,
+          result.orderPayload,
         );
+        if (result.financePayload.isNotEmpty) {
+          updated = await _businessApi.updateSalesOrderFinance(
+            order.id,
+            result.financePayload,
+          );
+        }
+        if (result.packingPayload.isNotEmpty) {
+          updated = await _businessApi.updateSalesOrderPacking(
+            order.id,
+            result.packingPayload,
+          );
+        }
       }
       if (!mounted) {
         return;
@@ -1102,6 +1145,14 @@ class _ActionStrip extends StatelessWidget {
           const StatusTag(label: '老板只读', tone: StatusTone.neutral),
         if (role == UserRole.finance)
           const StatusTag(label: '财务可维护订单信息', tone: StatusTone.info),
+        if (role == UserRole.sales)
+          StatusTag(
+            key: const ValueKey('sales-order-edit-remaining'),
+            label: '剩余完整修改次数：${order.salesEditRemaining}',
+            tone: order.salesEditRemaining > 0
+                ? StatusTone.info
+                : StatusTone.neutral,
+          ),
         if (canMark) ...[
           MarkInfoButton(
             marked: order.customer?.financeMark ?? false,
@@ -1917,7 +1968,8 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
 
     orderPayload.addAll({
       'orderType': _orderType,
-      'salesUserId': _salesUserIdController.text.trim(),
+      if (widget.role != UserRole.sales)
+        'salesUserId': _salesUserIdController.text.trim(),
       'travelGroupId': _orderType == 'travel_group' ? travelGroupId : null,
       'remark': _remarkController.text.trim(),
       'customer': {
@@ -2066,11 +2118,12 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                       controller: _salesFormNoController,
                       decoration: const InputDecoration(labelText: '销售单号'),
                     ),
-                    TextField(
-                      key: const ValueKey('order-edit-sales-user-id-field'),
-                      controller: _salesUserIdController,
-                      decoration: const InputDecoration(labelText: '销售人员 ID'),
-                    ),
+                    if (widget.role != UserRole.sales)
+                      TextField(
+                        key: const ValueKey('order-edit-sales-user-id-field'),
+                        controller: _salesUserIdController,
+                        decoration: const InputDecoration(labelText: '销售人员 ID'),
+                      ),
                     TextField(
                       key: const ValueKey('order-edit-cod-field'),
                       controller: _codController,

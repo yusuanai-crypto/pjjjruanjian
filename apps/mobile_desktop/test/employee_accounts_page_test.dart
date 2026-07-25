@@ -255,6 +255,65 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'action buttons stay on one non-overlapping row at 1440x900',
+    (tester) async {
+      final apiClient = _FakeEmployeeApiClient(users: [_ordinaryEmployee]);
+
+      await _pumpPage(tester, apiClient);
+
+      _expectActionButtonsInOneNonOverlappingRow(tester, 'employee-1');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'action buttons stay aligned and table scrolls at 800x600 with text scaling',
+    (tester) async {
+      final apiClient = _FakeEmployeeApiClient(
+        users: [
+          <String, dynamic>{
+            ..._ordinaryEmployee,
+            'statusReason': '这是用于验证高字体缩放下两行最近原因布局的较长说明',
+          },
+        ],
+      );
+
+      await _pumpPage(
+        tester,
+        apiClient,
+        surfaceSize: const Size(800, 600),
+        textScaleFactor: 1.25,
+      );
+
+      _expectActionButtonsInOneNonOverlappingRow(tester, 'employee-1');
+      expect(tester.takeException(), isNull);
+
+      final horizontalScrollView = find.byWidgetPredicate(
+        (widget) =>
+            widget is SingleChildScrollView &&
+            widget.scrollDirection == Axis.horizontal,
+      );
+      expect(horizontalScrollView, findsOneWidget);
+
+      final horizontalScrollable = find.descendant(
+        of: horizontalScrollView,
+        matching: find.byType(Scrollable),
+      );
+      expect(horizontalScrollable, findsOneWidget);
+      final scrollableState =
+          tester.state<ScrollableState>(horizontalScrollable);
+      expect(scrollableState.position.maxScrollExtent, greaterThan(0));
+      expect(scrollableState.position.pixels, 0);
+
+      await tester.drag(horizontalScrollView, const Offset(-300, 0));
+      await tester.pumpAndSettle();
+
+      expect(scrollableState.position.pixels, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _pumpPage(
@@ -262,11 +321,21 @@ Future<void> _pumpPage(
   _FakeEmployeeApiClient apiClient, {
   UserRole role = UserRole.admin,
   String currentUserId = 'current-admin',
+  Size surfaceSize = const Size(1440, 900),
+  double textScaleFactor = 1,
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1440, 900));
+  await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScaleFactor),
+          ),
+          child: child!,
+        );
+      },
       home: Scaffold(
         body: EmployeeAccountsPage(
           apiClient: apiClient,
@@ -278,6 +347,31 @@ Future<void> _pumpPage(
     ),
   );
   await tester.pumpAndSettle();
+}
+
+void _expectActionButtonsInOneNonOverlappingRow(
+  WidgetTester tester,
+  String userId,
+) {
+  final buttonFinders = [
+    find.byKey(ValueKey('employee-action-toggle-$userId')),
+    find.byKey(ValueKey('employee-action-change-password-$userId')),
+    find.byKey(ValueKey('employee-action-reset-password-$userId')),
+  ];
+  for (final finder in buttonFinders) {
+    expect(finder, findsOneWidget);
+  }
+
+  final rects = buttonFinders.map(tester.getRect).toList();
+  expect(rects[0].center.dy, rects[1].center.dy);
+  expect(rects[1].center.dy, rects[2].center.dy);
+  for (var first = 0; first < rects.length; first += 1) {
+    for (var second = first + 1; second < rects.length; second += 1) {
+      expect(rects[first].overlaps(rects[second]), isFalse);
+    }
+  }
+  expect(rects[0].right, lessThan(rects[1].left));
+  expect(rects[1].right, lessThan(rects[2].left));
 }
 
 Finder _textFieldWithLabel(String label) {

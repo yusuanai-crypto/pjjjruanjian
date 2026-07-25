@@ -530,6 +530,9 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool isPaid,
   ) {
+    if (!summary.summaryExists) {
+      return Future<void>.value();
+    }
     return _runSummaryAction(
       busyKey: '${summary.travelGroupId}:dailyRebatePaid',
       action: () => _businessApi.setDailyRebatePaid(
@@ -545,6 +548,9 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     int totalAgencyDeductionCents,
   ) async {
+    if (!summary.summaryExists) {
+      return;
+    }
     final travelGroupId = summary.travelGroupId;
     if (_agencyDeductionUpdatingIds.contains(travelGroupId)) {
       return;
@@ -583,6 +589,9 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool isPaid,
   ) {
+    if (!summary.summaryExists) {
+      return Future<void>.value();
+    }
     return _runSummaryAction(
       busyKey: '${summary.travelGroupId}:monthlyRebatePaid',
       action: () => _businessApi.setMonthlyRebatePaid(
@@ -598,6 +607,9 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool value,
   ) {
+    if (!summary.summaryExists) {
+      return Future<void>.value();
+    }
     if (value && !_guideImageReadyIds.contains(summary.travelGroupId)) {
       return Future<void>.value();
     }
@@ -616,6 +628,9 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool value,
   ) {
+    if (!summary.summaryExists) {
+      return Future<void>.value();
+    }
     if (value && !_travelAgencyImageReadyIds.contains(summary.travelGroupId)) {
       return Future<void>.value();
     }
@@ -1028,6 +1043,7 @@ class _TravelGroupFinanceSupplementPageState
                   value: _statusFilter,
                   items: const [
                     MapEntry(_allFilter, '全部'),
+                    MapEntry(_statusMissing, '未生成汇总'),
                     MapEntry(_statusPending, '待返'),
                     MapEntry(_statusComplete, '已完成'),
                     MapEntry(_statusAfterSalesProcessing, '售后处理中'),
@@ -1488,10 +1504,12 @@ class _FinancePointTable extends StatelessWidget {
           amountCents: summary.paidDailyRebateCents,
           paid: summary.dailyRebatePaid,
           busy: rebateUpdatingKeys.contains('$rowKey:dailyRebatePaid'),
-          onPressed: () => onDailyRebatePaidChanged(
-            summary,
-            !summary.dailyRebatePaid,
-          ),
+          onPressed: summary.summaryExists
+              ? () => onDailyRebatePaidChanged(
+                    summary,
+                    !summary.dailyRebatePaid,
+                  )
+              : null,
         )),
         DataCell(_MoneyCell(cents: summary.unpaidDailyRebateCents)),
         DataCell(_MoneyCell(cents: summary.totalMonthlyRebateCents)),
@@ -1500,10 +1518,12 @@ class _FinancePointTable extends StatelessWidget {
           amountCents: summary.paidMonthlyRebateCents,
           paid: summary.monthlyRebatePaid,
           busy: rebateUpdatingKeys.contains('$rowKey:monthlyRebatePaid'),
-          onPressed: () => onMonthlyRebatePaidChanged(
-            summary,
-            !summary.monthlyRebatePaid,
-          ),
+          onPressed: summary.summaryExists
+              ? () => onMonthlyRebatePaidChanged(
+                    summary,
+                    !summary.monthlyRebatePaid,
+                  )
+              : null,
         )),
         DataCell(_MoneyCell(cents: summary.unpaidMonthlyRebateCents)),
         DataCell(_AfterSalesImpactCell(summary: summary)),
@@ -1525,17 +1545,20 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(Switch(
           key: ValueKey('$rowKey:guideInfoSent'),
           value: summary.guideInfoSent,
-          onChanged: guideSentBusy || (!guideReady && !summary.guideInfoSent)
+          onChanged: !summary.summaryExists ||
+                  guideSentBusy ||
+                  (!guideReady && !summary.guideInfoSent)
               ? null
               : (value) => onGuideInfoSentChanged(summary, value),
         )),
         DataCell(Switch(
           key: ValueKey('$rowKey:travelAgencyInfoSent'),
           value: summary.travelAgencyInfoSent,
-          onChanged:
-              agencySentBusy || (!agencyReady && !summary.travelAgencyInfoSent)
-                  ? null
-                  : (value) => onTravelAgencyInfoSentChanged(summary, value),
+          onChanged: !summary.summaryExists ||
+                  agencySentBusy ||
+                  (!agencyReady && !summary.travelAgencyInfoSent)
+              ? null
+              : (value) => onTravelAgencyInfoSentChanged(summary, value),
         )),
         DataCell(StatusTag(
           label: _summaryStatus(summary),
@@ -1654,7 +1677,7 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
   }
 
   Future<void> _save() async {
-    if (widget.saving) {
+    if (!widget.summary.summaryExists || widget.saving) {
       return;
     }
     final result = _parseAgencyDeduction(
@@ -1682,7 +1705,7 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
                 '${widget.summary.travelGroupId}:agencyDeductionInput',
               ),
               controller: _controller,
-              enabled: !widget.saving,
+              enabled: widget.summary.summaryExists && !widget.saving,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -1708,7 +1731,8 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
               key: ValueKey(
                 '${widget.summary.travelGroupId}:agencyDeductionSave',
               ),
-              onPressed: widget.saving ? null : _save,
+              onPressed:
+                  !widget.summary.summaryExists || widget.saving ? null : _save,
               child: widget.saving
                   ? const SizedBox.square(
                       dimension: 14,
@@ -1780,7 +1804,7 @@ class _RebatePaidButton extends StatelessWidget {
   final int amountCents;
   final bool paid;
   final bool busy;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -2526,6 +2550,7 @@ class _InlineNotice extends StatelessWidget {
 const _allFilter = '__all__';
 const _sentFilter = '__sent__';
 const _notSentFilter = '__not_sent__';
+const _statusMissing = '未生成汇总';
 const _statusPending = '待返';
 const _statusComplete = '已完成';
 const _statusAfterSalesProcessing = '售后处理中';
@@ -2547,6 +2572,9 @@ bool _matchesSentFilter(bool sent, String filter) {
 }
 
 String _summaryStatus(TravelGroupFinanceSummaryRecord summary) {
+  if (!summary.summaryExists) {
+    return _statusMissing;
+  }
   switch (summary.afterSalesImpactStatus) {
     case 'after_rebate_paid_requires_finance':
       return _statusFinanceRequired;
@@ -2560,6 +2588,7 @@ String _summaryStatus(TravelGroupFinanceSummaryRecord summary) {
 
 StatusTone _summaryStatusTone(TravelGroupFinanceSummaryRecord summary) {
   return switch (_summaryStatus(summary)) {
+    _statusMissing => StatusTone.neutral,
     _statusComplete => StatusTone.success,
     _statusFinanceRequired => StatusTone.danger,
     _ => StatusTone.warning,

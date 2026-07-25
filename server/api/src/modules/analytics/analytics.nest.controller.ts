@@ -49,6 +49,53 @@ export class AnalyticsNestController {
     return this.analyticsService.getProfitOverview(actor, query);
   }
 
+  @Get('sales-performance')
+  async salesPerformance(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.listSalesPerformance(actor, query);
+  }
+
+  @Get('sales-performance/export')
+  async salesPerformanceExport(
+    @Query() query: any,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult =
+      await this.analyticsService.exportSalesPerformanceXlsx(
+        actor,
+        query,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
+  @Get('sales-performance/:salesUserId')
+  async salesPerformanceDetail(
+    @Param('salesUserId') salesUserId: string,
+    @Query() query: any,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.getSalesPerformanceDetail(
+      actor,
+      salesUserId,
+      query,
+    );
+  }
+
   @Get('travel-group-profits')
   async travelGroupProfits(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

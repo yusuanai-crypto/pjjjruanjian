@@ -14,7 +14,7 @@ Flutter 手机和 Windows 客户端。当前已完成第 2 阶段 UI 骨架，�
 - 订单录入页已调用 `/api/sales-orders` 保存订单；暂存为本页本地草稿，历史客户和酒品明细仍是页面内数据。
 - 订单管理页已调用 `/api/sales-orders` 读取订单，标记按钮调用 `/api/sales-orders/:id/finance-mark`。
 - 损耗与离店备注页已读取后端旅行团，并通过 `PATCH /api/travel-groups/:id` 保存品酒/损耗明细、离店时间和离店备注。
-- 财务查询页已调用 `/api/finance/overview`；对账表已调用 `/api/reconciliations/:businessDate` 读取和保存。
+- 物流单号与品鉴师提成填写页已调用 `/api/finance/overview`；对账表已调用 `/api/reconciliations/:businessDate` 读取和保存。
 - 首页指标和待办、旅行团管理、积分表、二维码销售单、我的接待、库管打包、售后开单、数据分析、AI 助手仍是 UI 骨架或假数据。
 
 ## 本地运行前置条件

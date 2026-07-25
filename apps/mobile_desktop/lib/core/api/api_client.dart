@@ -14,11 +14,15 @@ class ApiClient {
   ApiClient({
     required String baseUrl,
     this.onSessionRevoked,
+    this.onAccessTokenExpired,
+    this.accessTokenProvider,
   }) : _baseUrl = AppConfig.normalizeApiBaseUrl(baseUrl);
 
   final HttpClient _httpClient = HttpClient();
   String _baseUrl;
   FutureOr<void> Function(ApiException error)? onSessionRevoked;
+  Future<String?> Function()? onAccessTokenExpired;
+  String? Function()? accessTokenProvider;
 
   set baseUrl(String value) {
     _baseUrl = AppConfig.normalizeApiBaseUrl(value);
@@ -70,6 +74,26 @@ class ApiClient {
     Map<String, String> fields = const <String, String>{},
     int? maxFileSizeBytes,
     String? token,
+  }) {
+    return _postMultipartFiles(
+      path,
+      files: files,
+      fieldName: fieldName,
+      fields: fields,
+      maxFileSizeBytes: maxFileSizeBytes,
+      token: token,
+      retryAfterRefresh: true,
+    );
+  }
+
+  Future<Map<String, dynamic>> _postMultipartFiles(
+    String path, {
+    required List<ApiMultipartFile> files,
+    required String fieldName,
+    required Map<String, String> fields,
+    required int? maxFileSizeBytes,
+    required String? token,
+    required bool retryAfterRefresh,
   }) async {
     if (files.isEmpty) {
       throw const ApiException(
@@ -114,8 +138,12 @@ class ApiClient {
         HttpHeaders.contentTypeHeader,
         'multipart/form-data; boundary=$boundary',
       );
-      if (token != null && token.isNotEmpty) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final effectiveToken = _effectiveToken(token);
+      if (effectiveToken != null && effectiveToken.isNotEmpty) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $effectiveToken',
+        );
       }
 
       for (final entry in fields.entries) {
@@ -146,8 +174,25 @@ class ApiClient {
       }
       request.add(utf8.encode('--$boundary--\r\n'));
 
-      return _decodeJsonResponse(await request.close());
-    } on ApiException {
+      return await _decodeJsonResponse(await request.close());
+    } on ApiException catch (error) {
+      final refreshedToken = await _tokenForRetry(
+        error,
+        requestedToken: token,
+        path: path,
+        retryAfterRefresh: retryAfterRefresh,
+      );
+      if (refreshedToken != null) {
+        return _postMultipartFiles(
+          path,
+          files: files,
+          fieldName: fieldName,
+          fields: fields,
+          maxFileSizeBytes: maxFileSizeBytes,
+          token: refreshedToken,
+          retryAfterRefresh: false,
+        );
+      }
       rethrow;
     } on FileSystemException {
       throw const ApiException(
@@ -180,13 +225,31 @@ class ApiClient {
     String path, {
     required String defaultFileName,
     String? token,
+  }) {
+    return _getBytes(
+      path,
+      defaultFileName: defaultFileName,
+      token: token,
+      retryAfterRefresh: true,
+    );
+  }
+
+  Future<ApiDownloadedFile> _getBytes(
+    String path, {
+    required String defaultFileName,
+    required String? token,
+    required bool retryAfterRefresh,
   }) async {
     try {
       final request =
           await _httpClient.openUrl('GET', Uri.parse('$_baseUrl$path'));
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
-      if (token != null && token.isNotEmpty) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final effectiveToken = _effectiveToken(token);
+      if (effectiveToken != null && effectiveToken.isNotEmpty) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $effectiveToken',
+        );
       }
 
       final response = await request.close();
@@ -212,7 +275,21 @@ class ApiClient {
         fileName: parseContentDispositionFileName(contentDisposition) ??
             defaultFileName,
       );
-    } on ApiException {
+    } on ApiException catch (error) {
+      final refreshedToken = await _tokenForRetry(
+        error,
+        requestedToken: token,
+        path: path,
+        retryAfterRefresh: retryAfterRefresh,
+      );
+      if (refreshedToken != null) {
+        return _getBytes(
+          path,
+          defaultFileName: defaultFileName,
+          token: refreshedToken,
+          retryAfterRefresh: false,
+        );
+      }
       rethrow;
     } on SocketException {
       throw const ApiException(
@@ -240,6 +317,22 @@ class ApiClient {
     required Map<String, dynamic> body,
     required String defaultFileName,
     String? token,
+  }) {
+    return _postBytes(
+      path,
+      body: body,
+      defaultFileName: defaultFileName,
+      token: token,
+      retryAfterRefresh: true,
+    );
+  }
+
+  Future<ApiDownloadedFile> _postBytes(
+    String path, {
+    required Map<String, dynamic> body,
+    required String defaultFileName,
+    required String? token,
+    required bool retryAfterRefresh,
   }) async {
     try {
       final request =
@@ -249,8 +342,12 @@ class ApiClient {
         HttpHeaders.contentTypeHeader,
         'application/json; charset=utf-8',
       );
-      if (token != null && token.isNotEmpty) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final effectiveToken = _effectiveToken(token);
+      if (effectiveToken != null && effectiveToken.isNotEmpty) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $effectiveToken',
+        );
       }
       request.add(utf8.encode(jsonEncode(body)));
 
@@ -274,7 +371,22 @@ class ApiClient {
             ) ??
             defaultFileName,
       );
-    } on ApiException {
+    } on ApiException catch (error) {
+      final refreshedToken = await _tokenForRetry(
+        error,
+        requestedToken: token,
+        path: path,
+        retryAfterRefresh: retryAfterRefresh,
+      );
+      if (refreshedToken != null) {
+        return _postBytes(
+          path,
+          body: body,
+          defaultFileName: defaultFileName,
+          token: refreshedToken,
+          retryAfterRefresh: false,
+        );
+      }
       rethrow;
     } on SocketException {
       throw const ApiException(
@@ -306,13 +418,18 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? body,
     String? token,
+    bool retryAfterRefresh = true,
   }) async {
     try {
       final request =
           await _httpClient.openUrl(method, Uri.parse('$_baseUrl$path'));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      if (token != null && token.isNotEmpty) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final effectiveToken = _effectiveToken(token);
+      if (effectiveToken != null && effectiveToken.isNotEmpty) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $effectiveToken',
+        );
       }
       if (body != null) {
         request.headers.set(
@@ -320,8 +437,23 @@ class ApiClient {
         request.write(jsonEncode(body));
       }
 
-      return _decodeJsonResponse(await request.close());
-    } on ApiException {
+      return await _decodeJsonResponse(await request.close());
+    } on ApiException catch (error) {
+      final refreshedToken = await _tokenForRetry(
+        error,
+        requestedToken: token,
+        path: path,
+        retryAfterRefresh: retryAfterRefresh,
+      );
+      if (refreshedToken != null) {
+        return _requestJson(
+          method,
+          path,
+          body: body,
+          token: refreshedToken,
+          retryAfterRefresh: false,
+        );
+      }
       rethrow;
     } on SocketException {
       throw const ApiException(
@@ -371,9 +503,41 @@ class ApiClient {
     if (error.code == 'SESSION_REVOKED' ||
         error.code == 'ACCOUNT_DISABLED' ||
         error.code == 'ACCOUNT_FROZEN' ||
-        error.code == 'USER_DISABLED') {
+        error.code == 'USER_DISABLED' ||
+        error.code == 'REFRESH_TOKEN_EXPIRED' ||
+        error.code == 'REFRESH_TOKEN_INVALID' ||
+        error.code == 'REFRESH_TOKEN_REUSED') {
       await onSessionRevoked?.call(error);
     }
+  }
+
+  String? _effectiveToken(String? requestedToken) {
+    if (requestedToken == null || requestedToken.isEmpty) {
+      return requestedToken;
+    }
+    final currentToken = accessTokenProvider?.call();
+    return currentToken == null || currentToken.isEmpty
+        ? requestedToken
+        : currentToken;
+  }
+
+  Future<String?> _tokenForRetry(
+    ApiException error, {
+    required String? requestedToken,
+    required String path,
+    required bool retryAfterRefresh,
+  }) async {
+    if (!retryAfterRefresh ||
+        requestedToken == null ||
+        requestedToken.isEmpty ||
+        path == '/api/auth/refresh' ||
+        error.code != 'AUTH_TOKEN_EXPIRED') {
+      return null;
+    }
+    final refreshedToken = await onAccessTokenExpired?.call();
+    return refreshedToken == null || refreshedToken.isEmpty
+        ? null
+        : refreshedToken;
   }
 }
 

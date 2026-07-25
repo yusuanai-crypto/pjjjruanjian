@@ -192,6 +192,21 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
       assertOrderSummaryContract(detail.body.data.customer.recentOrders[0]);
       assert.equal(detail.body.data.customer.recentOrders[0].orderNo, 'SO-CUST-RELATED');
       assert.equal(detail.body.data.customer.recentOrders[0].packingStatus, 'pending');
+      assert.equal(
+        detail.body.data.customer.recentOrders[0].tasterCommissionCents,
+        4500,
+      );
+      assert.deepEqual(
+        detail.body.data.customer.recentOrders[0].tasterCommission,
+        {
+          recordId: 'cr_customer_order_taster',
+          amountCents: 4500,
+          isConfirmed: false,
+          confirmedById: null,
+          confirmedByName: null,
+          confirmedAt: null,
+        },
+      );
 
       const salesDetail = await requestJson(baseUrl, '/api/customers/cust_related', {
         token: sales.token,
@@ -385,7 +400,16 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
         },
       );
       assert.equal(logs.response.status, 200);
-      const actions = logs.body.data.logs.map((log) => log.action).sort();
+      const writeActions = new Set([
+        'customers.create',
+        'customers.finance_mark.disable',
+        'customers.finance_mark.enable',
+        'customers.update',
+      ]);
+      const writeLogs = logs.body.data.logs.filter(
+        (log) => log.result === 'SUCCESS' && writeActions.has(log.action),
+      );
+      const actions = writeLogs.map((log) => log.action).sort();
       assert.deepEqual(actions, [
         'customers.create',
         'customers.create',
@@ -394,7 +418,18 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
         'customers.update',
         'customers.update',
       ]);
-      const updateLogs = logs.body.data.logs.filter(
+      assert.equal(
+        logs.body.data.logs.some(
+          (log) =>
+            log.action === 'customers.list' && log.result === 'SUCCESS',
+        ),
+        true,
+      );
+      assert.equal(
+        logs.body.data.logs.some((log) => log.result === 'FAILURE'),
+        true,
+      );
+      const updateLogs = writeLogs.filter(
         (log) => log.action === 'customers.update',
       );
       assert.equal(updateLogs.length, 2);
@@ -445,6 +480,22 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
             password: 'Password123',
             role: 'sales',
           },
+          {
+            id: 'usr_customer_order_taster',
+            name: 'Customer Order Taster',
+            username: 'customer-order-taster',
+            password: 'Password123',
+            role: 'taster',
+          },
+        ],
+        travelGroups: [
+          {
+            id: 'tg_customer_related',
+            groupNo: 'TG-CUSTOMER-RELATED',
+            visitDate: '2026-06-24',
+            tasterId: 'usr_customer_order_taster',
+            tasterName: 'Customer Order Taster',
+          },
         ],
         customers: [
           {
@@ -477,6 +528,7 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
             id: 'ord_cust_related',
             orderNo: 'SO-CUST-RELATED',
             orderType: 'TRAVEL_GROUP',
+            travelGroupId: 'tg_customer_related',
             customerId: 'cust_related',
             customerName: 'Seed Related Customer',
             customerPhone: '13900000001',
@@ -499,6 +551,26 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
             totalAmountCents: 8000,
             salesUserId: 'usr_customer_other_sales',
             createdById: 'usr_customer_other_sales',
+          },
+        ],
+        commissionRecords: [
+          {
+            id: 'cr_customer_order_taster',
+            salesOrderId: 'ord_cust_related',
+            travelGroupId: 'tg_customer_related',
+            targetType: 'TASTER_COMMISSION',
+            targetUserId: 'usr_customer_order_taster',
+            amountCents: 4500,
+            manualInput: true,
+          },
+          {
+            id: 'cr_customer_legacy_group_taster',
+            salesOrderId: null,
+            travelGroupId: 'tg_customer_related',
+            targetType: 'TASTER_COMMISSION',
+            targetUserId: 'usr_customer_order_taster',
+            amountCents: 9999,
+            manualInput: true,
           },
         ],
       },
@@ -554,6 +626,8 @@ function assertOrderSummaryContract(order) {
     'packingStatus',
     'salesUserId',
     'status',
+    'tasterCommission',
+    'tasterCommissionCents',
     'totalAmountCents',
     'travelGroup',
     'travelGroupId',

@@ -6,7 +6,11 @@ import '../../shared/widgets/brand_logo.dart';
 typedef LoginSubmit = Future<void> Function({
   required String username,
   required String password,
+  required bool rememberPassword,
 });
+
+typedef RememberedPasswordLookup = Future<String?> Function(String username);
+typedef ForgetAccount = Future<void> Function(String username);
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -14,10 +18,18 @@ class LoginPage extends StatefulWidget {
     required this.initialUsername,
     required this.onLogin,
     this.initialMessage,
+    this.rememberedUsernames = const <String>[],
+    this.rememberPassword = false,
+    this.onPasswordLookup,
+    this.onForgetAccount,
   });
 
   final String initialUsername;
   final String? initialMessage;
+  final List<String> rememberedUsernames;
+  final bool rememberPassword;
+  final RememberedPasswordLookup? onPasswordLookup;
+  final ForgetAccount? onForgetAccount;
   final LoginSubmit onLogin;
 
   @override
@@ -29,13 +41,89 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _submitting = false;
+  late bool _rememberPassword;
+  late List<String> _rememberedUsernames;
   String? _message;
+  String? _autofilledUsername;
+  int _passwordLookupGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _usernameController = TextEditingController(text: widget.initialUsername);
     _message = widget.initialMessage;
+    _rememberPassword = widget.rememberPassword;
+    _rememberedUsernames = _normalizeUsernames(widget.rememberedUsernames);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _matchRememberedPassword(_usernameController.text);
+    });
+  }
+
+  Future<void> _matchRememberedPassword(String username) async {
+    final normalizedUsername = username.trim().toLowerCase();
+    final generation = ++_passwordLookupGeneration;
+    if (!_rememberedUsernames.contains(normalizedUsername) ||
+        widget.onPasswordLookup == null) {
+      if (_autofilledUsername != null) {
+        _passwordController.clear();
+        _autofilledUsername = null;
+      }
+      return;
+    }
+    final password = await widget.onPasswordLookup!(normalizedUsername);
+    if (!mounted ||
+        generation != _passwordLookupGeneration ||
+        _usernameController.text.trim().toLowerCase() != normalizedUsername) {
+      return;
+    }
+    if (password != null && password.isNotEmpty) {
+      setState(() {
+        _passwordController.text = password;
+        _passwordController.selection = TextSelection.collapsed(
+          offset: password.length,
+        );
+        _autofilledUsername = normalizedUsername;
+        _rememberPassword = true;
+      });
+    }
+  }
+
+  void _selectUsername(String username) {
+    _usernameController.text = username;
+    _usernameController.selection = TextSelection.collapsed(
+      offset: username.length,
+    );
+    _matchRememberedPassword(username);
+  }
+
+  Future<void> _forgetCurrentAccount() async {
+    final username = _usernameController.text.trim().toLowerCase();
+    if (!_rememberedUsernames.contains(username) ||
+        widget.onForgetAccount == null) {
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      await widget.onForgetAccount!(username);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _rememberedUsernames.remove(username);
+        _passwordController.clear();
+        _autofilledUsername = null;
+        _rememberPassword = false;
+        _message = '已忘记此账号保存的密码。';
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _message = '忘记账号失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
   }
 
   @override
@@ -63,6 +151,7 @@ class _LoginPageState extends State<LoginPage> {
       await widget.onLogin(
         username: username,
         password: password,
+        rememberPassword: _rememberPassword,
       );
     } on AuthFailure catch (error) {
       if (mounted) {
@@ -133,16 +222,35 @@ class _LoginPageState extends State<LoginPage> {
             ),
             const SizedBox(height: 18),
             TextField(
+              key: const ValueKey('login-username-field'),
               controller: _usernameController,
               enabled: !_submitting,
               textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
+              onChanged: _matchRememberedPassword,
+              decoration: InputDecoration(
                 labelText: '账号',
-                prefixIcon: Icon(Icons.person_rounded),
+                prefixIcon: const Icon(Icons.person_rounded),
+                suffixIcon: _rememberedUsernames.isEmpty
+                    ? null
+                    : PopupMenuButton<String>(
+                        key: const ValueKey('remembered-account-menu'),
+                        tooltip: '选择已保存账号',
+                        onSelected: _selectUsername,
+                        itemBuilder: (context) => _rememberedUsernames
+                            .map(
+                              (username) => PopupMenuItem<String>(
+                                value: username,
+                                child: Text(username),
+                              ),
+                            )
+                            .toList(),
+                        icon: const Icon(Icons.arrow_drop_down_rounded),
+                      ),
               ),
             ),
             const SizedBox(height: 12),
             TextField(
+              key: const ValueKey('login-password-field'),
               controller: _passwordController,
               enabled: !_submitting,
               obscureText: _obscurePassword,
@@ -166,6 +274,33 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: CheckboxListTile(
+                    key: const ValueKey('remember-password-checkbox'),
+                    value: _rememberPassword,
+                    enabled: !_submitting,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('记住密码'),
+                    onChanged: (value) {
+                      setState(() => _rememberPassword = value ?? false);
+                    },
+                  ),
+                ),
+                if (_rememberedUsernames.contains(
+                  _usernameController.text.trim().toLowerCase(),
+                ))
+                  TextButton.icon(
+                    key: const ValueKey('forget-account-button'),
+                    onPressed: _submitting ? null : _forgetCurrentAccount,
+                    icon: const Icon(Icons.person_remove_alt_1_rounded),
+                    label: const Text('忘记此账号'),
+                  ),
+              ],
+            ),
             if (_message != null) ...[
               const SizedBox(height: 12),
               _LoginMessage(message: _message!),
@@ -187,6 +322,17 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
+}
+
+List<String> _normalizeUsernames(Iterable<String> usernames) {
+  final result = <String>[];
+  for (final username in usernames) {
+    final normalized = username.trim().toLowerCase();
+    if (normalized.isNotEmpty && !result.contains(normalized)) {
+      result.add(normalized);
+    }
+  }
+  return result;
 }
 
 class _LoginMessage extends StatelessWidget {

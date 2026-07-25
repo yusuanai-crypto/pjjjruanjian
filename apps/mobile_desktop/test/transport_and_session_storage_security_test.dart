@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_controller.dart';
@@ -108,6 +110,27 @@ void main() {
     });
   });
 
+  group('platform credential policy', () {
+    test('Android backup remains disabled', () async {
+      final manifest = await File(
+        'android/app/src/main/AndroidManifest.xml',
+      ).readAsString();
+      expect(manifest.contains('android:allowBackup="false"'), isTrue);
+    });
+
+    test('iOS Keychain items stay on this device and never synchronize',
+        () async {
+      final source = await File(
+        'lib/core/storage/session_storage.dart',
+      ).readAsString();
+      expect(
+        source.contains('KeychainAccessibility.first_unlock_this_device'),
+        isTrue,
+      );
+      expect(source.contains('synchronizable: false'), isTrue);
+    });
+  });
+
   group('session token migration', () {
     test('moves a legacy token to secure storage before removing it', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
@@ -154,12 +177,15 @@ void main() {
   });
 
   group('last successful username', () {
-    test('successful login saves the server-confirmed username only', () async {
+    test(
+        'successful login keeps password out of preferences and in secure storage',
+        () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final preferences = await SharedPreferences.getInstance();
+      final secureStorage = FakeSecureTokenStorage();
       final storage = await SessionStorage.create(
         preferences: preferences,
-        secureStorage: FakeSecureTokenStorage(),
+        secureStorage: secureStorage,
       );
       final apiClient = _FakeAuthApiClient(loginUsername: 'confirmed.user');
       final controller = AuthController(
@@ -170,6 +196,7 @@ void main() {
       await controller.login(
         username: ' entered.user ',
         password: 'never-save-this-password',
+        rememberPassword: true,
       );
 
       expect(storage.readLastUsername(), 'confirmed.user');
@@ -177,6 +204,17 @@ void main() {
       expect(
         preferences.getKeys().map(preferences.get).whereType<String>(),
         isNot(contains('never-save-this-password')),
+      );
+      expect(
+        (await storage.readRememberedPassword('confirmed.user')) ==
+            'never-save-this-password',
+        isTrue,
+      );
+      expect(
+        secureStorage.values.containsKey(
+          SessionStorage.rememberedPasswordsKey,
+        ),
+        isTrue,
       );
       apiClient.close(force: true);
     });
@@ -190,6 +228,10 @@ void main() {
         preferences: preferences,
         secureStorage: FakeSecureTokenStorage(),
       );
+      await storage.saveRememberedPassword(
+        'previous.user',
+        'previous-password',
+      );
       final apiClient = _FakeAuthApiClient(failLogin: true);
       final controller = AuthController(
         storage: storage,
@@ -198,12 +240,22 @@ void main() {
       await controller.restore();
 
       await expectLater(
-        controller.login(username: 'wrong.user', password: 'wrong-password'),
+        controller.login(
+          username: 'wrong.user',
+          password: 'wrong-password',
+          rememberPassword: true,
+        ),
         throwsA(isA<AuthFailure>()),
       );
 
       expect(storage.readLastUsername(), 'previous.user');
       expect(controller.lastUsername, 'previous.user');
+      expect(
+        (await storage.readRememberedPassword('previous.user')) ==
+            'previous-password',
+        isTrue,
+      );
+      expect(await storage.readRememberedPassword('wrong.user'), isNull);
       apiClient.close(force: true);
     });
 
@@ -227,6 +279,46 @@ void main() {
 
       expect(storage.readLastUsername(), 'remembered.user');
       expect(controller.lastUsername, 'remembered.user');
+      apiClient.close(force: true);
+    });
+
+    test(
+        'logout preserves remembered passwords and forget removes only one account',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final preferences = await SharedPreferences.getInstance();
+      final storage = await SessionStorage.create(
+        preferences: preferences,
+        secureStorage: FakeSecureTokenStorage(),
+      );
+      await storage.saveRememberedPassword('first.user', 'first-password');
+      await storage.saveRememberedPassword('second.user', 'second-password');
+      final apiClient = _FakeAuthApiClient(loginUsername: 'first.user');
+      final controller = AuthController(
+        storage: storage,
+        apiClient: apiClient,
+      );
+
+      await controller.login(
+        username: 'first.user',
+        password: 'first-password',
+        rememberPassword: true,
+      );
+      await controller.logout();
+      expect(
+        (await storage.readRememberedPassword('first.user')) ==
+            'first-password',
+        isTrue,
+      );
+
+      await controller.forgetAccount('first.user');
+      expect(await storage.readRememberedPassword('first.user'), isNull);
+      expect(
+        (await storage.readRememberedPassword('second.user')) ==
+            'second-password',
+        isTrue,
+      );
+      expect(storage.readRememberedUsernames(), <String>['second.user']);
       apiClient.close(force: true);
     });
 
@@ -306,7 +398,12 @@ class _FakeAuthApiClient extends ApiClient {
 
 Map<String, dynamic> _authSessionPayload(String username, {String? token}) {
   return <String, dynamic>{
-    if (token != null) 'token': token,
+    if (token != null) ...<String, dynamic>{
+      'accessToken': token,
+      'accessTokenExpiresAt': '2030-01-01T00:00:00.000Z',
+      'refreshToken': 'test-refresh-token',
+      'refreshTokenExpiresAt': '2030-01-30T00:00:00.000Z',
+    },
     'user': <String, dynamic>{
       'id': 'user-1',
       'name': '测试用户',

@@ -407,6 +407,7 @@ function createTravelGroup(baseUrl, token, overrides) {
       licensePlate: 'STAGE10',
       guideId: overrides.guideId,
       guestCount: 2,
+      cigaretteFeeCents: 100,
       tastingRoomNo: 'Stage10 Room',
       tasterId: overrides.tasterId,
       groupType: 'test',

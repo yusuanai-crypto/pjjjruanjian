@@ -17,6 +17,11 @@ import {
   buildAnalyticsSalesOrderWhere,
   buildAnalyticsTravelGroupWhere,
 } from './analytics-scope.helper';
+import {
+  buildSalesPerformanceDataset,
+  isUnassignedSalesUserParam,
+  SalesPerformanceDataset,
+} from './analytics-sales-performance.helper';
 import { calculateTravelGroupProfit } from './travel-group-profit.helper';
 
 const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
@@ -146,6 +151,103 @@ export class AnalyticsNestService {
       range,
       metrics: calculated.metrics,
       warnings: calculated.warnings,
+    };
+  }
+
+  async listSalesPerformance(actor: any, query: any = {}) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildSalesPerformanceReadResult(query);
+    return {
+      range: result.range,
+      salesPerformance: result.dataset.records,
+    };
+  }
+
+  async getSalesPerformanceDetail(
+    actor: any,
+    salesUserIdParam: string,
+    query: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildSalesPerformanceReadResult(query);
+    const normalizedParam = normalizeOptionalString(salesUserIdParam);
+    if (!normalizedParam) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'salesUserId is required.',
+      );
+    }
+    const salesUserId = isUnassignedSalesUserParam(normalizedParam)
+      ? null
+      : normalizedParam;
+    const summary = result.dataset.records.find(
+      (record) => record.salesUserId === salesUserId,
+    );
+    if (!summary) {
+      throw createHttpError(
+        404,
+        'ANALYTICS_SALES_USER_NOT_FOUND',
+        'No sales performance data exists for this sales user in the selected range.',
+      );
+    }
+
+    return {
+      range: result.range,
+      salesUser: {
+        id: summary.salesUserId,
+        name: summary.salesUserName,
+        isActive: summary.isActive,
+        isUnassigned: summary.isUnassigned,
+      },
+      summary,
+      orders: result.dataset.orders.filter(
+        (order) => order.salesUserId === salesUserId,
+      ),
+    };
+  }
+
+  async exportSalesPerformanceXlsx(
+    actor: any,
+    query: any = {},
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildSalesPerformanceReadResult(query);
+    const summaryRowCount = result.dataset.records.length;
+    const detailRowCount = result.dataset.orders.length;
+    const rowCount = summaryRowCount + detailRowCount;
+    assertExportRowLimit(rowCount);
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'analytics.sales_performance.export',
+      entityType: 'analytics_sales_performance',
+      entityId: 'analytics.sales_performance.export',
+      beforeData: null,
+      afterData: {
+        filters: summarizeExportFilters(query),
+        rowCount,
+        summaryRowCount,
+        detailRowCount,
+        rowCounts: {
+          summary: summaryRowCount,
+          details: detailRowCount,
+        },
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+
+    const workbook = buildSalesPerformanceExportWorkbook(result.dataset);
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildSalesPerformanceExportFileName(),
+      buffer: Buffer.from(xlsxData as any),
+      rowCount,
+      rowCounts: {
+        summary: summaryRowCount,
+        details: detailRowCount,
+      },
     };
   }
 
@@ -800,6 +902,71 @@ export class AnalyticsNestService {
     };
   }
 
+  private async buildSalesPerformanceReadResult(query: any = {}) {
+    const range = normalizeAnalyticsDateRange({
+      preset: query?.preset,
+      dateFrom: query?.dateFrom,
+      dateTo: query?.dateTo,
+    });
+    const dateRange = {
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+    };
+    const { onlyShowMarkedRecords } =
+      await this.settingsService.getGlobalMarkQuery();
+    const [salesUsers, salesOrders, afterSalesOrders] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          role: 'SALES',
+        },
+        orderBy: {
+          name: 'asc',
+        },
+      }),
+      this.prisma.salesOrder.findMany({
+        where: buildAnalyticsSalesOrderWhere({
+          onlyShowMarkedRecords,
+          dateRange,
+          baseWhere: {
+            status: {
+              in: GROSS_SALES_STATUS_VALUES,
+            },
+          },
+        }),
+        include: getSalesPerformanceSalesOrderInclude(),
+        orderBy: {
+          orderDate: 'asc',
+        },
+      }),
+      this.prisma.afterSalesOrder.findMany({
+        where: buildAnalyticsAfterSalesOrderWhere({
+          onlyShowMarkedRecords,
+          dateRange,
+          baseWhere: {
+            financeConfirmed: true,
+            refundAmountCents: {
+              gt: 0,
+            },
+          },
+        }),
+        include: getSalesPerformanceAfterSalesInclude(),
+        orderBy: {
+          createdAt: 'asc',
+        },
+      }),
+    ]);
+    return {
+      range,
+      dataset: buildSalesPerformanceDataset({
+        salesUsers,
+        salesOrders,
+        afterSalesOrders,
+        sortBy: query?.sortBy,
+        sortDirection: query?.sortDirection,
+      }),
+    };
+  }
+
   private async findSalesOrdersForTravelGroups(
     travelGroups: any[],
     onlyShowMarkedRecords: boolean,
@@ -923,6 +1090,20 @@ function getSalesOrderAnalyticsInclude() {
     travelGroup: true,
     items: true,
     afterSalesOrders: true,
+  };
+}
+
+function getSalesPerformanceSalesOrderInclude() {
+  return {
+    salesUser: true,
+  };
+}
+
+function getSalesPerformanceAfterSalesInclude() {
+  return {
+    salesOrder: {
+      include: getSalesPerformanceSalesOrderInclude(),
+    },
   };
 }
 
@@ -1151,6 +1332,14 @@ function toTravelGroupProfitDto(row: any) {
     pendingRefundAmountCents: Number(row.pendingRefundAmountCents || 0),
     actualProductCostCents: Number(row.actualProductCostCents || 0),
     logisticsFeeCents: Number(row.logisticsFeeCents || 0),
+    parkingFeeCents: Number(row.parkingFeeCents || 0),
+    cigaretteFeeCents:
+      row.cigaretteFeeCents === null || row.cigaretteFeeCents === undefined
+        ? null
+        : Number(row.cigaretteFeeCents),
+    salesCommissionCents: Number(row.salesCommissionCents || 0),
+    leaderCommissionCents: Number(row.leaderCommissionCents || 0),
+    outreachCommissionCents: Number(row.outreachCommissionCents || 0),
     employeeCommissionCents: Number(row.employeeCommissionCents || 0),
     tasterCommissionCents: Number(row.tasterCommissionCents || 0),
     dailyAgencyRebateCents: Number(row.dailyAgencyRebateCents || 0),
@@ -1549,6 +1738,36 @@ const ANALYTICS_TASTER_DETAIL_EXPORT_COLUMNS = [
   { header: 'warnings', key: 'warnings', width: 36 },
 ];
 
+const SALES_PERFORMANCE_SUMMARY_EXPORT_COLUMNS = [
+  { header: '销售ID', key: 'salesUserId', width: 24 },
+  { header: '销售人员', key: 'salesUserName', width: 18 },
+  { header: '状态', key: 'status', width: 14 },
+  { header: '出单数', key: 'orderCount', width: 12 },
+  { header: '出单销售额(分)', key: 'grossSalesAmountCents', width: 18 },
+  { header: '退单销售额(分)', key: 'refundAmountCents', width: 18 },
+  { header: '总销售额(分)', key: 'netSalesAmountCents', width: 18 },
+  {
+    header: '单均销售额(分/单)',
+    key: 'averageSalesPerOrderCents',
+    width: 20,
+  },
+];
+
+const SALES_PERFORMANCE_DETAIL_EXPORT_COLUMNS = [
+  { header: '销售ID', key: 'salesUserId', width: 24 },
+  { header: '销售人员', key: 'salesUserName', width: 18 },
+  { header: '订单ID', key: 'id', width: 24 },
+  { header: '订单号', key: 'orderNo', width: 22 },
+  { header: '订单日期', key: 'orderDate', width: 14 },
+  { header: '客户', key: 'customerName', width: 20 },
+  { header: '订单状态', key: 'status', width: 16 },
+  { header: '本期出单销售额(分)', key: 'grossSalesAmountCents', width: 22 },
+  { header: '本期退单销售额(分)', key: 'refundAmountCents', width: 22 },
+  { header: '本期总销售额(分)', key: 'netSalesAmountCents', width: 20 },
+  { header: '计入出单数', key: 'contributesToOrderCount', width: 14 },
+  { header: '本期售后单ID', key: 'afterSalesOrderIds', width: 36 },
+];
+
 function buildAnalyticsOverviewExportWorkbook(input: {
   overview: any;
   metricRows?: any[];
@@ -1606,6 +1825,65 @@ function buildAnalyticsTasterRankingsExportWorkbook(input: {
     '品鉴师明细',
     ANALYTICS_TASTER_DETAIL_EXPORT_COLUMNS,
     input.details,
+  );
+  return workbook;
+}
+
+function buildSalesPerformanceExportWorkbook(
+  dataset: SalesPerformanceDataset,
+) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'jiangjiu-api';
+  workbook.created = new Date();
+  const salesUserNameByKey = new Map(
+    dataset.records.map((record) => [
+      record.salesUserId || '__unassigned_sales_user__',
+      record.salesUserName,
+    ]),
+  );
+  addWorksheet(
+    workbook,
+    '销售汇总',
+    SALES_PERFORMANCE_SUMMARY_EXPORT_COLUMNS,
+    dataset.records.map((record) => ({
+      salesUserId: record.salesUserId || '',
+      salesUserName: record.salesUserName,
+      status: record.isUnassigned
+        ? '未分配'
+        : record.isActive
+          ? '在职'
+          : '停用',
+      orderCount: record.orderCount,
+      grossSalesAmountCents: record.grossSalesAmountCents,
+      refundAmountCents: record.refundAmountCents,
+      netSalesAmountCents: record.netSalesAmountCents,
+      averageSalesPerOrderCents:
+        record.averageSalesPerOrderCents === null
+          ? ''
+          : record.averageSalesPerOrderCents,
+    })),
+  );
+  addWorksheet(
+    workbook,
+    '订单贡献明细',
+    SALES_PERFORMANCE_DETAIL_EXPORT_COLUMNS,
+    dataset.orders.map((order) => ({
+      salesUserId: order.salesUserId || '',
+      salesUserName:
+        salesUserNameByKey.get(
+          order.salesUserId || '__unassigned_sales_user__',
+        ) || '',
+      id: order.id,
+      orderNo: order.orderNo,
+      orderDate: order.orderDate || '',
+      customerName: order.customerName,
+      status: order.status,
+      grossSalesAmountCents: order.grossSalesAmountCents,
+      refundAmountCents: order.refundAmountCents,
+      netSalesAmountCents: order.netSalesAmountCents,
+      contributesToOrderCount: booleanLabel(order.contributesToOrderCount),
+      afterSalesOrderIds: formatIdList(order.afterSalesOrderIds),
+    })),
   );
   return workbook;
 }
@@ -2356,6 +2634,10 @@ function buildAnalyticsOverviewExportFileName(date = new Date()) {
 
 function buildAnalyticsTasterRankingsExportFileName(date = new Date()) {
   return `analytics-taster-rankings-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function buildSalesPerformanceExportFileName(date = new Date()) {
+  return `analytics-sales-performance-${formatFileNameTimestamp(date)}.xlsx`;
 }
 
 function formatFileNameTimestamp(date: Date) {

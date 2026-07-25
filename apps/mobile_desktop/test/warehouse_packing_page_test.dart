@@ -15,8 +15,7 @@ void main() {
     expect(uri.queryParameters['packingStatus'], 'pending');
     expect(uri.queryParameters['limit'], '100');
 
-    final expectedForegroundColor =
-        buildJiangjiuTheme().colorScheme.onSurface;
+    final expectedForegroundColor = buildJiangjiuTheme().colorScheme.onSurface;
     const filterStates = <Set<WidgetState>>[
       <WidgetState>{},
       <WidgetState>{WidgetState.selected},
@@ -96,15 +95,14 @@ void main() {
     expect(find.text('订单核对/打包处理'), findsOneWidget);
     expect(find.text('订单号'), findsOneWidget);
     expect(find.text('电话'), findsWidgets);
-
-    final statusField =
-        find.byKey(const ValueKey('warehouse-packing-status-field'));
-    await tester.ensureVisible(statusField);
-    await tester.pumpAndSettle();
-    await tester.tap(statusField);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('已打包').last);
-    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('warehouse-packing-status-field')),
+      findsNothing,
+    );
+    expect(
+      find.widgetWithText(OutlinedButton, '标记异常'),
+      findsNothing,
+    );
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('warehouse-package-count-field')),
@@ -196,14 +194,9 @@ void main() {
     );
     expect(packageField.readOnly, isTrue);
     expect(remarkField.readOnly, isTrue);
-
-    final statusDropdown = tester.widget<DropdownButton<PackingStatus>>(
-      find.descendant(
-        of: find.byKey(const ValueKey('warehouse-packing-status-field')),
-        matching: find.byWidgetPredicate(
-          (widget) => widget is DropdownButton<PackingStatus>,
-        ),
-      ),
+    expect(
+      find.byKey(const ValueKey('warehouse-packing-status-field')),
+      findsNothing,
     );
     final logisticsDropdown = tester.widget<DropdownButton<String>>(
       find.descendant(
@@ -213,7 +206,6 @@ void main() {
         ),
       ),
     );
-    expect(statusDropdown.onChanged, isNull);
     expect(logisticsDropdown.onChanged, isNull);
 
     expect(apiClient.packingPatchPaths, isEmpty);
@@ -316,7 +308,7 @@ class _FakeApiClient extends ApiClient {
       logisticsMethod = '${body?['logisticsMethod'] ?? logisticsMethod}';
       return {
         'data': {
-          'salesOrder': _orderJson(
+          'warehouseOrder': _orderJson(
             packingStatus: packingStatus,
             packageCount: packageCount,
             warehouseRemark: warehouseRemark,

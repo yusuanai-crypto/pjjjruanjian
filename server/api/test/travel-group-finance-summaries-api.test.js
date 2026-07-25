@@ -25,6 +25,7 @@ test('contract: stage7 travel group finance summaries list and detail expose saf
       'summary-stage7-marked',
     ]);
     const listed = list.body.data.travelGroupFinanceSummaries[0];
+    assert.equal(listed.summaryExists, true);
     assert.equal(listed.travelGroup.groupNo, 'TG-STAGE7-SUMMARY-MARKED');
     assert.equal(listed.travelGroup.licensePlate, '贵A-STAGE7');
     assert.equal(listed.travelGroup.guestCount, 20);
@@ -62,6 +63,103 @@ test('contract: stage7 travel group finance summaries list and detail expose saf
     assert.equal(summary.sourceSnapshot.password, undefined);
     assert.equal(JSON.stringify(summary.sourceSnapshot).includes('secret-token'), false);
     assert.equal(JSON.stringify(summary.sourceSnapshot).includes('Password123'), false);
+  }, {
+    prisma: buildTravelGroupFinanceSummaryApiPrisma(),
+  });
+});
+
+test('contract: stage7 finance summary list and detail expose no-order travel groups as read-only zero rows', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const emptyGroupId = 'tg-stage7-summary-no-order';
+    const filtered = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries'
+        + '?dateFrom=2026-07-23&dateTo=2026-07-23'
+        + '&agencyName=Stage7%20No%20Order%20Agency'
+        + '&guideName=Stage7%20No%20Order%20Guide'
+        + '&query=Stage7%20No%20Order%20Taster'
+        + '&agencyDeductionConfirmed=false&limit=10',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(filtered.response.status, 200);
+    assert.equal(filtered.body.data.travelGroupFinanceSummaries.length, 1);
+    const summary = filtered.body.data.travelGroupFinanceSummaries[0];
+    assert.equal(summary.id, null);
+    assert.equal(summary.summaryExists, false);
+    assert.equal(summary.travelGroupId, emptyGroupId);
+    assert.equal(summary.travelGroup.groupNo, 'TG-STAGE7-SUMMARY-NO-ORDER');
+    assert.equal(summary.travelGroup.travelAgency, 'Stage7 No Order Agency');
+    assert.equal(summary.travelGroup.guideName, 'Stage7 No Order Guide');
+    assert.equal(summary.travelGroup.licensePlate, '贵A-NOORDER');
+    assert.equal(summary.travelGroup.guestCount, 26);
+    assert.equal(summary.travelGroup.tasterName, 'Stage7 No Order Taster');
+    for (const field of [
+      'totalSalesAmountCents',
+      'totalCashOnDeliveryCents',
+      'totalPaidDepositCents',
+      'confirmedRefundAmountCents',
+      'effectiveSalesAmountCents',
+      'totalAgencyDeductionCents',
+      'totalAgencyNetAmountCents',
+      'totalDailyRebateCents',
+      'totalMonthlyRebateCents',
+      'paidRebateCents',
+      'unpaidRebateCents',
+      'paidDailyRebateCents',
+      'unpaidDailyRebateCents',
+      'paidMonthlyRebateCents',
+      'unpaidMonthlyRebateCents',
+    ]) {
+      assert.equal(summary[field], 0, field);
+    }
+    assert.equal(summary.agencyDeductionConfirmed, false);
+    assert.equal(summary.dailyRebatePaid, false);
+    assert.equal(summary.monthlyRebatePaid, false);
+
+    const detail = await requestJson(
+      baseUrl,
+      `/api/travel-group-finance-summaries/${emptyGroupId}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(detail.response.status, 200);
+    assert.equal(
+      detail.body.data.travelGroupFinanceSummary.summaryExists,
+      false,
+    );
+    assert.equal(detail.body.data.travelGroupFinanceSummary.id, null);
+
+    const confirmedOnly = await requestJson(
+      baseUrl,
+      `/api/travel-group-finance-summaries?travelGroupId=${emptyGroupId}`
+        + '&agencyDeductionConfirmed=true',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(confirmedOnly.response.status, 200);
+    assert.deepEqual(
+      confirmedOnly.body.data.travelGroupFinanceSummaries,
+      [],
+    );
+
+    const afterReads = await requestJson(
+      baseUrl,
+      `/api/travel-group-finance-summaries?travelGroupId=${emptyGroupId}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(afterReads.response.status, 200);
+    assert.equal(afterReads.body.data.travelGroupFinanceSummaries[0].id, null);
+    assert.equal(
+      afterReads.body.data.travelGroupFinanceSummaries[0].summaryExists,
+      false,
+    );
   }, {
     prisma: buildTravelGroupFinanceSummaryApiPrisma(),
   });
@@ -627,10 +725,15 @@ test('contract: stage7 travel group finance summaries obey global mark filtering
       },
     );
     assert.equal(openList.response.status, 200);
-    assert.deepEqual(summaryIds(openList.body.data.travelGroupFinanceSummaries), [
-      'summary-stage7-marked',
-      'summary-stage7-unmarked',
-    ]);
+    assert.deepEqual(
+      summaryTravelGroupIds(openList.body.data.travelGroupFinanceSummaries),
+      [
+        'tg-stage7-summary-no-order',
+        'tg-stage7-summary-refresh',
+        'tg-stage7-summary-unmarked',
+        'tg-stage7-summary-marked',
+      ],
+    );
 
     const openHiddenDetail = await requestJson(
       baseUrl,
@@ -659,9 +762,14 @@ test('contract: stage7 travel group finance summaries obey global mark filtering
       },
     );
     assert.equal(list.response.status, 200);
-    assert.deepEqual(summaryIds(list.body.data.travelGroupFinanceSummaries), [
-      'summary-stage7-marked',
-    ]);
+    assert.deepEqual(
+      summaryTravelGroupIds(list.body.data.travelGroupFinanceSummaries),
+      [
+        'tg-stage7-summary-no-order',
+        'tg-stage7-summary-refresh',
+        'tg-stage7-summary-marked',
+      ],
+    );
 
     const hidden = await requestJson(
       baseUrl,
@@ -673,7 +781,7 @@ test('contract: stage7 travel group finance summaries obey global mark filtering
     assertErrorContract(
       hidden,
       404,
-      'TRAVEL_GROUP_FINANCE_SUMMARY_NOT_FOUND',
+      'TRAVEL_GROUP_NOT_FOUND',
     );
   }, {
     prisma: buildTravelGroupFinanceSummaryApiPrisma(),
@@ -694,6 +802,10 @@ function assertStage7ApiLog(log, expected) {
 
 function summaryIds(summaries) {
   return summaries.map((summary) => summary.id).sort();
+}
+
+function summaryTravelGroupIds(summaries) {
+  return summaries.map((summary) => summary.travelGroupId);
 }
 
 async function requestStatus(baseUrl, pathName, options = {}) {
@@ -744,6 +856,17 @@ function buildTravelGroupFinanceSummaryApiPrisma() {
         id: 'tg-stage7-summary-refresh',
         groupNo: 'TG-STAGE7-SUMMARY-REFRESH',
         visitDate: '2026-07-22',
+        financeMark: true,
+      }),
+      travelGroup({
+        id: 'tg-stage7-summary-no-order',
+        groupNo: 'TG-STAGE7-SUMMARY-NO-ORDER',
+        visitDate: '2026-07-23',
+        travelAgency: 'Stage7 No Order Agency',
+        guideName: 'Stage7 No Order Guide',
+        licensePlate: '贵A-NOORDER',
+        guestCount: 26,
+        tasterName: 'Stage7 No Order Taster',
         financeMark: true,
       }),
     ],

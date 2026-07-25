@@ -106,8 +106,8 @@ test('unit: analytics scope helper composes date ranges and base where clauses',
         { financeConfirmed: true },
         {
           createdAt: {
-            gte: instant('2026-07-01T00:00:00.000Z'),
-            lte: instant('2026-07-04T23:59:59.999Z'),
+            gte: instant('2026-06-30T16:00:00.000Z'),
+            lte: instant('2026-07-04T15:59:59.999Z'),
           },
         },
         buildGlobalAfterSalesOrderMarkScope(true),

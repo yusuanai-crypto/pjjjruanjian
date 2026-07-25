@@ -35,6 +35,15 @@ const _rankingSortOptions = <_RankingSortOption>[
   _RankingSortOption(label: '打蛋率', sortBy: 'noOrderRate'),
 ];
 
+const _salesPerformanceSortOptions = <_RankingSortOption>[
+  _RankingSortOption(label: '总销售额', sortBy: 'netSalesAmountCents'),
+  _RankingSortOption(label: '出单销售额', sortBy: 'grossSalesAmountCents'),
+  _RankingSortOption(label: '退单销售额', sortBy: 'refundAmountCents'),
+  _RankingSortOption(label: '出单数', sortBy: 'orderCount'),
+  _RankingSortOption(label: '单均销售额', sortBy: 'averageSalesPerOrderCents'),
+  _RankingSortOption(label: '销售人员', sortBy: 'salesUserName'),
+];
+
 const _trendMetrics = <_TrendMetricOption>[
   _TrendMetricOption(
     label: '销售额趋势',
@@ -93,6 +102,14 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   int _trendsRequestSerial = 0;
   bool _exportingOverview = false;
   bool _exportingRankings = false;
+  List<SalesPerformanceRecord> _salesPerformance = const [];
+  bool _salesPerformanceLoading = false;
+  String? _salesPerformanceErrorMessage;
+  int _salesPerformanceRequestSerial = 0;
+  _RankingSortOption _salesPerformanceSort =
+      _salesPerformanceSortOptions.first;
+  String _salesPerformanceSortDirection = 'desc';
+  bool _exportingSalesPerformance = false;
 
   bool get _canViewAnalytics =>
       widget.role == UserRole.superAdmin ||
@@ -102,6 +119,11 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       widget.role == UserRole.afterSales;
 
   bool get _canExportAnalytics => _canViewAnalytics;
+
+  bool get _canViewSalesPerformance =>
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.boss;
 
   @override
   void initState() {
@@ -113,6 +135,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       _loading = true;
       _rankingsLoading = true;
       _trendsLoading = true;
+      _salesPerformanceLoading = _canViewSalesPerformance;
       _loadAnalytics(markLoading: false);
     }
   }
@@ -140,10 +163,22 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         _trendsErrorMessage = null;
         _exportingOverview = false;
         _exportingRankings = false;
+        _salesPerformanceRequestSerial += 1;
+        _salesPerformance = const [];
+        _salesPerformanceLoading = false;
+        _salesPerformanceErrorMessage = null;
+        _exportingSalesPerformance = false;
       });
       return;
     }
 
+    if (!_canViewSalesPerformance) {
+      _salesPerformanceRequestSerial += 1;
+      _salesPerformance = const [];
+      _salesPerformanceLoading = false;
+      _salesPerformanceErrorMessage = null;
+      _exportingSalesPerformance = false;
+    }
     _loadAnalytics();
   }
 
@@ -204,6 +239,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
             key: const ValueKey('analytics-overview-metrics-section'),
             metrics: _metricsFor(overview, _openMetricSource),
           ),
+          if (_canViewSalesPerformance) _buildSalesPerformanceSection(),
           _buildTrendsSection(),
           if (_warningItems(overview).isNotEmpty)
             _WarningsSection(items: _warningItems(overview)),
@@ -235,7 +271,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                 IconButton(
                   key: const ValueKey('analytics-overview-refresh-button'),
                   tooltip: '刷新',
-                  onPressed: _loading || _rankingsLoading || _trendsLoading
+                  onPressed: _loading ||
+                          _rankingsLoading ||
+                          _trendsLoading ||
+                          _salesPerformanceLoading
                       ? null
                       : _loadAnalytics,
                   icon: const Icon(Icons.refresh_rounded),
@@ -387,6 +426,274 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         _rankingsLoading = false;
         _rankingsErrorMessage = _friendlyError(error);
       });
+    }
+  }
+
+  Future<void> _loadSalesPerformance({bool markLoading = true}) async {
+    if (!_canViewSalesPerformance) {
+      return;
+    }
+
+    final requestId = ++_salesPerformanceRequestSerial;
+    if (markLoading) {
+      setState(() {
+        _salesPerformanceLoading = true;
+        _salesPerformanceErrorMessage = null;
+      });
+    } else {
+      _salesPerformanceErrorMessage = null;
+    }
+
+    try {
+      final records = await BusinessApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+      ).listSalesPerformance(
+        preset: _preset,
+        dateFrom: _start,
+        dateTo: _end,
+        sortBy: _salesPerformanceSort.sortBy,
+        sortDirection: _salesPerformanceSortDirection,
+      );
+      if (!mounted || requestId != _salesPerformanceRequestSerial) {
+        return;
+      }
+      setState(() {
+        _salesPerformance = records;
+        _salesPerformanceLoading = false;
+        _salesPerformanceErrorMessage = null;
+      });
+    } catch (error) {
+      if (!mounted || requestId != _salesPerformanceRequestSerial) {
+        return;
+      }
+      setState(() {
+        _salesPerformanceLoading = false;
+        _salesPerformanceErrorMessage = _friendlyError(error);
+      });
+    }
+  }
+
+  Widget _buildSalesPerformanceSection() {
+    return Card(
+      key: const ValueKey('analytics-sales-performance-section'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: Text(
+                    '销售出单情况',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                SizedBox(
+                  width: 210,
+                  child: DropdownButtonFormField<_RankingSortOption>(
+                    key: const ValueKey('analytics-sales-performance-sort'),
+                    initialValue: _salesPerformanceSort,
+                    decoration: const InputDecoration(
+                      labelText: '排序指标',
+                      prefixIcon: Icon(Icons.sort_rounded),
+                      isDense: true,
+                    ),
+                    items: _salesPerformanceSortOptions
+                        .map(
+                          (option) => DropdownMenuItem<_RankingSortOption>(
+                            value: option,
+                            child: Text(
+                              option.label,
+                              key: ValueKey(
+                                'analytics-sales-sort-${option.sortBy}',
+                              ),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _salesPerformanceLoading
+                        ? null
+                        : (option) {
+                            if (option == null ||
+                                option.sortBy ==
+                                    _salesPerformanceSort.sortBy) {
+                              return;
+                            }
+                            setState(() {
+                              _salesPerformanceSort = option;
+                            });
+                            _loadSalesPerformance();
+                          },
+                  ),
+                ),
+                Tooltip(
+                  message: _salesPerformanceSortDirection == 'desc'
+                      ? '当前降序，点击切换升序'
+                      : '当前升序，点击切换降序',
+                  child: IconButton.outlined(
+                    key: const ValueKey(
+                      'analytics-sales-performance-sort-direction',
+                    ),
+                    onPressed: _salesPerformanceLoading
+                        ? null
+                        : () {
+                            setState(() {
+                              _salesPerformanceSortDirection =
+                                  _salesPerformanceSortDirection == 'desc'
+                                      ? 'asc'
+                                      : 'desc';
+                            });
+                            _loadSalesPerformance();
+                          },
+                    icon: Icon(
+                      _salesPerformanceSortDirection == 'desc'
+                          ? Icons.arrow_downward_rounded
+                          : Icons.arrow_upward_rounded,
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  key: const ValueKey(
+                    'analytics-sales-performance-export-button',
+                  ),
+                  onPressed: _exportingSalesPerformance
+                      ? null
+                      : _exportSalesPerformance,
+                  icon: _exportingSalesPerformance
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_rounded),
+                  label: Text(
+                    _exportingSalesPerformance
+                        ? '导出中'
+                        : '导出销售出单统计',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_salesPerformanceLoading && _salesPerformance.isNotEmpty)
+              const LinearProgressIndicator(),
+            if (_salesPerformanceErrorMessage != null &&
+                _salesPerformance.isNotEmpty)
+              _InlineError(
+                message: _salesPerformanceErrorMessage!,
+                onRetry: _loadSalesPerformance,
+              ),
+            if (_salesPerformanceLoading && _salesPerformance.isEmpty)
+              const _EmbeddedState(
+                key: ValueKey('analytics-sales-performance-loading'),
+                icon: Icons.point_of_sale_rounded,
+                title: '正在加载销售出单情况',
+                message: '正在按销售人员汇总本期出单与已确认退款。',
+                showProgress: true,
+              )
+            else if (_salesPerformanceErrorMessage != null &&
+                _salesPerformance.isEmpty)
+              _EmbeddedState(
+                key: const ValueKey('analytics-sales-performance-error'),
+                icon: Icons.error_outline_rounded,
+                title: '销售出单情况加载失败',
+                message: _salesPerformanceErrorMessage!,
+                actionLabel: '重试',
+                onAction: _loadSalesPerformance,
+              )
+            else if (_salesPerformance.isEmpty)
+              const _EmbeddedState(
+                key: ValueKey('analytics-sales-performance-empty'),
+                icon: Icons.inbox_outlined,
+                title: '暂无销售人员数据',
+                message: '当前没有可展示的销售人员或出单记录。',
+              )
+            else
+              _SalesPerformanceView(
+                records: _salesPerformance,
+                onOpenDetail: _openSalesPerformanceDetail,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSalesPerformanceDetail(
+    SalesPerformanceRecord record,
+  ) async {
+    final detailFuture = BusinessApi(
+      apiClient: widget.apiClient,
+      token: widget.token,
+    ).getSalesPerformanceDetail(
+      record.salesUserId,
+      preset: _preset,
+      dateFrom: _start,
+      dateTo: _end,
+      sortBy: _salesPerformanceSort.sortBy,
+      sortDirection: _salesPerformanceSortDirection,
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _SalesPerformanceDetailDialog(
+        title: '${_displaySalesUserName(record)} 详情',
+        future: detailFuture,
+      ),
+    );
+  }
+
+  Future<void> _exportSalesPerformance() async {
+    if (!_canViewSalesPerformance || _exportingSalesPerformance) {
+      return;
+    }
+    setState(() {
+      _exportingSalesPerformance = true;
+      _salesPerformanceErrorMessage = null;
+    });
+    try {
+      final downloadedFile = await BusinessApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+      ).exportSalesPerformance(
+        preset: _preset,
+        dateFrom: _start,
+        dateTo: _end,
+        sortBy: _salesPerformanceSort.sortBy,
+        sortDirection: _salesPerformanceSortDirection,
+      );
+      final targetFile = await _writeExportFile(
+        downloadedFile,
+        'analytics-sales-performance',
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _exportingSalesPerformance = false);
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('销售出单统计已导出：${targetFile.path}')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _friendlyError(error);
+      setState(() {
+        _exportingSalesPerformance = false;
+        _salesPerformanceErrorMessage = message;
+      });
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
     }
   }
 
@@ -818,6 +1125,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     _loadOverview(markLoading: markLoading);
     _loadTasterRankings(markLoading: markLoading);
     _loadTrends(markLoading: markLoading);
+    if (_canViewSalesPerformance) {
+      _loadSalesPerformance(markLoading: markLoading);
+    }
   }
 
   void _applyPresetLabel(String label) {
@@ -1130,6 +1440,27 @@ String _displayTasterName(TasterRankingRecord record) {
     return '未分配品鉴师';
   }
   return _fallbackText(record.tasterName, '未命名品鉴师');
+}
+
+String _displaySalesUserName(SalesPerformanceRecord record) {
+  if (record.isUnassigned || record.salesUserId?.trim().isEmpty != false) {
+    return '未分配销售';
+  }
+  return _fallbackText(record.salesUserName, '未命名销售');
+}
+
+String _formatAverageSales(int? amountCents) {
+  return amountCents == null ? '—' : formatMoneyCents(amountCents);
+}
+
+Widget _salesPerformanceStatusTag(SalesPerformanceRecord record) {
+  if (record.isUnassigned || record.salesUserId?.trim().isEmpty != false) {
+    return const StatusTag(label: '未分配', tone: StatusTone.info);
+  }
+  if (record.isActive) {
+    return const StatusTag(label: '在职', tone: StatusTone.success);
+  }
+  return const StatusTag(label: '停用', tone: StatusTone.warning);
 }
 
 String _fallbackText(String? value, String fallback) {
@@ -1614,6 +1945,319 @@ class _AnalyticsSourceContent extends StatelessWidget {
                   .toList(),
               hiddenCount:
                   _hiddenCountAfter(result.afterSalesOrders.length, limit),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SalesPerformanceView extends StatelessWidget {
+  const _SalesPerformanceView({
+    required this.records,
+    required this.onOpenDetail,
+  });
+
+  final List<SalesPerformanceRecord> records;
+  final ValueChanged<SalesPerformanceRecord> onOpenDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 680) {
+          return Column(
+            key: const ValueKey('analytics-sales-performance-mobile-cards'),
+            children: records
+                .map(
+                  (record) => _SalesPerformanceCard(
+                    record: record,
+                    onOpenDetail: () => onOpenDetail(record),
+                  ),
+                )
+                .toList(),
+          );
+        }
+        return SingleChildScrollView(
+          key: const ValueKey('analytics-sales-performance-desktop-table'),
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            dataRowMinHeight: 56,
+            dataRowMaxHeight: 72,
+            columns: const [
+              DataColumn(label: Text('销售人员')),
+              DataColumn(label: Text('状态')),
+              DataColumn(label: Text('出单数')),
+              DataColumn(label: Text('出单销售额')),
+              DataColumn(label: Text('退单销售额')),
+              DataColumn(label: Text('总销售额')),
+              DataColumn(label: Text('单均销售额')),
+              DataColumn(label: Text('详情')),
+            ],
+            rows: records
+                .map(
+                  (record) => DataRow(
+                    cells: [
+                      DataCell(Text(_displaySalesUserName(record))),
+                      DataCell(_salesPerformanceStatusTag(record)),
+                      DataCell(Text(_formatCount(record.orderCount))),
+                      DataCell(
+                        Text(
+                          formatMoneyCents(record.grossSalesAmountCents),
+                        ),
+                      ),
+                      DataCell(
+                        Text(formatMoneyCents(record.refundAmountCents)),
+                      ),
+                      DataCell(
+                        Text(formatMoneyCents(record.netSalesAmountCents)),
+                      ),
+                      DataCell(
+                        Text(
+                          _formatAverageSales(
+                            record.averageSalesPerOrderCents,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        TextButton.icon(
+                          key: ValueKey(
+                            'analytics-sales-detail-'
+                            '${record.salesUserId ?? 'unassigned'}',
+                          ),
+                          onPressed: () => onOpenDetail(record),
+                          icon: const Icon(
+                            Icons.receipt_long_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('详情'),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+                .toList(),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SalesPerformanceCard extends StatelessWidget {
+  const _SalesPerformanceCard({
+    required this.record,
+    required this.onOpenDetail,
+  });
+
+  final SalesPerformanceRecord record;
+  final VoidCallback onOpenDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  _displaySalesUserName(record),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                _salesPerformanceStatusTag(record),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _DetailMetricChip(
+                  label: '出单数',
+                  value: _formatCount(record.orderCount),
+                ),
+                _DetailMetricChip(
+                  label: '出单销售额',
+                  value: formatMoneyCents(record.grossSalesAmountCents),
+                ),
+                _DetailMetricChip(
+                  label: '退单销售额',
+                  value: formatMoneyCents(record.refundAmountCents),
+                ),
+                _DetailMetricChip(
+                  label: '总销售额',
+                  value: formatMoneyCents(record.netSalesAmountCents),
+                ),
+                _DetailMetricChip(
+                  label: '单均销售额',
+                  value: _formatAverageSales(
+                    record.averageSalesPerOrderCents,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: ValueKey(
+                  'analytics-sales-detail-'
+                  '${record.salesUserId ?? 'unassigned'}',
+                ),
+                onPressed: onOpenDetail,
+                icon: const Icon(Icons.receipt_long_rounded),
+                label: const Text('查看订单贡献'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SalesPerformanceDetailDialog extends StatelessWidget {
+  const _SalesPerformanceDetailDialog({
+    required this.title,
+    required this.future,
+  });
+
+  final String title;
+  final Future<SalesPerformanceDetail> future;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.sizeOf(context);
+    final contentWidth = screenSize.width < 900 ? screenSize.width - 48 : 820.0;
+    final contentHeight =
+        screenSize.height < 760 ? screenSize.height - 160 : 600.0;
+    return AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: contentWidth < 300 ? 300 : contentWidth,
+        height: contentHeight < 320 ? 320 : contentHeight,
+        child: FutureBuilder<SalesPerformanceDetail>(
+          future: future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const _EmbeddedState(
+                icon: Icons.hourglass_top_rounded,
+                title: '正在加载销售详情',
+                message: '正在合并本期出单与退款贡献。',
+                showProgress: true,
+              );
+            }
+            if (snapshot.hasError) {
+              return _EmbeddedState(
+                icon: Icons.error_outline_rounded,
+                title: '销售详情加载失败',
+                message: _friendlyError(snapshot.error!),
+              );
+            }
+            final detail = snapshot.data;
+            if (detail == null) {
+              return const _EmbeddedState(
+                icon: Icons.inbox_outlined,
+                title: '暂无销售详情',
+                message: '当前日期范围暂无可追溯明细。',
+              );
+            }
+            return _SalesPerformanceDetailContent(detail: detail);
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SalesPerformanceDetailContent extends StatelessWidget {
+  const _SalesPerformanceDetailContent({required this.detail});
+
+  final SalesPerformanceDetail detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = detail.summary;
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _salesPerformanceStatusTag(summary),
+              _DetailMetricChip(
+                label: '出单数',
+                value: _formatCount(summary.orderCount),
+              ),
+              _DetailMetricChip(
+                label: '出单销售额',
+                value: formatMoneyCents(summary.grossSalesAmountCents),
+              ),
+              _DetailMetricChip(
+                label: '退单销售额',
+                value: formatMoneyCents(summary.refundAmountCents),
+              ),
+              _DetailMetricChip(
+                label: '总销售额',
+                value: formatMoneyCents(summary.netSalesAmountCents),
+              ),
+              _DetailMetricChip(
+                label: '单均销售额',
+                value: _formatAverageSales(
+                  summary.averageSalesPerOrderCents,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '订单贡献明细',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          if (detail.orders.isEmpty)
+            const Text('当前范围暂无订单或退款贡献。')
+          else
+            ...detail.orders.map(
+              (order) => _DetailLine(
+                title: _fallbackText(order.orderNo, '未命名订单'),
+                subtitle:
+                    '${_dateText(order.orderDate)} · '
+                    '${_fallbackText(order.customerName, '未知客户')} · '
+                    '出单 ${formatMoneyCents(order.grossSalesAmountCents)} · '
+                    '退单 ${formatMoneyCents(order.refundAmountCents)} · '
+                    '总销售额 ${formatMoneyCents(order.netSalesAmountCents)}',
+                trailing: StatusTag(
+                  label: order.contributesToOrderCount
+                      ? '计入出单数'
+                      : '仅退款贡献',
+                  tone: order.contributesToOrderCount
+                      ? StatusTone.success
+                      : StatusTone.info,
+                ),
+              ),
             ),
         ],
       ),

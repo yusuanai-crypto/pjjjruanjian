@@ -233,8 +233,15 @@ keys, cycles, and total JSON size.
 Set the following non-secret retention controls:
 
 - `OPERATION_LOG_RETENTION_DAYS`: default `365`, allowed range `30`-`3650`.
+- `OPERATION_LOG_EXPORT_MAX_ROWS`: default `5000`, hard maximum `20000`.
 - `AI_HISTORY_RETENTION_DAYS`: default `180`, allowed range `7`-`3650`.
 - `RETENTION_CLEANUP_BATCH_SIZE`: default `500`, allowed range `1`-`1000`.
+
+Expired operation logs are copied transactionally to
+`operation_log_archives` before their online rows are removed. Run
+`npm run retention:cleanup -- --dry-run` to count eligible rows and
+`npm run retention:cleanup -- --apply` to archive them in batches. AI history
+continues to use its existing deletion policy.
 
 The API validates these values during module initialization. Operation-log
 queries always paginate: `page` defaults to `1`, `pageSize` defaults to `50`,

@@ -25,8 +25,7 @@ test('contract: stage7 taster manual commission can be created and updated by fi
         method: 'PATCH',
         token: finance.token,
         body: {
-          travelGroupId: 'tg-stage7-taster-manual',
-          tasterId: 'usr-stage7-taster',
+          salesOrderId: 'so-stage7-taster-manual-1',
           amountCents: 12345,
           calculationNote: 'stage7 test taster manual create',
         },
@@ -48,6 +47,51 @@ test('contract: stage7 taster manual commission can be created and updated by fi
     assert.equal(
       created.body.data.commissionRecord.sourceSnapshot.operatedBy.id,
       finance.user.id,
+    );
+    assert.equal(
+      created.body.data.commissionRecord.salesOrderId,
+      'so-stage7-taster-manual-1',
+    );
+
+    const secondOrder = await requestJson(
+      baseUrl,
+      '/api/commission-records/new/manual-amount',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          salesOrderId: 'so-stage7-taster-manual-2',
+          amountCents: 6789,
+        },
+      },
+    );
+    assert.equal(secondOrder.response.status, 200);
+    assert.equal(secondOrder.body.data.commissionRecord.amountCents, 6789);
+    assert.equal(
+      secondOrder.body.data.commissionRecord.salesOrderId,
+      'so-stage7-taster-manual-2',
+    );
+    assert.notEqual(
+      secondOrder.body.data.commissionRecord.id,
+      created.body.data.commissionRecord.id,
+    );
+
+    const repeatedCreate = await requestJson(
+      baseUrl,
+      '/api/commission-records/new/manual-amount',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: {
+          salesOrderId: 'so-stage7-taster-manual-1',
+          amountCents: 12345,
+        },
+      },
+    );
+    assert.equal(repeatedCreate.response.status, 200);
+    assert.equal(
+      repeatedCreate.body.data.commissionRecord.id,
+      created.body.data.commissionRecord.id,
     );
 
     const updated = await requestJson(
@@ -71,31 +115,56 @@ test('contract: stage7 taster manual commission can be created and updated by fi
       updated.body.data.commissionRecord.sourceSnapshot.operation,
       'update_taster_manual_commission',
     );
+    assert.equal(
+      secondOrder.body.data.commissionRecord.amountCents,
+      6789,
+    );
+    const listed = await requestJson(
+      baseUrl,
+      '/api/commission-records?targetType=taster_commission&manualInput=true',
+      { token: finance.token },
+    );
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.data.commissionRecords.length, 2);
 
-    const logs = await requestJson(
+    const createLogs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=commission_records.taster_manual_amount.create',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(createLogs.response.status, 200);
+    const createdLog = createLogs.body.data.logs.find(
+      (log) => log.entityId === created.body.data.commissionRecord.id,
+    );
+    assert.ok(createdLog);
+    assertStage7TasterLog(createdLog, {
+      action: 'commission_records.taster_manual_amount.create',
+      userId: finance.user.id,
+    });
+    assert.equal(createdLog.beforeData, null);
+    assert.equal(createdLog.afterData.amountCents, 12345);
+
+    const updateLogs = await requestJson(
       baseUrl,
       '/api/operation-logs?action=commission_records.taster_manual_amount.update',
       {
         token: admin.token,
       },
     );
-    assert.equal(logs.response.status, 200);
-    const tasterLogs = logs.body.data.logs.filter(
-      (log) => log.entityId === created.body.data.commissionRecord.id,
+    const updatedLog = updateLogs.body.data.logs.find(
+      (log) =>
+        log.entityId === created.body.data.commissionRecord.id &&
+        log.afterData?.amountCents === 23456,
     );
-    assert.equal(tasterLogs.length, 2);
-    assertStage7TasterLog(tasterLogs[0], {
+    assert.ok(updatedLog);
+    assertStage7TasterLog(updatedLog, {
       action: 'commission_records.taster_manual_amount.update',
       userId: finance.user.id,
     });
-    assertStage7TasterLog(tasterLogs[1], {
-      action: 'commission_records.taster_manual_amount.update',
-      userId: finance.user.id,
-    });
-    assert.equal(tasterLogs[0].beforeData, null);
-    assert.equal(tasterLogs[0].afterData.amountCents, 12345);
-    assert.equal(tasterLogs[1].beforeData.amountCents, 12345);
-    assert.equal(tasterLogs[1].afterData.amountCents, 23456);
+    assert.equal(updatedLog.beforeData.amountCents, 12345);
+    assert.equal(updatedLog.afterData.amountCents, 23456);
   }, {
     prisma: buildTasterManualPrisma(),
   });
@@ -132,6 +201,60 @@ test('contract: stage7 taster manual amount update resets confirmation', async (
         confirmedTasterCommissionRecord(),
       ],
     }),
+  });
+});
+
+test('contract: concurrent order-level taster commission requests reuse one record', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const finance = await login(
+      baseUrl,
+      'stage7-taster-manual-finance',
+      'Password123',
+    );
+    const results = await Promise.all([
+      requestJson(
+        baseUrl,
+        '/api/commission-records/new/manual-amount',
+        {
+          method: 'PATCH',
+          token: finance.token,
+          body: {
+            salesOrderId: 'so-stage7-taster-manual-1',
+            amountCents: 1111,
+          },
+        },
+      ),
+      requestJson(
+        baseUrl,
+        '/api/commission-records/new/manual-amount',
+        {
+          method: 'PATCH',
+          token: finance.token,
+          body: {
+            salesOrderId: 'so-stage7-taster-manual-1',
+            amountCents: 2222,
+          },
+        },
+      ),
+    ]);
+    assert.deepEqual(
+      results.map((result) => result.response.status),
+      [200, 200],
+    );
+    assert.equal(
+      results[0].body.data.commissionRecord.id,
+      results[1].body.data.commissionRecord.id,
+    );
+
+    const listed = await requestJson(
+      baseUrl,
+      '/api/commission-records?salesOrderId=so-stage7-taster-manual-1&manualInput=true',
+      { token: finance.token },
+    );
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.data.commissionRecords.length, 1);
+  }, {
+    prisma: buildTasterManualPrisma(),
   });
 });
 
@@ -236,8 +359,7 @@ test('contract: stage7 taster manual commission allows admin write role', async 
         method: 'PATCH',
         token: admin.token,
         body: {
-          travelGroupId: 'tg-stage7-taster-manual',
-          tasterId: 'usr-stage7-taster',
+          salesOrderId: 'so-stage7-taster-manual-1',
           amountCents: 45678,
           calculationNote: 'stage7 test admin taster manual create',
         },
@@ -291,8 +413,7 @@ test('contract: stage7 taster manual commission rejects non-finance roles and ne
           method: 'PATCH',
           token: session.token,
           body: {
-            travelGroupId: 'tg-stage7-taster-manual',
-            tasterId: 'usr-stage7-taster',
+            salesOrderId: 'so-stage7-taster-manual-1',
             amountCents: 100,
           },
         },
@@ -320,8 +441,7 @@ test('contract: stage7 taster manual commission rejects non-finance roles and ne
         method: 'PATCH',
         token: finance.token,
         body: {
-          travelGroupId: 'tg-stage7-taster-manual',
-          tasterId: 'usr-stage7-taster',
+          salesOrderId: 'so-stage7-taster-manual-1',
           amountCents: -1,
         },
       },
@@ -365,6 +485,79 @@ test('contract: stage7 taster manual commission rejects non-taster commission re
             targetType: 'SALES_COMMISSION',
           }),
           manualInput: false,
+        },
+      ],
+    }),
+  });
+});
+
+test('contract: order-level taster commission validates order relationships and amount range', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const finance = await login(
+      baseUrl,
+      'stage7-taster-manual-finance',
+      'Password123',
+    );
+
+    for (const [body, expectedStatus] of [
+      [{
+        amountCents: 100,
+      }, 400],
+      [{
+        salesOrderId: 'missing-sales-order',
+        amountCents: 100,
+      }, 404],
+      [{
+        salesOrderId: 'so-stage7-taster-manual-1',
+        travelGroupId: 'wrong-travel-group',
+        amountCents: 100,
+      }, 400],
+      [{
+        salesOrderId: 'so-stage7-taster-manual-1',
+        tasterId: 'wrong-taster',
+        amountCents: 100,
+      }, 400],
+      [{
+        salesOrderId: 'so-stage7-taster-manual-1',
+        amountCents: 2147483648,
+      }, 400],
+      [{
+        salesOrderId: 'so-stage7-without-taster',
+        amountCents: 100,
+      }, 400],
+    ]) {
+      const result = await requestJson(
+        baseUrl,
+        '/api/commission-records/new/manual-amount',
+        {
+          method: 'PATCH',
+          token: finance.token,
+          body,
+        },
+      );
+      assert.equal(result.response.status, expectedStatus);
+      assert.ok(result.body.error.code);
+    }
+  }, {
+    prisma: buildTasterManualPrisma({
+      travelGroups: [
+        {
+          id: 'tg-stage7-without-taster',
+          groupNo: 'TG-STAGE7-WITHOUT-TASTER',
+          visitDate: '2026-07-20',
+          tasterId: null,
+          tasterName: null,
+        },
+      ],
+      salesOrders: [
+        {
+          id: 'so-stage7-without-taster',
+          orderNo: 'SO-STAGE7-WITHOUT-TASTER',
+          orderType: 'TRAVEL_GROUP',
+          travelGroupId: 'tg-stage7-without-taster',
+          customerName: 'No Taster Customer',
+          orderDate: '2026-07-20',
+          status: 'VALID',
         },
       ],
     }),
@@ -437,6 +630,27 @@ function buildTasterManualPrisma(overrides = {}) {
       },
       ...(overrides.travelGroups || []),
     ],
+    salesOrders: [
+      {
+        id: 'so-stage7-taster-manual-1',
+        orderNo: 'SO-STAGE7-TASTER-MANUAL-1',
+        orderType: 'TRAVEL_GROUP',
+        travelGroupId: 'tg-stage7-taster-manual',
+        customerName: 'Stage7 Customer One',
+        orderDate: '2026-07-20',
+        status: 'VALID',
+      },
+      {
+        id: 'so-stage7-taster-manual-2',
+        orderNo: 'SO-STAGE7-TASTER-MANUAL-2',
+        orderType: 'TRAVEL_GROUP',
+        travelGroupId: 'tg-stage7-taster-manual',
+        customerName: 'Stage7 Customer Two',
+        orderDate: '2026-07-20',
+        status: 'VALID',
+      },
+      ...(overrides.salesOrders || []),
+    ],
     commissionRecords: overrides.commissionRecords || [],
   };
 }
@@ -444,6 +658,10 @@ function buildTasterManualPrisma(overrides = {}) {
 function tasterCommissionRecord(overrides = {}) {
   return {
     id: overrides.id || 'rec-stage7-taster',
+    salesOrderId:
+      overrides.salesOrderId === undefined
+        ? 'so-stage7-taster-manual-1'
+        : overrides.salesOrderId,
     travelGroupId: 'tg-stage7-taster-manual',
     targetType: overrides.targetType || 'TASTER_COMMISSION',
     targetUserId: 'usr-stage7-taster',
@@ -495,6 +713,7 @@ function assertStage7TasterLog(log, expected) {
 
 function assertTasterManualRecord(record, expected = {}) {
   assert.equal(record.targetType, 'taster_commission');
+  assert.equal(record.salesOrderId, 'so-stage7-taster-manual-1');
   assert.equal(record.travelGroupId, 'tg-stage7-taster-manual');
   assert.equal(record.targetUserId, 'usr-stage7-taster');
   assert.equal(record.manualInput, true);

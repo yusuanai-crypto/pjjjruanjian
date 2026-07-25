@@ -27,6 +27,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.account_tree_rounded,
       phase: 2),
   AppDestination(
+      id: 'operation_logs',
+      label: '操作日志',
+      icon: Icons.manage_history_rounded,
+      phase: 1),
+  AppDestination(
       id: 'employee_accounts',
       label: '员工账号',
       icon: Icons.manage_accounts_rounded,
@@ -83,7 +88,7 @@ const appDestinations = <AppDestination>[
       phase: 7),
   AppDestination(
       id: 'finance_query',
-      label: '财务查询',
+      label: '物流单号与品鉴师提成填写',
       icon: Icons.account_balance_wallet_rounded,
       phase: 6),
   AppDestination(
@@ -164,6 +169,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
   if (!canViewProfitAnalysis(role)) {
     ids.remove('profit_analysis');
   }
+  if (role != UserRole.superAdmin && role != UserRole.admin) {
+    ids.remove('operation_logs');
+  }
   if (role != UserRole.superAdmin &&
       role != UserRole.admin &&
       role != UserRole.finance) {
@@ -239,6 +247,7 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
     case UserRole.afterSales:
       ids
         ..remove('travel_group_form')
+        ..remove('order_form')
         ..remove('travel_agency_management');
       _removeStage7Destinations(ids);
       if (requestedAnalytics) {
@@ -287,9 +296,10 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'employee_accounts';
     case 'role_permissions':
     case 'global_mark_query':
-    case 'operation_logs':
     case 'system_settings':
       return 'role_menu';
+    case 'operation_logs':
+      return 'operation_logs';
     case 'travel_groups':
       return 'travel_group_form';
     case 'travel_agency_management':

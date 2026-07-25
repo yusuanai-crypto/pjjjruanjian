@@ -11,6 +11,7 @@ import '../features/employee_accounts/employee_accounts_page.dart';
 import '../features/finance/finance_query_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
+import '../features/operation_logs/operation_logs_page.dart';
 import '../features/moutai_inventory/moutai_inventory_page.dart';
 import '../features/product_management/product_management_page.dart';
 import '../features/profit_analysis/profit_analysis_page.dart';
@@ -49,6 +50,11 @@ Widget buildPageForDestination({
         role: role,
         allowedDestinations: allowedDestinations,
         onOpenDestination: onOpenDestination,
+      );
+    case 'operation_logs':
+      return OperationLogsPage(
+        apiClient: apiClient,
+        token: token,
       );
     case 'travel_group_form':
       return TravelGroupFormPage(

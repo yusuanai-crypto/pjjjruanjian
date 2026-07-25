@@ -34,7 +34,7 @@ const ROLE_DEFINITIONS = {
   sales: {
     role: 'sales',
     title: '销售',
-    description: '维护自己负责的客户、订单和旅行团离店补充信息。',
+    description: '查看今天全部旅行团，录入本人当天订单并拥有一次完整修改机会。',
   },
   finance: {
     role: 'finance',
@@ -54,7 +54,7 @@ const ROLE_DEFINITIONS = {
   taster: {
     role: 'taster',
     title: '品鉴师',
-    description: '查看全部旅行团，按本人接团或对接关系维护信息，并查看自己的接待和提成。',
+    description: '查看今天及未来旅行团，今天关联团共享两次修改机会，并查看接待品鉴师关系订单。',
   },
 };
 
@@ -74,7 +74,7 @@ const MENU_ENTRIES = {
   sales_orders: { id: 'sales_orders', title: '销售订单', phase: 4 },
   order_query: { id: 'order_query', title: '订单管理', phase: 4 },
   after_sales_orders: { id: 'after_sales_orders', title: '售后处理', phase: 6 },
-  finance_workspace: { id: 'finance_workspace', title: '财务查询', phase: 6 },
+  finance_workspace: { id: 'finance_workspace', title: '物流单号与品鉴师提成填写', phase: 6 },
   reconciliation_table: { id: 'reconciliation_table', title: '对账表', phase: 6 },
   warehouse_workspace: { id: 'warehouse_workspace', title: '库管发货', phase: 6 },
   commissions: { id: 'commissions', title: '提成积分', phase: 7 },
@@ -190,7 +190,6 @@ const ROLE_MENU_IDS = {
     'dashboard',
     'travel_group_query',
     'customers',
-    'sales_orders',
     'order_query',
     'after_sales_orders',
     'analytics',
@@ -227,6 +226,11 @@ const TRAVEL_GROUP_WRITE_PERMISSIONS = [
   'travel_groups:update',
 ];
 const TRAVEL_GROUP_FINANCE_MARK_PERMISSIONS = ['travel_groups:finance_mark'];
+const TRAVEL_GROUP_TASTER_WRITE_PERMISSIONS = [
+  'travel_groups:taster_update',
+  'travel_groups:taster_summary',
+  'travel_groups:taster_attachments',
+];
 
 const GUIDE_CARRIED_GROUP_READ_PERMISSIONS = ['guide_carried_groups:list', 'guide_carried_groups:read'];
 const GUIDE_CARRIED_GROUP_WRITE_PERMISSIONS = [
@@ -324,7 +328,6 @@ const ROLE_PERMISSIONS = {
     ...GROUP_WRITE_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
-    ...SALES_ORDER_CREATE_PERMISSIONS,
   ],
   front_desk: [
     ...AUTHENTICATED_PERMISSIONS,
@@ -336,7 +339,7 @@ const ROLE_PERMISSIONS = {
   sales: [
     ...AUTHENTICATED_PERMISSIONS,
     ...GLOBAL_MARK_READ_PERMISSION,
-    ...GROUP_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_READ_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...CUSTOMER_CREATE_PERMISSIONS,
     ...CUSTOMER_UPDATE_PERMISSIONS,
@@ -374,12 +377,12 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_CREATE_PERMISSIONS,
     ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
-    ...SALES_ORDER_CREATE_PERMISSIONS,
   ],
   taster: [
     ...AUTHENTICATED_PERMISSIONS,
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GROUP_READ_PERMISSIONS,
+    ...TRAVEL_GROUP_TASTER_WRITE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
   ],
 };
@@ -389,14 +392,18 @@ const ROLE_DATA_SCOPES = {
   admin: { default: 'all' },
   boss: { default: 'all' },
   front_desk: { travelGroups: 'front_desk_scope' },
-  sales: { customers: 'own_sales_user_id', orders: 'own_sales_user_id', travelGroups: 'all_travel_groups_read' },
+  sales: {
+    customers: 'own_sales_user_id',
+    orders: 'own_sales_user_id_today_created_at',
+    travelGroups: 'today_all_read_only',
+  },
   finance: { default: 'finance_allowed' },
   warehouse: { orders: 'delivery_related' },
   after_sales: { orders: 'after_sales_related' },
   taster: {
-    travelGroups: 'all',
-    travelGroupUpdates: 'assigned_taster_or_liaison',
-    orders: 'own_taster_travel_groups',
+    travelGroups: 'today_and_future',
+    travelGroupUpdates: 'today_assigned_taster_or_liaison_shared_two_edits',
+    orders: 'today_and_future_reception_taster_only',
     receptions: 'own_user_id',
     commissions: 'own_user_id',
   },

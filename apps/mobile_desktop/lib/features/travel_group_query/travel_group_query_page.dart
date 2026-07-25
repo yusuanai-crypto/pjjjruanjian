@@ -53,8 +53,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   late BusinessApi _businessApi;
   late final TextEditingController _keywordController;
 
-  DateTime _start = DateTime.now().subtract(const Duration(days: 30));
-  DateTime _end = DateTime.now();
+  late DateTime _start;
+  late DateTime _end;
   bool _dateRangeAll = false;
   String _keyword = '';
   String _groupTypeFilter = _allFilter;
@@ -76,6 +76,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   @override
   void initState() {
     super.initState();
+    _resetDefaultDateRange();
     _tasterScope = _normalizedInitialTasterScope();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
@@ -94,8 +95,30 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
       _tasterScope = _normalizedInitialTasterScope();
+      if (oldWidget.role != widget.role) {
+        _resetDefaultDateRange();
+      }
       _loadData();
     }
+  }
+
+  void _resetDefaultDateRange() {
+    final today = _shanghaiToday();
+    if (widget.role == UserRole.sales) {
+      _start = today;
+      _end = today;
+      _dateRangeAll = false;
+      return;
+    }
+    if (widget.role == UserRole.taster) {
+      _start = today;
+      _end = today;
+      _dateRangeAll = true;
+      return;
+    }
+    _start = today.subtract(const Duration(days: 30));
+    _end = today;
+    _dateRangeAll = false;
   }
 
   @override
@@ -224,6 +247,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
             }
 
             final size = MediaQuery.sizeOf(context);
+            final tasterReadOnlyReason = _tasterReadOnlyReason(selected);
             return Dialog(
               clipBehavior: Clip.antiAlias,
               child: ConstrainedBox(
@@ -233,34 +257,83 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                 ),
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
-                  child: TravelGroupDetailPanel(
-                    group: selected,
-                    role: widget.role,
-                    marking: _markingIds.contains(selected.id),
-                    summarizing: _summarizingIds.contains(selected.id),
-                    onCreateOrder: _canCreateOrder(widget.role)
-                        ? () => _openOrderForm(selected)
-                        : null,
-                    onEdit: _canEditGroup(selected)
-                        ? () => runAction(() => _editTravelGroup(selected))
-                        : null,
-                    onFinanceMark: _canMark(widget.role)
-                        ? () => runAction(() => _toggleFinanceMark(selected))
-                        : null,
-                    onSummary: _canSubmitSummary(widget.role) &&
-                            (widget.role != UserRole.taster ||
-                                _isAssociatedTaster(selected))
-                        ? () => runAction(() => _submitSummary(selected))
-                        : null,
-                    onPreviewAttachment: (attachment) =>
-                        _previewAttachment(selected, attachment),
-                    onDownloadAttachment: (attachment) =>
-                        _downloadAttachment(selected, attachment),
-                    onDeleteAttachment: _canDeleteAttachments(selected)
-                        ? (attachment) => runAction(
-                              () => _deleteAttachment(selected, attachment),
-                            )
-                        : null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (tasterReadOnlyReason != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: StatusTag(
+                            key: const ValueKey(
+                              'travel-group-taster-read-only-reason',
+                            ),
+                            label: tasterReadOnlyReason,
+                            tone: StatusTone.neutral,
+                          ),
+                        ),
+                      if (widget.role == UserRole.taster)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: StatusTag(
+                            key: const ValueKey(
+                              'travel-group-taster-edit-remaining',
+                            ),
+                            label: '共享剩余修改次数：${selected.tasterEditRemaining}',
+                            tone: selected.tasterEditRemaining > 0
+                                ? StatusTone.info
+                                : StatusTone.neutral,
+                          ),
+                        ),
+                      TravelGroupDetailPanel(
+                        group: selected,
+                        role: widget.role,
+                        marking: _markingIds.contains(selected.id),
+                        summarizing: _summarizingIds.contains(selected.id),
+                        onCreateOrder: _canCreateOrder(widget.role)
+                            ? () => _openOrderForm(selected)
+                            : null,
+                        onEdit: _canEditGroup(selected)
+                            ? () => runAction(() => _editTravelGroup(selected))
+                            : null,
+                        onFinanceMark: _canMark(widget.role)
+                            ? () =>
+                                runAction(() => _toggleFinanceMark(selected))
+                            : null,
+                        onSummary: _canSubmitSummary(widget.role) &&
+                                (widget.role != UserRole.taster ||
+                                    selected.canEditByCurrentUser)
+                            ? () => runAction(() => _submitSummary(selected))
+                            : null,
+                        onPreviewAttachment: (attachment) =>
+                            _previewAttachment(selected, attachment),
+                        onDownloadAttachment: (attachment) =>
+                            _downloadAttachment(selected, attachment),
+                        onDeleteAttachment: _canDeleteAttachments(selected)
+                            ? (attachment) => runAction(
+                                  () => _deleteAttachment(selected, attachment),
+                                )
+                            : null,
+                        onUploadKeyCustomerPhotos:
+                            _canDeleteAttachments(selected)
+                                ? () => runAction(
+                                      () => _uploadAttachments(
+                                        selected,
+                                        TravelGroupAttachmentCategory
+                                            .keyCustomerPhoto,
+                                      ),
+                                    )
+                                : null,
+                        onUploadGuestInfoAttachments:
+                            _canDeleteAttachments(selected)
+                                ? () => runAction(
+                                      () => _uploadAttachments(
+                                        selected,
+                                        TravelGroupAttachmentCategory.guestInfo,
+                                      ),
+                                    )
+                                : null,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -390,7 +463,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
 
   bool _canEditGroup(TravelGroupRecord group) {
     if (widget.role == UserRole.taster) {
-      return _isAssociatedTaster(group);
+      return group.canEditByCurrentUser;
     }
     return _canEdit(widget.role);
   }
@@ -399,7 +472,23 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     return widget.role == UserRole.superAdmin ||
         widget.role == UserRole.admin ||
         widget.role == UserRole.frontDesk ||
-        (widget.role == UserRole.taster && _isAssociatedTaster(group));
+        (widget.role == UserRole.taster && group.canEditByCurrentUser);
+  }
+
+  String? _tasterReadOnlyReason(TravelGroupRecord group) {
+    if (widget.role != UserRole.taster || group.canEditByCurrentUser) {
+      return null;
+    }
+    if (group.visitDate != formatDate(_shanghaiToday())) {
+      return '未来旅行团仅可查看，品鉴师只能修改今天的旅行团。';
+    }
+    if (!_isAssociatedTaster(group)) {
+      return '仅接待品鉴师或对接品鉴师可修改今天的旅行团。';
+    }
+    if (group.tasterEditRemaining <= 0) {
+      return '本团两次共享修改机会已用完。';
+    }
+    return '当前旅行团为只读。';
   }
 
   Future<void> _previewAttachment(
@@ -450,6 +539,55 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           ),
         ),
       );
+    } catch (error) {
+      _showAttachmentError(error);
+    }
+  }
+
+  Future<void> _uploadAttachments(
+    TravelGroupRecord group,
+    TravelGroupAttachmentCategory category,
+  ) async {
+    try {
+      final picked = await FilePicker.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: const [
+          'jpg',
+          'jpeg',
+          'png',
+          'gif',
+          'webp',
+          'bmp',
+          'tif',
+          'tiff',
+          'avif',
+          'pdf',
+          'doc',
+          'docx',
+          'xls',
+          'xlsx',
+          'csv',
+          'txt',
+          'log',
+          'md',
+        ],
+      );
+      final files =
+          picked?.files.map(ApiMultipartFile.fromPlatformFile).toList() ??
+              const <ApiMultipartFile>[];
+      if (files.isEmpty) {
+        return;
+      }
+      final result = await _businessApi.uploadTravelGroupAttachments(
+        group.id,
+        category: category,
+        files: files,
+      );
+      if (!mounted) {
+        return;
+      }
+      _replaceGroup(result.travelGroup);
     } catch (error) {
       _showAttachmentError(error);
     }
@@ -1063,6 +1201,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   late final TextEditingController _travelAgencyController;
   late final TextEditingController _licensePlateController;
   late final TextEditingController _guestCountController;
+  late final TextEditingController _cigaretteFeeController;
   late final TextEditingController _tastingRoomNoController;
   late final TextEditingController _arrivalTimeController;
   late final TextEditingController _expectedArrivalTimeController;
@@ -1088,7 +1227,6 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   bool get _isAdmin =>
       widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
   bool get _isFrontDesk => widget.role == UserRole.frontDesk;
-  bool get _isSales => widget.role == UserRole.sales;
   bool get _isTaster => widget.role == UserRole.taster;
   bool get _isFinance => widget.role == UserRole.finance;
   bool get _isAssociatedTaster =>
@@ -1096,29 +1234,25 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       widget.currentUserId.isNotEmpty &&
       (widget.group.tasterId == widget.currentUserId ||
           widget.group.liaisonTasterId == widget.currentUserId);
-  bool get _isLiaisonTaster =>
-      _isTaster &&
-      widget.currentUserId.isNotEmpty &&
-      widget.group.liaisonTasterId == widget.currentUserId;
-
   bool get _canEditGroupNo => _isAdmin;
-  bool get _canEditVisitDate => _isAdmin || _isFrontDesk || _isLiaisonTaster;
+  bool get _canEditVisitDate => _isAdmin || _isFrontDesk;
   bool get _canEditTravelAgency => _isAdmin || _isFrontDesk;
-  bool get _canEditGuide => _isAdmin || _isFrontDesk || _isLiaisonTaster;
+  bool get _canEditGuide => _isAdmin || _isFrontDesk;
   bool get _canEditLicensePlate =>
       _isAdmin || _isFrontDesk || _isAssociatedTaster;
   bool get _canEditGuestCount =>
-      _isAdmin || _isFrontDesk || _isSales || _isAssociatedTaster;
+      _isAdmin || _isFrontDesk || _isAssociatedTaster;
+  bool get _canEditCigaretteFee => _isAdmin || _isFrontDesk;
   bool get _canEditFrontDeskOnlyFields => _isAdmin || _isFrontDesk;
   bool get _canManageTasterAssignments => _isAdmin || _isFrontDesk;
-  bool get _canEditExpectedArrivalTime => _isAdmin || _isLiaisonTaster;
-  bool get _canEditDepartureTime => _isAdmin || _isSales;
-  bool get _canEditTastingItems => _isAdmin || _isFrontDesk || _isSales;
+  bool get _canEditExpectedArrivalTime => _isAdmin || _isAssociatedTaster;
+  bool get _canEditDepartureTime => _isAdmin;
+  bool get _canEditTastingItems => _isAdmin || _isFrontDesk;
   bool get _canEditTasterNotes => _isAdmin || _isAssociatedTaster;
   bool get _canEditCustomerFields =>
       _isAdmin || _isFrontDesk || _isAssociatedTaster;
   bool get _canEditRemarks =>
-      _isAdmin || _isFrontDesk || _isSales || _isFinance || _isAssociatedTaster;
+      _isAdmin || _isFrontDesk || _isFinance || _isAssociatedTaster;
   bool get _canEditFinanceFields => _isAdmin || _isFinance;
 
   bool get _showBasicSection =>
@@ -1128,6 +1262,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       _canEditGuide ||
       _canEditLicensePlate ||
       _canEditGuestCount ||
+      _canEditCigaretteFee ||
       _canEditFrontDeskOnlyFields ||
       _canManageTasterAssignments ||
       _canEditExpectedArrivalTime;
@@ -1163,6 +1298,11 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     _licensePlateController =
         TextEditingController(text: group.licensePlate ?? '');
     _guestCountController = TextEditingController(text: '${group.guestCount}');
+    _cigaretteFeeController = TextEditingController(
+      text: group.cigaretteFeeCents == null
+          ? ''
+          : _moneyText(group.cigaretteFeeCents!),
+    );
     _tastingRoomNoController =
         TextEditingController(text: group.tastingRoomNo ?? '');
     _arrivalTimeController =
@@ -1209,6 +1349,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     _travelAgencyController.dispose();
     _licensePlateController.dispose();
     _guestCountController.dispose();
+    _cigaretteFeeController.dispose();
     _tastingRoomNoController.dispose();
     _arrivalTimeController.dispose();
     _expectedArrivalTimeController.dispose();
@@ -1310,6 +1451,10 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     }
     if (_canEditGuestCount) {
       payload['guestCount'] = _intFromText(_guestCountController.text);
+    }
+    if (_canEditCigaretteFee) {
+      payload['cigaretteFeeCents'] =
+          _centsFromMoneyText(_cigaretteFeeController.text);
     }
     if (_canEditDepartureTime) {
       payload['departureTime'] =
@@ -1467,6 +1612,14 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           decoration: const InputDecoration(labelText: '人数'),
           validator: _nonNegativeIntValidator,
+        ),
+      if (_canEditCigaretteFee)
+        TextFormField(
+          key: const ValueKey('travel-group-edit-cigarette-fee'),
+          controller: _cigaretteFeeController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: '香烟费用（元）'),
+          validator: _requiredNonNegativeMoneyValidator,
         ),
       if (_canEditFrontDeskOnlyFields)
         TextFormField(
@@ -1890,6 +2043,11 @@ String _safeFileName(String value) {
   return safe.isEmpty ? 'attachment' : safe;
 }
 
+DateTime _shanghaiToday() {
+  final shanghaiNow = DateTime.now().toUtc().add(const Duration(hours: 8));
+  return DateTime(shanghaiNow.year, shanghaiNow.month, shanghaiNow.day);
+}
+
 String _tasterLabel(TasterOption taster) {
   if (taster.username.trim().isEmpty) {
     return taster.name;
@@ -2009,11 +2167,25 @@ String? _moneyValidator(String? value) {
   return null;
 }
 
+String? _requiredNonNegativeMoneyValidator(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) {
+    return '香烟费用不能为空';
+  }
+  if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(text)) {
+    return '请输入最多两位小数的非负金额';
+  }
+  final cents = _centsFromMoneyText(text);
+  if (cents < 0 || cents > 2147483647) {
+    return '香烟费用超出允许范围';
+  }
+  return null;
+}
+
 bool _canEdit(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||
       role == UserRole.frontDesk ||
-      role == UserRole.sales ||
       role == UserRole.taster ||
       role == UserRole.finance;
 }
@@ -2022,8 +2194,7 @@ bool _canCreateOrder(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||
       role == UserRole.sales ||
-      role == UserRole.finance ||
-      role == UserRole.afterSales;
+      role == UserRole.finance;
 }
 
 bool _canMark(UserRole role) {

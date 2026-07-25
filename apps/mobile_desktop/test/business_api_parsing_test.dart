@@ -115,6 +115,14 @@ void main() {
       'totalAmountCents': 647800,
       'entryAmountCents': 620000,
       'tasterCommissionCents': 36000,
+      'tasterCommission': {
+        'recordId': 'commission-taster-order-1',
+        'amountCents': 36000,
+        'isConfirmed': true,
+        'confirmedById': 'usr_finance',
+        'confirmedByName': '财务甲',
+        'confirmedAt': '2026-07-24T08:00:00.000Z',
+      },
       'tasterId': 'taster-1',
       'tasterName': '测试品鉴师',
       'cashOnDeliveryAmountCents': 5000,
@@ -140,6 +148,10 @@ void main() {
       'markedById': 'usr_finance',
       'markedAt': '2026-06-24T08:00:00.000Z',
       'salesUserId': 'usr_sales',
+      'salesEditCount': 1,
+      'salesEditLimit': 1,
+      'salesEditRemaining': 0,
+      'canEditByCurrentUser': false,
       'province': '贵州省',
       'city': '贵阳市',
       'district': '观山湖区',
@@ -174,6 +186,15 @@ void main() {
     expect(order.totalAmountCents, 647800);
     expect(order.entryAmountCents, 620000);
     expect(order.tasterCommissionCents, 36000);
+    expect(order.tasterCommission?.recordId, 'commission-taster-order-1');
+    expect(order.tasterCommission?.amountCents, 36000);
+    expect(order.tasterCommission?.isConfirmed, isTrue);
+    expect(order.tasterCommission?.confirmedById, 'usr_finance');
+    expect(order.tasterCommission?.confirmedByName, '财务甲');
+    expect(
+      order.tasterCommission?.confirmedAt,
+      '2026-07-24T08:00:00.000Z',
+    );
     expect(order.tasterId, 'taster-1');
     expect(order.tasterName, '测试品鉴师');
     expect(order.deliverySummary, 'shipping');
@@ -189,6 +210,10 @@ void main() {
     expect(order.trackingLatestDescription, '快件已发往贵阳市');
     expect(order.logisticsFeeCents, 1888);
     expect(order.invoiceRequired, isTrue);
+    expect(order.salesEditCount, 1);
+    expect(order.salesEditLimit, 1);
+    expect(order.salesEditRemaining, 0);
+    expect(order.canEditByCurrentUser, isFalse);
     expect(order.invoiceIssued, isTrue);
     expect(order.financeRemark, '财务备注');
     expect(order.financeMark, isTrue);
@@ -200,6 +225,39 @@ void main() {
     expect(order.items.single.notes, '礼盒装');
     expect(order.items.single.sortOrder, 1);
     expect(order.travelGroup?.groupNo, 'GZ-TEST-001');
+  });
+
+  test('sales edit API uses the single atomic endpoint', () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+    apiClient.nextJson = {
+      'data': {
+        'salesOrder': {
+          'id': 'order-atomic',
+          'orderNo': 'SO-ATOMIC',
+          'salesEditCount': 1,
+          'salesEditRemaining': 0,
+        },
+      },
+    };
+
+    final updated = await api.salesEditSalesOrder(
+      'order-atomic',
+      {
+        'remark': 'saved once',
+        'packageCount': 2,
+      },
+    );
+
+    expect(apiClient.lastMethod, 'PATCH');
+    expect(
+      apiClient.lastPath,
+      '/api/sales-orders/order-atomic/sales-edit',
+    );
+    expect(apiClient.lastBody?['remark'], 'saved once');
+    expect(apiClient.lastBody?['packageCount'], 2);
+    expect(updated.salesEditCount, 1);
+    expect(updated.salesEditRemaining, 0);
   });
 
   test('parses sales order item JSON with subtotal fallback', () {
@@ -529,6 +587,7 @@ void main() {
 
     final summaryJson = {
       'id': 'summary-1',
+      'summaryExists': true,
       'travelGroupId': 'group-1',
       'travelGroup': {
         'id': 'group-1',
@@ -590,6 +649,8 @@ void main() {
       },
     };
     final summary = TravelGroupFinanceSummaryRecord.fromJson(summaryJson);
+    expect(summary.id, 'summary-1');
+    expect(summary.summaryExists, isTrue);
     expect(summary.travelGroup?.guideName, 'test guide');
     expect(summary.travelGroup?.licensePlate, '贵A·12345');
     expect(summary.travelGroup?.guestCount, 18);
@@ -606,6 +667,36 @@ void main() {
     expect(summary.dailyRebatePaidBy?.username, 'finance');
     expect(summary.monthlyRebatePaid, isFalse);
     expect(summary.sourceSnapshot?['orders'], const []);
+
+    final emptySummary = TravelGroupFinanceSummaryRecord.fromJson({
+      ...summaryJson,
+      'id': null,
+      'summaryExists': false,
+      'totalSalesAmountCents': 0,
+      'totalCashOnDeliveryCents': 0,
+      'totalPaidDepositCents': 0,
+      'confirmedRefundAmountCents': 0,
+      'effectiveSalesAmountCents': 0,
+      'totalAgencyDeductionCents': 0,
+      'agencyDeductionConfirmed': false,
+      'totalAgencyNetAmountCents': 0,
+      'totalDailyRebateCents': 0,
+      'totalMonthlyRebateCents': 0,
+      'paidRebateCents': 0,
+      'unpaidRebateCents': 0,
+      'paidDailyRebateCents': 0,
+      'unpaidDailyRebateCents': 0,
+      'paidMonthlyRebateCents': 0,
+      'unpaidMonthlyRebateCents': 0,
+      'dailyRebatePaid': false,
+      'monthlyRebatePaid': false,
+      'notes': null,
+      'sourceSnapshot': null,
+    });
+    expect(emptySummary.id, isNull);
+    expect(emptySummary.summaryExists, isFalse);
+    expect(emptySummary.totalSalesAmountCents, 0);
+    expect(emptySummary.totalDailyRebateCents, 0);
 
     final refresh = TravelGroupFinanceSummaryRefreshResult.fromJson({
       'travelGroupFinanceSummary': summaryJson,
@@ -933,6 +1024,8 @@ void main() {
           'sourceRegion': 'North China',
           'mentionedFeitian': null,
           'expectedArrivalTime': '10:20',
+          'parkingFeeCents': 500,
+          'cigaretteFeeCents': null,
         },
       },
     };
@@ -947,6 +1040,7 @@ void main() {
       'keyCustomerInfo': 'VIP notes',
       'liaisonTasterId': 'liaison-1',
       'expectedArrivalTime': '10:20',
+      'cigaretteFeeCents': 2050,
     };
     final created = await api.createTravelGroup(createBody);
     expect(apiClient.lastMethod, 'POST');
@@ -954,6 +1048,8 @@ void main() {
     expect(apiClient.lastBody, createBody);
     expect(created.mentionedFeitian, isNull);
     expect(created.expectedArrivalTime, '10:20');
+    expect(created.parkingFeeCents, 500);
+    expect(created.cigaretteFeeCents, isNull);
 
     final updateBody = <String, dynamic>{
       'sourceRegion': 'South China',
@@ -962,6 +1058,7 @@ void main() {
       'previousStopOrderStatus': '熊猫',
       'keyCustomerInfo': 'Updated VIP notes',
       'expectedArrivalTime': null,
+      'cigaretteFeeCents': 3050,
     };
     await api.updateTravelGroup('group-new-fields', updateBody);
     expect(apiClient.lastMethod, 'PATCH');
@@ -1087,6 +1184,34 @@ void main() {
       ['as-analytics-1'],
     );
 
+    final salesPerformance = SalesPerformanceRecord.fromJson(
+      _salesPerformanceJson(),
+    );
+    expect(salesPerformance.salesUserId, 'usr_sales_1');
+    expect(salesPerformance.netSalesAmountCents, 150000);
+    expect(salesPerformance.averageSalesPerOrderCents, 75000);
+    final emptySalesPerformance = SalesPerformanceRecord.fromJson({
+      ..._salesPerformanceJson(),
+      'orderCount': 0,
+      'averageSalesPerOrderCents': null,
+    });
+    expect(emptySalesPerformance.averageSalesPerOrderCents, isNull);
+
+    final salesDetail = SalesPerformanceDetail.fromJson({
+      'range': _analyticsRangeJson(),
+      'salesUser': {
+        'id': 'usr_sales_1',
+        'name': 'test sales A',
+        'isActive': true,
+        'isUnassigned': false,
+      },
+      'summary': _salesPerformanceJson(),
+      'orders': [_salesPerformanceOrderJson()],
+    });
+    expect(salesDetail.salesUserName, 'test sales A');
+    expect(salesDetail.orders.single.orderNo, 'SO-SALES-001');
+    expect(salesDetail.orders.single.afterSalesOrderIds, ['as-sales-1']);
+
     final ranking = TasterRankingRecord.fromJson(_analyticsRankingJson());
     expect(ranking.tasterId, 'usr_taster_1');
     expect(ranking.tasterName, 'test taster A');
@@ -1172,6 +1297,71 @@ void main() {
     expect(uri.queryParameters['tasterId'], 'usr_taster_1');
     expect(uri.queryParameters['travelAgency'], 'test agency');
     expect(overview.netSalesAmountCents, 180000);
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'salesPerformance': [_salesPerformanceJson()],
+      },
+    };
+    final salesPerformance = await api.listSalesPerformance(
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      dateTo: DateTime(2026, 7, 4),
+      sortBy: 'averageSalesPerOrderCents',
+      sortDirection: 'asc',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/sales-performance');
+    expect(uri.queryParameters['sortBy'], 'averageSalesPerOrderCents');
+    expect(uri.queryParameters['sortDirection'], 'asc');
+    expect(salesPerformance.single.salesUserName, 'test sales A');
+
+    apiClient.nextJson = {
+      'data': {
+        'range': _analyticsRangeJson(),
+        'salesUser': {
+          'id': null,
+          'name': '未分配销售',
+          'isActive': false,
+          'isUnassigned': true,
+        },
+        'summary': {
+          ..._salesPerformanceJson(),
+          'salesUserId': null,
+          'salesUserName': '未分配销售',
+          'isActive': false,
+          'isUnassigned': true,
+          'orderCount': 0,
+          'averageSalesPerOrderCents': null,
+        },
+        'orders': [_salesPerformanceOrderJson()],
+      },
+    };
+    final salesDetail = await api.getSalesPerformanceDetail(
+      null,
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      dateTo: DateTime(2026, 7, 4),
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/analytics/sales-performance/unassigned');
+    expect(salesDetail.isUnassigned, isTrue);
+    expect(salesDetail.summary.averageSalesPerOrderCents, isNull);
+
+    await api.exportSalesPerformance(
+      preset: 'this_month',
+      sortBy: 'netSalesAmountCents',
+      sortDirection: 'desc',
+    );
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(
+      apiClient.lastDefaultFileName,
+      'analytics-sales-performance.xlsx',
+    );
+    expect(uri.path, '/api/analytics/sales-performance/export');
+    expect(uri.queryParameters['sortBy'], 'netSalesAmountCents');
 
     apiClient.nextJson = {
       'data': {
@@ -1677,6 +1867,24 @@ void main() {
       '/api/commission-records/commission-1/manual-amount',
     );
     expect(apiClient.lastBody?['amountCents'], 5000);
+    await api.saveSalesOrderTasterCommission(
+      salesOrderId: 'order-1',
+      amountCents: 0,
+    );
+    expect(apiClient.lastPath, '/api/commission-records/new/manual-amount');
+    expect(apiClient.lastBody?['salesOrderId'], 'order-1');
+    expect(apiClient.lastBody?['amountCents'], 0);
+    await api.saveSalesOrderTasterCommission(
+      salesOrderId: 'order-1',
+      recordId: 'commission-1',
+      amountCents: 8850,
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/commission-records/commission-1/manual-amount',
+    );
+    expect(apiClient.lastBody?['salesOrderId'], 'order-1');
+    expect(apiClient.lastBody?['amountCents'], 8850);
     await api.confirmTasterCommission('commission-1', true);
     expect(apiClient.lastPath, '/api/commission-records/commission-1/confirm');
     expect(apiClient.lastBody?['isConfirmed'], isTrue);
@@ -1891,6 +2099,10 @@ void main() {
       'markedAt': '2026-06-24T08:00:00.000Z',
       'tasterSummary': 'Guests liked the reserve.',
       'tasterSummaryAt': '2026-06-24T09:00:00.000Z',
+      'tasterEditCount': 1,
+      'tasterEditLimit': 2,
+      'tasterEditRemaining': 1,
+      'canEditByCurrentUser': true,
       'tastingItems': [
         {
           'id': 'item-1',
@@ -1947,6 +2159,10 @@ void main() {
     expect(group.financeMark, isTrue);
     expect(group.markedById, 'usr_finance');
     expect(group.tasterSummary, 'Guests liked the reserve.');
+    expect(group.tasterEditCount, 1);
+    expect(group.tasterEditLimit, 2);
+    expect(group.tasterEditRemaining, 1);
+    expect(group.canEditByCurrentUser, isTrue);
     expect(group.tastingItems, hasLength(1));
     expect(group.tastingItems.single.productName, '酱香珍藏');
     expect(group.tastingItems.single.quantity, 2);
@@ -2296,6 +2512,35 @@ Map<String, dynamic> _analyticsMetricsJson() {
     'conversionGroupCount': 3,
     'noOrderRate': 0.25,
     'conversionRate': 0.75,
+  };
+}
+
+Map<String, dynamic> _salesPerformanceJson() {
+  return {
+    'salesUserId': 'usr_sales_1',
+    'salesUserName': 'test sales A',
+    'isActive': true,
+    'isUnassigned': false,
+    'orderCount': 2,
+    'grossSalesAmountCents': 180000,
+    'refundAmountCents': 30000,
+    'netSalesAmountCents': 150000,
+    'averageSalesPerOrderCents': 75000,
+  };
+}
+
+Map<String, dynamic> _salesPerformanceOrderJson() {
+  return {
+    'id': 'order-sales-1',
+    'orderNo': 'SO-SALES-001',
+    'orderDate': '2026-07-01',
+    'customerName': 'test customer',
+    'status': 'PARTIAL_REFUND',
+    'grossSalesAmountCents': 100000,
+    'refundAmountCents': 30000,
+    'netSalesAmountCents': 70000,
+    'contributesToOrderCount': true,
+    'afterSalesOrderIds': ['as-sales-1'],
   };
 }
 

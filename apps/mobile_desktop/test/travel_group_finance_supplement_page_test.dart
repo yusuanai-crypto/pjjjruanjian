@@ -168,6 +168,65 @@ void main() {
     );
   });
 
+  testWidgets(
+      'no-order row keeps recalculation enabled and disables summary mutations',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(
+      summaries: [
+        _summaryJson(summaryExists: false),
+      ],
+    );
+    await _pumpPage(tester, apiClient: apiClient);
+
+    expect(find.text('未生成汇总'), findsWidgets);
+    expect(find.text('¥0.00'), findsWidgets);
+    final deductionInput = tester.widget<TextField>(
+      find.byKey(const ValueKey('group-1:agencyDeductionInput')),
+    );
+    final deductionSave = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('group-1:agencyDeductionSave')),
+    );
+    expect(deductionInput.enabled, isFalse);
+    expect(deductionSave.onPressed, isNull);
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('group-1:guideInfoSent')),
+          )
+          .onChanged,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('group-1:travelAgencyInfoSent')),
+          )
+          .onChanged,
+      isNull,
+    );
+    for (final key in const [
+      ValueKey('group-1:dailyRebatePaid'),
+      ValueKey('group-1:monthlyRebatePaid'),
+    ]) {
+      final action = find.descendant(
+        of: find.byKey(key),
+        matching: find.byType(OutlinedButton),
+      );
+      expect(tester.widget<OutlinedButton>(action).onPressed, isNull);
+    }
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    final recalculate = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('finance-recalculate-button')),
+    );
+    expect(recalculate.onPressed, isNotNull);
+    await tester.tap(find.byKey(const ValueKey('finance-recalculate-button')));
+    await _pumpUntil(tester, () => apiClient.postPaths.isNotEmpty);
+    expect(apiClient.patchPaths, isEmpty);
+    expect(apiClient.postPaths.single, '/api/commission-records/recalculate');
+  });
+
   testWidgets('clicking a data row toggles its manual checkbox',
       (tester) async {
     await _pumpPage(tester, apiClient: _FakeFinanceApiClient());
@@ -1104,6 +1163,8 @@ class _FakeFinanceApiClient extends ApiClient {
       throw StateError('Unexpected POST $path');
     }
     final updated = Map<String, dynamic>.from(_summaries.first)
+      ..['id'] = 'summary-recalculated'
+      ..['summaryExists'] = true
       ..['totalAgencyDeductionCents'] = 3000
       ..['totalAgencyNetAmountCents'] = 7000
       ..['totalDailyRebateCents'] = 210
@@ -1134,6 +1195,7 @@ class _FakeFinanceApiClient extends ApiClient {
 
 Map<String, dynamic> _summaryJson({
   int index = 1,
+  bool summaryExists = true,
   String agencyId = 'agency-default',
   String agencyName = '山水旅行社',
   String guideId = 'guide-default',
@@ -1144,7 +1206,8 @@ Map<String, dynamic> _summaryJson({
   int totalAgencyNetAmountCents = 92000,
 }) {
   return {
-    'id': 'summary-$index',
+    'id': summaryExists ? 'summary-$index' : null,
+    'summaryExists': summaryExists,
     'travelGroupId': 'group-$index',
     'travelGroup': {
       'id': 'group-$index',
@@ -1160,11 +1223,11 @@ Map<String, dynamic> _summaryJson({
       'tasterName': '陈品鉴',
       'financeMark': false,
     },
-    'totalSalesAmountCents': totalSalesAmountCents,
-    'totalCashOnDeliveryCents': 20000,
-    'totalPaidDepositCents': 80000,
+    'totalSalesAmountCents': summaryExists ? totalSalesAmountCents : 0,
+    'totalCashOnDeliveryCents': summaryExists ? 20000 : 0,
+    'totalPaidDepositCents': summaryExists ? 80000 : 0,
     'confirmedRefundAmountCents': 0,
-    'effectiveSalesAmountCents': totalSalesAmountCents,
+    'effectiveSalesAmountCents': summaryExists ? totalSalesAmountCents : 0,
     'afterSalesCount': 0,
     'activeAfterSalesCount': 0,
     'pendingAfterSalesRefundCount': 0,
@@ -1172,25 +1235,28 @@ Map<String, dynamic> _summaryJson({
     'latestAfterSalesNo': null,
     'latestAfterSalesStatus': null,
     'afterSalesImpactStatus': 'none',
-    'totalAgencyDeductionCents': 8000,
-    'agencyDeductionConfirmed': true,
-    'agencyDeductionConfirmedById': 'usr_finance',
-    'agencyDeductionConfirmedBy': {
-      'id': 'usr_finance',
-      'name': '财务',
-      'username': 'finance',
-      'role': 'finance',
-    },
-    'agencyDeductionConfirmedAt': '2026-07-03T09:10:00.000Z',
-    'totalAgencyNetAmountCents': totalAgencyNetAmountCents,
-    'totalDailyRebateCents': 3000,
-    'totalMonthlyRebateCents': 1000,
+    'totalAgencyDeductionCents': summaryExists ? 8000 : 0,
+    'agencyDeductionConfirmed': summaryExists,
+    'agencyDeductionConfirmedById': summaryExists ? 'usr_finance' : null,
+    'agencyDeductionConfirmedBy': summaryExists
+        ? {
+            'id': 'usr_finance',
+            'name': '财务',
+            'username': 'finance',
+            'role': 'finance',
+          }
+        : null,
+    'agencyDeductionConfirmedAt':
+        summaryExists ? '2026-07-03T09:10:00.000Z' : null,
+    'totalAgencyNetAmountCents': summaryExists ? totalAgencyNetAmountCents : 0,
+    'totalDailyRebateCents': summaryExists ? 3000 : 0,
+    'totalMonthlyRebateCents': summaryExists ? 1000 : 0,
     'paidRebateCents': 0,
-    'unpaidRebateCents': 4000,
+    'unpaidRebateCents': summaryExists ? 4000 : 0,
     'paidDailyRebateCents': 0,
-    'unpaidDailyRebateCents': 3000,
+    'unpaidDailyRebateCents': summaryExists ? 3000 : 0,
     'paidMonthlyRebateCents': 0,
-    'unpaidMonthlyRebateCents': 1000,
+    'unpaidMonthlyRebateCents': summaryExists ? 1000 : 0,
     'dailyRebatePaid': false,
     'dailyRebatePaidById': null,
     'dailyRebatePaidBy': null,
@@ -1202,16 +1268,18 @@ Map<String, dynamic> _summaryJson({
     'notes': null,
     'guideInfoSent': false,
     'travelAgencyInfoSent': false,
-    'calculationVersion': 'stage7-v1',
-    'sourceSnapshot': {'orders': []},
-    'updatedById': 'usr_finance',
-    'updatedBy': {
-      'id': 'usr_finance',
-      'name': '财务',
-      'username': 'finance',
-      'role': 'finance',
-    },
-    'createdAt': '2026-07-03T09:00:00.000Z',
-    'updatedAt': '2026-07-03T09:00:00.000Z',
+    'calculationVersion': summaryExists ? 'stage7-v1' : null,
+    'sourceSnapshot': summaryExists ? {'orders': []} : null,
+    'updatedById': summaryExists ? 'usr_finance' : null,
+    'updatedBy': summaryExists
+        ? {
+            'id': 'usr_finance',
+            'name': '财务',
+            'username': 'finance',
+            'role': 'finance',
+          }
+        : null,
+    'createdAt': summaryExists ? '2026-07-03T09:00:00.000Z' : null,
+    'updatedAt': summaryExists ? '2026-07-03T09:00:00.000Z' : null,
   };
 }

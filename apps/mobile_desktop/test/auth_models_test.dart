@@ -37,4 +37,36 @@ void main() {
       );
     });
   });
+
+  test('auth session prefers explicit access-token fields and keeps aliases',
+      () {
+    final session = AuthSession.fromJson(<String, dynamic>{
+      'accessToken': 'access-value',
+      'accessTokenExpiresAt': '2099-01-01T00:00:00.000Z',
+      'refreshToken': 'refresh-value',
+      'refreshTokenExpiresAt': '2099-02-01T00:00:00.000Z',
+      'token': 'legacy-value',
+      'expiresAt': '2000-01-01T00:00:00.000Z',
+      'user': <String, dynamic>{
+        'id': 'user-1',
+        'name': 'Test',
+        'username': 'test.user',
+        'role': 'admin',
+        'isActive': true,
+        'mustChangePassword': false,
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'updatedAt': '2026-01-01T00:00:00.000Z',
+      },
+      'permissions': <String>[],
+      'menus': <Map<String, dynamic>>[],
+      'dataScope': <String, dynamic>{},
+    });
+
+    expect(session.accessToken == 'access-value', isTrue);
+    expect(
+      session.accessTokenExpiresAt == '2099-01-01T00:00:00.000Z',
+      isTrue,
+    );
+    expect(session.refreshToken?.isNotEmpty, isTrue);
+  });
 }

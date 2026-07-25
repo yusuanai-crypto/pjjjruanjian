@@ -12,22 +12,28 @@ import 'destinations.dart';
 import 'theme.dart';
 
 typedef SessionStorageFactory = Future<SessionStorage> Function();
+typedef AuthControllerFactory = AuthController Function(
+  SessionStorage storage,
+  VoidCallback onSessionRevoked,
+);
 
 class JiangjiuApp extends StatefulWidget {
   const JiangjiuApp({
     super.key,
     this.sessionStorageFactory = SessionStorage.create,
     this.bootstrapTimeout = const Duration(seconds: 15),
+    this.authControllerFactory,
   });
 
   final SessionStorageFactory sessionStorageFactory;
   final Duration bootstrapTimeout;
+  final AuthControllerFactory? authControllerFactory;
 
   @override
   State<JiangjiuApp> createState() => _JiangjiuAppState();
 }
 
-class _JiangjiuAppState extends State<JiangjiuApp> {
+class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
   AuthController? _authController;
   Timer? _sessionRefreshTimer;
   bool _bootstrapping = true;
@@ -37,17 +43,27 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrapAuth();
-    _sessionRefreshTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _refreshSessionIfNeeded(),
-    );
+    _startSessionRefreshTimer();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sessionRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startSessionRefreshTimer();
+      unawaited(_refreshSessionIfNeeded());
+      return;
+    }
+    _sessionRefreshTimer?.cancel();
+    _sessionRefreshTimer = null;
   }
 
   Future<void> _bootstrapAuth() async {
@@ -75,10 +91,14 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
 
   Future<AuthController> _createAndRestoreAuthController() async {
     final storage = await widget.sessionStorageFactory();
-    final authController = AuthController(
-      storage: storage,
-      onSessionRevoked: _handleSessionRevoked,
-    );
+    final authController = widget.authControllerFactory?.call(
+          storage,
+          _handleSessionRevoked,
+        ) ??
+        AuthController(
+          storage: storage,
+          onSessionRevoked: _handleSessionRevoked,
+        );
     await authController.restore();
     return authController;
   }
@@ -105,6 +125,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
   Future<void> _handleLogin({
     required String username,
     required String password,
+    required bool rememberPassword,
   }) async {
     final authController = _authController;
     if (authController == null) {
@@ -114,6 +135,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
     await authController.login(
       username: username,
       password: password,
+      rememberPassword: rememberPassword,
     );
 
     setState(() {
@@ -167,10 +189,20 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
         setState(() {});
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && authController?.session == null) {
         setState(() => _selectedDestinationId = 'dashboard');
       }
     }
+  }
+
+  void _startSessionRefreshTimer() {
+    if (_sessionRefreshTimer != null) {
+      return;
+    }
+    _sessionRefreshTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _refreshSessionIfNeeded(),
+    );
   }
 
   void _handleDestinationChanged(String destinationId) {
@@ -212,6 +244,10 @@ class _JiangjiuAppState extends State<JiangjiuApp> {
                   ? LoginPage(
                       initialUsername: authController.lastUsername,
                       initialMessage: authController.restoreMessage,
+                      rememberedUsernames: authController.rememberedUsernames,
+                      rememberPassword: authController.rememberPasswordEnabled,
+                      onPasswordLookup: authController.readRememberedPassword,
+                      onForgetAccount: authController.forgetAccount,
                       onLogin: _handleLogin,
                     )
                   : session.user.mustChangePassword

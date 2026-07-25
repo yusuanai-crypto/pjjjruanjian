@@ -138,10 +138,29 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('商品实际成本（汇总）'), findsOneWidget);
-    expect(find.text('员工提成（汇总）'), findsOneWidget);
+    expect(find.text('停车费'), findsOneWidget);
+    expect(find.text('香烟费用'), findsOneWidget);
+    expect(find.text('销售提成'), findsOneWidget);
+    expect(find.text('组长提成'), findsOneWidget);
+    expect(find.text('外联提成'), findsOneWidget);
+    expect(find.text('员工提成（汇总）'), findsNothing);
     expect(find.text('品鉴师提成（汇总）'), findsOneWidget);
     expect(find.text('商品单位成本'), findsNothing);
     expect(find.text('个人提成明细'), findsNothing);
+
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    final incompleteRow = find.text('TG-INCOMPLETE');
+    await tester.ensureVisible(incompleteRow);
+    await tester.tap(incompleteRow);
+    await tester.pumpAndSettle();
+    expect(find.text('未填写'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('profit-analysis-warning-CIGARETTE_FEE_MISSING'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('sends preset, search, status, sort, direction, and page filters',
@@ -259,6 +278,11 @@ void main() {
     expect(response.items.single.estimatedProfitRate, isNull);
     expect(response.items.single.warnings, isEmpty);
     expect(response.items.single.totalExpenseCents, 0);
+    expect(response.items.single.parkingFeeCents, 0);
+    expect(response.items.single.cigaretteFeeCents, isNull);
+    expect(response.items.single.salesCommissionCents, 0);
+    expect(response.items.single.leaderCommissionCents, 0);
+    expect(response.items.single.outreachCommissionCents, 0);
   });
 }
 
@@ -383,6 +407,10 @@ List<Map<String, dynamic>> _itemsJson() {
           'code': 'ACTUAL_COST_COVERAGE_PARTIAL',
           'message': 'Cost snapshots are incomplete.',
         },
+        {
+          'code': 'CIGARETTE_FEE_MISSING',
+          'message': '香烟费用未填写，请前台补录后再核算利润。',
+        },
       ],
     ),
     _item(
@@ -430,6 +458,11 @@ Map<String, dynamic> _item({
     'pendingRefundAmountCents': id == 'estimated' ? 200 : 0,
     'actualProductCostCents': expenses ~/ 2,
     'logisticsFeeCents': expenses ~/ 10,
+    'parkingFeeCents': 500,
+    'cigaretteFeeCents': id == 'incomplete' ? null : 200,
+    'salesCommissionCents': expenses ~/ 30,
+    'leaderCommissionCents': expenses ~/ 30,
+    'outreachCommissionCents': expenses ~/ 30,
     'employeeCommissionCents': expenses ~/ 10,
     'tasterCommissionCents': expenses ~/ 10,
     'dailyAgencyRebateCents': expenses ~/ 10,

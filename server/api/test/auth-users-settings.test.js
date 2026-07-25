@@ -137,7 +137,6 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'customers:read',
     'sales_orders:list',
     'sales_orders:read',
-    'sales_orders:create',
   ],
   front_desk: [
     'auth:me',
@@ -167,16 +166,6 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'settings:global_mark:read',
     'travel_groups:list',
     'travel_groups:read',
-    'travel_groups:create',
-    'travel_groups:update',
-    'guide_carried_groups:list',
-    'guide_carried_groups:read',
-    'guide_carried_groups:create',
-    'guide_carried_groups:update',
-    'pending_travel_groups:list',
-    'pending_travel_groups:read',
-    'pending_travel_groups:create',
-    'pending_travel_groups:update',
     'customers:list',
     'customers:read',
     'customers:create',
@@ -243,7 +232,6 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'customers:update',
     'sales_orders:list',
     'sales_orders:read',
-    'sales_orders:create',
   ],
   taster: [
     'auth:me',
@@ -256,6 +244,9 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'guide_carried_groups:read',
     'pending_travel_groups:list',
     'pending_travel_groups:read',
+    'travel_groups:taster_update',
+    'travel_groups:taster_summary',
+    'travel_groups:taster_attachments',
     'sales_orders:list',
     'sales_orders:read',
   ],
@@ -350,6 +341,12 @@ test('contract: protected auth endpoints require bearer token and return current
     );
     assert.equal(roleMenus.admin.includes('order_query'), true);
     assert.equal(roleMenus.admin.includes('finance_workspace'), true);
+    assert.equal(
+      roles.body.data.roles
+        .find((role) => role.role === 'admin')
+        .menus.find((menu) => menu.id === 'finance_workspace').title,
+      '物流单号与品鉴师提成填写',
+    );
     assert.equal(roleMenus.admin.includes('commission_rules'), true);
     assert.equal(roleMenus.admin.includes('travel_agency_management'), true);
     assert.equal(roleMenus.admin.includes('product_management'), true);
@@ -357,6 +354,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.after_sales.includes('travel_group_query'), true);
     assert.equal(roleMenus.after_sales.includes('analytics'), true);
     assert.equal(roleMenus.after_sales.includes('order_query'), true);
+    assert.equal(roleMenus.after_sales.includes('sales_orders'), false);
     assert.equal(roleMenus.finance.includes('order_query'), true);
     assert.equal(roleMenus.finance.includes('after_sales_orders'), true);
     assert.equal(roleMenus.finance.includes('finance_workspace'), true);
@@ -398,7 +396,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(tasterRole.title, '品鉴师');
     assert.equal(
       tasterRole.description,
-      '查看全部旅行团，按本人接团或对接关系维护信息，并查看自己的接待和提成。',
+      '查看今天及未来旅行团，今天关联团共享两次修改机会，并查看接待品鉴师关系订单。',
     );
     assert.equal(Array.isArray(tasterRole.permissions), true);
     assert.deepEqual(
@@ -406,9 +404,10 @@ test('contract: protected auth endpoints require bearer token and return current
       ['dashboard', 'travel_group_query', 'order_query', 'own_taster_receptions', 'own_commissions'],
     );
     assert.deepEqual(tasterRole.dataScope, {
-      travelGroups: 'all',
-      travelGroupUpdates: 'assigned_taster_or_liaison',
-      orders: 'own_taster_travel_groups',
+      travelGroups: 'today_and_future',
+      travelGroupUpdates:
+        'today_assigned_taster_or_liaison_shared_two_edits',
+      orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',
     });
@@ -416,8 +415,8 @@ test('contract: protected auth endpoints require bearer token and return current
     const salesRole = roles.body.data.roles.find((role) => role.role === 'sales');
     assert.deepEqual(salesRole.dataScope, {
       customers: 'own_sales_user_id',
-      orders: 'own_sales_user_id',
-      travelGroups: 'all_travel_groups_read',
+      orders: 'own_sales_user_id_today_created_at',
+      travelGroups: 'today_all_read_only',
     });
   });
 });
@@ -456,19 +455,12 @@ test('contract: POST /api/auth/change-password returns current session shape and
     });
     assert.equal(changed.response.status, 200);
     assert.deepEqual(Object.keys(changed.body).sort(), ['data']);
-    assertSessionContract(changed.body.data);
-    assert.equal(changed.body.data.user.username, 'admin');
-    assert.equal(changed.body.data.permissions.includes('users:create'), true);
+    assert.deepEqual(changed.body.data, { passwordChanged: true });
 
     const revokedSession = await requestJson(baseUrl, '/api/auth/me', {
       token: admin.token,
     });
     assertErrorContract(revokedSession, 401, 'SESSION_REVOKED');
-
-    const replacementSession = await requestJson(baseUrl, '/api/auth/me', {
-      token: changed.body.data.token,
-    });
-    assert.equal(replacementSession.response.status, 200);
 
     const oldPasswordLogin = await requestJson(baseUrl, '/api/auth/login', {
       method: 'POST',
@@ -537,13 +529,20 @@ test('contract: employees default to the initial password and must change it bef
       },
     );
     assert.equal(changed.response.status, 200);
-    assert.equal(changed.body.data.user.mustChangePassword, false);
+    assert.deepEqual(changed.body.data, { passwordChanged: true });
+
+    const changedSession = await login(
+      baseUrl,
+      username,
+      'EmployeeChangedPassword123',
+    );
+    assert.equal(changedSession.user.mustChangePassword, false);
 
     const normalAccess = await requestJson(
       baseUrl,
       '/api/auth/roles',
       {
-        token: changed.body.data.token,
+        token: changedSession.token,
       },
     );
     assert.equal(normalAccess.response.status, 200);
@@ -1099,9 +1098,10 @@ test('contract: non-admin users cannot manage users and taster data scopes expos
     );
     assert.equal(taster.menus.some((menu) => menu.id === 'employee_accounts'), false);
     assert.deepEqual(taster.dataScope, {
-      travelGroups: 'all',
-      travelGroupUpdates: 'assigned_taster_or_liaison',
-      orders: 'own_taster_travel_groups',
+      travelGroups: 'today_and_future',
+      travelGroupUpdates:
+        'today_assigned_taster_or_liaison_shared_two_edits',
+      orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',
     });

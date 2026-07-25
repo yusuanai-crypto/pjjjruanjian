@@ -88,6 +88,85 @@ void main() {
     expect(find.text('已开票'), findsWidgets);
   });
 
+  testWidgets(
+      'saves logistics and taster commission per order and confirms inline',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpFinanceQuery(tester, apiClient);
+
+    expect(find.text('物流单号与品鉴师提成填写'), findsOneWidget);
+    const logisticsKey = ValueKey('finance-order-logistics-no-order-1');
+    const commissionKey = ValueKey('finance-order-taster-commission-order-1');
+    const saveKey = ValueKey('finance-order-save-order-1');
+
+    await tester.enterText(find.byKey(logisticsKey), 'JD000111222');
+    await tester.enterText(find.byKey(commissionKey), '88.50');
+    await tester.ensureVisible(find.byKey(saveKey));
+    await tester.tap(find.byKey(saveKey));
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastFinanceBody?['logisticsNo'], 'JD000111222');
+    expect(apiClient.lastCommissionPatchBody?['salesOrderId'], 'order-1');
+    expect(apiClient.lastCommissionPatchBody?['amountCents'], 8850);
+    expect(find.text('物流单号 JD000111222'), findsOneWidget);
+    expect(find.text('待确认'), findsWidgets);
+
+    const confirmKey = ValueKey('finance-order-confirm-order-1');
+    await tester.ensureVisible(find.byKey(confirmKey));
+    await tester.tap(find.byKey(confirmKey));
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastCommissionPatchBody?['isConfirmed'], isTrue);
+    expect(find.text('已确认'), findsWidgets);
+  });
+
+  testWidgets('inline save failure retains current order input',
+      (tester) async {
+    final apiClient = _FakeApiClient(failFinancePatch: true);
+    await _pumpFinanceQuery(tester, apiClient);
+
+    const logisticsKey = ValueKey('finance-order-logistics-no-order-1');
+    const commissionKey = ValueKey('finance-order-taster-commission-order-1');
+    await tester.enterText(find.byKey(logisticsKey), 'KEEP-ME');
+    await tester.enterText(find.byKey(commissionKey), '0');
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('finance-order-save-order-1')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('finance-order-save-order-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('运费不能小于 0'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byKey(logisticsKey)).controller?.text,
+      'KEEP-ME',
+    );
+    expect(
+      tester.widget<TextField>(find.byKey(commissionKey)).controller?.text,
+      '0',
+    );
+    expect(apiClient.lastCommissionPatchBody?['amountCents'], 0);
+  });
+
+  testWidgets('order without taster disables only commission input',
+      (tester) async {
+    final apiClient = _FakeApiClient(withTaster: false);
+    await _pumpFinanceQuery(tester, apiClient);
+
+    expect(find.text('无关联品鉴师'), findsOneWidget);
+    final commissionField = tester.widget<TextField>(
+      find.byKey(
+        const ValueKey('finance-order-taster-commission-order-1'),
+      ),
+    );
+    final logisticsField = tester.widget<TextField>(
+      find.byKey(const ValueKey('finance-order-logistics-no-order-1')),
+    );
+    expect(commissionField.enabled, isFalse);
+    expect(logisticsField.enabled, isTrue);
+  });
+
   testWidgets('shows API error when finance save fails', (tester) async {
     final apiClient = _FakeApiClient(failFinancePatch: true);
     await _pumpFinanceQuery(tester, apiClient);
@@ -373,6 +452,69 @@ void main() {
       apiClient.summaryRefreshPaths,
       contains('/api/travel-group-finance-summaries/group-summary-1/refresh'),
     );
+  });
+
+  testWidgets(
+      'no-order travel group shows zero amounts and disables summary-only actions',
+      (tester) async {
+    final apiClient = _FakeApiClient(summaryExists: false);
+    await _pumpFinanceQuery(tester, apiClient);
+
+    await _tapFilterChip(tester, '返积分汇总');
+
+    expect(find.text('TG-SUMMARY-001'), findsOneWidget);
+    expect(find.text('¥0.00'), findsWidgets);
+    expect(find.text('暂无出单'), findsOneWidget);
+    expect(find.text('未生成汇总'), findsNWidgets(2));
+
+    final editButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('finance-summary-edit-group-summary-1')),
+    );
+    final confirmButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('finance-summary-confirm-group-summary-1')),
+    );
+    final refreshButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('finance-summary-refresh-group-summary-1')),
+    );
+    expect(editButton.onPressed, isNull);
+    expect(confirmButton.onPressed, isNull);
+    expect(refreshButton.onPressed, isNotNull);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'finance-summary-daily-rebate-paid-group-summary-1',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const ValueKey(
+          'finance-summary-monthly-rebate-paid-group-summary-1',
+        ),
+      ),
+      findsNothing,
+    );
+
+    _pressTextButton(
+      tester,
+      const ValueKey('finance-summary-detail-group-summary-1'),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('尚未生成返积分汇总'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+
+    _pressIconButton(
+      tester,
+      const ValueKey('finance-summary-refresh-group-summary-1'),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      apiClient.summaryRefreshPaths,
+      contains('/api/travel-group-finance-summaries/group-summary-1/refresh'),
+    );
+    expect(apiClient.summaryPatchPaths, isEmpty);
   });
 
   testWidgets('finance can export commission records and rebate summaries',
@@ -694,11 +836,15 @@ void _pressFilledButton(WidgetTester tester, Key key) {
 class _FakeApiClient extends ApiClient {
   _FakeApiClient({
     this.failFinancePatch = false,
+    this.withTaster = true,
+    this.summaryExists = true,
     this.commissionListError,
     this.downloadError,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool failFinancePatch;
+  final bool withTaster;
+  bool summaryExists;
   ApiException? commissionListError;
   ApiException? downloadError;
   final List<String> financeWorkbenchPaths = <String>[];
@@ -763,6 +909,7 @@ class _FakeApiClient extends ApiClient {
                 logisticsFeeCents: logisticsFeeCents,
                 invoiceIssued: invoiceIssued,
                 financeRemark: financeRemark,
+                withTaster: withTaster,
               ),
             ],
             'pendingAfterSales':
@@ -809,6 +956,22 @@ class _FakeApiClient extends ApiClient {
       };
     }
 
+    if (path == '/api/sales-orders/order-1') {
+      return {
+        'data': {
+          'salesOrder': _orderJson(
+            logisticsNo: logisticsNo,
+            logisticsFeeCents: logisticsFeeCents,
+            invoiceIssued: invoiceIssued,
+            financeRemark: financeRemark,
+            tasterCommissionAmountCents: tasterCommissionAmountCents,
+            tasterCommissionConfirmed: tasterCommissionConfirmed,
+            withTaster: withTaster,
+          ),
+        },
+      };
+    }
+
     if (path == '/api/commission-records/commission-taster-1') {
       commissionDetailPaths.add(path);
       return {
@@ -843,6 +1006,7 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
+            summaryExists: summaryExists,
             dailyRebatePaid: summaryDailyRebatePaid,
             monthlyRebatePaid: summaryMonthlyRebatePaid,
             agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
@@ -860,6 +1024,7 @@ class _FakeApiClient extends ApiClient {
         'data': {
           'travelGroupFinanceSummaries': [
             _summaryJson(
+              summaryExists: summaryExists,
               dailyRebatePaid: summaryDailyRebatePaid,
               monthlyRebatePaid: summaryMonthlyRebatePaid,
               agencyDeductionConfirmed: summaryAgencyDeductionConfirmed,
@@ -917,8 +1082,12 @@ class _FakeApiClient extends ApiClient {
       logisticsFeeCents = body?['logisticsFeeCents'] is int
           ? body!['logisticsFeeCents'] as int
           : logisticsFeeCents;
-      invoiceIssued = body?['invoiceIssued'] == true;
-      financeRemark = '${body?['financeRemark'] ?? ''}';
+      if (body?.containsKey('invoiceIssued') == true) {
+        invoiceIssued = body?['invoiceIssued'] == true;
+      }
+      if (body?.containsKey('financeRemark') == true) {
+        financeRemark = '${body?['financeRemark'] ?? ''}';
+      }
       return {
         'data': {
           'salesOrder': _orderJson(
@@ -1065,6 +1234,7 @@ class _FakeApiClient extends ApiClient {
   }) async {
     if (path == '/api/travel-group-finance-summaries/group-summary-1/refresh') {
       summaryRefreshPaths.add(path);
+      summaryExists = true;
       return {
         'data': {
           'travelGroupFinanceSummary': _summaryJson(
@@ -1154,6 +1324,7 @@ Map<String, dynamic> _commissionRecordJson({
 }
 
 Map<String, dynamic> _summaryJson({
+  bool summaryExists = true,
   required bool dailyRebatePaid,
   required bool monthlyRebatePaid,
   required bool agencyDeductionConfirmed,
@@ -1161,10 +1332,12 @@ Map<String, dynamic> _summaryJson({
   required bool travelAgencyInfoSent,
   required String notes,
 }) {
-  final paidRebateCents =
-      (dailyRebatePaid ? 6000 : 0) + (monthlyRebatePaid ? 4000 : 0);
+  final paidRebateCents = summaryExists
+      ? (dailyRebatePaid ? 6000 : 0) + (monthlyRebatePaid ? 4000 : 0)
+      : 0;
   return {
-    'id': 'summary-1',
+    'id': summaryExists ? 'summary-1' : null,
+    'summaryExists': summaryExists,
     'travelGroupId': 'group-summary-1',
     'travelGroup': {
       'id': 'group-summary-1',
@@ -1178,14 +1351,14 @@ Map<String, dynamic> _summaryJson({
       'tasterName': 'Smoke Taster',
       'financeMark': true,
     },
-    'totalSalesAmountCents': 100000,
-    'totalCashOnDeliveryCents': 20000,
-    'totalPaidDepositCents': 80000,
-    'confirmedRefundAmountCents': 10000,
-    'effectiveSalesAmountCents': 90000,
-    'totalAgencyDeductionCents': 12000,
-    'agencyDeductionConfirmed': agencyDeductionConfirmed,
-    'agencyDeductionConfirmedBy': agencyDeductionConfirmed
+    'totalSalesAmountCents': summaryExists ? 100000 : 0,
+    'totalCashOnDeliveryCents': summaryExists ? 20000 : 0,
+    'totalPaidDepositCents': summaryExists ? 80000 : 0,
+    'confirmedRefundAmountCents': summaryExists ? 10000 : 0,
+    'effectiveSalesAmountCents': summaryExists ? 90000 : 0,
+    'totalAgencyDeductionCents': summaryExists ? 12000 : 0,
+    'agencyDeductionConfirmed': summaryExists && agencyDeductionConfirmed,
+    'agencyDeductionConfirmedBy': summaryExists && agencyDeductionConfirmed
         ? {
             'id': 'finance-1',
             'name': 'Smoke Finance',
@@ -1193,15 +1366,16 @@ Map<String, dynamic> _summaryJson({
             'role': 'finance',
           }
         : null,
-    'agencyDeductionConfirmedAt':
-        agencyDeductionConfirmed ? '2026-07-03T10:00:00.000Z' : null,
-    'totalAgencyNetAmountCents': 78000,
-    'totalDailyRebateCents': 6000,
-    'totalMonthlyRebateCents': 4000,
+    'agencyDeductionConfirmedAt': summaryExists && agencyDeductionConfirmed
+        ? '2026-07-03T10:00:00.000Z'
+        : null,
+    'totalAgencyNetAmountCents': summaryExists ? 78000 : 0,
+    'totalDailyRebateCents': summaryExists ? 6000 : 0,
+    'totalMonthlyRebateCents': summaryExists ? 4000 : 0,
     'paidRebateCents': paidRebateCents,
-    'unpaidRebateCents': 10000 - paidRebateCents,
-    'dailyRebatePaid': dailyRebatePaid,
-    'dailyRebatePaidBy': dailyRebatePaid
+    'unpaidRebateCents': summaryExists ? 10000 - paidRebateCents : 0,
+    'dailyRebatePaid': summaryExists && dailyRebatePaid,
+    'dailyRebatePaidBy': summaryExists && dailyRebatePaid
         ? {
             'id': 'finance-1',
             'name': 'Smoke Finance',
@@ -1209,9 +1383,10 @@ Map<String, dynamic> _summaryJson({
             'role': 'finance',
           }
         : null,
-    'dailyRebatePaidAt': dailyRebatePaid ? '2026-07-03T11:00:00.000Z' : null,
-    'monthlyRebatePaid': monthlyRebatePaid,
-    'monthlyRebatePaidBy': monthlyRebatePaid
+    'dailyRebatePaidAt':
+        summaryExists && dailyRebatePaid ? '2026-07-03T11:00:00.000Z' : null,
+    'monthlyRebatePaid': summaryExists && monthlyRebatePaid,
+    'monthlyRebatePaidBy': summaryExists && monthlyRebatePaid
         ? {
             'id': 'finance-1',
             'name': 'Smoke Finance',
@@ -1220,43 +1395,47 @@ Map<String, dynamic> _summaryJson({
           }
         : null,
     'monthlyRebatePaidAt':
-        monthlyRebatePaid ? '2026-07-03T12:00:00.000Z' : null,
-    'notes': notes,
-    'guideInfoSent': guideInfoSent,
-    'travelAgencyInfoSent': travelAgencyInfoSent,
-    'calculationVersion': 'stage7-v1',
-    'sourceSnapshot': {
-      'orders': [
-        {
-          'salesOrderId': 'order-summary-1',
-          'orderNo': 'SO-SUMMARY-001',
-          'customerName': 'Smoke Customer',
-          'totalAmountCents': 100000,
-          'confirmedRefundAmountCents': 10000,
-          'effectiveSalesAmountCents': 90000,
-        },
-      ],
-      'commissionRecords': [
-        {
-          'id': 'daily-rebate-1',
-          'targetType': 'agency_daily_rebate',
-          'pointsCents': 6000,
-          'calculationNoteSummary': 'test daily rebate',
-        },
-        {
-          'id': 'monthly-rebate-1',
-          'targetType': 'agency_monthly_rebate',
-          'pointsCents': 4000,
-          'calculationNoteSummary': 'test monthly rebate',
-        },
-      ],
-    },
-    'updatedBy': {
-      'id': 'finance-1',
-      'name': 'Smoke Finance',
-      'username': 'finance',
-      'role': 'finance',
-    },
+        summaryExists && monthlyRebatePaid ? '2026-07-03T12:00:00.000Z' : null,
+    'notes': summaryExists ? notes : null,
+    'guideInfoSent': summaryExists && guideInfoSent,
+    'travelAgencyInfoSent': summaryExists && travelAgencyInfoSent,
+    'calculationVersion': summaryExists ? 'stage7-v1' : null,
+    'sourceSnapshot': summaryExists
+        ? {
+            'orders': [
+              {
+                'salesOrderId': 'order-summary-1',
+                'orderNo': 'SO-SUMMARY-001',
+                'customerName': 'Smoke Customer',
+                'totalAmountCents': 100000,
+                'confirmedRefundAmountCents': 10000,
+                'effectiveSalesAmountCents': 90000,
+              },
+            ],
+            'commissionRecords': [
+              {
+                'id': 'daily-rebate-1',
+                'targetType': 'agency_daily_rebate',
+                'pointsCents': 6000,
+                'calculationNoteSummary': 'test daily rebate',
+              },
+              {
+                'id': 'monthly-rebate-1',
+                'targetType': 'agency_monthly_rebate',
+                'pointsCents': 4000,
+                'calculationNoteSummary': 'test monthly rebate',
+              },
+            ],
+          }
+        : null,
+    'updatedBy': summaryExists
+        ? {
+            'id': 'finance-1',
+            'name': 'Smoke Finance',
+            'username': 'finance',
+            'role': 'finance',
+          }
+        : null,
   };
 }
 
@@ -1265,6 +1444,9 @@ Map<String, dynamic> _orderJson({
   required int logisticsFeeCents,
   required bool invoiceIssued,
   required String financeRemark,
+  int tasterCommissionAmountCents = 5000,
+  bool tasterCommissionConfirmed = false,
+  bool withTaster = true,
 }) {
   return {
     'id': 'order-1',
@@ -1280,9 +1462,24 @@ Map<String, dynamic> _orderJson({
     'district': '观山湖区',
     'address': '测试路 1 号',
     'travelGroupId': 'group-1',
-    'travelGroup': _travelGroupJson(),
+    'travelGroup': _travelGroupJson(withTaster: withTaster),
     'salesFormNo': 'XS-001',
     'totalAmountCents': 79800,
+    'tasterCommissionCents': withTaster ? tasterCommissionAmountCents : 0,
+    'tasterCommission': withTaster
+        ? {
+            'recordId': 'commission-taster-1',
+            'amountCents': tasterCommissionAmountCents,
+            'isConfirmed': tasterCommissionConfirmed,
+            'confirmedById': tasterCommissionConfirmed ? 'finance-1' : null,
+            'confirmedByName':
+                tasterCommissionConfirmed ? 'Smoke Finance' : null,
+            'confirmedAt':
+                tasterCommissionConfirmed ? '2026-07-03T10:00:00.000Z' : null,
+          }
+        : null,
+    'tasterId': withTaster ? 'taster-1' : null,
+    'tasterName': withTaster ? 'Smoke Taster' : null,
     'cashOnDeliveryAmountCents': 10000,
     'status': 'valid',
     'deliverySummary': 'shipping',
@@ -1333,7 +1530,7 @@ Map<String, dynamic> _customerJson() {
   };
 }
 
-Map<String, dynamic> _travelGroupJson() {
+Map<String, dynamic> _travelGroupJson({bool withTaster = true}) {
   return {
     'id': 'group-1',
     'kind': 'travel',
@@ -1341,6 +1538,8 @@ Map<String, dynamic> _travelGroupJson() {
     'visitDate': '2026-06-30',
     'travelAgency': '测试旅行社',
     'guideName': '李导',
+    'tasterId': withTaster ? 'taster-1' : null,
+    'tasterName': withTaster ? 'Smoke Taster' : null,
     'guestCount': 20,
     'status': 'unmarked',
     'financeMark': true,

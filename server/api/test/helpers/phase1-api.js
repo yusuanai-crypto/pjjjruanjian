@@ -61,6 +61,10 @@ async function withNestApiServer(run, options = {}) {
     PHASE1_SETTINGS_STORE: process.env.PHASE1_SETTINGS_STORE,
     PHASE1_OPERATION_LOG_STORE: process.env.PHASE1_OPERATION_LOG_STORE,
     AUTH_TOKEN_SECRET: process.env.AUTH_TOKEN_SECRET,
+    AUTH_TOKEN_EXPIRES_IN_SECONDS:
+      process.env.AUTH_TOKEN_EXPIRES_IN_SECONDS,
+    AUTH_REFRESH_TOKEN_EXPIRES_IN_SECONDS:
+      process.env.AUTH_REFRESH_TOKEN_EXPIRES_IN_SECONDS,
     PRISMA_CONNECT_ON_BOOT: process.env.PRISMA_CONNECT_ON_BOOT,
     AI_ENABLED: process.env.AI_ENABLED,
     AI_MOCK_MODE: process.env.AI_MOCK_MODE,
@@ -74,6 +78,8 @@ async function withNestApiServer(run, options = {}) {
     AI_HISTORY_RETENTION_DAYS: process.env.AI_HISTORY_RETENTION_DAYS,
     OPERATION_LOG_RETENTION_DAYS:
       process.env.OPERATION_LOG_RETENTION_DAYS,
+    OPERATION_LOG_EXPORT_MAX_ROWS:
+      process.env.OPERATION_LOG_EXPORT_MAX_ROWS,
     RETENTION_CLEANUP_BATCH_SIZE:
       process.env.RETENTION_CLEANUP_BATCH_SIZE,
     TRAVEL_GROUP_ATTACHMENT_DIR: process.env.TRAVEL_GROUP_ATTACHMENT_DIR,
@@ -200,7 +206,9 @@ function createInMemoryPrisma(options = {}) {
     ),
   ];
   const operationLogs = [];
+  const operationLogArchives = [];
   const smsVerificationCodes = [];
+  const refreshSessions = [];
   const aiChatMessages = [];
   const travelAgencies = [];
   const guides = [];
@@ -228,6 +236,12 @@ function createInMemoryPrisma(options = {}) {
   const strikeBonusAwards = [];
   seedAiChatMessages(aiChatMessages, options.aiChatMessages || [], now);
   seedOperationLogs(operationLogs, options.operationLogs || [], now);
+  seedOperationLogs(
+    operationLogArchives,
+    options.operationLogArchives || [],
+    now,
+    true,
+  );
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
@@ -246,7 +260,9 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    operationLogArchives,
     smsVerificationCodes,
+    refreshSessions,
     aiChatMessages,
     travelAgencies,
     guides,
@@ -333,6 +349,75 @@ function createInMemoryPrisma(options = {}) {
         return copyRow(users[index]);
       },
     },
+    refreshSession: {
+      findUnique: async ({ where }) => {
+        const row = refreshSessions.find((session) =>
+          matchesUnique(session, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        return sortRows(
+          refreshSessions
+            .filter((session) => matchesWhere(session, where))
+            .map(copyRow),
+          orderBy,
+        );
+      },
+      create: async ({ data }) => {
+        if (
+          refreshSessions.some(
+            (session) => session.tokenHash === data.tokenHash,
+          )
+        ) {
+          throw createPrismaUniqueError('token_hash');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          expiresAt: asDate(data.expiresAt),
+          revokedAt: asDate(data.revokedAt),
+          replacedBySessionId: data.replacedBySessionId ?? null,
+          revokeReason: data.revokeReason ?? null,
+          lastUsedAt: asDate(data.lastUsedAt),
+          createdAt: asDate(data.createdAt) || new Date(),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        refreshSessions.push(row);
+        return copyRow(row);
+      },
+      updateMany: async ({ where, data } = {}) => {
+        let count = 0;
+        for (let index = 0; index < refreshSessions.length; index += 1) {
+          if (!matchesWhere(refreshSessions[index], where)) {
+            continue;
+          }
+          const updated = applyPrismaUpdateData(
+            refreshSessions[index],
+            data,
+          );
+          refreshSessions[index] = {
+            ...refreshSessions[index],
+            ...updated,
+            expiresAt:
+              data.expiresAt === undefined
+                ? refreshSessions[index].expiresAt
+                : asDate(data.expiresAt),
+            revokedAt:
+              data.revokedAt === undefined
+                ? refreshSessions[index].revokedAt
+                : asDate(data.revokedAt),
+            lastUsedAt:
+              data.lastUsedAt === undefined
+                ? refreshSessions[index].lastUsedAt
+                : asDate(data.lastUsedAt),
+            updatedAt: asDate(data.updatedAt) || new Date(),
+          };
+          count += 1;
+        }
+        return { count };
+      },
+    },
     systemSetting: {
       findMany: async ({ where, orderBy } = {}) => {
         return sortRows(
@@ -385,11 +470,70 @@ function createInMemoryPrisma(options = {}) {
       count: async ({ where } = {}) => {
         return operationLogs.filter((log) => matchesWhere(log, where)).length;
       },
+      findUnique: async ({ where } = {}) => {
+        const row = operationLogs.find((log) => matchesUnique(log, where));
+        return row ? copyRow(row) : null;
+      },
       deleteMany: async ({ where } = {}) => {
         let count = 0;
         for (let index = operationLogs.length - 1; index >= 0; index -= 1) {
           if (matchesWhere(operationLogs[index], where)) {
             operationLogs.splice(index, 1);
+            count += 1;
+          }
+        }
+        return { count };
+      },
+    },
+    operationLogArchive: {
+      createMany: async ({ data, skipDuplicates } = {}) => {
+        let count = 0;
+        for (const value of data || []) {
+          const duplicate = operationLogArchives.some(
+            (row) => row.id === value.id,
+          );
+          if (duplicate && skipDuplicates) {
+            continue;
+          }
+          if (duplicate) {
+            throw createPrismaUniqueError('id');
+          }
+          operationLogArchives.push({
+            ...value,
+            archivedAt: asDate(value.archivedAt) || new Date(),
+            createdAt: asDate(value.createdAt) || new Date(),
+          });
+          count += 1;
+        }
+        return { count };
+      },
+      findMany: async ({ where, orderBy, skip, take } = {}) => {
+        const rows = sortRows(
+          operationLogArchives
+            .filter((log) => matchesWhere(log, where))
+            .map(copyRow),
+          orderBy,
+        );
+        const start = skip || 0;
+        return rows.slice(start, take ? start + take : rows.length);
+      },
+      findUnique: async ({ where } = {}) => {
+        const row = operationLogArchives.find((log) =>
+          matchesUnique(log, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      count: async ({ where } = {}) =>
+        operationLogArchives.filter((log) => matchesWhere(log, where)).length,
+      deleteMany: async ({ where } = {}) => {
+        let count = 0;
+        for (
+          let index = operationLogArchives.length - 1;
+          index >= 0;
+          index -= 1
+        ) {
+          if (matchesWhere(operationLogArchives[index], where)) {
+            operationLogArchives.splice(index, 1);
             count += 1;
           }
         }
@@ -534,6 +678,7 @@ function createInMemoryPrisma(options = {}) {
       tastingItems: travelGroupTastingItems,
       users,
       salesOrders,
+      travelGroupFinanceSummaries,
     }),
     guideCarriedGroup: createTravelGroupDelegate(guideCarriedGroups),
     pendingTravelGroup: createTravelGroupDelegate(pendingTravelGroups),
@@ -603,6 +748,8 @@ function createInMemoryPrisma(options = {}) {
           id: data.id || crypto.randomUUID(),
           createdAt: asDate(data.createdAt) || new Date(),
           updatedAt: asDate(data.updatedAt) || new Date(),
+          salesEditCount: data.salesEditCount ?? 0,
+          salesEditedAt: asDate(data.salesEditedAt) || null,
         };
         if (failSalesOrderCreateOrderNoOnce) {
           failSalesOrderCreateOrderNoOnce = false;
@@ -634,6 +781,20 @@ function createInMemoryPrisma(options = {}) {
           afterSalesOrders,
           commissionRecords,
         );
+      },
+      updateMany: async ({ where, data } = {}) => {
+        let count = 0;
+        for (let index = 0; index < salesOrders.length; index += 1) {
+          if (!matchesWhere(salesOrders[index], where)) {
+            continue;
+          }
+          salesOrders[index] = applyAtomicUpdateData(
+            salesOrders[index],
+            data,
+          );
+          count += 1;
+        }
+        return { count };
       },
       update: async ({ where, data, include } = {}) => {
         const index = salesOrders.findIndex((order) =>
@@ -815,7 +976,9 @@ function createInMemoryPrisma(options = {}) {
     users,
     systemSettings,
     operationLogs,
+    operationLogArchives,
     smsVerificationCodes,
+    refreshSessions,
     aiChatMessages,
     travelAgencies,
     guides,
@@ -1097,6 +1260,29 @@ function createCommissionRecordDelegate(rows, relations = {}) {
     },
     create: async ({ data, include } = {}) => {
       const row = normalizeCommissionRecordRow(data);
+      const duplicate = rows.find(
+        (item) =>
+          row.salesOrderId != null &&
+          item.salesOrderId === row.salesOrderId &&
+          item.targetType === row.targetType &&
+          item.targetUserId === row.targetUserId &&
+          Boolean(item.manualInput) === Boolean(row.manualInput),
+      );
+      if (duplicate) {
+        const error = new Error(
+          'Unique order commission record constraint failed in test Prisma store.',
+        );
+        error.code = 'P2002';
+        error.meta = {
+          target: [
+            'salesOrderId',
+            'targetType',
+            'targetUserId',
+            'manualInput',
+          ],
+        };
+        throw error;
+      }
       rows.push(row);
       return withCommissionRecordIncludes(row, include, relations);
     },
@@ -1283,28 +1469,36 @@ function createTravelGroupDelegate(rows, options = {}) {
   const tastingItems = options.tastingItems || [];
   const users = options.users || [];
   const salesOrders = options.salesOrders || [];
+  const travelGroupFinanceSummaries =
+    options.travelGroupFinanceSummaries || [];
+  const relations = {
+    tastingItems,
+    users,
+    salesOrders,
+    travelGroupFinanceSummaries,
+  };
   return {
     findUnique: async ({ where, include } = {}) => {
       const row = rows.find((item) => matchesUnique(item, where));
       return row
-        ? withTravelGroupIncludes(row, include, {
-            tastingItems,
-            users,
-            salesOrders,
-          })
+        ? withTravelGroupIncludes(row, include, relations)
         : null;
     },
     findMany: async ({ where, include, orderBy, take } = {}) => {
       const result = sortRows(
-        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        rows
+          .map((item) =>
+            withTravelGroupIncludes(
+              item,
+              { financeSummary: true },
+              relations,
+            ),
+          )
+          .filter((item) => matchesWhere(item, where)),
         orderBy,
       );
       return result.slice(0, take || result.length).map((row) =>
-        withTravelGroupIncludes(row, include, {
-          tastingItems,
-          users,
-          salesOrders,
-        }),
+        withTravelGroupIncludes(row, include, relations),
       );
     },
     create: async ({ data, include } = {}) => {
@@ -1315,6 +1509,10 @@ function createTravelGroupDelegate(rows, options = {}) {
       const row = {
         ...withoutNested(data, 'tastingItems'),
         id: data.id || crypto.randomUUID(),
+        parkingFeeCents: data.parkingFeeCents ?? 500,
+        cigaretteFeeCents: data.cigaretteFeeCents ?? null,
+        tasterEditCount: data.tasterEditCount ?? 0,
+        tasterLastEditedAt: asDate(data.tasterLastEditedAt) || null,
         createdAt: asDate(data.createdAt) || new Date(),
         updatedAt: asDate(data.updatedAt) || new Date(),
       };
@@ -1328,11 +1526,18 @@ function createTravelGroupDelegate(rows, options = {}) {
           updatedAt: asDate(item.updatedAt) || new Date(),
         });
       }
-      return withTravelGroupIncludes(row, include, {
-        tastingItems,
-        users,
-        salesOrders,
-      });
+      return withTravelGroupIncludes(row, include, relations);
+    },
+    updateMany: async ({ where, data } = {}) => {
+      let count = 0;
+      for (let index = 0; index < rows.length; index += 1) {
+        if (!matchesWhere(rows[index], where)) {
+          continue;
+        }
+        rows[index] = applyAtomicUpdateData(rows[index], data);
+        count += 1;
+      }
+      return { count };
     },
     update: async ({ where, data, include } = {}) => {
       if (failUpdateOnce) {
@@ -1425,18 +1630,36 @@ function seedAiChatMessages(rows, seeds, now) {
   }
 }
 
-function seedOperationLogs(rows, seeds, now) {
+function seedOperationLogs(rows, seeds, now, archived = false) {
   for (const seed of seeds) {
     rows.push({
       id: seed.id || crypto.randomUUID(),
       userId: seed.userId ?? null,
+      actorNameSnapshot: seed.actorNameSnapshot ?? null,
+      actorUsernameSnapshot: seed.actorUsernameSnapshot ?? null,
+      actorRoleSnapshot: seed.actorRoleSnapshot ?? null,
+      module: seed.module ?? null,
+      operationType: seed.operationType ?? null,
       action: seed.action || 'test.action',
       entityType: seed.entityType || 'test',
       entityId: seed.entityId ?? null,
+      result: seed.result ?? null,
       beforeData: seed.beforeData ?? null,
       afterData: seed.afterData ?? null,
+      requestSummary: seed.requestSummary ?? null,
       sanitizationSummary: seed.sanitizationSummary ?? null,
+      httpMethod: seed.httpMethod ?? null,
+      requestPath: seed.requestPath ?? null,
+      requestId: seed.requestId ?? null,
+      statusCode: seed.statusCode ?? null,
+      errorCode: seed.errorCode ?? null,
+      errorMessage: seed.errorMessage ?? null,
+      userAgent: seed.userAgent ?? null,
+      durationMs: seed.durationMs ?? null,
       ipAddress: seed.ipAddress ?? null,
+      archivedAt: archived
+        ? asDate(seed.archivedAt) || now
+        : asDate(seed.archivedAt) || null,
       createdAt: asDate(seed.createdAt) || now,
     });
   }
@@ -1497,6 +1720,8 @@ function seedTravelGroups(rows, seeds, now) {
       departureTime: seedValue(seed, 'departureTime', null),
       remarks: seedValue(seed, 'remarks', null),
       status: seed.status || 'UNMARKED',
+      parkingFeeCents: seed.parkingFeeCents ?? 500,
+      cigaretteFeeCents: seedValue(seed, 'cigaretteFeeCents', null),
       salesAmountCents: seed.salesAmountCents ?? 0,
       paidDepositCents: seed.paidDepositCents ?? 0,
       cashOnDeliveryCents: seed.cashOnDeliveryCents ?? 0,
@@ -1514,6 +1739,8 @@ function seedTravelGroups(rows, seeds, now) {
       tasterId: seed.tasterId ?? null,
       tasterSummary: seed.tasterSummary ?? null,
       tasterSummaryAt: asDate(seed.tasterSummaryAt) || null,
+      tasterEditCount: seed.tasterEditCount ?? 0,
+      tasterLastEditedAt: asDate(seed.tasterLastEditedAt) || null,
       postMarkEditedAt: asDate(seed.postMarkEditedAt) || null,
       postMarkEditedById: seed.postMarkEditedById ?? null,
       createdById: seed.createdById ?? null,
@@ -1589,6 +1816,8 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       markedAt: asDate(seed.markedAt) || null,
       outreachUserId: seed.outreachUserId ?? null,
       salesUserId: seed.salesUserId ?? null,
+      salesEditCount: seed.salesEditCount ?? 0,
+      salesEditedAt: asDate(seed.salesEditedAt) || null,
       createdById: seed.createdById ?? null,
       updatedById: seed.updatedById ?? null,
       createdAt: asDate(seed.createdAt) || now,
@@ -1806,6 +2035,25 @@ function matchesUnique(row, where = {}) {
   );
 }
 
+function applyAtomicUpdateData(row, data = {}) {
+  const updated = { ...row };
+  for (const [key, value] of Object.entries(data || {})) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      Number.isFinite(Number(value.increment))
+    ) {
+      updated[key] = Number(updated[key] || 0) + Number(value.increment);
+    } else {
+      updated[key] = value;
+    }
+  }
+  if (data.updatedAt !== undefined) {
+    updated.updatedAt = asDate(data.updatedAt) || data.updatedAt;
+  }
+  return updated;
+}
+
 function matchesWhere(row, where = {}) {
   return Object.entries(where || {}).every(([key, value]) => {
     if (key === 'AND' && Array.isArray(value)) {
@@ -1886,20 +2134,24 @@ function sortRows(rows, orderBy) {
   if (!orderBy) {
     return rows;
   }
-  const [key, direction] = Object.entries(orderBy)[0] || [];
-  if (!key) {
-    return rows;
-  }
+  const clauses = Array.isArray(orderBy) ? orderBy : [orderBy];
   return rows.sort((left, right) => {
-    const leftValue =
-      left[key] instanceof Date ? left[key].getTime() : left[key];
-    const rightValue =
-      right[key] instanceof Date ? right[key].getTime() : right[key];
-    if (leftValue === rightValue) {
-      return 0;
+    for (const clause of clauses) {
+      const [key, direction] = Object.entries(clause || {})[0] || [];
+      if (!key) {
+        continue;
+      }
+      const leftValue =
+        left[key] instanceof Date ? left[key].getTime() : left[key];
+      const rightValue =
+        right[key] instanceof Date ? right[key].getTime() : right[key];
+      if (leftValue === rightValue) {
+        continue;
+      }
+      const result = leftValue > rightValue ? 1 : -1;
+      return direction === 'desc' ? -result : result;
     }
-    const result = leftValue > rightValue ? 1 : -1;
-    return direction === 'desc' ? -result : result;
+    return 0;
   });
 }
 
@@ -1971,6 +2223,8 @@ function withTravelGroupIncludes(group, include, relations) {
   const users = relations?.users || [];
   const salesOrders = relations?.salesOrders || [];
   const commissionRecords = relations?.commissionRecords || [];
+  const travelGroupFinanceSummaries =
+    relations?.travelGroupFinanceSummaries || [];
   if (include?.tastingItems) {
     row.tastingItems = tastingItems
       .filter((item) => item.travelGroupId === group.id)
@@ -2012,6 +2266,22 @@ function withTravelGroupIncludes(group, include, relations) {
         .map(copyRow),
       includeConfig.orderBy,
     );
+  }
+  if (include?.financeSummary) {
+    const summary = travelGroupFinanceSummaries.find(
+      (item) => item.travelGroupId === group.id,
+    );
+    const includeConfig =
+      typeof include.financeSummary === 'object'
+        ? include.financeSummary.include
+        : {};
+    row.financeSummary = summary
+      ? withTravelGroupFinanceSummaryIncludes(
+          summary,
+          includeConfig,
+          relations,
+        )
+      : null;
   }
   return row;
 }
@@ -2087,7 +2357,17 @@ function withSalesOrderIncludes(
       commissionRecords
         .filter((record) => record.salesOrderId === order.id)
         .filter((record) => matchesWhere(record, includeConfig.where))
-        .map(copyRow),
+        .map((record) =>
+          withCommissionRecordIncludes(record, includeConfig.include, {
+            salesOrders: [order],
+            salesOrderItems,
+            travelGroups,
+            customers,
+            users,
+            afterSalesOrders,
+            commissionRecords,
+          }),
+        ),
       includeConfig.orderBy,
     );
   }
@@ -2319,7 +2599,9 @@ async function requestJsonWithStage10ProductFixtures(
   const method = String(options.method || 'GET').toUpperCase();
   const isSalesOrderWrite =
     (method === 'POST' && pathName === '/api/sales-orders') ||
-    (method === 'PATCH' && /^\/api\/sales-orders\/[^/]+$/.test(pathName));
+    (method === 'PATCH' &&
+      (/^\/api\/sales-orders\/[^/]+$/.test(pathName) ||
+        /^\/api\/sales-orders\/[^/]+\/sales-edit$/.test(pathName)));
   const isTravelGroupWrite =
     (method === 'POST' && pathName === '/api/travel-groups') ||
     (method === 'PATCH' && /^\/api\/travel-groups\/[^/]+$/.test(pathName));
@@ -2489,21 +2771,52 @@ async function createUser(baseUrl, token, payload) {
       },
     );
     assert.equal(changed.response.status, 200);
-    assertSessionContract(changed.body.data);
-    return changed.body.data.user;
+    assert.deepEqual(changed.body.data, { passwordChanged: true });
+    return (
+      await login(
+        baseUrl,
+        result.body.data.user.username,
+        initialPassword,
+      )
+    ).user;
   }
   return result.body.data.user;
 }
 
 function assertSessionContract(session) {
+  if (!Object.hasOwn(session, 'accessToken')) {
+    assert.deepEqual(Object.keys(session).sort(), [
+      'dataScope',
+      'expiresAt',
+      'menus',
+      'permissions',
+      'token',
+      'user',
+    ]);
+    assert.equal(typeof session.token, 'string');
+    assert.equal(typeof session.expiresAt, 'string');
+    assertPublicUserContract(session.user);
+    assert.equal(Array.isArray(session.permissions), true);
+    assert.equal(Array.isArray(session.menus), true);
+    assert.equal(typeof session.dataScope, 'object');
+    return;
+  }
   assert.deepEqual(Object.keys(session).sort(), [
+    'accessToken',
+    'accessTokenExpiresAt',
     'dataScope',
     'expiresAt',
     'menus',
     'permissions',
+    'refreshToken',
+    'refreshTokenExpiresAt',
     'token',
     'user',
   ]);
+  assert.equal(session.accessToken, session.token);
+  assert.equal(session.accessTokenExpiresAt, session.expiresAt);
+  assert.equal(typeof session.refreshToken, 'string');
+  assert.equal(typeof session.refreshTokenExpiresAt, 'string');
   assert.equal(typeof session.token, 'string');
   assert.match(
     session.token,
@@ -2574,13 +2887,31 @@ function assertSettingsContract(settings) {
 function assertOperationLogContract(log) {
   assert.deepEqual(Object.keys(log).sort(), [
     'action',
+    'actorNameSnapshot',
+    'actorRoleSnapshot',
+    'actorUsernameSnapshot',
     'afterData',
+    'archived',
+    'archivedAt',
     'beforeData',
     'createdAt',
+    'durationMs',
     'entityId',
     'entityType',
+    'errorCode',
+    'errorMessage',
+    'httpMethod',
     'id',
     'ipAddress',
+    'module',
+    'operationType',
+    'requestId',
+    'requestPath',
+    'requestSummary',
+    'result',
+    'sanitizationSummary',
+    'statusCode',
+    'userAgent',
     'userId',
   ]);
   assert.equal(typeof log.id, 'string');

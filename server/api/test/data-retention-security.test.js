@@ -250,8 +250,10 @@ test('retention cleanup is dry-run by default and apply deletes only expired row
       question: 'current question',
     },
   ];
+  const operationArchives = [];
   const prisma = {
     operationLog: createCleanupDelegate(operationRows),
+    operationLogArchive: createArchiveDelegate(operationArchives),
     aiChatMessage: createCleanupDelegate(aiRows),
   };
   const policy = {
@@ -267,6 +269,7 @@ test('retention cleanup is dry-run by default and apply deletes only expired row
   });
   assert.equal(dryRun.mode, 'dry-run');
   assert.equal(dryRun.operationLogs.matchedCount, 5);
+  assert.equal(dryRun.operationLogs.archivedCount, 0);
   assert.equal(dryRun.operationLogs.deletedCount, 0);
   assert.equal(dryRun.aiHistory.matchedCount, 3);
   assert.equal(dryRun.aiHistory.deletedCount, 0);
@@ -285,6 +288,8 @@ test('retention cleanup is dry-run by default and apply deletes only expired row
   });
   assert.equal(applied.mode, 'apply');
   assert.equal(applied.operationLogs.deletedCount, 5);
+  assert.equal(applied.operationLogs.archivedCount, 5);
+  assert.equal(applied.operationLogs.failedCount, 0);
   assert.equal(applied.operationLogs.batches, 3);
   assert.equal(applied.aiHistory.deletedCount, 3);
   assert.equal(applied.aiHistory.batches, 2);
@@ -292,6 +297,7 @@ test('retention cleanup is dry-run by default and apply deletes only expired row
     operationRows.map((row) => row.id).sort(),
     ['operation-boundary', 'operation-current'],
   );
+  assert.equal(operationArchives.length, 5);
   assert.deepEqual(
     aiRows.map((row) => row.id).sort(),
     ['ai-boundary', 'ai-current'],
@@ -300,6 +306,104 @@ test('retention cleanup is dry-run by default and apply deletes only expired row
   assert.equal(logs[0].includes('must never be logged'), false);
   assert.equal(logs[0].includes('private historical question'), false);
   assert.equal(logs[0].includes('retention-test-apply'), true);
+});
+
+test('operation log archive is idempotent when an archive row already exists', async () => {
+  const now = new Date('2026-07-20T00:00:00.000Z');
+  const online = [
+    {
+      id: 'already-archived',
+      action: 'customers.read',
+      entityType: 'customer',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    },
+  ];
+  const archives = [
+    {
+      ...online[0],
+      archivedAt: now,
+    },
+  ];
+  const prisma = {
+    operationLog: createCleanupDelegate(online),
+    operationLogArchive: createArchiveDelegate(archives),
+    aiChatMessage: createCleanupDelegate([]),
+  };
+  const policy = {
+    operationLogRetentionDays: 30,
+    aiHistoryRetentionDays: 7,
+    batchSize: 10,
+  };
+
+  const first = await executeRetentionCleanup(prisma, {
+    apply: true,
+    now,
+    policy,
+  });
+  assert.equal(first.operationLogs.archivedCount, 0);
+  assert.equal(first.operationLogs.skippedCount, 1);
+  assert.equal(first.operationLogs.deletedCount, 1);
+  assert.equal(first.operationLogs.failedCount, 0);
+  assert.equal(online.length, 0);
+  assert.equal(archives.length, 1);
+
+  const second = await executeRetentionCleanup(prisma, {
+    apply: true,
+    now,
+    policy,
+  });
+  assert.equal(second.operationLogs.matchedCount, 0);
+  assert.equal(second.operationLogs.archivedCount, 0);
+  assert.equal(archives.length, 1);
+});
+
+test('operation log archive failure rolls back its copy and preserves online rows', async () => {
+  const now = new Date('2026-07-20T00:00:00.000Z');
+  const online = [
+    {
+      id: 'archive-failure',
+      action: 'customers.update',
+      entityType: 'customer',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    },
+  ];
+  const archives = [];
+  const operationLog = createCleanupDelegate(online);
+  const archiveDelegate = createArchiveDelegate(archives);
+  archiveDelegate.createMany = async ({ data }) => {
+    archives.push({ ...data[0] });
+    throw new Error('simulated archive storage failure');
+  };
+  const prisma = {
+    operationLog,
+    operationLogArchive: archiveDelegate,
+    aiChatMessage: createCleanupDelegate([]),
+    $transaction: async (callback) => {
+      const onlineSnapshot = online.map((row) => ({ ...row }));
+      const archiveSnapshot = archives.map((row) => ({ ...row }));
+      try {
+        return await callback(prisma);
+      } catch (error) {
+        online.splice(0, online.length, ...onlineSnapshot);
+        archives.splice(0, archives.length, ...archiveSnapshot);
+        throw error;
+      }
+    },
+  };
+
+  const result = await executeRetentionCleanup(prisma, {
+    apply: true,
+    now,
+    policy: {
+      operationLogRetentionDays: 30,
+      aiHistoryRetentionDays: 7,
+      batchSize: 10,
+    },
+  });
+  assert.equal(result.operationLogs.failedCount, 1);
+  assert.equal(result.operationLogs.deletedCount, 0);
+  assert.equal(online.length, 1);
+  assert.equal(archives.length, 0);
 });
 
 test('AI prompt and persisted history use a minimized question while internal request completes', async () => {
@@ -396,9 +500,24 @@ test('schema migration records audit sanitization metadata without storing clean
     path.resolve(__dirname, '../scripts/cleanup-retained-data.ts'),
     'utf8',
   );
+  const archiveMigration = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../prisma/migrations/20260725000100_operation_log_audit_archive/migration.sql',
+    ),
+    'utf8',
+  );
 
   assert.match(schema, /sanitizationSummary\s+Json\?/);
+  assert.match(schema, /model OperationLogArchive/);
+  assert.match(schema, /actorUsernameSnapshot\s+String\?/);
+  assert.match(schema, /operationType\s+OperationLogType\?/);
   assert.match(migration, /sanitization_summary/);
+  assert.match(archiveMigration, /CREATE TABLE `operation_log_archives`/);
+  assert.doesNotMatch(
+    archiveMigration,
+    /FOREIGN KEY.*operation_log_archives/is,
+  );
   assert.match(cleanupScript, /args\.includes\('--apply'\)/);
   assert.doesNotMatch(cleanupScript, /deleteMany\(\{\s*\}\)/);
 });
@@ -412,7 +531,7 @@ function createCleanupDelegate(rows) {
         .filter((row) => matchesCleanupWhere(row, where))
         .sort((left, right) => left.createdAt - right.createdAt)
         .slice(0, take || rows.length)
-        .map((row) => ({ id: row.id })),
+        .map((row) => ({ ...row })),
     deleteMany: async ({ where } = {}) => {
       const ids = new Set(where?.id?.in || []);
       let count = 0;
@@ -423,6 +542,29 @@ function createCleanupDelegate(rows) {
         }
       }
       return { count };
+    },
+  };
+}
+
+function createArchiveDelegate(rows) {
+  return {
+    createMany: async ({ data, skipDuplicates } = {}) => {
+      let count = 0;
+      for (const row of data || []) {
+        if (rows.some((item) => item.id === row.id)) {
+          if (skipDuplicates) continue;
+          throw new Error('duplicate archive id');
+        }
+        rows.push({ ...row });
+        count += 1;
+      }
+      return { count };
+    },
+    findMany: async ({ where } = {}) => {
+      const ids = new Set(where?.id?.in || []);
+      return rows
+        .filter((row) => ids.size === 0 || ids.has(row.id))
+        .map((row) => ({ id: row.id }));
     },
   };
 }

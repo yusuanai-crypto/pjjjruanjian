@@ -21,9 +21,13 @@ const {
   sanitizeAttachmentOriginalName,
   validateTravelGroupAttachmentFile,
 } = require('../src/modules/business-data/travel-group-attachment-storage.helper');
+const {
+  formatShanghaiBusinessDate,
+} = require('../src/modules/business-data/reconciliation-calculation.helper');
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHANGHAI_TODAY = formatShanghaiBusinessDate(new Date());
 
 test('travel group attachment type and path validation accepts supported documents and rejects unsafe input', () => {
   const supported = [
@@ -227,11 +231,11 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
 
         const group = await createTravelGroup(baseUrl, frontDesk.token, {
           tasterId: assignedTasterUser.id,
-          visitDate: '2026-07-15',
+          visitDate: SHANGHAI_TODAY,
         });
         const otherGroup = await createTravelGroup(baseUrl, admin.token, {
           tasterId: unrelatedTasterUser.id,
-          visitDate: '2026-07-16',
+          visitDate: SHANGHAI_TODAY,
         });
 
         const keyPhotoUpload = await uploadFiles(
@@ -314,6 +318,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
         });
         assert.equal(rawGroup.keyCustomerPhotos.length, 3);
         assert.equal(rawGroup.guestInfoAttachments.length, 2);
+        assert.equal(rawGroup.tasterEditCount, 1);
         for (const attachment of [
           ...rawGroup.keyCustomerPhotos,
           ...rawGroup.guestInfoAttachments,
@@ -577,6 +582,11 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           { method: 'DELETE', token: assignedTaster.token },
         );
         assert.equal(tasterDelete.response.status, 200);
+        assert.equal(tasterDelete.body.data.travelGroup.tasterEditCount, 2);
+        assert.equal(
+          tasterDelete.body.data.travelGroup.tasterEditRemaining,
+          0,
+        );
 
         const adminDeleted = adminUpload.body.data.attachments[0];
         const adminDelete = await requestJson(
@@ -597,7 +607,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
 
         const uploadLogs = await requestJson(
           baseUrl,
-          '/api/operation-logs?action=travel_groups.attachments.upload',
+          '/api/operation-logs?action=travel_groups.attachments.upload&result=SUCCESS',
           { token: admin.token },
         );
         assert.equal(uploadLogs.response.status, 200);
@@ -605,7 +615,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
         assertNoStorageLocation(uploadLogs.body.data.logs);
         const deleteLogs = await requestJson(
           baseUrl,
-          '/api/operation-logs?action=travel_groups.attachments.delete',
+          '/api/operation-logs?action=travel_groups.attachments.delete&result=SUCCESS',
           { token: admin.token },
         );
         assert.equal(deleteLogs.response.status, 200);
@@ -628,14 +638,19 @@ test('travel group attachment upload removes the physical file when metadata per
           password: 'Password123',
           role: 'taster',
         });
+        const tasterSession = await login(
+          baseUrl,
+          taster.username,
+          'Password123',
+        );
         const group = await createTravelGroup(baseUrl, admin.token, {
           tasterId: taster.id,
-          visitDate: '2026-07-20',
+          visitDate: SHANGHAI_TODAY,
         });
 
         const failedUpload = await uploadFiles(
           baseUrl,
-          admin.token,
+          tasterSession.token,
           group.id,
           'guest_info',
           [
@@ -660,6 +675,7 @@ test('travel group attachment upload removes the physical file when metadata per
         );
         assert.equal(detail.response.status, 200);
         assert.equal(detail.body.data.travelGroup.guestInfoAttachments, null);
+        assert.equal(detail.body.data.travelGroup.tasterEditCount, 0);
       },
       {
         env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
@@ -688,6 +704,7 @@ async function createTravelGroup(baseUrl, token, overrides = {}) {
       visitDate: overrides.visitDate || '2026-07-15',
       travelAgency: `Attachment Agency ${suffix}`,
       guideId: guideResult.body.data.guide.id,
+      cigaretteFeeCents: 100,
       tasterId: overrides.tasterId,
       liaisonTasterId: overrides.liaisonTasterId,
     },

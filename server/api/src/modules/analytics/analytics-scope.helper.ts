@@ -145,10 +145,18 @@ function buildDateFieldWhere(
   }
   const range: Record<string, Date> = {};
   if (dateRange.dateFrom) {
-    range.gte = toDateBound(dateRange.dateFrom, false);
+    range.gte = toDateBound(
+      dateRange.dateFrom,
+      false,
+      includeFullDateToDay,
+    );
   }
   if (dateRange.dateTo) {
-    range.lte = toDateBound(dateRange.dateTo, includeFullDateToDay);
+    range.lte = toDateBound(
+      dateRange.dateTo,
+      includeFullDateToDay,
+      includeFullDateToDay,
+    );
   }
   if (Object.keys(range).length === 0) {
     return null;
@@ -158,14 +166,19 @@ function buildDateFieldWhere(
   };
 }
 
-function toDateBound(value: string | Date, endOfDay: boolean) {
+function toDateBound(
+  value: string | Date,
+  endOfDay: boolean,
+  useShanghaiTimezone: boolean,
+) {
   if (value instanceof Date) {
     return value;
   }
   const text = String(value).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const timezoneSuffix = useShanghaiTimezone ? '+08:00' : 'Z';
     return new Date(
-      `${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`,
+      `${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}${timezoneSuffix}`,
     );
   }
   return new Date(text);

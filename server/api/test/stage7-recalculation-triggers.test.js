@@ -863,8 +863,7 @@ test('contract: cancelled orders zero automatic records and remind manual taster
         method: 'PATCH',
         token: finance.token,
         body: {
-          travelGroupId: TRAVEL_GROUP_ID,
-          tasterId: TASTER_USER_ID,
+          salesOrderId: createdOrder.id,
           amountCents: 9999,
           calculationNote: 'stage7 smoke taster manual before cancel',
         },

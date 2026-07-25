@@ -709,8 +709,26 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                   value: formatMoneyCents(item.logisticsFeeCents),
                 ),
                 _DetailLine(
-                  label: '员工提成（汇总）',
-                  value: formatMoneyCents(item.employeeCommissionCents),
+                  label: '停车费',
+                  value: formatMoneyCents(item.parkingFeeCents),
+                ),
+                _DetailLine(
+                  label: '香烟费用',
+                  value: item.cigaretteFeeCents == null
+                      ? '未填写'
+                      : formatMoneyCents(item.cigaretteFeeCents!),
+                ),
+                _DetailLine(
+                  label: '销售提成',
+                  value: formatMoneyCents(item.salesCommissionCents),
+                ),
+                _DetailLine(
+                  label: '组长提成',
+                  value: formatMoneyCents(item.leaderCommissionCents),
+                ),
+                _DetailLine(
+                  label: '外联提成',
+                  value: formatMoneyCents(item.outreachCommissionCents),
                 ),
                 _DetailLine(
                   label: '品鉴师提成（汇总）',

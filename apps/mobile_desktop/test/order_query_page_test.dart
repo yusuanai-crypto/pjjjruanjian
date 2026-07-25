@@ -157,6 +157,10 @@ void main() {
     expect(find.text('客户与收货'), findsOneWidget);
     expect(find.text('酒品明细'), findsOneWidget);
     expect(find.text('财务与物流'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('order-edit-sales-user-id-field')),
+      findsOneWidget,
+    );
 
     await tester.enterText(
       find.byKey(const ValueKey('order-edit-sales-form-no-field')),
@@ -295,9 +299,31 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
     await tester.pumpAndSettle();
 
+    expect(find.text('确认使用修改机会'), findsOneWidget);
+    await tester
+        .tap(find.byKey(const ValueKey('sales-order-edit-confirm-button')));
+    await tester.pumpAndSettle();
+
     expect(find.text('客户与收货'), findsOneWidget);
     expect(find.text('酒品明细'), findsOneWidget);
     expect(find.text('财务与物流'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('order-edit-sales-user-id-field')),
+      findsNothing,
+    );
+
+    final saveButton = find.byKey(const ValueKey('order-edit-save-button'));
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.salesEditPatchPaths, [
+      '/api/sales-orders/order-1/sales-edit',
+    ]);
+    expect(apiClient.salesOrderUpdatePaths, isEmpty);
+    expect(apiClient.financePatchPaths, isEmpty);
+    expect(apiClient.packingPatchPaths, isEmpty);
+    expect(apiClient.lastSalesEditBody?['salesUserId'], isNull);
   });
 
   testWidgets('boss sees read-only details without edit or mark actions',
@@ -316,6 +342,22 @@ void main() {
     expect(find.text('订单未标记'), findsNothing);
     expect(find.text('上单金额'), findsNothing);
     expect(find.text('品鉴师提成'), findsNothing);
+  });
+
+  testWidgets('sales edit button is hidden after the single chance is used',
+      (tester) async {
+    final apiClient = _FakeApiClient()..salesEdited = true;
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.sales);
+    await _openOrderDetailDialog(tester);
+
+    expect(
+      find.byKey(const ValueKey('sales-order-edit-remaining')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+      findsNothing,
+    );
   });
 
   testWidgets('after sales can use the page as an order locator',
@@ -635,6 +677,7 @@ class _FakeApiClient extends ApiClient {
   final List<String> salesSheetPaths = <String>[];
   final List<String> financePatchPaths = <String>[];
   final List<String> packingPatchPaths = <String>[];
+  final List<String> salesEditPatchPaths = <String>[];
   final List<String> qrCodePaths = <String>[];
   final String? salesSheetQrUrl;
   final bool failDownload;
@@ -643,11 +686,13 @@ class _FakeApiClient extends ApiClient {
   Map<String, dynamic>? lastOrderUpdateBody;
   Map<String, dynamic>? lastOrderFinanceBody;
   Map<String, dynamic>? lastOrderPackingBody;
+  Map<String, dynamic>? lastSalesEditBody;
   Map<String, dynamic>? lastQrCodeBody;
   String? lastDownloadDefaultFileName;
   Completer<void>? downloadGate;
   bool customerMark = false;
   bool orderMark = false;
+  bool salesEdited = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -767,6 +812,16 @@ class _FakeApiClient extends ApiClient {
         },
       };
     }
+    if (path == '/api/sales-orders/order-1/sales-edit') {
+      salesEditPatchPaths.add(path);
+      lastSalesEditBody = Map<String, dynamic>.from(body ?? {});
+      salesEdited = true;
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
     if (path == '/api/sales-orders/order-1') {
       salesOrderUpdatePaths.add(path);
       lastOrderUpdateBody = Map<String, dynamic>.from(body ?? {});
@@ -799,6 +854,12 @@ class _FakeApiClient extends ApiClient {
 
   Map<String, dynamic> _currentOrderJson() {
     final order = _orderJson(customerMark: customerMark, orderMark: orderMark);
+    order.addAll({
+      'salesEditCount': salesEdited ? 1 : 0,
+      'salesEditLimit': 1,
+      'salesEditRemaining': salesEdited ? 0 : 1,
+      'canEditByCurrentUser': !salesEdited,
+    });
     final updateBody = lastOrderUpdateBody;
     if (updateBody != null) {
       order.addAll(updateBody);

@@ -103,6 +103,25 @@ export class SalesOrdersNestController {
     };
   }
 
+  @Patch(':id/sales-edit')
+  async salesEdit(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.salesEditSalesOrder(
+        actor,
+        id,
+        body,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      ),
+    };
+  }
+
   @Patch(':id/finance')
   async updateFinance(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
