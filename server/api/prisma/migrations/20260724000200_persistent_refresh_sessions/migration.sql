@@ -18,7 +18,7 @@ CREATE TABLE `refresh_sessions` (
   INDEX `refresh_sessions_expires_at_idx`(`expires_at`),
   INDEX `refresh_sessions_revoked_at_idx`(`revoked_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `refresh_sessions`
   ADD CONSTRAINT `refresh_sessions_user_id_fkey`
