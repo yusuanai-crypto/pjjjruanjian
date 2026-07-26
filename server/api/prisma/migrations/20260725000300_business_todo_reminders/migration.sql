@@ -32,7 +32,7 @@ CREATE TABLE `business_todos` (
   INDEX `business_todos_target_role_status_idx` (`target_role`, `status`),
   INDEX `business_todos_status_detected_idx` (`status`, `last_detected_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `todo_recipients` (
   `id` CHAR(36) NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE `todo_recipients` (
   INDEX `todo_recipients_user_read_idx` (`user_id`, `read_at`),
   INDEX `todo_recipients_remind_at_idx` (`personal_remind_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `todo_recipients`
   ADD CONSTRAINT `todo_recipients_todo_id_fkey`
