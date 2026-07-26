@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,7 +16,12 @@ import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../../shared/widgets/time_picker_field.dart';
+import '../guide_management/remote_guide_picker_dialog.dart';
 import '../sales_orders/order_form_page.dart';
+import '../travel_group_attachments/attachment_picker_service.dart';
+import '../travel_group_attachments/downloaded_file_service.dart';
+import '../travel_group_attachments/fullscreen_photo_preview_page.dart';
+import '../travel_group_attachments/incoming_attachment_service.dart';
 import '../travel_group_detail/travel_group_detail_panel.dart';
 import '../travel_groups/tasting_items_editor.dart';
 
@@ -37,6 +44,10 @@ class TravelGroupQueryPage extends StatefulWidget {
     required this.role,
     required this.currentUserId,
     this.initialTasterScope = tasterScopeAll,
+    this.attachmentPickerService,
+    this.incomingAttachmentService,
+    this.downloadedFileService,
+    this.photoPreviewOrientationService,
   });
 
   final ApiClient apiClient;
@@ -44,6 +55,10 @@ class TravelGroupQueryPage extends StatefulWidget {
   final UserRole role;
   final String currentUserId;
   final String initialTasterScope;
+  final AttachmentPickerService? attachmentPickerService;
+  final IncomingAttachmentService? incomingAttachmentService;
+  final DownloadedFileService? downloadedFileService;
+  final PhotoPreviewOrientationService? photoPreviewOrientationService;
 
   @override
   State<TravelGroupQueryPage> createState() => _TravelGroupQueryPageState();
@@ -51,6 +66,10 @@ class TravelGroupQueryPage extends StatefulWidget {
 
 class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   late BusinessApi _businessApi;
+  late final AttachmentPickerService _attachmentPickerService;
+  late final IncomingAttachmentService _incomingAttachmentService;
+  late final DownloadedFileService _downloadedFileService;
+  late final PhotoPreviewOrientationService _photoPreviewOrientationService;
   late final TextEditingController _keywordController;
 
   late DateTime _start;
@@ -60,6 +79,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   String _groupTypeFilter = _allFilter;
   String _travelAgencyFilter = _allFilter;
   String _guideFilter = _allFilter;
+  GuideRecord? _selectedGuideFilter;
   String _tasterFilter = _allFilter;
   late String _tasterScope;
   String? _selectedId;
@@ -72,6 +92,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   List<TasterOption> _tasters = const <TasterOption>[];
   final Set<String> _markingIds = <String>{};
   final Set<String> _summarizingIds = <String>{};
+  String? _activeDetailGroupId;
+  bool _handlingIncomingAttachments = false;
 
   @override
   void initState() {
@@ -80,8 +102,18 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     _tasterScope = _normalizedInitialTasterScope();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _attachmentPickerService =
+        widget.attachmentPickerService ?? AttachmentPickerService();
+    _incomingAttachmentService =
+        widget.incomingAttachmentService ?? IncomingAttachmentService.instance;
+    _downloadedFileService =
+        widget.downloadedFileService ?? DownloadedFileService();
+    _photoPreviewOrientationService = widget.photoPreviewOrientationService ??
+        const SystemPhotoPreviewOrientationService();
+    _incomingAttachmentService.addListener(_onIncomingAttachmentsChanged);
     _keywordController = TextEditingController();
     _loadData();
+    unawaited(_incomingAttachmentService.initialize());
   }
 
   @override
@@ -123,6 +155,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
 
   @override
   void dispose() {
+    _incomingAttachmentService.removeListener(_onIncomingAttachmentsChanged);
     _keywordController.dispose();
     super.dispose();
   }
@@ -146,7 +179,11 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           tasterId: _tasterIdFilter(),
           liaisonTasterId: _liaisonTasterIdFilter(),
         ),
-        _businessApi.listGuides(isActive: true, limit: 200),
+        _businessApi.listGuidesPage(
+          page: 1,
+          pageSize: 20,
+          isActive: true,
+        ),
         _businessApi.listTasters(),
       ]);
 
@@ -155,17 +192,16 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       }
 
       final groups = results[0] as List<TravelGroupRecord>;
-      final guides = results[1] as List<GuideRecord>;
+      final guidePage = results[1] as GuidePage;
+      final guides = _selectedGuideFilter == null
+          ? guidePage.guides
+          : _mergeGuideRecords(guidePage.guides, [_selectedGuideFilter!]);
       final tasters = results[2] as List<TasterOption>;
 
       setState(() {
         _groups = groups;
         _guides = guides;
         _tasters = tasters;
-        if (_guideFilter != _allFilter &&
-            !guides.any((guide) => guide.id == _guideFilter)) {
-          _guideFilter = _allFilter;
-        }
         if (_tasterFilter != _allFilter &&
             !tasters.any((taster) => taster.id == _tasterFilter)) {
           _tasterFilter = _allFilter;
@@ -192,6 +228,29 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       return _tasterScopeReception;
     }
     return _tasterScopeAll;
+  }
+
+  Future<void> _pickGuideFilter() async {
+    final result = await showDialog<GuidePickerResult>(
+      context: context,
+      builder: (context) => RemoteGuidePickerDialog(
+        businessApi: _businessApi,
+        title: '筛选导游',
+        initialGuide: _selectedGuideFilter,
+        allowClear: true,
+      ),
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _selectedGuideFilter = result.guide;
+      _guideFilter = result.guide?.id ?? _allFilter;
+      if (result.guide != null) {
+        _guides = _mergeGuideRecords(_guides, [result.guide!]);
+      }
+    });
+    _loadData();
   }
 
   String? _selectedIdFor(List<TravelGroupRecord> groups) {
@@ -231,117 +290,294 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     return null;
   }
 
+  void _onIncomingAttachmentsChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    final activeId = _activeDetailGroupId;
+    if (activeId == null || _handlingIncomingAttachments) {
+      return;
+    }
+    final group = _recordById(activeId);
+    if (group == null || !_canDeleteAttachments(group)) {
+      return;
+    }
+    final claimed = _incomingAttachmentService.claim(
+      category: PendingAttachmentCategory.guestInfo,
+      includeColdStart: false,
+      maxCount: attachmentMaxFileCount,
+    );
+    if (claimed.isNotEmpty) {
+      unawaited(_uploadClaimedIncoming(group, claimed));
+    }
+  }
+
+  Future<void> _uploadClaimedIncoming(
+    TravelGroupRecord group,
+    List<PendingIncomingAttachment> claimed,
+  ) async {
+    if (_handlingIncomingAttachments) {
+      _incomingAttachmentService.restore(claimed);
+      return;
+    }
+    _handlingIncomingAttachments = true;
+    final outstanding = List<PendingIncomingAttachment>.from(claimed);
+    try {
+      final grouped =
+          <PendingAttachmentCategory, List<PendingIncomingAttachment>>{};
+      for (final item in claimed) {
+        grouped.putIfAbsent(item.category, () => []).add(item);
+      }
+      var currentGroup = group;
+      for (final entry in grouped.entries) {
+        final result = await _businessApi.uploadTravelGroupAttachments(
+          currentGroup.id,
+          category: entry.key == PendingAttachmentCategory.keyCustomerPhoto
+              ? TravelGroupAttachmentCategory.keyCustomerPhoto
+              : TravelGroupAttachmentCategory.guestInfo,
+          files: entry.value.map((item) => item.attachment.file).toList(),
+        );
+        currentGroup = result.travelGroup;
+        await _incomingAttachmentService.complete(entry.value);
+        outstanding.removeWhere(entry.value.contains);
+      }
+      if (!mounted) {
+        return;
+      }
+      _replaceGroup(currentGroup);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('微信附件已上传。')),
+      );
+    } catch (error) {
+      _incomingAttachmentService.restore(outstanding);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('微信附件上传失败：${_messageForError(error)}'),
+            action: SnackBarAction(
+              label: '重试',
+              onPressed: () {
+                final retry = _claimAllPendingAttachments();
+                if (retry.isNotEmpty) {
+                  unawaited(_uploadClaimedIncoming(group, retry));
+                }
+              },
+            ),
+          ),
+        );
+      }
+    } finally {
+      _handlingIncomingAttachments = false;
+    }
+  }
+
+  List<PendingIncomingAttachment> _claimAllPendingAttachments() {
+    return <PendingIncomingAttachment>[
+      ..._incomingAttachmentService.claim(
+        category: PendingAttachmentCategory.keyCustomerPhoto,
+        includeColdStart: true,
+        maxCount: attachmentMaxFileCount,
+      ),
+      ..._incomingAttachmentService.claim(
+        category: PendingAttachmentCategory.guestInfo,
+        includeColdStart: true,
+        maxCount: attachmentMaxFileCount,
+      ),
+    ];
+  }
+
+  Future<void> _choosePendingAttachmentTarget() async {
+    List<TravelGroupRecord> availableGroups;
+    try {
+      availableGroups = (await _businessApi.listTravelGroups(limit: 100))
+          .where(_canDeleteAttachments)
+          .toList();
+    } catch (error) {
+      _showAttachmentError(error);
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (availableGroups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有可修改的旅行团，暂时无法导入附件。')),
+      );
+      return;
+    }
+    final selected = await showDialog<TravelGroupRecord>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('选择附件所属旅行团'),
+        content: SizedBox(
+          width: 520,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final group in availableGroups)
+                ListTile(
+                  title: Text(group.groupNo),
+                  subtitle: Text(
+                    '${_display(group.visitDate)} · '
+                    '${_display(group.travelAgency)} · '
+                    '${_display(group.guideName)}',
+                  ),
+                  onTap: () => Navigator.of(context).pop(group),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) {
+      return;
+    }
+    final claimed = _claimAllPendingAttachments();
+    if (claimed.isNotEmpty) {
+      await _uploadClaimedIncoming(selected, claimed);
+    }
+  }
+
+  Future<void> _discardPendingAttachments() async {
+    final items = _incomingAttachmentService.pending;
+    if (items.isEmpty) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('取消导入附件'),
+        content: const Text('确定清除全部待导入附件吗？清除后需要重新从微信分享。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('返回'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _incomingAttachmentService.discard(items);
+    }
+  }
+
   Future<void> _openTravelGroupDetail(TravelGroupRecord group) async {
     setState(() => _selectedId = group.id);
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final selected = _recordById(group.id) ?? group;
-            Future<void> runAction(Future<void> Function() action) async {
-              await action();
-              if (mounted) {
-                setDialogState(() {});
+    _activeDetailGroupId = group.id;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final selected = _recordById(group.id) ?? group;
+              Future<void> runAction(Future<void> Function() action) async {
+                await action();
+                if (mounted) {
+                  setDialogState(() {});
+                }
               }
-            }
 
-            final size = MediaQuery.sizeOf(context);
-            final tasterReadOnlyReason = _tasterReadOnlyReason(selected);
-            return Dialog(
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: size.width < 1040 ? size.width - 32 : 980,
-                  maxHeight: size.height < 860 ? size.height - 48 : 820,
-                ),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (tasterReadOnlyReason != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: StatusTag(
-                            key: const ValueKey(
-                              'travel-group-taster-read-only-reason',
+              final size = MediaQuery.sizeOf(context);
+              final tasterReadOnlyReason = _tasterReadOnlyReason(selected);
+              return Dialog(
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: size.width < 1040 ? size.width - 32 : 980,
+                    maxHeight: size.height < 860 ? size.height - 48 : 820,
+                  ),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (tasterReadOnlyReason != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: StatusTag(
+                              key: const ValueKey(
+                                'travel-group-taster-read-only-reason',
+                              ),
+                              label: tasterReadOnlyReason,
+                              tone: StatusTone.neutral,
                             ),
-                            label: tasterReadOnlyReason,
-                            tone: StatusTone.neutral,
                           ),
+                        TravelGroupDetailPanel(
+                          group: selected,
+                          role: widget.role,
+                          marking: _markingIds.contains(selected.id),
+                          summarizing: _summarizingIds.contains(selected.id),
+                          onCreateOrder: _canCreateOrder(widget.role)
+                              ? () => _openOrderForm(selected)
+                              : null,
+                          onEdit: _canEditGroup(selected)
+                              ? () =>
+                                  runAction(() => _editTravelGroup(selected))
+                              : null,
+                          onFinanceMark: _canMark(widget.role)
+                              ? () =>
+                                  runAction(() => _toggleFinanceMark(selected))
+                              : null,
+                          onSummary: _canSubmitSummary(widget.role) &&
+                                  (widget.role != UserRole.taster ||
+                                      selected.canEditByCurrentUser)
+                              ? () => runAction(() => _submitSummary(selected))
+                              : null,
+                          onPreviewAttachment: (attachment) =>
+                              _previewAttachment(selected, attachment),
+                          onDownloadAttachment: (attachment) =>
+                              _downloadAttachment(selected, attachment),
+                          onDeleteAttachment: _canDeleteAttachments(selected)
+                              ? (attachment) => runAction(
+                                    () =>
+                                        _deleteAttachment(selected, attachment),
+                                  )
+                              : null,
+                          onUploadKeyCustomerPhotos:
+                              _canDeleteAttachments(selected)
+                                  ? () => runAction(
+                                        () => _uploadAttachments(
+                                          selected,
+                                          TravelGroupAttachmentCategory
+                                              .keyCustomerPhoto,
+                                        ),
+                                      )
+                                  : null,
+                          onUploadGuestInfoAttachments:
+                              _canDeleteAttachments(selected)
+                                  ? () => runAction(
+                                        () => _uploadAttachments(
+                                          selected,
+                                          TravelGroupAttachmentCategory
+                                              .guestInfo,
+                                        ),
+                                      )
+                                  : null,
                         ),
-                      if (widget.role == UserRole.taster)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: StatusTag(
-                            key: const ValueKey(
-                              'travel-group-taster-edit-remaining',
-                            ),
-                            label: '共享剩余修改次数：${selected.tasterEditRemaining}',
-                            tone: selected.tasterEditRemaining > 0
-                                ? StatusTone.info
-                                : StatusTone.neutral,
-                          ),
-                        ),
-                      TravelGroupDetailPanel(
-                        group: selected,
-                        role: widget.role,
-                        marking: _markingIds.contains(selected.id),
-                        summarizing: _summarizingIds.contains(selected.id),
-                        onCreateOrder: _canCreateOrder(widget.role)
-                            ? () => _openOrderForm(selected)
-                            : null,
-                        onEdit: _canEditGroup(selected)
-                            ? () => runAction(() => _editTravelGroup(selected))
-                            : null,
-                        onFinanceMark: _canMark(widget.role)
-                            ? () =>
-                                runAction(() => _toggleFinanceMark(selected))
-                            : null,
-                        onSummary: _canSubmitSummary(widget.role) &&
-                                (widget.role != UserRole.taster ||
-                                    selected.canEditByCurrentUser)
-                            ? () => runAction(() => _submitSummary(selected))
-                            : null,
-                        onPreviewAttachment: (attachment) =>
-                            _previewAttachment(selected, attachment),
-                        onDownloadAttachment: (attachment) =>
-                            _downloadAttachment(selected, attachment),
-                        onDeleteAttachment: _canDeleteAttachments(selected)
-                            ? (attachment) => runAction(
-                                  () => _deleteAttachment(selected, attachment),
-                                )
-                            : null,
-                        onUploadKeyCustomerPhotos:
-                            _canDeleteAttachments(selected)
-                                ? () => runAction(
-                                      () => _uploadAttachments(
-                                        selected,
-                                        TravelGroupAttachmentCategory
-                                            .keyCustomerPhoto,
-                                      ),
-                                    )
-                                : null,
-                        onUploadGuestInfoAttachments:
-                            _canDeleteAttachments(selected)
-                                ? () => runAction(
-                                      () => _uploadAttachments(
-                                        selected,
-                                        TravelGroupAttachmentCategory.guestInfo,
-                                      ),
-                                    )
-                                : null,
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      _activeDetailGroupId = null;
+    }
   }
 
   Future<void> _openOrderForm(TravelGroupRecord group) async {
@@ -485,9 +721,6 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     if (!_isAssociatedTaster(group)) {
       return '仅接待品鉴师或对接品鉴师可修改今天的旅行团。';
     }
-    if (group.tasterEditRemaining <= 0) {
-      return '本团两次共享修改机会已用完。';
-    }
     return '当前旅行团为只读。';
   }
 
@@ -495,6 +728,10 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     TravelGroupRecord group,
     TravelGroupAttachmentRecord attachment,
   ) async {
+    if (!isTravelGroupImageAttachment(attachment)) {
+      _showAttachmentError(StateError('该附件不是图片，不能使用照片预览。'));
+      return;
+    }
     try {
       final downloaded = await _businessApi.downloadTravelGroupAttachment(
         group.id,
@@ -503,41 +740,11 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       if (!mounted) {
         return;
       }
-      await showDialog<void>(
-        context: context,
-        builder: (context) => Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  title: Text(
-                    attachment.originalName,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: IconButton(
-                    tooltip: '关闭',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ),
-                Flexible(
-                  child: InteractiveViewer(
-                    child: Image.memory(
-                      downloaded.bytes,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Padding(
-                        padding: EdgeInsets.all(32),
-                        child: Text('图片预览失败，请下载后查看。'),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      await FullscreenPhotoPreviewPage.show(
+        context,
+        fileName: attachment.originalName,
+        bytes: downloaded.bytes,
+        orientationService: _photoPreviewOrientationService,
       );
     } catch (error) {
       _showAttachmentError(error);
@@ -549,41 +756,73 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     TravelGroupAttachmentCategory category,
   ) async {
     try {
-      final picked = await FilePicker.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
-        allowedExtensions: const [
-          'jpg',
-          'jpeg',
-          'png',
-          'gif',
-          'webp',
-          'bmp',
-          'tif',
-          'tiff',
-          'avif',
-          'pdf',
-          'doc',
-          'docx',
-          'xls',
-          'xlsx',
-          'csv',
-          'txt',
-          'log',
-          'md',
-        ],
-      );
-      final files =
-          picked?.files.map(ApiMultipartFile.fromPlatformFile).toList() ??
-              const <ApiMultipartFile>[];
-      if (files.isEmpty) {
+      AttachmentPickResult picked;
+      if (category == TravelGroupAttachmentCategory.keyCustomerPhoto) {
+        picked = await _attachmentPickerService.pickKeyCustomerPhotos(
+          existingCount: 0,
+        );
+      } else if (_attachmentPickerService.isMobile) {
+        final source = await showGuestAttachmentSourceSheet(context);
+        if (!mounted || source == null) {
+          return;
+        }
+        switch (source) {
+          case GuestAttachmentSource.gallery:
+            picked = await _attachmentPickerService.pickGuestInfoPhotos(
+              existingCount: 0,
+            );
+            break;
+          case GuestAttachmentSource.files:
+            picked = await _attachmentPickerService.pickGuestInfoFiles(
+              existingCount: 0,
+            );
+            break;
+          case GuestAttachmentSource.wechat:
+            await _incomingAttachmentService.refresh();
+            final claimed = _incomingAttachmentService.claim(
+              category: PendingAttachmentCategory.guestInfo,
+              includeColdStart: true,
+              maxCount: attachmentMaxFileCount,
+            );
+            if (claimed.isEmpty) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      '请先在微信中将 Excel、PDF 或 Word 文件分享给本应用。',
+                    ),
+                  ),
+                );
+              }
+              return;
+            }
+            await _uploadClaimedIncoming(group, claimed);
+            return;
+        }
+      } else {
+        picked = await _attachmentPickerService.pickGuestInfoFiles(
+          existingCount: 0,
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      if (picked.message != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(picked.message!)),
+        );
+      }
+      if (picked.files.isEmpty) {
         return;
       }
       final result = await _businessApi.uploadTravelGroupAttachments(
         group.id,
         category: category,
-        files: files,
+        files: picked.files.map((item) => item.file).toList(),
       );
+      for (final attachment in picked.files) {
+        await attachment.deleteTemporaryCopy();
+      }
       if (!mounted) {
         return;
       }
@@ -602,21 +841,83 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
         group.id,
         attachment,
       );
-      final path = await FilePicker.saveFile(
-        dialogTitle: '保存附件',
-        fileName: _safeFileName(attachment.originalName),
+      final saved = await _downloadedFileService.save(
+        originalFileName: attachment.originalName,
         bytes: downloaded.bytes,
-        lockParentWindow: true,
       );
-      if (!mounted || path == null) {
+      if (!mounted || saved.cancelled || saved.path == null) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('附件已保存。')),
+      if (!_downloadedFileService.isMobile) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('附件已保存。')),
+        );
+        return;
+      }
+      final savedPath = saved.path!;
+      final mimeType =
+          attachmentKindForFileName(attachment.originalName).mimeType;
+      await _showDownloadedAttachmentActions(
+        filePath: savedPath,
+        mimeType: mimeType,
       );
     } catch (error) {
       _showAttachmentError(error);
     }
+  }
+
+  Future<void> _showDownloadedAttachmentActions({
+    required String filePath,
+    required String mimeType,
+  }) async {
+    String? openError;
+    var opening = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('附件已下载'),
+          content: openError == null
+              ? const Text('附件已保存到本地，可以选择其他应用打开。')
+              : Text(openError!),
+          actions: [
+            TextButton(
+              onPressed:
+                  opening ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+            FilledButton(
+              onPressed: opening
+                  ? null
+                  : () async {
+                      setDialogState(() => opening = true);
+                      final result = await _downloadedFileService.open(
+                        filePath: filePath,
+                        mimeType: mimeType,
+                      );
+                      if (!dialogContext.mounted) {
+                        return;
+                      }
+                      if (result.opened) {
+                        Navigator.of(dialogContext).pop();
+                        return;
+                      }
+                      setDialogState(() {
+                        opening = false;
+                        openError = result.message ?? '打开附件失败，请稍后重试。';
+                      });
+                    },
+              child: opening
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('用其他应用打开'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteAttachment(
@@ -730,6 +1031,39 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   Widget build(BuildContext context) {
     return ResponsivePage(
       children: [
+        if (_incomingAttachmentService.pendingCount > 0)
+          FormSection(
+            title: '待导入附件',
+            trailing: StatusTag(
+              label: '${_incomingAttachmentService.pendingCount} 个文件',
+              tone: StatusTone.warning,
+            ),
+            children: [
+              const Text('这些文件尚未关联旅行团，请选择你有权查看和修改的旅行团后再上传。'),
+              const SizedBox(height: 10),
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: _discardPendingAttachments,
+                    child: const Text('取消导入'),
+                  ),
+                  FilledButton.icon(
+                    key: const ValueKey(
+                      'choose-pending-attachment-travel-group',
+                    ),
+                    onPressed: _handlingIncomingAttachments
+                        ? null
+                        : _choosePendingAttachmentTarget,
+                    icon: const Icon(Icons.drive_file_move_rounded),
+                    label: const Text('选择旅行团并上传'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         _TravelGroupQueryFilters(
           start: _start,
           end: _end,
@@ -737,7 +1071,6 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           keywordController: _keywordController,
           groupTypeFilter: _groupTypeFilter,
           travelAgencyFilter: _travelAgencyFilter,
-          guideFilter: _guideFilter,
           tasterFilter: _tasterFilter,
           tasterScope: _tasterScope,
           role: widget.role,
@@ -745,8 +1078,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           exporting: _exporting,
           hasCurrentUserId: widget.currentUserId.isNotEmpty,
           travelAgencyItems:
-              _travelAgencyFilterItems(_groups, _guides, _travelAgencyFilter),
-          guides: _guides,
+              _travelAgencyFilterItems(_groups, _travelAgencyFilter),
+          selectedGuide: _selectedGuideFilter,
           tasters: _tasters,
           resultCount: _groups.length,
           onKeywordChanged: (value) => _keyword = value,
@@ -764,7 +1097,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
               _setFilter(() => _groupTypeFilter = value),
           onTravelAgencyChanged: (value) =>
               _setFilter(() => _travelAgencyFilter = value),
-          onGuideChanged: (value) => _setFilter(() => _guideFilter = value),
+          onOpenGuidePicker: _pickGuideFilter,
           onTasterChanged: (value) => _setFilter(() => _tasterFilter = value),
           onTasterScopeChanged: (value) =>
               _setFilter(() => _tasterScope = value),
@@ -841,7 +1174,6 @@ class _TravelGroupQueryFilters extends StatelessWidget {
     required this.keywordController,
     required this.groupTypeFilter,
     required this.travelAgencyFilter,
-    required this.guideFilter,
     required this.tasterFilter,
     required this.tasterScope,
     required this.role,
@@ -849,7 +1181,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
     required this.exporting,
     required this.hasCurrentUserId,
     required this.travelAgencyItems,
-    required this.guides,
+    required this.selectedGuide,
     required this.tasters,
     required this.resultCount,
     required this.onKeywordChanged,
@@ -858,7 +1190,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
     required this.onAllDatesSelected,
     required this.onGroupTypeChanged,
     required this.onTravelAgencyChanged,
-    required this.onGuideChanged,
+    required this.onOpenGuidePicker,
     required this.onTasterChanged,
     required this.onTasterScopeChanged,
     required this.onExport,
@@ -871,7 +1203,6 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   final TextEditingController keywordController;
   final String groupTypeFilter;
   final String travelAgencyFilter;
-  final String guideFilter;
   final String tasterFilter;
   final String tasterScope;
   final UserRole role;
@@ -879,7 +1210,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   final bool exporting;
   final bool hasCurrentUserId;
   final List<MapEntry<String, String>> travelAgencyItems;
-  final List<GuideRecord> guides;
+  final GuideRecord? selectedGuide;
   final List<TasterOption> tasters;
   final int resultCount;
   final ValueChanged<String> onKeywordChanged;
@@ -888,7 +1219,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
   final VoidCallback onAllDatesSelected;
   final ValueChanged<String> onGroupTypeChanged;
   final ValueChanged<String> onTravelAgencyChanged;
-  final ValueChanged<String> onGuideChanged;
+  final VoidCallback onOpenGuidePicker;
   final ValueChanged<String> onTasterChanged;
   final ValueChanged<String> onTasterScopeChanged;
   final VoidCallback onExport;
@@ -929,15 +1260,9 @@ class _TravelGroupQueryFilters extends StatelessWidget {
               items: travelAgencyItems,
               onChanged: onTravelAgencyChanged,
             ),
-            _StringDropdown(
-              label: '导游',
-              value: guideFilter,
-              items: [
-                const MapEntry(_allFilter, '全部'),
-                for (final guide in guides)
-                  MapEntry(guide.id, '${guide.name} · ${guide.travelAgency}'),
-              ],
-              onChanged: onGuideChanged,
+            _GuideFilterField(
+              guide: selectedGuide,
+              onTap: onOpenGuidePicker,
             ),
             if (role != UserRole.taster)
               _StringDropdown(
@@ -1033,7 +1358,7 @@ class _TravelGroupList extends StatelessWidget {
           AppRecordItem(
             title: group.groupNo,
             subtitle:
-                '${_display(group.travelAgency)} · ${_display(group.guideName)} · ${group.guestCount} 人',
+                '${_display(group.travelAgency)} · ${_display(group.guideName)} · ${group.guestCount > 0 ? '${group.guestCount} 人' : '人数未填写'}',
             meta: [
               if (group.visitDate.isNotEmpty) group.visitDate,
               _display(group.groupType),
@@ -1041,6 +1366,8 @@ class _TravelGroupList extends StatelessWidget {
               '品鉴：${_display(group.tasterName)}',
               '预计：${_display(group.expectedArrivalTime)}',
               '实际：${_display(group.arrivalTime)}',
+              if (_frontDeskMissingLabels(group.pendingReasons).isNotEmpty)
+                '待补：${_frontDeskMissingLabels(group.pendingReasons).join('、')}',
             ],
             icon: selectedId == group.id
                 ? Icons.radio_button_checked_rounded
@@ -1056,6 +1383,36 @@ class _TravelGroupList extends StatelessWidget {
             onTap: () => onSelect(group),
           ),
       ],
+    );
+  }
+}
+
+class _GuideFilterField extends StatelessWidget {
+  const _GuideFilterField({
+    required this.guide,
+    required this.onTap,
+  });
+
+  final GuideRecord? guide;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      key: const ValueKey('travel-group-guide-filter'),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: const InputDecoration(
+          labelText: '导游',
+          suffixIcon: Icon(Icons.manage_search_rounded),
+        ),
+        child: Text(
+          guide == null ? '全部' : '${guide!.name} · ${guide!.phone}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
     );
   }
 }
@@ -1184,6 +1541,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
 
   late DateTime _visitDate;
   late String _selectedGuideId;
+  GuideRecord? _selectedGuide;
   late String _selectedTasterId;
   late String _selectedLiaisonTasterId;
   late String _mentionedFeitianValue;
@@ -1200,7 +1558,8 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   late final TextEditingController _groupNoController;
   late final TextEditingController _travelAgencyController;
   late final TextEditingController _licensePlateController;
-  late final TextEditingController _guestCountController;
+  late final TextEditingController _adultCountController;
+  late final TextEditingController _childCountController;
   late final TextEditingController _cigaretteFeeController;
   late final TextEditingController _tastingRoomNoController;
   late final TextEditingController _arrivalTimeController;
@@ -1240,14 +1599,14 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   bool get _canEditGuide => _isAdmin || _isFrontDesk;
   bool get _canEditLicensePlate =>
       _isAdmin || _isFrontDesk || _isAssociatedTaster;
-  bool get _canEditGuestCount =>
+  bool get _canEditGuestCounts =>
       _isAdmin || _isFrontDesk || _isAssociatedTaster;
   bool get _canEditCigaretteFee => _isAdmin || _isFrontDesk;
   bool get _canEditFrontDeskOnlyFields => _isAdmin || _isFrontDesk;
   bool get _canManageTasterAssignments => _isAdmin || _isFrontDesk;
   bool get _canEditExpectedArrivalTime => _isAdmin || _isAssociatedTaster;
   bool get _canEditDepartureTime => _isAdmin;
-  bool get _canEditTastingItems => _isAdmin || _isFrontDesk;
+  bool get _canEditTastingItems => _isAdmin;
   bool get _canEditTasterNotes => _isAdmin || _isAssociatedTaster;
   bool get _canEditCustomerFields =>
       _isAdmin || _isFrontDesk || _isAssociatedTaster;
@@ -1261,7 +1620,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       _canEditTravelAgency ||
       _canEditGuide ||
       _canEditLicensePlate ||
-      _canEditGuestCount ||
+      _canEditGuestCounts ||
       _canEditCigaretteFee ||
       _canEditFrontDeskOnlyFields ||
       _canManageTasterAssignments ||
@@ -1279,6 +1638,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     final group = widget.group;
     _visitDate = DateTime.tryParse(group.visitDate) ?? DateTime.now();
     _selectedGuideId = group.guideId ?? '';
+    _selectedGuide = _guideForGroup(group, widget.guides);
     _selectedTasterId = group.tasterId ?? '';
     _selectedLiaisonTasterId = group.liaisonTasterId ?? '';
     _mentionedFeitianValue = group.mentionedFeitian == null
@@ -1297,7 +1657,12 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
         TextEditingController(text: group.travelAgency ?? '');
     _licensePlateController =
         TextEditingController(text: group.licensePlate ?? '');
-    _guestCountController = TextEditingController(text: '${group.guestCount}');
+    _adultCountController = TextEditingController(
+      text: group.adultCount == 0 ? '' : '${group.adultCount}',
+    );
+    _childCountController = TextEditingController(
+      text: group.childCount == 0 ? '' : '${group.childCount}',
+    );
     _cigaretteFeeController = TextEditingController(
       text: group.cigaretteFeeCents == null
           ? ''
@@ -1348,7 +1713,8 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     _groupNoController.dispose();
     _travelAgencyController.dispose();
     _licensePlateController.dispose();
-    _guestCountController.dispose();
+    _adultCountController.dispose();
+    _childCountController.dispose();
     _cigaretteFeeController.dispose();
     _tastingRoomNoController.dispose();
     _arrivalTimeController.dispose();
@@ -1370,6 +1736,29 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     _returnedPointsController.dispose();
     _unreturnedPointsController.dispose();
     super.dispose();
+  }
+
+  String? _childCountValidator(String? value) {
+    final fieldError = _optionalNonNegativeGuestCountValidator(value);
+    if (fieldError != null) {
+      return fieldError;
+    }
+    final adultCountText = _adultCountController.text.trim();
+    final childCountText = (value ?? '').trim();
+    if (adultCountText.isEmpty && childCountText.isEmpty) {
+      return null;
+    }
+    final adultCount =
+        adultCountText.isEmpty ? 0 : int.tryParse(adultCountText);
+    final childCount =
+        childCountText.isEmpty ? 0 : int.tryParse(childCountText);
+    if (adultCount == null || childCount == null) {
+      return null;
+    }
+    if (adultCount + childCount <= 0) {
+      return '大人人数与小孩人数合计必须大于 0';
+    }
+    return null;
   }
 
   Future<void> _save() async {
@@ -1449,12 +1838,15 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       payload['expectedArrivalTime'] =
           normalizeTimeText(_expectedArrivalTimeController.text);
     }
-    if (_canEditGuestCount) {
-      payload['guestCount'] = _intFromText(_guestCountController.text);
+    if (_canEditGuestCounts) {
+      payload['adultCount'] = _intFromText(_adultCountController.text);
+      payload['childCount'] = _intFromText(_childCountController.text);
     }
     if (_canEditCigaretteFee) {
       payload['cigaretteFeeCents'] =
-          _centsFromMoneyText(_cigaretteFeeController.text);
+          _cigaretteFeeController.text.trim().isEmpty
+              ? null
+              : _centsFromMoneyText(_cigaretteFeeController.text);
     }
     if (_canEditDepartureTime) {
       payload['departureTime'] =
@@ -1605,13 +1997,23 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
           controller: _licensePlateController,
           decoration: const InputDecoration(labelText: '车牌号'),
         ),
-      if (_canEditGuestCount)
+      if (_canEditGuestCounts)
         TextFormField(
-          controller: _guestCountController,
+          key: const ValueKey('travel-group-edit-adult-count'),
+          controller: _adultCountController,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: const InputDecoration(labelText: '人数'),
-          validator: _nonNegativeIntValidator,
+          decoration: const InputDecoration(labelText: '大人人数'),
+          validator: _optionalNonNegativeGuestCountValidator,
+        ),
+      if (_canEditGuestCounts)
+        TextFormField(
+          key: const ValueKey('travel-group-edit-child-count'),
+          controller: _childCountController,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: const InputDecoration(labelText: '小孩人数'),
+          validator: _childCountValidator,
         ),
       if (_canEditCigaretteFee)
         TextFormField(
@@ -1619,7 +2021,7 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
           controller: _cigaretteFeeController,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           decoration: const InputDecoration(labelText: '香烟费用（元）'),
-          validator: _requiredNonNegativeMoneyValidator,
+          validator: _optionalPositiveMoneyValidator,
         ),
       if (_canEditFrontDeskOnlyFields)
         TextFormField(
@@ -1729,28 +2131,43 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
   }
 
   Widget _guideDropdown() {
-    final items = _guideItems();
-    final values = items.map((item) => item.key).toSet();
-    final safeValue = values.contains(_selectedGuideId) ? _selectedGuideId : '';
-    return DropdownButtonFormField<String>(
-      initialValue: safeValue,
-      isExpanded: true,
-      decoration: const InputDecoration(labelText: '导游'),
-      items: [
-        const DropdownMenuItem(value: '', child: Text('未选择')),
-        for (final item in items)
-          DropdownMenuItem(
-            value: item.key,
-            child: Text(item.value, overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: (value) {
-        setState(() {
-          _selectedGuideId = value ?? '';
-          _guideTouched = true;
-        });
-      },
+    return InkWell(
+      key: const ValueKey('travel-group-edit-guide-picker'),
+      onTap: _pickGuide,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: const InputDecoration(
+          labelText: '导游',
+          suffixIcon: Icon(Icons.manage_search_rounded),
+        ),
+        child: Text(
+          _selectedGuide == null
+              ? '未选择'
+              : '${_selectedGuide!.name} · ${_selectedGuide!.phone}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
     );
+  }
+
+  Future<void> _pickGuide() async {
+    final result = await showDialog<GuidePickerResult>(
+      context: context,
+      builder: (context) => RemoteGuidePickerDialog(
+        businessApi: widget.businessApi,
+        initialGuide: _selectedGuide,
+        allowClear: true,
+      ),
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _selectedGuide = result.guide;
+      _selectedGuideId = result.guide?.id ?? '';
+      _guideTouched = true;
+    });
   }
 
   Widget _tasterDropdown() {
@@ -1893,21 +2310,6 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
     }
   }
 
-  List<MapEntry<String, String>> _guideItems() {
-    final items = <String, String>{};
-    if ((widget.group.guideId ?? '').isNotEmpty) {
-      items[widget.group.guideId!] =
-          '${_display(widget.group.guideName)} · ${_display(widget.group.guidePhone)}';
-    }
-    for (final guide in widget.guides) {
-      if (guide.id.trim().isNotEmpty) {
-        items[guide.id] =
-            '${guide.name} · ${guide.phone} · ${guide.travelAgency}';
-      }
-    }
-    return items.entries.toList();
-  }
-
   List<MapEntry<String, String>> _tasterItems({bool liaison = false}) {
     final items = <String, String>{};
     final snapshotId =
@@ -2007,19 +2409,12 @@ String? _optionalFilter(String value) {
 
 List<MapEntry<String, String>> _travelAgencyFilterItems(
   List<TravelGroupRecord> groups,
-  List<GuideRecord> guides,
   String selected,
 ) {
   final names = <String>{};
   for (final group in groups) {
     final name = group.travelAgency?.trim();
     if (name != null && name.isNotEmpty) {
-      names.add(name);
-    }
-  }
-  for (final guide in guides) {
-    final name = guide.travelAgency.trim();
-    if (name.isNotEmpty) {
       names.add(name);
     }
   }
@@ -2031,6 +2426,41 @@ List<MapEntry<String, String>> _travelAgencyFilterItems(
     const MapEntry(_allFilter, '全部'),
     for (final name in sortedNames) MapEntry(name, name),
   ];
+}
+
+GuideRecord? _guideForGroup(
+  TravelGroupRecord group,
+  List<GuideRecord> guides,
+) {
+  for (final guide in guides) {
+    if (guide.id == group.guideId) {
+      return guide;
+    }
+  }
+  final id = group.guideId?.trim() ?? '';
+  if (id.isEmpty) {
+    return null;
+  }
+  return GuideRecord(
+    id: id,
+    name: _display(group.guideName),
+    phone: _display(group.guidePhone),
+    remarks: null,
+    isActive: true,
+    createdAt: null,
+    updatedAt: null,
+  );
+}
+
+List<GuideRecord> _mergeGuideRecords(
+  List<GuideRecord> existing,
+  List<GuideRecord> incoming,
+) {
+  final byId = <String, GuideRecord>{
+    for (final guide in existing) guide.id: guide,
+    for (final guide in incoming) guide.id: guide,
+  };
+  return byId.values.toList();
 }
 
 String _display(String? value) {
@@ -2125,8 +2555,11 @@ FormFieldValidator<String> _requiredValidator(String message) {
   };
 }
 
-String? _nonNegativeIntValidator(String? value) {
+String? _optionalNonNegativeGuestCountValidator(String? value) {
   final text = (value ?? '').trim();
+  if (text.isEmpty) {
+    return null;
+  }
   final number = int.tryParse(text);
   if (number == null || number < 0) {
     return '人数必须为非负整数';
@@ -2167,16 +2600,19 @@ String? _moneyValidator(String? value) {
   return null;
 }
 
-String? _requiredNonNegativeMoneyValidator(String? value) {
+String? _optionalPositiveMoneyValidator(String? value) {
   final text = (value ?? '').trim();
   if (text.isEmpty) {
-    return '香烟费用不能为空';
+    return null;
   }
   if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(text)) {
-    return '请输入最多两位小数的非负金额';
+    return '请输入最多两位小数的金额';
   }
   final cents = _centsFromMoneyText(text);
-  if (cents < 0 || cents > 2147483647) {
+  if (cents <= 0) {
+    return '香烟费用必须大于 0';
+  }
+  if (cents > 2147483647) {
     return '香烟费用超出允许范围';
   }
   return null;
@@ -2235,6 +2671,8 @@ String _pendingStatusLabel(String? status) {
   switch (status) {
     case 'pending_front_desk':
       return '待前台';
+    case 'pending_sales':
+      return '待销售';
     case 'pending_taster':
       return '待品鉴师';
     case 'pending_finance':
@@ -2253,11 +2691,29 @@ StatusTone _pendingStatusTone(String? status) {
     case 'pending_front_desk':
     case 'pending_finance':
       return StatusTone.warning;
+    case 'pending_sales':
+      return StatusTone.info;
     case 'pending_taster':
       return StatusTone.info;
     default:
       return StatusTone.success;
   }
+}
+
+List<String> _frontDeskMissingLabels(List<String> reasons) {
+  const labels = <String, String>{
+    'missing_license_plate': '车牌号',
+    'missing_guest_count': '人数',
+    'missing_cigarette_fee': '香烟费用',
+    'missing_tasting_room_no': '品鉴馆号',
+    'missing_taster': '品鉴师',
+    'missing_arrival_time': '进店时间',
+    'missing_group_type': '团型',
+  };
+  return [
+    for (final reason in reasons)
+      if (labels.containsKey(reason)) labels[reason]!,
+  ];
 }
 
 String _messageForError(Object error) {

@@ -18,7 +18,7 @@ void main() {
     );
     expect(find.text('日期'), findsNothing);
     expect(find.text('进店日期'), findsOneWidget);
-    expect(find.text('品鉴师（选填）'), findsOneWidget);
+    expect(find.text('品鉴师（选填，进店当日待补）'), findsOneWidget);
     expect(find.text('对接品鉴师（选填）'), findsOneWidget);
     expect(find.text('客源地（选填）'), findsOneWidget);
     expect(find.text('年龄文本（选填）'), findsOneWidget);
@@ -27,7 +27,10 @@ void main() {
     expect(find.text('均单'), findsOneWidget);
     expect(find.text('熊猫'), findsOneWidget);
     expect(find.text('重点客户信息（选填）'), findsOneWidget);
-    expect(find.text('香烟费用（元）'), findsOneWidget);
+    expect(find.text('香烟费用（元，选填，进店当日待补）'), findsOneWidget);
+    expect(find.text('大人人数（选填，进店当日待补）'), findsOneWidget);
+    expect(find.text('小孩人数（选填，进店当日待补）'), findsOneWidget);
+    expect(find.text('人数（选填）'), findsNothing);
     expect(
       find.byKey(const ValueKey('key-customer-photo-picker')),
       findsOneWidget,
@@ -80,12 +83,37 @@ void main() {
     await _selectVisitDate(tester);
     await _selectTravelAgency(tester);
     await _selectGuide(tester);
-    await tester.enterText(_textFormFieldWithLabel('人数（选填）'), '0');
+    await _fillCigaretteFee(tester, '0');
     await _submit(tester);
 
     expect(apiClient.createCalls, 0);
     expect(find.text('录入失败'), findsOneWidget);
-    expect(find.text('人数必须大于 0'), findsWidgets);
+    expect(find.text('香烟费用必须大于 0'), findsWidgets);
+  });
+
+  testWidgets('submits adult and child counts without a client total',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await tester.enterText(
+      _textFormFieldWithLabel('大人人数（选填，进店当日待补）'),
+      '10',
+    );
+    await tester.enterText(
+      _textFormFieldWithLabel('小孩人数（选填，进店当日待补）'),
+      '3',
+    );
+    await _fillCigaretteFee(tester, '20');
+    await _submit(tester);
+
+    expect(apiClient.createCalls, 1);
+    expect(apiClient.lastCreateBody?['adultCount'], 10);
+    expect(apiClient.lastCreateBody?['childCount'], 3);
+    expect(apiClient.lastCreateBody?.containsKey('guestCount'), isFalse);
   });
 
   testWidgets('other optional fields may stay empty and yuan is sent as cents',
@@ -104,6 +132,8 @@ void main() {
     expect(body['visitDate'], isNotEmpty);
     expect(body['travelAgency'], '测试旅行社');
     expect(body['guideId'], 'guide-1');
+    expect(body['adultCount'], 0);
+    expect(body['childCount'], 0);
     expect(body['cigaretteFeeCents'], 2050);
     for (final optionalField in [
       'licensePlate',
@@ -127,7 +157,52 @@ void main() {
     expect(find.textContaining('SERVER-TG-001'), findsWidgets);
   });
 
-  testWidgets('cigarette fee is required, positive, and limited to two decimals',
+  testWidgets('successful save clears both count fields', (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
+    await tester.enterText(
+      _textFormFieldWithLabel('大人人数（选填，进店当日待补）'),
+      '8',
+    );
+    await tester.enterText(
+      _textFormFieldWithLabel('小孩人数（选填，进店当日待补）'),
+      '2',
+    );
+    await _fillCigaretteFee(tester, '20');
+    await _submit(tester);
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+
+    final adultField = tester.widget<TextFormField>(
+      find.byKey(const ValueKey('adult-count-field')),
+    );
+    final childField = tester.widget<TextFormField>(
+      find.byKey(const ValueKey('child-count-field')),
+    );
+    expect(adultField.controller?.text, isEmpty);
+    expect(childField.controller?.text, isEmpty);
+  });
+
+  testWidgets('count fields wrap without overflow on a narrow screen',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(
+      tester,
+      apiClient,
+      viewSize: const Size(420, 1200),
+    );
+
+    expect(find.byKey(const ValueKey('adult-count-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('child-count-field')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'cigarette fee is optional, but supplied values must be positive with two decimals',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpPage(tester, apiClient);
@@ -137,14 +212,20 @@ void main() {
     await _selectGuide(tester);
     await _submit(tester);
 
-    expect(apiClient.createCalls, 0);
-    expect(find.text('香烟费用必须大于 0'), findsWidgets);
+    expect(apiClient.createCalls, 1);
+    expect(
+      apiClient.lastCreateBody?.containsKey('cigaretteFeeCents'),
+      isFalse,
+    );
     await tester.tap(find.text('确定'));
     await tester.pumpAndSettle();
 
+    await _selectVisitDate(tester);
+    await _selectTravelAgency(tester);
+    await _selectGuide(tester);
     await _fillCigaretteFee(tester, '20.123');
     await _submit(tester);
-    expect(apiClient.createCalls, 0);
+    expect(apiClient.createCalls, 1);
     expect(find.text('请输入最多两位小数的非负金额'), findsWidgets);
   });
 
@@ -236,8 +317,9 @@ Future<void> _pumpPage(
   WidgetTester tester,
   _FakeApiClient apiClient, {
   TravelGroupFilePicker? filePicker,
+  Size viewSize = const Size(1440, 1200),
 }) async {
-  tester.view.physicalSize = const Size(1440, 1200);
+  tester.view.physicalSize = viewSize;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -434,7 +516,6 @@ Map<String, dynamic> _guideJson() {
     'id': 'guide-1',
     'name': '测试导游',
     'phone': '13900001111',
-    'travelAgency': '测试旅行社',
     'isActive': true,
   };
 }

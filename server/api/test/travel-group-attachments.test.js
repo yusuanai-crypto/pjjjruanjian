@@ -318,7 +318,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
         });
         assert.equal(rawGroup.keyCustomerPhotos.length, 3);
         assert.equal(rawGroup.guestInfoAttachments.length, 2);
-        assert.equal(rawGroup.tasterEditCount, 1);
+        assert.equal(rawGroup.tasterEditCount, 0);
         for (const attachment of [
           ...rawGroup.keyCustomerPhotos,
           ...rawGroup.guestInfoAttachments,
@@ -582,10 +582,55 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           { method: 'DELETE', token: assignedTaster.token },
         );
         assert.equal(tasterDelete.response.status, 200);
-        assert.equal(tasterDelete.body.data.travelGroup.tasterEditCount, 2);
+        assert.equal(tasterDelete.body.data.travelGroup.tasterEditCount, 0);
         assert.equal(
           tasterDelete.body.data.travelGroup.tasterEditRemaining,
-          0,
+          null,
+        );
+        assert.equal(
+          tasterDelete.body.data.travelGroup.tasterEditUnlimited,
+          true,
+        );
+
+        await prisma.travelGroup.update({
+          where: { id: group.id },
+          data: { tasterEditCount: 2 },
+        });
+        const historicalCountUpload = await uploadFiles(
+          baseUrl,
+          assignedTaster.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('historical-count-upload'),
+              name: 'after-old-limit.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assert.equal(historicalCountUpload.response.status, 201);
+        assert.equal(
+          historicalCountUpload.body.data.travelGroup.tasterEditCount,
+          2,
+        );
+        assert.equal(
+          historicalCountUpload.body.data.travelGroup.canEditByCurrentUser,
+          true,
+        );
+        const historicalCountDelete = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}/attachments/${historicalCountUpload.body.data.attachments[0].id}`,
+          { method: 'DELETE', token: assignedTaster.token },
+        );
+        assert.equal(historicalCountDelete.response.status, 200);
+        assert.equal(
+          historicalCountDelete.body.data.travelGroup.tasterEditCount,
+          2,
+        );
+        assert.equal(
+          historicalCountDelete.body.data.travelGroup.tasterEditUnlimited,
+          true,
         );
 
         const adminDeleted = adminUpload.body.data.attachments[0];
@@ -611,7 +656,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           { token: admin.token },
         );
         assert.equal(uploadLogs.response.status, 200);
-        assert.equal(uploadLogs.body.data.logs.length, 3);
+        assert.equal(uploadLogs.body.data.logs.length, 4);
         assertNoStorageLocation(uploadLogs.body.data.logs);
         const deleteLogs = await requestJson(
           baseUrl,
@@ -619,7 +664,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           { token: admin.token },
         );
         assert.equal(deleteLogs.response.status, 200);
-        assert.equal(deleteLogs.body.data.logs.length, 3);
+        assert.equal(deleteLogs.body.data.logs.length, 4);
         assertNoStorageLocation(deleteLogs.body.data.logs);
       },
       { env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot } },

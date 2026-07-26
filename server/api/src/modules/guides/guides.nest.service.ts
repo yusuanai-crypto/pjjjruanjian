@@ -23,14 +23,26 @@ export class GuidesNestService {
       'warehouse',
       'after_sales',
     ]);
-    const guides = await this.prisma.guide.findMany({
-      where: buildGuideWhere(filters),
-      orderBy: {
-        createdAt: 'desc',
+    const where = buildGuideWhere(filters);
+    const { page, pageSize } = normalizeGuidePagination(filters);
+    const [guides, total] = await Promise.all([
+      this.prisma.guide.findMany({
+        where,
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.guide.count({ where }),
+    ]);
+    return {
+      guides: guides.map(toGuideDto),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
       },
-      take: normalizeTake(filters.limit, 100),
-    });
-    return guides.map(toGuideDto);
+    };
   }
 
   async getGuide(actor: any, id: string) {
@@ -56,16 +68,23 @@ export class GuidesNestService {
       },
     });
     if (existing) {
-      throw createHttpError(
-        409,
-        'GUIDE_PHONE_EXISTS',
-        'Guide phone already exists.',
-      );
+      throwGuidePhoneConflict(existing);
     }
 
-    const created = await this.prisma.guide.create({
-      data,
-    });
+    let created;
+    try {
+      created = await this.prisma.guide.create({
+        data,
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        const duplicate = await this.prisma.guide.findUnique({
+          where: { phone: data.phone },
+        });
+        throwGuidePhoneConflict(duplicate);
+      }
+      throw error;
+    }
     const dto = toGuideDto(created);
     await this.operationLogsService.appendLog({
       userId: actor.id,
@@ -90,20 +109,27 @@ export class GuidesNestService {
         },
       });
       if (duplicate) {
-        throw createHttpError(
-          409,
-          'GUIDE_PHONE_EXISTS',
-          'Guide phone already exists.',
-        );
+        throwGuidePhoneConflict(duplicate);
       }
     }
 
-    const updated = await this.prisma.guide.update({
-      where: {
-        id,
-      },
-      data,
-    });
+    let updated;
+    try {
+      updated = await this.prisma.guide.update({
+        where: {
+          id,
+        },
+        data,
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        const duplicate = await this.prisma.guide.findUnique({
+          where: { phone: data.phone },
+        });
+        throwGuidePhoneConflict(duplicate);
+      }
+      throw error;
+    }
     await this.operationLogsService.appendLog({
       userId: actor.id,
       action: 'guides.update',
@@ -122,7 +148,7 @@ export class GuidesNestService {
     isActive: boolean,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin']);
+    requireAnyRole(actor, ['admin', 'front_desk']);
     const current = await this.findGuideOrThrow(id);
     const updated = await this.prisma.guide.update({
       where: {
@@ -167,15 +193,8 @@ function buildGuideWhere(filters: any = {}) {
     where.OR = [
       { name: { contains: keyword } },
       { phone: { contains: keyword } },
-      { travelAgency: { contains: keyword } },
       { remarks: { contains: keyword } },
     ];
-  }
-  const travelAgency = normalizeOptionalString(filters.travelAgency);
-  if (travelAgency) {
-    where.travelAgency = {
-      contains: travelAgency,
-    };
   }
   if (filters.isActive !== undefined && filters.isActive !== '') {
     where.isActive = normalizeBoolean(filters.isActive, 'isActive');
@@ -191,13 +210,6 @@ function buildGuideData(payload: any, creating: boolean) {
 
   assignRequiredString(data, 'name', payload?.name, creating, 'name', 80);
   assignRequiredString(data, 'phone', payload?.phone, creating, 'phone', 30);
-  assignOptionalString(
-    data,
-    'travelAgency',
-    payload?.travelAgency,
-    'travelAgency',
-    120,
-  );
   assignNullableString(data, 'remarks', payload?.remarks);
   if (payload?.isActive !== undefined) {
     data.isActive = normalizeBoolean(payload.isActive, 'isActive');
@@ -239,27 +251,6 @@ function assignNullableString(data: any, key: string, value: unknown) {
   }
 }
 
-function assignOptionalString(
-  data: any,
-  key: string,
-  value: unknown,
-  fieldName: string,
-  maxLength: number,
-) {
-  if (value === undefined) {
-    return;
-  }
-  const text = normalizeOptionalString(value);
-  if (text && text.length > maxLength) {
-    throw createHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `${fieldName} must be ${maxLength} characters or fewer.`,
-    );
-  }
-  data[key] = text;
-}
-
 function normalizeRequiredString(value: unknown, fieldName: string) {
   const text = normalizeOptionalString(value);
   if (!text) {
@@ -298,15 +289,45 @@ function normalizeBoolean(value: unknown, fieldName: string) {
   );
 }
 
-function normalizeTake(value: unknown, fallback: number) {
+function normalizeGuidePagination(filters: any = {}) {
+  const page = normalizePositiveInteger(filters.page, 'page', 1);
+  const hasPageSize =
+    filters.pageSize !== undefined &&
+    filters.pageSize !== null &&
+    filters.pageSize !== '';
+  const hasLegacyLimit =
+    filters.limit !== undefined &&
+    filters.limit !== null &&
+    filters.limit !== '';
+  const pageSize = hasPageSize
+    ? normalizePositiveInteger(filters.pageSize, 'pageSize', 20, 100)
+    : hasLegacyLimit
+      ? normalizePositiveInteger(filters.limit, 'limit', 20, 200)
+      : 20;
+  return { page, pageSize };
+}
+
+function normalizePositiveInteger(
+  value: unknown,
+  fieldName: string,
+  fallback: number,
+  maximum?: number,
+) {
   if (value === undefined || value === null || value === '') {
     return fallback;
   }
   const numberValue = Number(value);
-  if (!Number.isFinite(numberValue)) {
-    throw createHttpError(400, 'VALIDATION_FAILED', 'limit must be a number.');
+  if (!Number.isFinite(numberValue) || numberValue < 1) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a positive number.`,
+    );
   }
-  return Math.min(Math.max(Math.trunc(numberValue), 1), 200);
+  const integerValue = Math.trunc(numberValue);
+  return maximum === undefined
+    ? integerValue
+    : Math.min(integerValue, maximum);
 }
 
 function toGuideDto(guide: any) {
@@ -314,12 +335,30 @@ function toGuideDto(guide: any) {
     id: guide.id,
     name: guide.name,
     phone: guide.phone,
-    travelAgency: guide.travelAgency || null,
     remarks: guide.remarks,
     isActive: Boolean(guide.isActive),
     createdAt: toIsoString(guide.createdAt),
     updatedAt: toIsoString(guide.updatedAt),
   };
+}
+
+function throwGuidePhoneConflict(guide: any): never {
+  if (guide && !Boolean(guide.isActive)) {
+    throw createHttpError(
+      409,
+      'GUIDE_DISABLED',
+      'The guide using this phone number is disabled. Restore the existing guide instead.',
+    );
+  }
+  throw createHttpError(
+    409,
+    'GUIDE_PHONE_EXISTS',
+    'Guide phone already exists.',
+  );
+}
+
+function isUniqueConstraintError(error: any) {
+  return error?.code === 'P2002';
 }
 
 function toIsoString(value: unknown) {

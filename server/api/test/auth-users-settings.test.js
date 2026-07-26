@@ -29,6 +29,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'users:list',
     'users:read',
     'users:create',
@@ -74,6 +79,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'users:list',
     'users:read',
     'users:create',
@@ -119,6 +129,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'settings:global_mark:enable',
     'travel_groups:list',
@@ -142,6 +157,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'settings:global_mark:enable',
     'travel_groups:list',
@@ -163,6 +183,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'travel_groups:list',
     'travel_groups:read',
@@ -178,6 +203,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'travel_groups:list',
     'travel_groups:read',
@@ -212,6 +242,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'travel_groups:list',
     'travel_groups:read',
@@ -222,6 +257,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'settings:global_mark:enable',
     'travel_groups:list',
@@ -237,6 +277,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'auth:me',
     'auth:change_password',
     'roles:read',
+    'todo_reminders:list',
+    'todo_reminders:read',
+    'todo_reminders:update',
+    'todo_reminders:verify',
+    'todo_reminders:archive',
     'settings:global_mark:read',
     'travel_groups:list',
     'travel_groups:read',
@@ -349,6 +394,19 @@ test('contract: protected auth endpoints require bearer token and return current
     );
     assert.equal(roleMenus.admin.includes('commission_rules'), true);
     assert.equal(roleMenus.admin.includes('travel_agency_management'), true);
+    assert.equal(roleMenus.super_admin.includes('guide_management'), true);
+    assert.equal(roleMenus.admin.includes('guide_management'), true);
+    assert.equal(roleMenus.front_desk.includes('guide_management'), true);
+    for (const role of [
+      'boss',
+      'sales',
+      'finance',
+      'warehouse',
+      'after_sales',
+      'taster',
+    ]) {
+      assert.equal(roleMenus[role].includes('guide_management'), false);
+    }
     assert.equal(roleMenus.admin.includes('product_management'), true);
     assert.equal(roleMenus.after_sales.includes('after_sales_orders'), true);
     assert.equal(roleMenus.after_sales.includes('travel_group_query'), true);
@@ -396,17 +454,24 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(tasterRole.title, '品鉴师');
     assert.equal(
       tasterRole.description,
-      '查看今天及未来旅行团，今天关联团共享两次修改机会，并查看接待品鉴师关系订单。',
+      '查看今天及未来旅行团，今天关联团可无限次修改，并查看接待品鉴师关系订单。',
     );
     assert.equal(Array.isArray(tasterRole.permissions), true);
     assert.deepEqual(
       tasterRole.menus.map((menu) => menu.id),
-      ['dashboard', 'travel_group_query', 'order_query', 'own_taster_receptions', 'own_commissions'],
+      [
+        'dashboard',
+        'todo_reminders',
+        'travel_group_query',
+        'order_query',
+        'own_taster_receptions',
+        'own_commissions',
+      ],
     );
     assert.deepEqual(tasterRole.dataScope, {
       travelGroups: 'today_and_future',
       travelGroupUpdates:
-        'today_assigned_taster_or_liaison_shared_two_edits',
+        'today_assigned_taster_or_liaison_unlimited_edits',
       orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',
@@ -1094,13 +1159,20 @@ test('contract: non-admin users cannot manage users and taster data scopes expos
     );
     assert.deepEqual(
       taster.menus.map((menu) => menu.id),
-      ['dashboard', 'travel_group_query', 'order_query', 'own_taster_receptions', 'own_commissions'],
+      [
+        'dashboard',
+        'todo_reminders',
+        'travel_group_query',
+        'order_query',
+        'own_taster_receptions',
+        'own_commissions',
+      ],
     );
     assert.equal(taster.menus.some((menu) => menu.id === 'employee_accounts'), false);
     assert.deepEqual(taster.dataScope, {
       travelGroups: 'today_and_future',
       travelGroupUpdates:
-        'today_assigned_taster_or_liaison_shared_two_edits',
+        'today_assigned_taster_or_liaison_unlimited_edits',
       orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',

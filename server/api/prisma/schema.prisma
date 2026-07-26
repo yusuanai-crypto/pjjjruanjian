@@ -27,6 +27,37 @@ enum UserRole {
   @@map("user_role")
 }
 
+enum TodoSourceType {
+  TRAVEL_GROUP      @map("travel_group")
+  SALES_ORDER       @map("sales_order")
+  AFTER_SALES_ORDER @map("after_sales_order")
+
+  @@map("todo_source_type")
+}
+
+enum TodoPriority {
+  NORMAL    @map("normal")
+  IMPORTANT @map("important")
+  URGENT    @map("urgent")
+
+  @@map("todo_priority")
+}
+
+enum TodoStatus {
+  ACTIVE    @map("active")
+  RESOLVED  @map("resolved")
+  CANCELLED @map("cancelled")
+
+  @@map("todo_status")
+}
+
+enum TodoRecipientReason {
+  BUSINESS   @map("business")
+  ESCALATION @map("escalation")
+
+  @@map("todo_recipient_reason")
+}
+
 model User {
   id                 String    @id @default(uuid()) @db.Char(36)
   name               String    @db.VarChar(100)
@@ -50,6 +81,7 @@ model User {
   operationLogs                    OperationLog[]
   tasterTravelGroups               TravelGroup[]               @relation("TravelGroupTaster")
   liaisonTasterTravelGroups        TravelGroup[]               @relation("TravelGroupLiaisonTaster")
+  lossConfirmedTravelGroups        TravelGroup[]               @relation("TravelGroupLossConfirmedBy")
   tasterGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupTaster")
   tasterPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupTaster")
   salesOrders                      SalesOrder[]                @relation("SalesOrderSalesUser")
@@ -72,6 +104,7 @@ model User {
   updatedSalesDeductionRules       SalesDeductionRule[]        @relation("SalesDeductionRuleUpdatedBy")
   createdCommissionRules           CommissionRule[]            @relation("CommissionRuleCreatedBy")
   updatedCommissionRules           CommissionRule[]            @relation("CommissionRuleUpdatedBy")
+  todoRecipients                   TodoRecipient[]
   targetCommissionRecords          CommissionRecord[]          @relation("CommissionRecordTargetUser")
   confirmedCommissionRecords       CommissionRecord[]          @relation("CommissionRecordConfirmedBy")
   createdCommissionRecords         CommissionRecord[]          @relation("CommissionRecordCreatedBy")
@@ -95,6 +128,58 @@ model User {
   @@index([leaderId])
   @@index([statusChangedBy])
   @@map("users")
+}
+
+model BusinessTodo {
+  id              String         @id @default(uuid()) @db.Char(36)
+  ruleCode        String         @map("rule_code") @db.VarChar(80)
+  sourceType      TodoSourceType @map("source_type")
+  sourceId        String         @map("source_id") @db.Char(36)
+  targetRole      UserRole       @map("target_role")
+  title           String         @db.VarChar(160)
+  content         String         @db.VarChar(500)
+  priority        TodoPriority   @default(NORMAL)
+  status          TodoStatus     @default(ACTIVE)
+  dueAt           DateTime       @map("due_at") @db.DateTime(0)
+  sourceSnapshot  Json?          @map("source_snapshot")
+  firstDetectedAt DateTime       @default(now()) @map("first_detected_at") @db.DateTime(0)
+  lastDetectedAt  DateTime       @default(now()) @map("last_detected_at") @db.DateTime(0)
+  resolvedAt      DateTime?      @map("resolved_at") @db.DateTime(0)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.DateTime(0)
+
+  recipients TodoRecipient[]
+
+  @@unique([ruleCode, sourceType, sourceId], map: "business_todos_rule_source_key")
+  @@index([status, dueAt], map: "business_todos_status_due_at_idx")
+  @@index([sourceType, sourceId], map: "business_todos_source_idx")
+  @@index([targetRole, status], map: "business_todos_target_role_status_idx")
+  @@index([status, lastDetectedAt], map: "business_todos_status_detected_idx")
+  @@map("business_todos")
+}
+
+model TodoRecipient {
+  id               String              @id @default(uuid()) @db.Char(36)
+  todoId           String              @map("todo_id") @db.Char(36)
+  userId           String              @map("user_id") @db.Char(36)
+  recipientReason  TodoRecipientReason @default(BUSINESS) @map("recipient_reason")
+  readAt           DateTime?           @map("read_at") @db.DateTime(0)
+  personalNote     String?             @map("personal_note") @db.Text
+  personalRemindAt DateTime?           @map("personal_remind_at") @db.DateTime(0)
+  snoozedUntil     DateTime?           @map("snoozed_until") @db.DateTime(0)
+  archivedAt       DateTime?           @map("archived_at") @db.DateTime(0)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.DateTime(0)
+
+  todo BusinessTodo @relation(fields: [todoId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([todoId, userId], map: "todo_recipients_todo_user_key")
+  @@index([userId, archivedAt, createdAt], map: "todo_recipients_user_archive_created_idx")
+  @@index([todoId, recipientReason], map: "todo_recipients_todo_reason_idx")
+  @@index([userId, readAt], map: "todo_recipients_user_read_idx")
+  @@index([personalRemindAt], map: "todo_recipients_remind_at_idx")
+  @@map("todo_recipients")
 }
 
 model RefreshSession {
@@ -440,19 +525,17 @@ model TravelAgency {
 }
 
 model Guide {
-  id           String   @id @default(uuid()) @db.Char(36)
-  name         String   @db.VarChar(80)
-  phone        String   @unique @db.VarChar(30)
-  travelAgency String?  @map("travel_agency") @db.VarChar(120)
-  remarks      String?  @db.Text
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+  id        String   @id @default(uuid()) @db.Char(36)
+  name      String   @db.VarChar(80)
+  phone     String   @unique @db.VarChar(30)
+  remarks   String?  @db.Text
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
   travelGroups TravelGroup[]
 
   @@index([name])
-  @@index([travelAgency])
   @@index([isActive])
   @@map("guides")
 }
@@ -463,6 +546,14 @@ enum TravelGroupStatus {
   ORDERED         @map("ordered")
 
   @@map("travel_group_status")
+}
+
+enum TravelGroupLossStatus {
+  PENDING  @map("pending")
+  RECORDED @map("recorded")
+  NO_LOSS  @map("no_loss")
+
+  @@map("travel_group_loss_status")
 }
 
 enum SalesOrderType {
@@ -567,6 +658,8 @@ model TravelGroup {
   licensePlate             String?           @map("license_plate") @db.VarChar(40)
   guideName                String?           @map("guide_name") @db.VarChar(80)
   guidePhone               String?           @map("guide_phone") @db.VarChar(30)
+  adultCount               Int               @default(0) @map("adult_count")
+  childCount               Int               @default(0) @map("child_count")
   guestCount               Int               @default(0) @map("guest_count")
   tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
   tasterName               String?           @map("taster_name") @db.VarChar(80)
@@ -590,6 +683,9 @@ model TravelGroup {
   status                   TravelGroupStatus @default(UNMARKED)
   parkingFeeCents          Int               @default(500) @map("parking_fee_cents")
   cigaretteFeeCents        Int?              @map("cigarette_fee_cents")
+  lossStatus               TravelGroupLossStatus @default(PENDING) @map("loss_status")
+  lossConfirmedAt          DateTime?         @map("loss_confirmed_at") @db.DateTime(0)
+  lossConfirmedById        String?           @map("loss_confirmed_by_id") @db.Char(36)
   salesAmountCents         Int               @default(0) @map("sales_amount_cents")
   paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
   cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
@@ -623,6 +719,7 @@ model TravelGroup {
   guide             Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
   taster            User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
   liaisonTaster     User?                      @relation("TravelGroupLiaisonTaster", fields: [liaisonTasterId], references: [id], onDelete: SetNull)
+  lossConfirmedBy   User?                      @relation("TravelGroupLossConfirmedBy", fields: [lossConfirmedById], references: [id], onDelete: SetNull)
   markedBy          User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@index([visitDate])
@@ -632,6 +729,8 @@ model TravelGroup {
   @@index([tasterName])
   @@index([tasterId])
   @@index([liaisonTasterId])
+  @@index([lossConfirmedById])
+  @@index([lossStatus])
   @@index([financeMark])
   @@index([markedById])
   @@index([groupType])

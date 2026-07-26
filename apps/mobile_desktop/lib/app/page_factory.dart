@@ -9,6 +9,7 @@ import '../features/commission_rules/commission_rule_config_page.dart';
 import '../features/dashboard/dashboard_page.dart';
 import '../features/employee_accounts/employee_accounts_page.dart';
 import '../features/finance/finance_query_page.dart';
+import '../features/guide_management/guide_management_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
 import '../features/operation_logs/operation_logs_page.dart';
@@ -20,7 +21,11 @@ import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_entry_page.dart';
 import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
+import '../features/todo_reminders/todo_reminder_controller.dart';
+import '../features/todo_reminders/todo_reminders_page.dart';
 import '../features/travel_agency_management/travel_agency_management_page.dart';
+import '../features/travel_group_attachments/attachment_picker_service.dart';
+import '../features/travel_group_attachments/incoming_attachment_service.dart';
 import '../features/travel_group_finance/travel_group_finance_supplement_page.dart';
 import '../features/travel_group_order_notes/travel_group_order_notes_page.dart';
 import '../features/travel_group_query/travel_group_query_page.dart';
@@ -36,8 +41,19 @@ Widget buildPageForDestination({
   String currentUserId = '',
   required List<AppDestination> allowedDestinations,
   required ValueChanged<String> onOpenDestination,
+  TodoReminderController? todoReminderController,
+  AttachmentPickerService? attachmentPickerService,
+  IncomingAttachmentService? incomingAttachmentService,
 }) {
   switch (destinationId) {
+    case 'todo_reminders':
+      if (todoReminderController == null) {
+        return const Center(child: Text('待办提醒正在初始化。'));
+      }
+      return TodoRemindersPage(
+        controller: todoReminderController,
+        onOpenDestination: onOpenDestination,
+      );
     case 'employee_accounts':
       return EmployeeAccountsPage(
         apiClient: apiClient,
@@ -58,13 +74,26 @@ Widget buildPageForDestination({
       );
     case 'travel_group_form':
       return TravelGroupFormPage(
-          apiClient: apiClient, token: token, role: role);
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        attachmentPickerService: attachmentPickerService,
+        incomingAttachmentService: incomingAttachmentService,
+      );
     case 'travel_group_query':
       return TravelGroupQueryPage(
         apiClient: apiClient,
         token: token,
         role: role,
         currentUserId: currentUserId,
+        attachmentPickerService: attachmentPickerService,
+        incomingAttachmentService: incomingAttachmentService,
+      );
+    case 'guide_management':
+      return GuideManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
       );
     case 'travel_group_finance_supplement':
       return TravelGroupFinanceSupplementPage(
@@ -72,7 +101,11 @@ Widget buildPageForDestination({
         token: token,
       );
     case 'travel_group_order_notes':
-      return TravelGroupOrderNotesPage(apiClient: apiClient, token: token);
+      return TravelGroupOrderNotesPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'order_form':
       return OrderFormEntryPage(apiClient: apiClient, token: token, role: role);
     case 'order_query':
@@ -151,6 +184,7 @@ Widget buildPageForDestination({
         role: role,
         allowedDestinations: allowedDestinations,
         onOpenDestination: onOpenDestination,
+        todoReminderController: todoReminderController,
       );
   }
 }

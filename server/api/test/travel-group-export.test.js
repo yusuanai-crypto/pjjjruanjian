@@ -22,6 +22,8 @@ const EXPECTED_HEADERS = [
   '车牌号',
   '导游',
   '导游电话',
+  '大人人数',
+  '小孩人数',
   '人数',
   '品鉴馆馆号',
   '品鉴师',
@@ -137,6 +139,8 @@ test('GET /api/travel-groups/export.xlsx reuses filters and exports documented c
       assert.equal(row['车牌号'], '贵A12345');
       assert.equal(row['导游'], 'Alpha Guide');
       assert.equal(row['导游电话'], '13900001111');
+      assert.equal(row['大人人数'], 15);
+      assert.equal(row['小孩人数'], 3);
       assert.equal(row['人数'], 18);
       assert.equal(row['品鉴馆馆号'], 'A101');
       assert.equal(row['品鉴师'], 'Alpha Taster');
@@ -336,6 +340,8 @@ function buildTravelGroupExportPrismaOptions() {
         licensePlate: '贵A12345',
         guideName: 'Alpha Guide',
         guidePhone: '13900001111',
+        adultCount: 15,
+        childCount: 3,
         guestCount: 18,
         tastingRoomNo: 'A101',
         tasterName: 'Alpha Taster',

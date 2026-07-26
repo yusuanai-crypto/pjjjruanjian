@@ -64,6 +64,11 @@ function createHttpError(statusCode, code, message, options = {}) {
   if (options.cause !== undefined) {
     error.cause = options.cause;
   }
+  if (Array.isArray(options.missingFields)) {
+    error.missingFields = options.missingFields.filter(
+      (field) => typeof field === 'string' && field.length > 0,
+    );
+  }
   return error;
 }
 
@@ -117,6 +122,9 @@ function mapErrorToPublicResponse(error) {
       statusCode === 429 ? normalizeRetryAfter(error.retryAfterSeconds) : null,
     includeRequestId: false,
     shouldLog: false,
+    missingFields: Array.isArray(error.missingFields)
+      ? error.missingFields.slice(0, 50)
+      : null,
   };
 }
 

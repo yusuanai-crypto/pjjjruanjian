@@ -1,4 +1,5 @@
-import 'package:file_picker/file_picker.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
@@ -13,6 +14,8 @@ import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../../shared/widgets/time_picker_field.dart';
+import '../travel_group_attachments/attachment_picker_service.dart';
+import '../travel_group_attachments/incoming_attachment_service.dart';
 
 typedef TravelGroupFilePicker = Future<List<ApiMultipartFile>> Function();
 
@@ -23,12 +26,16 @@ class TravelGroupFormPage extends StatefulWidget {
     required this.token,
     this.role = UserRole.frontDesk,
     this.filePicker,
+    this.attachmentPickerService,
+    this.incomingAttachmentService,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
   final TravelGroupFilePicker? filePicker;
+  final AttachmentPickerService? attachmentPickerService;
+  final IncomingAttachmentService? incomingAttachmentService;
 
   @override
   State<TravelGroupFormPage> createState() => _TravelGroupFormPageState();
@@ -38,9 +45,12 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   final _formKey = GlobalKey<FormState>();
 
   late BusinessApi _businessApi;
+  late final AttachmentPickerService _attachmentPickerService;
+  late final IncomingAttachmentService _incomingAttachmentService;
   late final TextEditingController _travelAgencyController;
   late final TextEditingController _licensePlateController;
-  late final TextEditingController _guestCountController;
+  late final TextEditingController _adultCountController;
+  late final TextEditingController _childCountController;
   late final TextEditingController _cigaretteFeeController;
   late final TextEditingController _tastingRoomNoController;
   late final TextEditingController _arrivalTimeController;
@@ -61,8 +71,8 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   TasterOption? _selectedTaster;
   TasterOption? _selectedLiaisonTaster;
   TravelGroupRecord? _createdGroupAwaitingAttachments;
-  List<ApiMultipartFile> _keyCustomerPhotoFiles = <ApiMultipartFile>[];
-  List<ApiMultipartFile> _guestInfoFiles = <ApiMultipartFile>[];
+  List<PickedAttachment> _keyCustomerPhotoFiles = <PickedAttachment>[];
+  List<PickedAttachment> _guestInfoFiles = <PickedAttachment>[];
   final Set<String> _markingGroupIds = <String>{};
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
   List<GuideRecord> _guides = const <GuideRecord>[];
@@ -74,9 +84,15 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     super.initState();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _attachmentPickerService =
+        widget.attachmentPickerService ?? AttachmentPickerService();
+    _incomingAttachmentService =
+        widget.incomingAttachmentService ?? IncomingAttachmentService.instance;
+    _incomingAttachmentService.addListener(_handleIncomingAttachments);
     _travelAgencyController = TextEditingController();
     _licensePlateController = TextEditingController();
-    _guestCountController = TextEditingController();
+    _adultCountController = TextEditingController();
+    _childCountController = TextEditingController();
     _cigaretteFeeController = TextEditingController();
     _tastingRoomNoController = TextEditingController();
     _arrivalTimeController = TextEditingController();
@@ -85,6 +101,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _previousStopOrderStatusController = TextEditingController();
     _keyCustomerInfoController = TextEditingController();
     _loadData();
+    unawaited(_initializeAttachmentRecovery());
   }
 
   @override
@@ -100,9 +117,11 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
 
   @override
   void dispose() {
+    _incomingAttachmentService.removeListener(_handleIncomingAttachments);
     _travelAgencyController.dispose();
     _licensePlateController.dispose();
-    _guestCountController.dispose();
+    _adultCountController.dispose();
+    _childCountController.dispose();
     _cigaretteFeeController.dispose();
     _tastingRoomNoController.dispose();
     _arrivalTimeController.dispose();
@@ -111,6 +130,40 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _previousStopOrderStatusController.dispose();
     _keyCustomerInfoController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeAttachmentRecovery() async {
+    await _incomingAttachmentService.initialize();
+    _handleIncomingAttachments();
+  }
+
+  void _handleIncomingAttachments() {
+    if (!mounted) {
+      return;
+    }
+    final remaining = attachmentMaxFileCount - _guestInfoFiles.length;
+    final claimed = _incomingAttachmentService.claim(
+      category: PendingAttachmentCategory.guestInfo,
+      includeColdStart: false,
+      maxCount: remaining < 0 ? 0 : remaining,
+    );
+    final incomingError = _incomingAttachmentService.lastErrorMessage;
+    if (claimed.isEmpty && incomingError == null) {
+      return;
+    }
+    setState(() {
+      if (claimed.isNotEmpty) {
+        _guestInfoFiles = [
+          ..._guestInfoFiles,
+          ...claimed.map((item) => item.attachment),
+        ];
+      }
+      if (incomingError != null) {
+        _errorMessage = incomingError;
+        _successMessage = null;
+      }
+    });
+    _incomingAttachmentService.clearError();
   }
 
   Future<void> _loadData() async {
@@ -122,7 +175,11 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     try {
       final results = await Future.wait<Object>([
         _businessApi.listTravelGroups(),
-        _businessApi.listGuides(isActive: true, limit: 100),
+        _businessApi.listGuidesPage(
+          page: 1,
+          pageSize: 20,
+          isActive: true,
+        ),
         _businessApi.listTravelAgencies(limit: 100),
         _businessApi.listTasters(),
       ]);
@@ -131,7 +188,7 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       }
       setState(() {
         _groups = results[0] as List<TravelGroupRecord>;
-        _guides = results[1] as List<GuideRecord>;
+        _guides = (results[1] as GuidePage).guides;
         _travelAgencies = results[2] as List<TravelAgencyRecord>;
         _tasters = results[3] as List<TasterOption>;
         _loading = false;
@@ -219,24 +276,44 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     _clearForm();
     setState(() {
       _saving = false;
-      _successMessage = '旅行团已保存，系统团号：${created.groupNo}';
+      _successMessage = created.pendingStatus == 'pending_front_desk'
+          ? '旅行团已创建，并已加入前台待办。系统团号：${created.groupNo}'
+          : '旅行团已保存，系统团号：${created.groupNo}';
     });
     await _showTravelGroupResultDialog(
       title: '录入成功',
-      message: '旅行团录入成功。系统团号：${created.groupNo}',
+      message: created.pendingStatus == 'pending_front_desk'
+          ? '旅行团已创建，并已加入前台待办。系统团号：${created.groupNo}'
+          : '旅行团录入成功。系统团号：${created.groupNo}',
     );
   }
 
   String _formValidationFailureMessage() {
-    final guestCount = _guestCountController.text.trim();
-    if (guestCount.isNotEmpty &&
-        (int.tryParse(guestCount) == null || int.parse(guestCount) <= 0)) {
-      return '人数必须大于 0';
+    final adultCountText = _adultCountController.text.trim();
+    final childCountText = _childCountController.text.trim();
+    final adultCount =
+        adultCountText.isEmpty ? 0 : int.tryParse(adultCountText);
+    final childCount =
+        childCountText.isEmpty ? 0 : int.tryParse(childCountText);
+    if (adultCount == null ||
+        childCount == null ||
+        adultCount < 0 ||
+        childCount < 0) {
+      return '大人人数和小孩人数必须是非负整数';
     }
-    if ((_parseYuanCents(_cigaretteFeeController.text) ?? 0) <= 0) {
+    if (_cigaretteFeeController.text.trim().isNotEmpty &&
+        (_parseYuanCents(_cigaretteFeeController.text) ?? 0) <= 0) {
       return '香烟费用必须大于 0';
     }
     return '请检查已填写的信息。';
+  }
+
+  String? _childCountValidator(String? value) {
+    final fieldError = _optionalNonNegativeIntValidator('小孩人数必须是非负整数')(value);
+    if (fieldError != null) {
+      return fieldError;
+    }
+    return null;
   }
 
   Future<void> _showSaveFailure(String message) async {
@@ -281,8 +358,13 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       'visitDate': formatDate(_visitDate!),
       'travelAgency': _travelAgencyController.text.trim(),
       'guideId': _selectedGuide!.id,
-      'cigaretteFeeCents': _parseYuanCents(_cigaretteFeeController.text)!,
+      'adultCount': _optionalCountValue(_adultCountController.text),
+      'childCount': _optionalCountValue(_childCountController.text),
     };
+    if (_cigaretteFeeController.text.trim().isNotEmpty) {
+      body['cigaretteFeeCents'] =
+          _parseYuanCents(_cigaretteFeeController.text)!;
+    }
     _putNonEmpty(body, 'licensePlate', _licensePlateController.text);
     _putNonEmpty(body, 'tastingRoomNo', _tastingRoomNoController.text);
     _putNonEmpty(
@@ -299,10 +381,6 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     );
     _putNonEmpty(body, 'keyCustomerInfo', _keyCustomerInfoController.text);
 
-    final guestCount = _guestCountController.text.trim();
-    if (guestCount.isNotEmpty) {
-      body['guestCount'] = int.parse(guestCount);
-    }
     if (_selectedTaster != null) {
       body['tasterId'] = _selectedTaster!.id;
     }
@@ -325,22 +403,23 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   ) async {
     final failures = <String>[];
     final keyCustomerPhotoFiles =
-        List<ApiMultipartFile>.from(_keyCustomerPhotoFiles);
-    final guestInfoFiles = List<ApiMultipartFile>.from(_guestInfoFiles);
+        List<PickedAttachment>.from(_keyCustomerPhotoFiles);
+    final guestInfoFiles = List<PickedAttachment>.from(_guestInfoFiles);
 
     if (keyCustomerPhotoFiles.isNotEmpty) {
       try {
         await _businessApi.uploadTravelGroupAttachments(
           created.id,
           category: TravelGroupAttachmentCategory.keyCustomerPhoto,
-          files: keyCustomerPhotoFiles,
+          files: keyCustomerPhotoFiles.map((item) => item.file).toList(),
         );
-        _keyCustomerPhotoFiles = <ApiMultipartFile>[];
+        _keyCustomerPhotoFiles = <PickedAttachment>[];
+        await _cleanupPickedAttachments(keyCustomerPhotoFiles);
       } catch (error) {
         failures.add(
           _attachmentCategoryFailure(
             '重点客户照片',
-            keyCustomerPhotoFiles,
+            keyCustomerPhotoFiles.map((item) => item.file).toList(),
             error,
           ),
         );
@@ -351,12 +430,17 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
         await _businessApi.uploadTravelGroupAttachments(
           created.id,
           category: TravelGroupAttachmentCategory.guestInfo,
-          files: guestInfoFiles,
+          files: guestInfoFiles.map((item) => item.file).toList(),
         );
-        _guestInfoFiles = <ApiMultipartFile>[];
+        _guestInfoFiles = <PickedAttachment>[];
+        await _cleanupPickedAttachments(guestInfoFiles);
       } catch (error) {
         failures.add(
-          _attachmentCategoryFailure('客人信息附件', guestInfoFiles, error),
+          _attachmentCategoryFailure(
+            '客人信息附件',
+            guestInfoFiles.map((item) => item.file).toList(),
+            error,
+          ),
         );
       }
     }
@@ -409,10 +493,13 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   }
 
   void _clearForm() {
+    unawaited(_cleanupPickedAttachments(_keyCustomerPhotoFiles));
+    unawaited(_cleanupPickedAttachments(_guestInfoFiles));
     _formKey.currentState?.reset();
     _travelAgencyController.clear();
     _licensePlateController.clear();
-    _guestCountController.clear();
+    _adultCountController.clear();
+    _childCountController.clear();
     _cigaretteFeeController.clear();
     _tastingRoomNoController.clear();
     _arrivalTimeController.clear();
@@ -428,8 +515,8 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       _selectedTaster = null;
       _selectedLiaisonTaster = null;
       _createdGroupAwaitingAttachments = null;
-      _keyCustomerPhotoFiles = <ApiMultipartFile>[];
-      _guestInfoFiles = <ApiMultipartFile>[];
+      _keyCustomerPhotoFiles = <PickedAttachment>[];
+      _guestInfoFiles = <PickedAttachment>[];
     });
   }
 
@@ -439,7 +526,6 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
       builder: (context) => _GuidePickerDialog(
         businessApi: _businessApi,
         guides: _guides,
-        initialAgency: _travelAgencyController.text.trim(),
       ),
     );
     if (selected == null || !mounted) {
@@ -488,22 +574,59 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
   Future<void> _pickAttachmentFiles({required bool keyCustomerPhotos}) async {
     try {
       final picker = widget.filePicker;
-      final selectedFiles =
-          picker == null ? await _pickFilesFromDevice() : await picker();
-      if (!mounted || selectedFiles.isEmpty) {
+      if (picker != null) {
+        final legacyFiles = await picker();
+        if (!mounted || legacyFiles.isEmpty) {
+          return;
+        }
+        final result = await _wrapLegacySelection(
+          legacyFiles,
+          existingCount: keyCustomerPhotos
+              ? _keyCustomerPhotoFiles.length
+              : _guestInfoFiles.length,
+        );
+        if (mounted) {
+          _applyPickResult(
+            result,
+            keyCustomerPhotos: keyCustomerPhotos,
+          );
+        }
         return;
       }
-      setState(() {
-        if (keyCustomerPhotos) {
-          _keyCustomerPhotoFiles = [
-            ..._keyCustomerPhotoFiles,
-            ...selectedFiles,
-          ];
-        } else {
-          _guestInfoFiles = [..._guestInfoFiles, ...selectedFiles];
+
+      AttachmentPickResult result;
+      if (keyCustomerPhotos) {
+        result = await _attachmentPickerService.pickKeyCustomerPhotos(
+          existingCount: _keyCustomerPhotoFiles.length,
+        );
+      } else if (_attachmentPickerService.isMobile) {
+        final source = await showGuestAttachmentSourceSheet(context);
+        if (!mounted || source == null) {
+          return;
         }
-        _errorMessage = null;
-      });
+        switch (source) {
+          case GuestAttachmentSource.gallery:
+            result = await _attachmentPickerService.pickGuestInfoPhotos(
+              existingCount: _guestInfoFiles.length,
+            );
+            break;
+          case GuestAttachmentSource.files:
+            result = await _attachmentPickerService.pickGuestInfoFiles(
+              existingCount: _guestInfoFiles.length,
+            );
+            break;
+          case GuestAttachmentSource.wechat:
+            await _importPendingWechatFiles();
+            return;
+        }
+      } else {
+        result = await _attachmentPickerService.pickGuestInfoFiles(
+          existingCount: _guestInfoFiles.length,
+        );
+      }
+      if (mounted) {
+        _applyPickResult(result, keyCustomerPhotos: keyCustomerPhotos);
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -515,33 +638,98 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
     }
   }
 
-  Future<List<ApiMultipartFile>> _pickFilesFromDevice() async {
-    final result = await FilePicker.pickFiles(
-      allowMultiple: true,
-      type: FileType.custom,
-      allowedExtensions: const [
-        'jpg',
-        'jpeg',
-        'png',
-        'gif',
-        'webp',
-        'bmp',
-        'tif',
-        'tiff',
-        'avif',
-        'pdf',
-        'doc',
-        'docx',
-        'xls',
-        'xlsx',
-        'csv',
-        'txt',
-        'log',
-        'md',
-      ],
+  void _applyPickResult(
+    AttachmentPickResult result, {
+    required bool keyCustomerPhotos,
+  }) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (keyCustomerPhotos && result.files.isNotEmpty) {
+        _keyCustomerPhotoFiles = [
+          ..._keyCustomerPhotoFiles,
+          ...result.files,
+        ];
+      } else if (result.files.isNotEmpty) {
+        _guestInfoFiles = [..._guestInfoFiles, ...result.files];
+      }
+      _errorMessage = result.message;
+      if (result.message != null) {
+        _successMessage = null;
+      }
+    });
+  }
+
+  Future<AttachmentPickResult> _wrapLegacySelection(
+    List<ApiMultipartFile> files, {
+    required int existingCount,
+  }) async {
+    if (existingCount + files.length > attachmentMaxFileCount) {
+      return AttachmentPickResult(
+        message: '最多只能选择5个文件；当前已有$existingCount个，本次选择了${files.length}个。',
+      );
+    }
+    final accepted = <PickedAttachment>[];
+    for (final file in files) {
+      if (await file.length() > attachmentMaxFileSizeBytes) {
+        return AttachmentPickResult(message: '“${file.fileName}”超过10MB，已拒绝添加。');
+      }
+      accepted.add(
+        PickedAttachment(
+          file: file,
+          kind: attachmentKindForFileName(file.fileName),
+        ),
+      );
+    }
+    return AttachmentPickResult(files: accepted);
+  }
+
+  Future<void> _importPendingWechatFiles() async {
+    await _incomingAttachmentService.refresh();
+    if (!mounted) {
+      return;
+    }
+    final remaining = attachmentMaxFileCount - _guestInfoFiles.length;
+    final claimed = _incomingAttachmentService.claim(
+      category: PendingAttachmentCategory.guestInfo,
+      includeColdStart: true,
+      maxCount: remaining < 0 ? 0 : remaining,
     );
-    return result?.files.map(ApiMultipartFile.fromPlatformFile).toList() ??
-        const <ApiMultipartFile>[];
+    if (claimed.isEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('从微信导入'),
+          content: const Text(
+            '请在微信中选择 PDF、Word 或 Excel 文件，点击“用其他应用打开”或“分享”，'
+            '再选择本应用。返回后文件会自动加入客人信息附件。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _guestInfoFiles = [
+        ..._guestInfoFiles,
+        ...claimed.map((item) => item.attachment),
+      ];
+      _errorMessage = null;
+    });
+  }
+
+  Future<void> _cleanupPickedAttachments(
+    List<PickedAttachment> attachments,
+  ) async {
+    for (final attachment in attachments) {
+      await attachment.deleteTemporaryCopy();
+    }
   }
 
   bool _isGroupMarked(TravelGroupRecord group) {
@@ -678,7 +866,9 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                         TextFormField(
                           controller: _licensePlateController,
                           decoration:
-                              const InputDecoration(labelText: '车牌号（选填）'),
+                              const InputDecoration(
+                                labelText: '车牌号（选填，进店当日待补）',
+                              ),
                         ),
                         _SelectionField(
                           fieldKey: const ValueKey('guide-field'),
@@ -690,14 +880,30 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           onTap: _selectGuide,
                         ),
                         TextFormField(
-                          controller: _guestCountController,
+                          key: const ValueKey('adult-count-field'),
+                          controller: _adultCountController,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
                             FilteringTextInputFormatter.digitsOnly,
                           ],
-                          decoration:
-                              const InputDecoration(labelText: '人数（选填）'),
-                          validator: _optionalPositiveIntValidator('人数必须大于 0'),
+                          decoration: const InputDecoration(
+                            labelText: '大人人数（选填，进店当日待补）',
+                          ),
+                          validator: _optionalNonNegativeIntValidator(
+                            '大人人数必须是非负整数',
+                          ),
+                        ),
+                        TextFormField(
+                          key: const ValueKey('child-count-field'),
+                          controller: _childCountController,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: '小孩人数（选填，进店当日待补）',
+                          ),
+                          validator: _childCountValidator,
                         ),
                         TextFormField(
                           key: const ValueKey('cigarette-fee-field'),
@@ -706,17 +912,19 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                             decimal: true,
                           ),
                           decoration: const InputDecoration(
-                            labelText: '香烟费用（元）',
+                            labelText: '香烟费用（元，选填，进店当日待补）',
                           ),
-                          validator: _requiredPositiveMoneyValidator,
+                          validator: _optionalPositiveMoneyValidator,
                         ),
                         TextFormField(
                           controller: _tastingRoomNoController,
                           decoration:
-                              const InputDecoration(labelText: '品鉴馆号（选填）'),
+                              const InputDecoration(
+                                labelText: '品鉴馆号（选填，进店当日待补）',
+                              ),
                         ),
                         _SelectionField(
-                          label: '品鉴师（选填）',
+                          label: '品鉴师（选填，进店当日待补）',
                           value: _selectedTaster == null
                               ? null
                               : '${_selectedTaster!.name} · ${_selectedTaster!.username}',
@@ -742,12 +950,14 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                         AppTimePickerField(
                           key: const ValueKey('arrival-time-field'),
                           controller: _arrivalTimeController,
-                          label: '进店时间（选填）',
+                          label: '进店时间（选填，进店当日待补）',
                         ),
                         DropdownButtonFormField<String>(
                           initialValue: _groupType ?? '',
                           decoration:
-                              const InputDecoration(labelText: '团型（选填）'),
+                              const InputDecoration(
+                                labelText: '团型（选填，进店当日待补）',
+                              ),
                           items: [
                             const DropdownMenuItem(
                               value: '',
@@ -807,9 +1017,12 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           onPick: () => _pickAttachmentFiles(
                             keyCustomerPhotos: true,
                           ),
-                          onRemove: (index) => setState(
-                            () => _keyCustomerPhotoFiles.removeAt(index),
-                          ),
+                          onRemove: (index) {
+                            final removed =
+                                _keyCustomerPhotoFiles.removeAt(index);
+                            unawaited(removed.deleteTemporaryCopy());
+                            setState(() {});
+                          },
                         ),
                         _AttachmentPickerField(
                           fieldKey: const ValueKey('guest-info-picker'),
@@ -818,9 +1031,11 @@ class _TravelGroupFormPageState extends State<TravelGroupFormPage> {
                           onPick: () => _pickAttachmentFiles(
                             keyCustomerPhotos: false,
                           ),
-                          onRemove: (index) => setState(
-                            () => _guestInfoFiles.removeAt(index),
-                          ),
+                          onRemove: (index) {
+                            final removed = _guestInfoFiles.removeAt(index);
+                            unawaited(removed.deleteTemporaryCopy());
+                            setState(() {});
+                          },
                         ),
                       ],
                     ),
@@ -932,8 +1147,12 @@ int? _parseYuanCents(String value) {
   return cents <= 2147483647 ? cents : null;
 }
 
-String? _requiredPositiveMoneyValidator(String? value) {
-  final cents = _parseYuanCents(value ?? '');
+String? _optionalPositiveMoneyValidator(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  final cents = _parseYuanCents(text);
   if (cents == null) {
     return '请输入最多两位小数的非负金额';
   }
@@ -1037,7 +1256,7 @@ class _AttachmentPickerField extends StatelessWidget {
 
   final Key fieldKey;
   final String label;
-  final List<ApiMultipartFile> files;
+  final List<PickedAttachment> files;
   final VoidCallback onPick;
   final ValueChanged<int> onRemove;
 
@@ -1239,12 +1458,10 @@ class _GuidePickerDialog extends StatefulWidget {
   const _GuidePickerDialog({
     required this.businessApi,
     required this.guides,
-    required this.initialAgency,
   });
 
   final BusinessApi businessApi;
   final List<GuideRecord> guides;
-  final String initialAgency;
 
   @override
   State<_GuidePickerDialog> createState() => _GuidePickerDialogState();
@@ -1255,24 +1472,32 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
   final _searchController = TextEditingController();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  late final TextEditingController _agencyController;
   final _remarksController = TextEditingController();
+  Timer? _searchDebounce;
+  late List<GuideRecord> _guides;
   bool _creating = false;
+  bool _loadingGuides = false;
+  bool _loadingMore = false;
+  int _guidePage = 1;
+  int _guideTotalPages = 0;
   String _guideQuery = '';
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _agencyController = TextEditingController(text: widget.initialAgency);
+    _guides = widget.guides;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadGuides(reset: true);
+    });
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _nameController.dispose();
     _phoneController.dispose();
-    _agencyController.dispose();
     _remarksController.dispose();
     super.dispose();
   }
@@ -1289,7 +1514,6 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
       final guide = await widget.businessApi.createGuide({
         'name': _nameController.text.trim(),
         'phone': _phoneController.text.trim(),
-        'travelAgency': _agencyController.text.trim(),
         'remarks': _remarksController.text.trim(),
       });
       if (mounted) {
@@ -1306,23 +1530,59 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
     }
   }
 
-  List<GuideRecord> get _filteredGuides {
-    final query = _guideQuery.trim().toLowerCase();
-    if (query.isEmpty) {
-      return widget.guides;
+  void _onGuideSearchChanged(String value) {
+    setState(() => _guideQuery = value);
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _loadGuides(reset: true),
+    );
+  }
+
+  Future<void> _loadGuides({required bool reset}) async {
+    if (reset) {
+      setState(() {
+        _loadingGuides = true;
+        _errorMessage = null;
+      });
+    } else {
+      if (_loadingMore || _guidePage >= _guideTotalPages) {
+        return;
+      }
+      setState(() => _loadingMore = true);
     }
-    return widget.guides.where((guide) {
-      return [
-        guide.name,
-        guide.phone,
-        guide.travelAgency,
-      ].any((value) => value.toLowerCase().contains(query));
-    }).toList();
+    try {
+      final result = await widget.businessApi.listGuidesPage(
+        page: reset ? 1 : _guidePage + 1,
+        pageSize: 20,
+        keyword: _guideQuery,
+        isActive: true,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _guides =
+            reset ? result.guides : _mergeGuideRecords(_guides, result.guides);
+        _guidePage = result.page;
+        _guideTotalPages = result.totalPages;
+        _loadingGuides = false;
+        _loadingMore = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingGuides = false;
+        _loadingMore = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredGuides = _filteredGuides;
     return AlertDialog(
       title: const Text('选择导游'),
       content: SizedBox(
@@ -1344,32 +1604,47 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
                           tooltip: '清空搜索',
                           onPressed: () {
                             _searchController.clear();
-                            setState(() => _guideQuery = '');
+                            _onGuideSearchChanged('');
                           },
                           icon: const Icon(Icons.close_rounded),
                         ),
                 ),
                 textInputAction: TextInputAction.search,
-                onChanged: (value) => setState(() => _guideQuery = value),
+                onChanged: _onGuideSearchChanged,
+                onSubmitted: (_) => _loadGuides(reset: true),
               ),
               const SizedBox(height: 12),
-              if (widget.guides.isEmpty)
+              if (_loadingGuides && _guides.isEmpty)
+                const Center(child: CircularProgressIndicator())
+              else if (_guides.isEmpty)
                 const Text('暂无导游，可在下方新建。')
-              else if (filteredGuides.isEmpty)
-                const Text('未找到匹配导游，可调整关键词或在下方新建。')
               else
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 280),
                   child: ListView(
                     shrinkWrap: true,
                     children: [
-                      for (final guide in filteredGuides)
+                      for (final guide in _guides)
                         ListTile(
                           title: Text(guide.name),
-                          subtitle:
-                              Text('${guide.phone} · ${guide.travelAgency}'),
+                          subtitle: Text('${guide.name} · ${guide.phone}'),
                           trailing: const Icon(Icons.check_circle_outline),
                           onTap: () => Navigator.of(context).pop(guide),
+                        ),
+                      if (_guidePage < _guideTotalPages)
+                        OutlinedButton.icon(
+                          key: const ValueKey('guide-picker-load-more'),
+                          onPressed: _loadingMore
+                              ? null
+                              : () => _loadGuides(reset: false),
+                          icon: _loadingMore
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.expand_more_rounded),
+                          label: const Text('加载更多'),
                         ),
                     ],
                   ),
@@ -1391,12 +1666,6 @@ class _GuidePickerDialogState extends State<_GuidePickerDialog> {
                       decoration: const InputDecoration(labelText: '导游电话'),
                       validator: _requiredValidator('导游电话不能为空'),
                     ),
-                    const SizedBox(height: 8),
-                    TextFormField(
-                      controller: _agencyController,
-                      decoration: const InputDecoration(labelText: '常用旅行社（选填）'),
-                    ),
-                    const SizedBox(height: 8),
                     TextFormField(
                       controller: _remarksController,
                       decoration: const InputDecoration(labelText: '备注'),
@@ -1531,18 +1800,34 @@ FormFieldValidator<String> _requiredValidator(String message) {
   };
 }
 
-FormFieldValidator<String> _optionalPositiveIntValidator(String message) {
+FormFieldValidator<String> _optionalNonNegativeIntValidator(String message) {
   return (value) {
     final text = (value ?? '').trim();
     if (text.isEmpty) {
       return null;
     }
     final number = int.tryParse(text);
-    if (number == null || number <= 0) {
+    if (number == null || number < 0) {
       return message;
     }
     return null;
   };
+}
+
+int _optionalCountValue(String value) {
+  final text = value.trim();
+  return text.isEmpty ? 0 : int.parse(text);
+}
+
+List<GuideRecord> _mergeGuideRecords(
+  List<GuideRecord> existing,
+  List<GuideRecord> incoming,
+) {
+  final byId = <String, GuideRecord>{
+    for (final guide in existing) guide.id: guide,
+    for (final guide in incoming) guide.id: guide,
+  };
+  return byId.values.toList();
 }
 
 void _putNonEmpty(

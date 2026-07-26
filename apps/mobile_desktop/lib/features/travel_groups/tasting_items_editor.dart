@@ -48,7 +48,9 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
       for (var index = 0; index < _rows.length; index += 1)
         {
           'productId': _rows[index].productId,
+          'productName': _rows[index].productName,
           'quantity': _rows[index].quantity,
+          'unit': _rows[index].unit,
           'note': _rows[index].note,
           'sortOrder': index + 1,
         },
@@ -134,6 +136,13 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
     _notifyChanged();
   }
 
+  void _addCannedWineRow() {
+    setState(() {
+      _rows.add(_TastingItemRowState.cannedWine());
+    });
+    _notifyChanged();
+  }
+
   void _deleteRow(int index) {
     setState(() {
       final row = _rows.removeAt(index);
@@ -153,14 +162,23 @@ class TastingItemsEditorState extends State<TastingItemsEditor> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FilledButton.icon(
-              key: const ValueKey('tasting_items_add'),
-              onPressed: _addRow,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('新增酒品'),
-            ),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                key: const ValueKey('tasting_items_add'),
+                onPressed: _addRow,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('新增酒品'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('tasting_items_add_canned_wine'),
+                onPressed: _addCannedWineRow,
+                icon: const Icon(Icons.local_drink_rounded),
+                label: const Text('新增罐装酒（瓶）'),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           if (_rows.isEmpty)
@@ -257,6 +275,8 @@ class _TastingItemRow extends StatelessWidget {
                   productId: row.productId,
                   snapshotName: row.productName,
                   snapshotUnit: row.unit,
+                  allowSnapshotWithoutProductId:
+                      row.productId == null && row.productName == '罐装酒',
                   onRetry: onRetryProductOptions,
                   onChanged: onProductChanged,
                 );
@@ -346,6 +366,16 @@ class _TastingItemRowState {
       productId: null,
       quantity: 1,
       unit: '',
+      note: null,
+    );
+  }
+
+  factory _TastingItemRowState.cannedWine() {
+    return _TastingItemRowState(
+      productName: '罐装酒',
+      productId: null,
+      quantity: 1,
+      unit: '瓶',
       note: null,
     );
   }

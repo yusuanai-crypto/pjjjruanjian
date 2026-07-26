@@ -76,7 +76,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       body: {
         name: '测试导游',
         phone: '13800001234',
-        travelAgency: '测试旅行社',
         remarks: '初始备注',
       },
     });
@@ -116,7 +115,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       body: {
         name: '重复导游',
         phone: '13800001234',
-        travelAgency: '重复旅行社',
       },
     });
     assertErrorContract(duplicate, 409, 'GUIDE_PHONE_EXISTS');
@@ -127,7 +125,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       body: {
         name: '备用导游',
         phone: '13800005678',
-        travelAgency: '备用旅行社',
       },
     });
     assert.equal(second.response.status, 201);
@@ -154,7 +151,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       body: {
         name: '销售不可建',
         phone: '13800009999',
-        travelAgency: '销售旅行社',
       },
     });
     assertErrorContract(salesCreate, 403, 'PERMISSION_DENIED');
@@ -166,7 +162,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
         body: {
           name: `Blocked ${role} Guide`,
           phone: `1380000888${index}`,
-          travelAgency: 'Blocked Agency',
         },
       });
       assertErrorContract(readOnlyCreate, 403, 'PERMISSION_DENIED');
@@ -181,7 +176,6 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
         body: {
           name: '更新导游',
           phone: '13800002222',
-          travelAgency: '更新旅行社',
           remarks: '更新备注',
         },
       },
@@ -189,7 +183,10 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     assert.equal(updated.response.status, 200);
     assert.equal(updated.body.data.guide.name, '更新导游');
     assert.equal(updated.body.data.guide.phone, '13800002222');
-    assert.equal(updated.body.data.guide.travelAgency, '更新旅行社');
+    assert.equal(
+      Object.hasOwn(updated.body.data.guide, 'travelAgency'),
+      false,
+    );
 
     const duplicatePatch = await requestJson(
       baseUrl,
@@ -260,7 +257,19 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
         token: frontDesk.token,
       },
     );
-    assertErrorContract(frontDeskDisable, 403, 'PERMISSION_DENIED');
+    assert.equal(frontDeskDisable.response.status, 200);
+    assert.equal(frontDeskDisable.body.data.guide.isActive, false);
+
+    const frontDeskEnable = await requestJson(
+      baseUrl,
+      `/api/guides/${created.body.data.guide.id}/enable`,
+      {
+        method: 'POST',
+        token: frontDesk.token,
+      },
+    );
+    assert.equal(frontDeskEnable.response.status, 200);
+    assert.equal(frontDeskEnable.body.data.guide.isActive, true);
 
     const disabled = await requestJson(
       baseUrl,
@@ -272,6 +281,16 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     );
     assert.equal(disabled.response.status, 200);
     assert.equal(disabled.body.data.guide.isActive, false);
+
+    const duplicateDisabled = await requestJson(baseUrl, '/api/guides', {
+      method: 'POST',
+      token: frontDesk.token,
+      body: {
+        name: '不能重复创建已停用导游',
+        phone: '13800002222',
+      },
+    });
+    assertErrorContract(duplicateDisabled, 409, 'GUIDE_DISABLED');
 
     const inactiveList = await requestJson(
       baseUrl,
@@ -291,15 +310,15 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
     assert.equal(activeList.response.status, 200);
     assert.deepEqual(guidePhones(activeList.body.data.guides), ['13800005678']);
 
-    const agencyList = await requestJson(
+    const remarksList = await requestJson(
       baseUrl,
-      '/api/guides?travelAgency=更新旅行社',
+      '/api/guides?keyword=更新备注',
       {
         token: admin.token,
       },
     );
-    assert.equal(agencyList.response.status, 200);
-    assert.deepEqual(guidePhones(agencyList.body.data.guides), ['13800002222']);
+    assert.equal(remarksList.response.status, 200);
+    assert.deepEqual(guidePhones(remarksList.body.data.guides), ['13800002222']);
 
     const optionalAgencyGuide = await requestJson(baseUrl, '/api/guides', {
       method: 'POST',
@@ -310,7 +329,10 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       },
     });
     assert.equal(optionalAgencyGuide.response.status, 201);
-    assert.equal(optionalAgencyGuide.body.data.guide.travelAgency, null);
+    assert.equal(
+      Object.hasOwn(optionalAgencyGuide.body.data.guide, 'travelAgency'),
+      false,
+    );
 
     const enabled = await requestJson(
       baseUrl,
@@ -357,6 +379,8 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
       'guides.create',
       'guides.create',
       'guides.disable',
+      'guides.disable',
+      'guides.enable',
       'guides.enable',
       'guides.update',
     ]);
@@ -373,6 +397,110 @@ test('contract: guide APIs enforce permissions and persist guide lifecycle', asy
   });
 });
 
+test('contract: guide list supports pagination, filters, stable order, and legacy limit', async () => {
+  await withPhase1Server(async (baseUrl, { prisma }) => {
+    const admin = await login(baseUrl);
+    const fixedTime = new Date('2026-07-25T08:00:00.000Z');
+    for (let index = 1; index <= 205; index += 1) {
+      const suffix = String(index).padStart(4, '0');
+      prisma.__store.guides.push({
+        id: `guide-${suffix}`,
+        name: index === 201 ? '远程搜索目标导游' : `导游 ${suffix}`,
+        phone: `139${String(index).padStart(8, '0')}`,
+        remarks: index === 201 ? '第201名以后仍可搜索' : `备注 ${suffix}`,
+        isActive: index % 3 !== 0,
+        createdAt: fixedTime,
+        updatedAt: fixedTime,
+      });
+    }
+
+    const defaultPage = await requestJson(baseUrl, '/api/guides', {
+      token: admin.token,
+    });
+    assert.equal(defaultPage.response.status, 200);
+    assert.equal(defaultPage.body.data.guides.length, 20);
+    assert.deepEqual(defaultPage.body.data.pagination, {
+      page: 1,
+      pageSize: 20,
+      total: 205,
+      totalPages: 11,
+    });
+    assert.equal(defaultPage.body.data.guides[0].id, 'guide-0205');
+
+    const secondPage = await requestJson(
+      baseUrl,
+      '/api/guides?page=2&pageSize=50',
+      { token: admin.token },
+    );
+    assert.equal(secondPage.response.status, 200);
+    assert.equal(secondPage.body.data.guides.length, 50);
+    assert.deepEqual(secondPage.body.data.pagination, {
+      page: 2,
+      pageSize: 50,
+      total: 205,
+      totalPages: 5,
+    });
+    const repeatedSecondPage = await requestJson(
+      baseUrl,
+      '/api/guides?page=2&pageSize=50',
+      { token: admin.token },
+    );
+    assert.deepEqual(
+      repeatedSecondPage.body.data.guides.map((guide) => guide.id),
+      secondPage.body.data.guides.map((guide) => guide.id),
+    );
+
+    const cappedPage = await requestJson(
+      baseUrl,
+      '/api/guides?page=1&pageSize=500',
+      { token: admin.token },
+    );
+    assert.equal(cappedPage.body.data.guides.length, 100);
+    assert.equal(cappedPage.body.data.pagination.pageSize, 100);
+    assert.equal(cappedPage.body.data.pagination.totalPages, 3);
+
+    const keywordPage = await requestJson(
+      baseUrl,
+      `/api/guides?keyword=${encodeURIComponent('第201名以后')}`,
+      { token: admin.token },
+    );
+    assert.equal(keywordPage.body.data.guides.length, 1);
+    assert.equal(keywordPage.body.data.guides[0].id, 'guide-0201');
+    assert.equal(
+      Object.hasOwn(keywordPage.body.data.guides[0], 'travelAgency'),
+      false,
+    );
+
+    const inactivePage = await requestJson(
+      baseUrl,
+      '/api/guides?pageSize=100&isActive=false',
+      { token: admin.token },
+    );
+    assert.equal(inactivePage.body.data.pagination.total, 68);
+    assert.equal(
+      inactivePage.body.data.guides.every((guide) => !guide.isActive),
+      true,
+    );
+
+    const legacyLimit = await requestJson(baseUrl, '/api/guides?limit=200', {
+      token: admin.token,
+    });
+    assert.equal(legacyLimit.response.status, 200);
+    assert.equal(legacyLimit.body.data.guides.length, 200);
+    assert.deepEqual(legacyLimit.body.data.pagination, {
+      page: 1,
+      pageSize: 200,
+      total: 205,
+      totalPages: 2,
+    });
+
+    const invalidPage = await requestJson(baseUrl, '/api/guides?page=0', {
+      token: admin.token,
+    });
+    assertErrorContract(invalidPage, 400, 'VALIDATION_FAILED');
+  });
+});
+
 function assertGuideContract(guide) {
   assert.deepEqual(Object.keys(guide).sort(), [
     'createdAt',
@@ -381,15 +509,11 @@ function assertGuideContract(guide) {
     'name',
     'phone',
     'remarks',
-    'travelAgency',
     'updatedAt',
   ]);
   assert.equal(typeof guide.id, 'string');
   assert.equal(typeof guide.name, 'string');
   assert.equal(typeof guide.phone, 'string');
-  assert.ok(
-    typeof guide.travelAgency === 'string' || guide.travelAgency === null,
-  );
   assert.equal(typeof guide.isActive, 'boolean');
   assert.equal(typeof guide.createdAt, 'string');
   assert.equal(typeof guide.updatedAt, 'string');

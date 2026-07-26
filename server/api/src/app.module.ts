@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { AiModule } from './modules/ai/ai.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -15,12 +16,14 @@ import { ProductsModule } from './modules/products/products.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SerializedInventoryModule } from './modules/serialized-inventory/serialized-inventory.module';
 import { TravelAgenciesModule } from './modules/travel-agencies/travel-agencies.module';
+import { TodoRemindersModule } from './modules/todo-reminders/todo-reminders.module';
 import { UsersModule } from './modules/users/users.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
     PrismaModule,
+    ScheduleModule.forRoot(),
     OperationLogsModule,
     UsersModule,
     AuthModule,
@@ -36,6 +39,7 @@ import { PrismaModule } from './prisma/prisma.module';
     GuidesModule,
     ProductsModule,
     TravelAgenciesModule,
+    TodoRemindersModule,
   ],
   controllers: [OperationLogNestController],
 })

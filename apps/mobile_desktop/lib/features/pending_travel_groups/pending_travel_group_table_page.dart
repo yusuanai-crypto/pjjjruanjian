@@ -17,6 +17,7 @@ const _allFilter = '全部';
 
 const _pendingStatusLabels = <String, String>{
   'pending_front_desk': '待前台',
+  'pending_sales': '待销售',
   'pending_taster': '待品鉴师',
   'pending_finance': '待财务',
   'abnormal': '异常',
@@ -220,6 +221,12 @@ class _PendingTravelGroupTablePageState
                 icon: Icons.assignment_ind_rounded,
               ),
               MetricData(
+                label: '待销售',
+                value:
+                    '${_groups.where((group) => group.pendingStatus == 'pending_sales').length}',
+                icon: Icons.point_of_sale_rounded,
+              ),
+              MetricData(
                 label: '待品鉴师',
                 value:
                     '${_groups.where((group) => group.pendingStatus == 'pending_taster').length}',
@@ -241,6 +248,7 @@ class _PendingTravelGroupTablePageState
                   filters: const [
                     _allFilter,
                     '待前台',
+                    '待销售',
                     '待品鉴师',
                     '待财务',
                     '异常',
@@ -320,7 +328,7 @@ class _PendingGroupList extends StatelessWidget {
           AppRecordItem(
             title: record.groupNo,
             subtitle:
-                '${_display(record.travelAgency)} · ${_display(record.guideName)} · ${record.guestCount} 人',
+                '${_display(record.travelAgency)} · ${_display(record.guideName)} · ${record.guestCount > 0 ? '${record.guestCount} 人' : '人数未填写'}',
             meta: [
               if (record.visitDate.isNotEmpty) record.visitDate,
               if (_display(record.tasterName) != '-')
@@ -444,6 +452,8 @@ StatusTone _pendingStatusTone(String? status) {
     case 'pending_front_desk':
     case 'pending_finance':
       return StatusTone.warning;
+    case 'pending_sales':
+      return StatusTone.info;
     case 'pending_taster':
       return StatusTone.info;
     default:
@@ -467,6 +477,8 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
   switch (reason) {
     case 'missing_taster':
       return '缺少品鉴师';
+    case 'missing_license_plate':
+      return '缺少车牌号';
     case 'missing_guide_name':
       return '缺少导游姓名';
     case 'missing_guide_phone':
@@ -477,6 +489,16 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
       return '缺少香烟费用';
     case 'missing_guest_count':
       return '缺少人数';
+    case 'missing_tasting_room_no':
+      return '缺少品鉴馆号';
+    case 'missing_arrival_time':
+      return '缺少进店时间';
+    case 'missing_group_type':
+      return '缺少团型';
+    case 'missing_departure_time':
+      return '缺少离店时间';
+    case 'loss_not_confirmed':
+      return '损耗尚未确认';
     case 'invalid_guest_count_zero':
       return '人数为 0';
     case 'no_order_and_missing_taster_summary':
@@ -496,6 +518,8 @@ String _handlingLabel(String? status, {bool showFinanceMark = true}) {
   switch (status) {
     case 'pending_front_desk':
       return '基础信息编辑';
+    case 'pending_sales':
+      return '补录损耗与离店';
     case 'pending_taster':
       return '填写总结';
     case 'pending_finance':
@@ -509,7 +533,9 @@ String _handlingLabel(String? status, {bool showFinanceMark = true}) {
 String _handlingDescription(String? status, {bool showFinanceMark = true}) {
   switch (status) {
     case 'pending_front_desk':
-      return '补齐导游、旅行社、人数、香烟费用等基础信息。';
+      return '可分次补齐车牌号、人数、香烟费用、品鉴馆号、品鉴师、进店时间和团型。';
+    case 'pending_sales':
+      return '补录离店时间，并记录损耗明细或确认无损耗。';
     case 'pending_taster':
       return '进入品鉴师总结表单，补充本团接待总结。';
     case 'pending_finance':
@@ -522,6 +548,8 @@ String _handlingDescription(String? status, {bool showFinanceMark = true}) {
 
 String _destinationFor(String? status) {
   switch (status) {
+    case 'pending_sales':
+      return 'travel_group_order_notes';
     case 'pending_taster':
       return 'taster_summary';
     case 'pending_front_desk':

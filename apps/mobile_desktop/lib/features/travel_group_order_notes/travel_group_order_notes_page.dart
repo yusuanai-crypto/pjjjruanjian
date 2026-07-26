@@ -16,10 +16,12 @@ class TravelGroupOrderNotesPage extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.token,
+    this.role = UserRole.sales,
   });
 
   final ApiClient apiClient;
   final String token;
+  final UserRole role;
 
   @override
   State<TravelGroupOrderNotesPage> createState() =>
@@ -37,7 +39,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   List<TastingItemDraft> _tastingItemDrafts = const <TastingItemDraft>[];
   List<Map<String, dynamic>> _tastingItems = const <Map<String, dynamic>>[];
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
-  String _filter = '待补充';
+  String _filter = '待销售';
   String _query = '';
   String? _selectedGroupId;
   bool _loading = true;
@@ -129,7 +131,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
       if (_filter == '今日' && group.visitDate != formatDate(DateTime.now())) {
         return false;
       }
-      if (_filter == '待补充' && !_needsSupplement(group)) {
+      if (_filter == '待销售' && !_needsSupplement(group)) {
         return false;
       }
       if (_filter == '已出单' && group.status != 'ordered') {
@@ -186,11 +188,14 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     });
 
     try {
-      final updated = await _businessApi.updateTravelGroup(group.id, {
-        'tastingItems': _tastingItems,
+      final body = <String, dynamic>{
         'departureTime': normalizeTimeText(_departureTimeController.text),
         'remarks': _remarksController.text.trim(),
-      });
+      };
+      if (_tastingItems.isNotEmpty || group.tastingItems.isNotEmpty) {
+        body['tastingItems'] = _tastingItems;
+      }
+      final updated = await _businessApi.updateTravelGroup(group.id, body);
       if (!mounted) {
         return;
       }
@@ -201,7 +206,9 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _tastingItemDrafts = _tastingDraftsFromGroup(updated);
         _tastingItems = _tastingPayloadFromGroup(updated);
         _saving = false;
-        _successMessage = '损耗与离店备注已成功保存';
+        _successMessage = _needsSupplement(updated)
+            ? '已暂存，未完成项目继续保留为待销售。'
+            : '离店时间与损耗确认均已完成。';
       });
     } catch (error) {
       if (!mounted) {
@@ -215,7 +222,54 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   }
 
   bool _needsSupplement(TravelGroupRecord group) {
-    return (group.departureTime ?? '').isEmpty && (group.remarks ?? '').isEmpty;
+    return (group.departureTime ?? '').isEmpty ||
+        group.lossStatus == 'PENDING';
+  }
+
+  Future<void> _confirmNoLoss() async {
+    final group = _selectedGroup;
+    if (group == null || _saving) {
+      return;
+    }
+    if (_tastingItems.isNotEmpty || group.tastingItems.isNotEmpty) {
+      setState(() {
+        _errorMessage = '已有损耗明细，请先清空并保存明细后再确认无损耗。';
+        _successMessage = null;
+      });
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+      _successMessage = null;
+    });
+    try {
+      final updated = await _businessApi.updateTravelGroup(group.id, {
+        'lossStatus': 'NO_LOSS',
+        'departureTime': normalizeTimeText(_departureTimeController.text),
+        'remarks': _remarksController.text.trim(),
+      });
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _groups = [
+          for (final item in _groups) item.id == updated.id ? updated : item,
+        ];
+        _saving = false;
+        _successMessage = _needsSupplement(updated)
+            ? '已确认无损耗，离店时间仍待补录。'
+            : '离店时间与无损耗确认均已完成。';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
   }
 
   @override
@@ -257,6 +311,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
             saving: _saving,
             onTastingItemsChanged: (items) => _tastingItems = items,
             onSave: _saving ? null : _saveSupplement,
+            onConfirmNoLoss: _saving ? null : _confirmNoLoss,
             onClear: selectedGroup == null
                 ? null
                 : () {
@@ -294,7 +349,7 @@ class _OrderNotesSummary extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         StatusTag(label: '旅行团 $groupCount 个', tone: StatusTone.info),
-        StatusTag(label: '待补充 $pendingCount 个', tone: StatusTone.warning),
+        StatusTag(label: '待销售 $pendingCount 个', tone: StatusTone.warning),
       ],
     );
   }
@@ -338,7 +393,7 @@ class _GroupQueue extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             AppFilterBar(
-              filters: const ['待补充', '今日', '已出单', '全部'],
+              filters: const ['待销售', '今日', '已出单', '全部'],
               selected: filter,
               onSelected: onFilterChanged,
             ),
@@ -360,7 +415,7 @@ class _GroupQueue extends StatelessWidget {
                   meta: [
                     group.visitDate,
                     if (group.licensePlate != null) group.licensePlate!,
-                    '${group.guestCount} 人',
+                    group.guestCount > 0 ? '${group.guestCount} 人' : '人数未填写',
                   ],
                   icon: selectedGroupId == group.id
                       ? Icons.radio_button_checked_rounded
@@ -389,6 +444,7 @@ class _NotesPanel extends StatelessWidget {
     required this.saving,
     required this.onTastingItemsChanged,
     required this.onSave,
+    required this.onConfirmNoLoss,
     required this.onClear,
   });
 
@@ -401,6 +457,7 @@ class _NotesPanel extends StatelessWidget {
   final bool saving;
   final ValueChanged<List<Map<String, dynamic>>> onTastingItemsChanged;
   final VoidCallback? onSave;
+  final VoidCallback? onConfirmNoLoss;
   final VoidCallback? onClear;
 
   @override
@@ -414,6 +471,27 @@ class _NotesPanel extends StatelessWidget {
       title: '损耗与离店备注',
       children: [
         _SelectedGroupHeader(group: selectedGroup),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            StatusTag(
+              label: _lossStatusLabel(selectedGroup.lossStatus),
+              tone: _lossStatusTone(selectedGroup.lossStatus),
+            ),
+            if (selectedGroup.lossConfirmedByName != null)
+              StatusTag(
+                label: '确认人：${selectedGroup.lossConfirmedByName}',
+                tone: StatusTone.neutral,
+              ),
+            if (selectedGroup.lossConfirmedAt != null)
+              StatusTag(
+                label: '确认时间：${selectedGroup.lossConfirmedAt}',
+                tone: StatusTone.neutral,
+              ),
+          ],
+        ),
         const SizedBox(height: 12),
         _TastingItemsBox(
           businessApi: businessApi,
@@ -439,9 +517,19 @@ class _NotesPanel extends StatelessWidget {
         const SizedBox(height: 14),
         SectionActions(
           primaryLabel: saving ? '保存中...' : '保存损耗与备注',
-          secondaryLabel: '清空',
+          secondaryLabel: '清空明细',
           onPrimaryPressed: onSave,
           onSecondaryPressed: onClear,
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            key: const ValueKey('confirm-no-loss'),
+            onPressed: onConfirmNoLoss,
+            icon: const Icon(Icons.check_circle_outline_rounded),
+            label: const Text('确认无损耗'),
+          ),
         ),
       ],
     );
@@ -475,7 +563,7 @@ class _TastingItemsBox extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '品酒明细',
+              '损耗明细',
               style: Theme.of(context)
                   .textTheme
                   .titleSmall
@@ -617,11 +705,36 @@ List<Map<String, dynamic>> _tastingPayloadFromGroup(TravelGroupRecord? group) {
     for (var index = 0; index < sortedItems.length; index += 1)
       {
         'productId': sortedItems[index].productId,
+        'productName': sortedItems[index].productName,
         'quantity': sortedItems[index].quantity,
+        'unit': sortedItems[index].unit,
         'note': sortedItems[index].note,
         'sortOrder': index + 1,
       },
   ];
+}
+
+String _lossStatusLabel(String status) {
+  switch (status) {
+    case 'RECORDED':
+      return '已记录损耗';
+    case 'NO_LOSS':
+      return '已确认无损耗';
+    case 'PENDING':
+    default:
+      return '损耗待确认';
+  }
+}
+
+StatusTone _lossStatusTone(String status) {
+  switch (status) {
+    case 'RECORDED':
+    case 'NO_LOSS':
+      return StatusTone.success;
+    case 'PENDING':
+    default:
+      return StatusTone.warning;
+  }
 }
 
 List<TravelGroupTastingItemRecord> _sortedTastingItems(

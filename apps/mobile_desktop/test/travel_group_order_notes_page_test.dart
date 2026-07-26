@@ -85,12 +85,81 @@ void main() {
       isEmpty,
     );
     expect(
-      apiClient.patchCalls.single.body,
-      containsPair('tastingItems', <Map<String, dynamic>>[]),
+      apiClient.patchCalls.single.body.containsKey('tastingItems'),
+      isFalse,
     );
     expect(apiClient.patchCalls.single.body, containsPair('departureTime', ''));
     expect(apiClient.patchCalls.single.body, containsPair('remarks', ''));
-    expect(find.text('损耗与离店备注已成功保存'), findsOneWidget);
+    expect(find.text('已暂存，未完成项目继续保留为待销售。'), findsOneWidget);
+  });
+
+  testWidgets('adds canned wine without a product id and records the loss',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TravelGroupOrderNotesPage(
+            apiClient: apiClient,
+            token: 'test-token',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final addCannedWine = find.byKey(
+      const ValueKey('tasting_items_add_canned_wine'),
+    );
+    await tester.ensureVisible(addCannedWine);
+    await tester.tap(addCannedWine);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('tasting_quantity_0')), findsOneWidget);
+
+    final saveButton = find.widgetWithText(FilledButton, '保存损耗与备注');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    final items =
+        apiClient.patchCalls.single.body['tastingItems'] as List<dynamic>;
+    expect(items, hasLength(1));
+    expect(items.single, containsPair('productId', null));
+    expect(items.single, containsPair('productName', '罐装酒'));
+    expect(items.single, containsPair('quantity', 1));
+    expect(items.single, containsPair('unit', '瓶'));
+  });
+
+  testWidgets('confirms no loss explicitly instead of saving an empty list',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TravelGroupOrderNotesPage(
+            apiClient: apiClient,
+            token: 'test-token',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final confirmButton = find.byKey(const ValueKey('confirm-no-loss'));
+    await tester.ensureVisible(confirmButton);
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.patchCalls, hasLength(1));
+    expect(
+      apiClient.patchCalls.single.body,
+      containsPair('lossStatus', 'NO_LOSS'),
+    );
+    expect(
+      apiClient.patchCalls.single.body.containsKey('tastingItems'),
+      isFalse,
+    );
+    expect(find.text('离店时间与无损耗确认均已完成。'), findsOneWidget);
   });
 }
 
@@ -181,6 +250,9 @@ Map<String, dynamic> _travelGroupJson() {
     'wineDetails': '',
     'departureTime': '18:05',
     'remarks': '',
+    'lossStatus': 'PENDING',
+    'lossConfirmedAt': null,
+    'lossConfirmedById': null,
     'status': 'ordered',
     'salesAmountCents': 79800,
     'paidDepositCents': 0,

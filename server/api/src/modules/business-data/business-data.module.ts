@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CommissionsModule } from '../commissions/commissions.module';
 import { OperationLogsModule } from '../operation-logs/operation-logs.module';
 import { SettingsModule } from '../settings/settings.module';
+import { TodoRemindersModule } from '../todo-reminders/todo-reminders.module';
 import { BusinessDataNestService } from './business-data.nest.service';
 import { AfterSalesOrdersNestController } from './after-sales-orders.nest.controller';
 import {
@@ -29,7 +30,13 @@ import {
 } from './travel-groups.nest.controller';
 
 @Module({
-  imports: [AuthModule, OperationLogsModule, SettingsModule, CommissionsModule],
+  imports: [
+    AuthModule,
+    OperationLogsModule,
+    SettingsModule,
+    CommissionsModule,
+    TodoRemindersModule,
+  ],
   controllers: [
     TravelGroupsNestController,
     GuideCarriedGroupsNestController,

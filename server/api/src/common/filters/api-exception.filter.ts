@@ -26,6 +26,7 @@ interface PublicErrorResponse {
   retryAfterSeconds: number | null;
   includeRequestId: boolean;
   shouldLog: boolean;
+  missingFields?: string[] | null;
 }
 
 @Catch()
@@ -61,6 +62,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
       error: {
         code: publicError.code,
         message: publicError.message,
+        ...(publicError.missingFields
+          ? { missingFields: publicError.missingFields }
+          : {}),
       },
       ...(publicError.includeRequestId
         ? { requestId: correlationId }

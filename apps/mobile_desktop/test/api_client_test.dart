@@ -38,6 +38,7 @@ void main() {
           'error': {
             'code': 'PERMISSION_DENIED',
             'message': 'No export permission',
+            'missingFields': ['licensePlate', 'guestCount'],
           },
         }),
       ),
@@ -46,6 +47,7 @@ void main() {
     expect(parsed.statusCode, 403);
     expect(parsed.code, 'PERMISSION_DENIED');
     expect(parsed.message, 'No export permission');
+    expect(parsed.missingFields, ['licensePlate', 'guestCount']);
 
     final fallback = apiExceptionFromResponseBytes(
       502,

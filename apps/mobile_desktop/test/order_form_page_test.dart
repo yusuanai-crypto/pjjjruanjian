@@ -312,6 +312,25 @@ void main() {
     expect(find.text('录入失败'), findsOneWidget);
     expect(find.text('库存不足，请调整商品明细。'), findsWidgets);
   });
+
+  testWidgets('incomplete travel group error lists the front-desk fields',
+      (tester) async {
+    final apiClient = _FakeApiClient()..failIncompleteTravelGroup = true;
+    await _pumpOrderForm(tester, apiClient);
+
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('录入失败'), findsOneWidget);
+    expect(
+      find.text('该旅行团前台信息尚未补齐：车牌号、人数、品鉴师，请先联系前台处理。'),
+      findsWidgets,
+    );
+  });
 }
 
 Future<void> _pumpOrderForm(
@@ -378,6 +397,7 @@ class _FakeApiClient extends ApiClient {
   Map<String, dynamic>? lastCustomerBody;
   Map<String, dynamic>? lastSalesOrderBody;
   bool failSalesOrder = false;
+  bool failIncompleteTravelGroup = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -455,6 +475,14 @@ class _FakeApiClient extends ApiClient {
     }
     if (path == '/api/sales-orders') {
       lastSalesOrderBody = Map<String, dynamic>.from(body ?? {});
+      if (failIncompleteTravelGroup) {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'TRAVEL_GROUP_FRONT_DESK_INFO_INCOMPLETE',
+          message: '旅行团前台信息尚未补齐。',
+          missingFields: ['licensePlate', 'guestCount', 'tasterId'],
+        );
+      }
       if (failSalesOrder) {
         throw const ApiException(
           statusCode: 409,

@@ -1284,6 +1284,23 @@ String _messageForError(Object error) {
     return error.message;
   }
   if (error is ApiException) {
+    if (error.code == 'TRAVEL_GROUP_FRONT_DESK_INFO_INCOMPLETE') {
+      const labels = <String, String>{
+        'licensePlate': '车牌号',
+        'guestCount': '人数',
+        'cigaretteFeeCents': '香烟费用',
+        'tastingRoomNo': '品鉴馆号',
+        'tasterId': '品鉴师',
+        'arrivalTime': '进店时间',
+        'groupType': '团型',
+      };
+      final missing = error.missingFields
+          .map((field) => labels[field] ?? field)
+          .join('、');
+      return missing.isEmpty
+          ? '该旅行团前台信息尚未补齐，请先联系前台处理。'
+          : '该旅行团前台信息尚未补齐：$missing，请先联系前台处理。';
+    }
     final message = error.message.trim();
     if (message.isEmpty) {
       return '订单保存失败，请稍后重试。';

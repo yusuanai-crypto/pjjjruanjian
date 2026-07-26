@@ -10,7 +10,6 @@ void main() {
       'id': 'guide-1',
       'name': 'Guide One',
       'phone': '13900001111',
-      'travelAgency': 'Agency One',
       'remarks': 'Prefers morning groups',
       'isActive': 'true',
       'createdAt': '2026-06-27T08:00:00.000Z',
@@ -20,7 +19,6 @@ void main() {
     expect(guide.id, 'guide-1');
     expect(guide.name, 'Guide One');
     expect(guide.phone, '13900001111');
-    expect(guide.travelAgency, 'Agency One');
     expect(guide.remarks, 'Prefers morning groups');
     expect(guide.isActive, isTrue);
     expect(guide.createdAt, '2026-06-27T08:00:00.000Z');
@@ -39,6 +37,31 @@ void main() {
     expect(errorState.hasError, isTrue);
     expect(errorState.isEmpty, isFalse);
 
+    final guidePage = GuidePage.fromJson({
+      'guides': [
+        {
+          'id': 'guide-1',
+          'name': 'Guide One',
+          'phone': '13900001111',
+          'remarks': 'Prefers morning groups',
+          'isActive': true,
+          'createdAt': '2026-06-27T08:00:00.000Z',
+          'updatedAt': '2026-06-27T09:00:00.000Z',
+        },
+      ],
+      'pagination': {
+        'page': 2,
+        'pageSize': 50,
+        'total': 201,
+        'totalPages': 5,
+      },
+    });
+    expect(guidePage.guides.single.id, 'guide-1');
+    expect(guidePage.page, 2);
+    expect(guidePage.pageSize, 50);
+    expect(guidePage.total, 201);
+    expect(guidePage.totalPages, 5);
+
     final agency = TravelAgencyRecord.fromJson({
       'id': 'agency-1',
       'name': 'Agency One',
@@ -54,6 +77,105 @@ void main() {
     expect(agency.contactName, 'Contact One');
     expect(agency.contactPhone, '13900003333');
     expect(agency.notes, 'Often handles morning groups');
+  });
+
+  test('guide API sends pagination and lifecycle requests', () async {
+    final client = _RecordingApiClient();
+    final api = BusinessApi(apiClient: client, token: 'guide-token');
+    client.nextJson = {
+      'data': {
+        'guides': [
+          {
+            'id': 'guide-201',
+            'name': '第201名导游',
+            'phone': '13900000201',
+            'remarks': null,
+            'isActive': true,
+            'createdAt': null,
+            'updatedAt': null,
+          },
+        ],
+        'pagination': {
+          'page': 2,
+          'pageSize': 50,
+          'total': 201,
+          'totalPages': 5,
+        },
+      },
+    };
+
+    final page = await api.listGuidesPage(
+      page: 2,
+      pageSize: 50,
+      keyword: '第201名',
+      isActive: true,
+    );
+    final listUri = Uri.parse(client.lastPath!);
+    expect(listUri.path, '/api/guides');
+    expect(listUri.queryParameters, {
+      'page': '2',
+      'pageSize': '50',
+      'keyword': '第201名',
+      'isActive': 'true',
+    });
+    expect(client.lastToken, 'guide-token');
+    expect(page.guides.single.id, 'guide-201');
+
+    client.nextJson = {
+      'data': {
+        'guide': {
+          'id': 'guide-201',
+          'name': '第201名导游',
+          'phone': '13900000201',
+          'remarks': '更新后',
+          'isActive': true,
+          'createdAt': null,
+          'updatedAt': null,
+        },
+      },
+    };
+    await api.createGuide({
+      'name': '第201名导游',
+      'phone': '13900000201',
+      'remarks': null,
+    });
+    expect(client.lastMethod, 'POST');
+    expect(client.lastPath, '/api/guides');
+    expect(client.lastBody!.containsKey('travelAgency'), isFalse);
+
+    await api.updateGuide('guide-201', {'remarks': '更新后'});
+    expect(client.lastMethod, 'PATCH');
+    expect(client.lastPath, '/api/guides/guide-201');
+    expect(client.lastBody, {'remarks': '更新后'});
+
+    await api.disableGuide('guide-201');
+    expect(client.lastMethod, 'POST');
+    expect(client.lastPath, '/api/guides/guide-201/disable');
+
+    await api.enableGuide('guide-201');
+    expect(client.lastMethod, 'POST');
+    expect(client.lastPath, '/api/guides/guide-201/enable');
+  });
+
+  test('guide API error codes have readable Chinese messages', () {
+    for (final entry in {
+      'GUIDE_PHONE_EXISTS': '该手机号已被其他导游使用。',
+      'GUIDE_DISABLED': '该手机号对应的导游已停用，请在列表中找到该导游并点击“恢复”。',
+      'GUIDE_NOT_FOUND': '导游不存在或已被移除。',
+      'PERMISSION_DENIED': '当前账号没有导游管理权限。',
+      'VALIDATION_FAILED': '请检查导游姓名、手机号和备注是否填写正确。',
+    }.entries) {
+      expect(
+        guideApiErrorMessage(
+          ApiException(
+            statusCode: 400,
+            code: entry.key,
+            message: 'English server message',
+          ),
+        ),
+        entry.value,
+      );
+    }
   });
 
   test('parses customer JSON returned by customer APIs', () {
@@ -2045,6 +2167,8 @@ void main() {
       'guideName': '测试导游',
       'guidePhone': '13900001111',
       'travelAgency': '测试旅行社',
+      'adultCount': '15',
+      'childCount': '3',
       'guestCount': '18',
       'tastingRoomNo': 'A-101',
       'tasterId': 'taster-1',
@@ -2090,6 +2214,13 @@ void main() {
       'groupType': 'KB团',
       'wineDetails': '偏好酱香',
       'departureTime': '11:30',
+      'lossStatus': 'RECORDED',
+      'lossConfirmedAt': '2026-06-24T10:30:00.000Z',
+      'lossConfirmedById': 'usr_sales',
+      'lossConfirmedBy': {
+        'id': 'usr_sales',
+        'name': '测试销售',
+      },
       'status': 'ordered',
       'salesAmountCents': '647800',
       'guideInfoSent': true,
@@ -2099,9 +2230,10 @@ void main() {
       'markedAt': '2026-06-24T08:00:00.000Z',
       'tasterSummary': 'Guests liked the reserve.',
       'tasterSummaryAt': '2026-06-24T09:00:00.000Z',
-      'tasterEditCount': 1,
-      'tasterEditLimit': 2,
-      'tasterEditRemaining': 1,
+      'tasterEditCount': 7,
+      'tasterEditLimit': null,
+      'tasterEditRemaining': null,
+      'tasterEditUnlimited': true,
       'canEditByCurrentUser': true,
       'tastingItems': [
         {
@@ -2152,6 +2284,8 @@ void main() {
     expect(group.liaisonTasterName, 'Liaison Taster');
     expect(group.liaisonTaster?.username, 'liaison.taster');
     expect(group.expectedArrivalTime, '09:10');
+    expect(group.adultCount, 15);
+    expect(group.childCount, 3);
     expect(group.guestCount, 18);
     expect(group.salesAmountCents, 647800);
     expect(group.guideInfoSent, isTrue);
@@ -2159,10 +2293,15 @@ void main() {
     expect(group.financeMark, isTrue);
     expect(group.markedById, 'usr_finance');
     expect(group.tasterSummary, 'Guests liked the reserve.');
-    expect(group.tasterEditCount, 1);
-    expect(group.tasterEditLimit, 2);
-    expect(group.tasterEditRemaining, 1);
+    expect(group.tasterEditCount, 7);
+    expect(group.tasterEditLimit, isNull);
+    expect(group.tasterEditRemaining, isNull);
+    expect(group.tasterEditUnlimited, isTrue);
     expect(group.canEditByCurrentUser, isTrue);
+    expect(group.lossStatus, 'RECORDED');
+    expect(group.lossConfirmedById, 'usr_sales');
+    expect(group.lossConfirmedByName, '测试销售');
+    expect(group.lossConfirmedAt, isNotNull);
     expect(group.tastingItems, hasLength(1));
     expect(group.tastingItems.single.productName, '酱香珍藏');
     expect(group.tastingItems.single.quantity, 2);
@@ -2171,7 +2310,12 @@ void main() {
     expect(group.orderSummary.cashOnDeliveryAmountCents, 5000);
     expect(group.pendingStatus, 'pending_finance');
     expect(group.pendingReasons, ['finance_unmarked_after_day_end']);
+    final legacyGroup = TravelGroupRecord.fromJson({'guestCount': '9'});
+    expect(legacyGroup.adultCount, 9);
+    expect(legacyGroup.childCount, 0);
+    expect(legacyGroup.guestCount, 9);
     expect(TravelGroupRecord.fromJson({}).mentionedFeitian, isNull);
+    expect(TravelGroupRecord.fromJson({}).tasterEditUnlimited, isTrue);
 
     final overview = FinanceOverview.fromJson({
       'metrics': {

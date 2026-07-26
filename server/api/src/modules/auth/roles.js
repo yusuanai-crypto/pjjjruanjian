@@ -54,19 +54,21 @@ const ROLE_DEFINITIONS = {
   taster: {
     role: 'taster',
     title: '品鉴师',
-    description: '查看今天及未来旅行团，今天关联团共享两次修改机会，并查看接待品鉴师关系订单。',
+    description: '查看今天及未来旅行团，今天关联团可无限次修改，并查看接待品鉴师关系订单。',
   },
 };
 
 const MENU_ENTRIES = {
   customers: { id: 'customers', title: 'Customers', phase: 4 },
   dashboard: { id: 'dashboard', title: '首页', phase: 1 },
+  todo_reminders: { id: 'todo_reminders', title: '待办提醒', phase: 1 },
   employee_accounts: { id: 'employee_accounts', title: '员工账号', phase: 1 },
   role_permissions: { id: 'role_permissions', title: '角色权限', phase: 1 },
   global_mark_query: { id: 'global_mark_query', title: '全局标记查询', phase: 1 },
   operation_logs: { id: 'operation_logs', title: '操作日志', phase: 1 },
   travel_groups: { id: 'travel_groups', title: '旅行团录入', phase: 3 },
   travel_group_query: { id: 'travel_group_query', title: '旅行团管理', phase: 3 },
+  guide_management: { id: 'guide_management', title: '导游管理', phase: 3 },
   travel_agency_management: { id: 'travel_agency_management', title: '旅行社管理', phase: 7 },
   travel_group_finance_supplement: { id: 'travel_group_finance_supplement', title: '积分表', phase: 6 },
   travel_group_order_notes: { id: 'travel_group_order_notes', title: '损耗与离店备注', phase: 4 },
@@ -91,12 +93,14 @@ const MENU_ENTRIES = {
 const ROLE_MENU_IDS = {
   super_admin: [
     'dashboard',
+    'todo_reminders',
     'employee_accounts',
     'role_permissions',
     'global_mark_query',
     'operation_logs',
     'travel_groups',
     'travel_group_query',
+    'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -118,12 +122,14 @@ const ROLE_MENU_IDS = {
   ],
   admin: [
     'dashboard',
+    'todo_reminders',
     'employee_accounts',
     'role_permissions',
     'global_mark_query',
     'operation_logs',
     'travel_groups',
     'travel_group_query',
+    'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -145,6 +151,7 @@ const ROLE_MENU_IDS = {
   ],
   boss: [
     'dashboard',
+    'todo_reminders',
     'global_mark_query',
     'travel_group_query',
     'customers',
@@ -153,9 +160,17 @@ const ROLE_MENU_IDS = {
     'profit_analysis',
     'ai_assistant',
   ],
-  front_desk: ['dashboard', 'global_mark_query', 'travel_groups', 'travel_group_query'],
+  front_desk: [
+    'dashboard',
+    'todo_reminders',
+    'global_mark_query',
+    'travel_groups',
+    'travel_group_query',
+    'guide_management',
+  ],
   sales: [
     'dashboard',
+    'todo_reminders',
     'travel_group_query',
     'travel_group_order_notes',
     'customers',
@@ -164,6 +179,7 @@ const ROLE_MENU_IDS = {
   ],
   finance: [
     'dashboard',
+    'todo_reminders',
     'travel_group_query',
     'travel_agency_management',
     'travel_group_finance_supplement',
@@ -180,6 +196,7 @@ const ROLE_MENU_IDS = {
   ],
   warehouse: [
     'dashboard',
+    'todo_reminders',
     'travel_group_query',
     'order_query',
     'warehouse_workspace',
@@ -188,6 +205,7 @@ const ROLE_MENU_IDS = {
   ],
   after_sales: [
     'dashboard',
+    'todo_reminders',
     'travel_group_query',
     'customers',
     'order_query',
@@ -197,6 +215,7 @@ const ROLE_MENU_IDS = {
   ],
   taster: [
     'dashboard',
+    'todo_reminders',
     'travel_group_query',
     'order_query',
     'own_taster_receptions',
@@ -204,7 +223,19 @@ const ROLE_MENU_IDS = {
   ],
 };
 
-const AUTHENTICATED_PERMISSIONS = ['auth:me', 'auth:change_password', 'roles:read'];
+const TODO_REMINDER_PERMISSIONS = [
+  'todo_reminders:list',
+  'todo_reminders:read',
+  'todo_reminders:update',
+  'todo_reminders:verify',
+  'todo_reminders:archive',
+];
+const AUTHENTICATED_PERMISSIONS = [
+  'auth:me',
+  'auth:change_password',
+  'roles:read',
+  ...TODO_REMINDER_PERMISSIONS,
+];
 const USER_ADMIN_PERMISSIONS = [
   'users:list',
   'users:read',
@@ -402,7 +433,7 @@ const ROLE_DATA_SCOPES = {
   after_sales: { orders: 'after_sales_related' },
   taster: {
     travelGroups: 'today_and_future',
-    travelGroupUpdates: 'today_assigned_taster_or_liaison_shared_two_edits',
+    travelGroupUpdates: 'today_assigned_taster_or_liaison_unlimited_edits',
     orders: 'today_and_future_reception_taster_only',
     receptions: 'own_user_id',
     commissions: 'own_user_id',

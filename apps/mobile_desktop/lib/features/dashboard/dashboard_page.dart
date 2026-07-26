@@ -4,6 +4,8 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import '../../app/destinations.dart';
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
+import '../todo_reminders/todo_reminder_controller.dart';
+import '../todo_reminders/todo_reminder_models.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/responsive.dart';
@@ -17,6 +19,7 @@ class DashboardPage extends StatefulWidget {
     required this.role,
     required this.allowedDestinations,
     required this.onOpenDestination,
+    this.todoReminderController,
   });
 
   final ApiClient apiClient;
@@ -24,6 +27,7 @@ class DashboardPage extends StatefulWidget {
   final UserRole role;
   final List<AppDestination> allowedDestinations;
   final ValueChanged<String> onOpenDestination;
+  final TodoReminderController? todoReminderController;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -172,32 +176,104 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
           ),
-          secondary: const AppRecordList(
-            compact: true,
-            items: [
-              AppRecordItem(
-                title: 'GZ-0622-018',
-                subtitle: '黔程旅行社 · 待总结',
-                icon: Icons.rate_review_rounded,
-                trailing: StatusTag(label: '待总结', tone: StatusTone.warning),
-              ),
-              AppRecordItem(
-                title: 'SO-20260622-031',
-                subtitle: '王女士 · 邮寄',
-                icon: Icons.receipt_long_rounded,
-                trailing: StatusTag(label: '待打包', tone: StatusTone.info),
-              ),
-              AppRecordItem(
-                title: 'AS-20260622-004',
-                subtitle: '物流破损 · 待补发',
-                icon: Icons.support_agent_rounded,
-                trailing: StatusTag(label: '待补发', tone: StatusTone.danger),
-              ),
-            ],
+          secondary: _DashboardTodoList(
+            controller: widget.todoReminderController,
+            onOpen: () => widget.onOpenDestination('todo_reminders'),
           ),
         ),
       ],
     );
+  }
+}
+
+class _DashboardTodoList extends StatelessWidget {
+  const _DashboardTodoList({
+    required this.controller,
+    required this.onOpen,
+  });
+
+  final TodoReminderController? controller;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = controller;
+    if (value == null) {
+      return const AppRecordList(
+        compact: true,
+        items: [
+          AppRecordItem(
+            title: '待办提醒',
+            subtitle: '正在初始化',
+            icon: Icons.notifications_none_rounded,
+          ),
+        ],
+      );
+    }
+    return AnimatedBuilder(
+      animation: value,
+      builder: (context, _) {
+        final reminders = value.activeReminders.take(5).toList();
+        if (reminders.isEmpty) {
+          return AppRecordList(
+            compact: true,
+            items: [
+              AppRecordItem(
+                title: value.error == null ? '暂无待办' : '待办加载失败',
+                subtitle: value.error ?? '当前没有需要处理的业务事项',
+                icon: value.error == null
+                    ? Icons.task_alt_rounded
+                    : Icons.sync_problem_rounded,
+                onTap: onOpen,
+              ),
+            ],
+          );
+        }
+        return AppRecordList(
+          compact: true,
+          items: reminders
+              .map(
+                (item) => AppRecordItem(
+                  title: item.sourceNumber,
+                  subtitle: item.title,
+                  icon: _todoIcon(item),
+                  trailing: StatusTag(
+                    label: item.isOverdue ? '逾期' : _todoPriority(item),
+                    tone: item.priority == 'URGENT'
+                        ? StatusTone.danger
+                        : item.priority == 'IMPORTANT'
+                            ? StatusTone.warning
+                            : StatusTone.info,
+                  ),
+                  onTap: onOpen,
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+}
+
+IconData _todoIcon(TodoReminder reminder) {
+  switch (reminder.sourceType) {
+    case 'TRAVEL_GROUP':
+      return Icons.directions_bus_rounded;
+    case 'AFTER_SALES_ORDER':
+      return Icons.support_agent_rounded;
+    default:
+      return Icons.receipt_long_rounded;
+  }
+}
+
+String _todoPriority(TodoReminder reminder) {
+  switch (reminder.priority) {
+    case 'URGENT':
+      return '紧急';
+    case 'IMPORTANT':
+      return '重要';
+    default:
+      return '待处理';
   }
 }
 

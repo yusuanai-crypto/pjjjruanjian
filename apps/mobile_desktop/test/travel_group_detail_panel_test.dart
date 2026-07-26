@@ -36,6 +36,12 @@ void main() {
     expect(find.text('李导'), findsOneWidget);
     expect(find.text('周品鉴师'), findsOneWidget);
     expect(find.text('吴对接'), findsOneWidget);
+    expect(find.text('导游ID'), findsNothing);
+    expect(find.text('品鉴师ID'), findsNothing);
+    expect(find.text('对接品鉴师ID'), findsNothing);
+    expect(find.text('guide-1'), findsNothing);
+    expect(find.text('taster-1'), findsNothing);
+    expect(find.text('taster-2'), findsNothing);
     expect(find.text('贵阳'), findsOneWidget);
     expect(find.text('35-50 岁'), findsOneWidget);
     expect(find.text('均单'), findsOneWidget);

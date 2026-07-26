@@ -802,11 +802,13 @@ class ApiException implements Exception {
     required this.statusCode,
     required this.code,
     required this.message,
+    this.missingFields = const <String>[],
   });
 
   final int statusCode;
   final String code;
   final String message;
+  final List<String> missingFields;
 
   factory ApiException.fromPayload(
       int statusCode, Map<String, dynamic> payload) {
@@ -817,6 +819,12 @@ class ApiException implements Exception {
         statusCode: statusCode,
         code: '${error['code'] ?? 'HTTP_ERROR'}',
         message: _friendlyMessage(rawMessage),
+        missingFields: error['missingFields'] is List
+            ? [
+                for (final field in error['missingFields'] as List)
+                  if (field is String && field.trim().isNotEmpty) field.trim(),
+              ]
+            : const <String>[],
       );
     }
 

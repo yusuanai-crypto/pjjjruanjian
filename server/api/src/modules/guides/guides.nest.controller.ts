@@ -24,9 +24,7 @@ export class GuidesNestController {
   @Get()
   async list(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      guides: await this.guidesService.listGuides(actor, query),
-    };
+    return this.guidesService.listGuides(actor, query);
   }
 
   @Post()

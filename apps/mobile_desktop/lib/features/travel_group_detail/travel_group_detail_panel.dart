@@ -113,14 +113,19 @@ class TravelGroupDetailPanel extends StatelessWidget {
         _InfoRow(label: '车牌号', value: group.licensePlate),
         _InfoRow(label: '品鉴馆', value: group.tastingRoomNo),
         _InfoRow(label: '团型', value: group.groupType),
-        _InfoRow(label: '人数', value: '${group.guestCount} 人'),
+        _InfoRow(
+          label: '人数',
+          value: group.guestCount > 0 ? '${group.guestCount} 人' : '未填写',
+        ),
         _InfoRow(label: '预计进店时间', value: group.expectedArrivalTime),
         _InfoRow(label: '实际进店时间', value: group.arrivalTime),
         _InfoRow(label: '离店', value: group.departureTime),
+        _InfoRow(label: '损耗状态', value: _lossStatusLabel(group.lossStatus)),
+        _InfoRow(label: '损耗确认人', value: group.lossConfirmedByName),
+        _InfoRow(label: '损耗确认时间', value: group.lossConfirmedAt),
         _InfoRow(label: '备注', value: group.remarks),
         const Divider(height: 24),
         const _SectionTitle('导游快照'),
-        _InfoRow(label: '导游ID', value: group.guideId),
         _InfoRow(label: '姓名', value: group.guideName),
         _InfoRow(label: '手机号', value: group.guidePhone),
         _InfoRow(label: '旅行社', value: group.travelAgency),
@@ -136,9 +141,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
         _InfoRow(label: '重点客户信息', value: group.keyCustomerInfo),
         const Divider(height: 24),
         const _SectionTitle('品鉴师'),
-        _InfoRow(label: '对接品鉴师ID', value: group.liaisonTasterId),
         _InfoRow(label: '对接品鉴师', value: group.liaisonTasterName),
-        _InfoRow(label: '品鉴师ID', value: group.tasterId),
         _InfoRow(label: '品鉴师', value: group.tasterName),
         _InfoRow(label: '总结', value: group.tasterSummary),
         _InfoRow(label: '总结时间', value: group.tasterSummaryAt),
@@ -327,7 +330,7 @@ class _AttachmentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isImage = _isImageAttachment(attachment);
+    final isImage = isTravelGroupImageAttachment(attachment);
     final scheme = Theme.of(context).colorScheme;
     return Card(
       key: ValueKey('travel-group-attachment-${attachment.id}'),
@@ -499,13 +502,22 @@ String _mentionedFeitianLabel(bool? value) {
   return value ? '是' : '否';
 }
 
-bool _isImageAttachment(TravelGroupAttachmentRecord attachment) {
+bool isTravelGroupImageAttachment(TravelGroupAttachmentRecord attachment) {
   if ((attachment.contentType ?? '').toLowerCase().startsWith('image/')) {
     return true;
   }
   final name = attachment.originalName.toLowerCase();
-  return const ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-      .any(name.endsWith);
+  return const [
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.tif',
+    '.tiff',
+    '.avif',
+  ].any(name.endsWith);
 }
 
 String _formatFileSize(int bytes) {
@@ -571,6 +583,8 @@ String _pendingStatusLabel(String? status) {
   switch (status) {
     case 'pending_front_desk':
       return '待前台';
+    case 'pending_sales':
+      return '待销售';
     case 'pending_taster':
       return '待品鉴师';
     case 'pending_finance':
@@ -589,6 +603,8 @@ StatusTone _pendingStatusTone(String? status) {
     case 'pending_front_desk':
     case 'pending_finance':
       return StatusTone.warning;
+    case 'pending_sales':
+      return StatusTone.info;
     case 'pending_taster':
       return StatusTone.info;
     default:
@@ -600,6 +616,8 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
   switch (reason) {
     case 'missing_taster':
       return '缺少品鉴师';
+    case 'missing_license_plate':
+      return '缺少车牌号';
     case 'missing_guide_name':
       return '缺少导游姓名';
     case 'missing_guide_phone':
@@ -610,6 +628,16 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
       return '缺少香烟费用';
     case 'missing_guest_count':
       return '缺少人数';
+    case 'missing_tasting_room_no':
+      return '缺少品鉴馆号';
+    case 'missing_arrival_time':
+      return '缺少进店时间';
+    case 'missing_group_type':
+      return '缺少团型';
+    case 'missing_departure_time':
+      return '缺少离店时间';
+    case 'loss_not_confirmed':
+      return '损耗尚未确认';
     case 'invalid_guest_count_zero':
       return '人数为 0';
     case 'no_order_and_missing_taster_summary':
@@ -622,5 +650,17 @@ String _pendingReasonLabel(String reason, {bool showFinanceMark = true}) {
       return '离店早于进店';
     default:
       return reason;
+  }
+}
+
+String _lossStatusLabel(String status) {
+  switch (status) {
+    case 'RECORDED':
+      return '已记录损耗';
+    case 'NO_LOSS':
+      return '已确认无损耗';
+    case 'PENDING':
+    default:
+      return '待确认';
   }
 }

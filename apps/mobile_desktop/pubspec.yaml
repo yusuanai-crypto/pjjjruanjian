@@ -14,11 +14,15 @@ dependencies:
   file_picker: ^11.0.2
   flutter_secure_storage: ^10.3.1
   gal: 2.3.2
+  image_picker: ^1.2.3
   jiangjiu_shared:
     path: ../../packages/shared
+  path: ^1.9.1
   path_provider: ^2.1.5
   qr_flutter: ^4.1.0
   shared_preferences: ^2.3.5
+  flutter_local_notifications: ^22.1.0
+  timezone: ^0.11.0
 
 dev_dependencies:
   flutter_test:

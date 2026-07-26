@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import * as crypto from 'node:crypto';
 
@@ -17,6 +17,10 @@ import {
   calculateProductProfitSummary,
 } from '../products/product-profit.helper';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import {
+  TODO_REMINDERS_RECONCILER,
+  TodoRemindersReconciler,
+} from '../todo-reminders/todo-reminders.tokens';
 import {
   buildQrCodeTokenFingerprint,
   calculateQrCodeExpiresAt,
@@ -104,6 +108,21 @@ const GROUP_STATUS_FROM_PRISMA: any = {
   ORDERED: 'ordered',
 };
 
+const PRISMA_INT_MAX = 2_147_483_647;
+const TRAVEL_GROUP_TYPES = new Set([
+  'KB团',
+  'AB团',
+  '保险团',
+  '渠道团',
+  '散客团',
+  '其他',
+]);
+const TRAVEL_GROUP_LOSS_STATUSES = new Set([
+  'PENDING',
+  'RECORDED',
+  'NO_LOSS',
+]);
+
 const TRAVEL_GROUP_FINANCE_PATCH_FIELDS = [
   'status',
   'salesAmountCents',
@@ -130,6 +149,8 @@ const TRAVEL_GROUP_INTAKE_PATCH_FIELDS = [
 const TRAVEL_GROUP_TASTER_PATCH_FIELDS = [
   'licensePlate',
   'guestCount',
+  'adultCount',
+  'childCount',
   'expectedArrivalTime',
   'remarks',
   'wineDetails',
@@ -147,6 +168,8 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'guideName',
     'guidePhone',
     'guestCount',
+    'adultCount',
+    'childCount',
     'tastingRoomNo',
     'tasterId',
     'tasterName',
@@ -157,6 +180,7 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'remarks',
     'tasterSummary',
     'tastingItems',
+    'lossStatus',
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
     'expectedArrivalTime',
@@ -172,6 +196,8 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'guideName',
     'guidePhone',
     'guestCount',
+    'adultCount',
+    'childCount',
     'tastingRoomNo',
     'tasterId',
     'tasterName',
@@ -182,6 +208,7 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'remarks',
     'tasterSummary',
     'tastingItems',
+    'lossStatus',
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
     'expectedArrivalTime',
@@ -194,16 +221,18 @@ const TRAVEL_GROUP_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'licensePlate',
     'guideId',
     'guestCount',
+    'adultCount',
+    'childCount',
     'tastingRoomNo',
     'tasterId',
     'arrivalTime',
     'groupType',
     'remarks',
-    'tastingItems',
     ...TRAVEL_GROUP_INTAKE_PATCH_FIELDS,
     'liaisonTasterId',
     'cigaretteFeeCents',
   ],
+  sales: ['departureTime', 'remarks', 'tastingItems', 'lossStatus'],
   taster: TRAVEL_GROUP_TASTER_PATCH_FIELDS,
   finance: TRAVEL_GROUP_FINANCE_PATCH_FIELDS,
 };
@@ -416,6 +445,8 @@ const TRAVEL_GROUP_EXPORT_COLUMNS = [
   { header: '车牌号', key: 'licensePlate', width: 14 },
   { header: '导游', key: 'guideName', width: 16 },
   { header: '导游电话', key: 'guidePhone', width: 16 },
+  { header: '大人人数', key: 'adultCount', width: 10 },
+  { header: '小孩人数', key: 'childCount', width: 10 },
   { header: '人数', key: 'guestCount', width: 10 },
   { header: '品鉴馆馆号', key: 'tastingRoomNo', width: 14 },
   { header: '品鉴师', key: 'tasterName', width: 16 },
@@ -576,6 +607,9 @@ export class BusinessDataNestService {
     private readonly commissionRecordsService: CommissionRecordsNestService,
     private readonly travelGroupFinanceSummaryService: TravelGroupFinanceSummaryNestService,
     private readonly logisticsTrackingService: LogisticsTrackingService,
+    @Optional()
+    @Inject(TODO_REMINDERS_RECONCILER)
+    private readonly todoReminders?: TodoRemindersReconciler,
   ) {}
 
   async listGroups(kind: string, actor: any, filters: any = {}) {
@@ -714,7 +748,7 @@ export class BusinessDataNestService {
     let updated: any;
     try {
       updated = await this.prisma.$transaction(async (tx: any) => {
-        await claimTravelGroupTasterEditOpportunity(
+        await recordTravelGroupTasterEditActivity(
           tx,
           actor,
           id,
@@ -852,7 +886,7 @@ export class BusinessDataNestService {
     let updated: any;
     try {
       updated = await this.prisma.$transaction(async (tx: any) => {
-        await claimTravelGroupTasterEditOpportunity(
+        await recordTravelGroupTasterEditActivity(
           tx,
           actor,
           id,
@@ -1052,6 +1086,11 @@ export class BusinessDataNestService {
         tx,
         tastingItemInputs,
       );
+      if (tastingItems.length > 0) {
+        data.lossStatus = 'RECORDED';
+        data.lossConfirmedAt = new Date();
+        data.lossConfirmedById = actor.id;
+      }
 
       return withGeneratedTravelGroupNo(
         tx.travelGroup,
@@ -1092,6 +1131,9 @@ export class BusinessDataNestService {
       );
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'TRAVEL_GROUP', sourceId: created.id },
+    ]);
     return toGroupDto(created, 'travel', actor);
   }
 
@@ -1156,16 +1198,18 @@ export class BusinessDataNestService {
     requireAnyRole(actor, [
       'admin',
       'front_desk',
+      'sales',
       'taster',
       'finance',
     ]);
     const current = await this.findGroupOrThrow('travel', id, true);
     await this.assertCanReadGroup('travel', actor, current);
     assertTasterCanEditTravelGroup(actor, current);
+    assertSalesCanEditTravelGroup(actor, current);
     assertTravelGroupPatchAllowedFields(actor, payload, current);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      const data = buildTravelGroupUpdateData(payload, actor);
+      const data = buildTravelGroupUpdateData(payload, actor, current);
 
       if (data.groupNo && data.groupNo !== current.groupNo) {
         const duplicate = await tx.travelGroup.findUnique({
@@ -1225,13 +1269,28 @@ export class BusinessDataNestService {
           tx,
           buildTravelGroupTastingItems(payload.tastingItems),
         );
+        applyTravelGroupLossConfirmationData(
+          data,
+          actor,
+          payload,
+          current,
+          tastingItems,
+        );
         data.tastingItems = {
           deleteMany: {},
           create: tastingItems,
         };
+      } else if (payload?.lossStatus !== undefined) {
+        applyTravelGroupLossConfirmationData(
+          data,
+          actor,
+          payload,
+          current,
+          null,
+        );
       }
 
-      await claimTravelGroupTasterEditOpportunity(
+      await recordTravelGroupTasterEditActivity(
         tx,
         actor,
         id,
@@ -1259,6 +1318,9 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.id },
+    ]);
     return toGroupDto(updated, 'travel', actor);
   }
 
@@ -1305,6 +1367,11 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
+    if (kind === 'travel') {
+      await this.reconcileTodoSources([
+        { sourceType: 'TRAVEL_GROUP', sourceId: updated.id },
+      ]);
+    }
     return toGroupDto(updated, kind, actor);
   }
 
@@ -1325,7 +1392,7 @@ export class BusinessDataNestService {
       'tasterSummary',
     );
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      await claimTravelGroupTasterEditOpportunity(tx, actor, id, now);
+      await recordTravelGroupTasterEditActivity(tx, actor, id, now);
       const updatedGroup = await tx.travelGroup.update({
         where: {
           id,
@@ -1353,6 +1420,9 @@ export class BusinessDataNestService {
       return updatedGroup;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.id },
+    ]);
     return toGroupDto(updated, 'travel', actor);
   }
 
@@ -1636,6 +1706,9 @@ export class BusinessDataNestService {
           );
         }
         assertSalesCanUseTravelGroup(actor, travelGroup);
+        if (data.orderType === 'TRAVEL_GROUP') {
+          await assertTravelGroupFrontDeskInfoComplete(tx, travelGroup);
+        }
       }
       if (data.salesUserId) {
         await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
@@ -1753,6 +1826,10 @@ export class BusinessDataNestService {
       );
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: order.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: order.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(order, actor);
   }
 
@@ -1976,6 +2053,11 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2193,6 +2275,11 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2272,6 +2359,10 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2330,6 +2421,10 @@ export class BusinessDataNestService {
       return updatedOrder;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2414,6 +2509,11 @@ export class BusinessDataNestService {
       return orderForLog;
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2459,6 +2559,10 @@ export class BusinessDataNestService {
       afterData: toSalesOrderDto(updated),
       ipAddress: metadata.ipAddress || null,
     });
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
 
@@ -2551,6 +2655,9 @@ export class BusinessDataNestService {
       );
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: created.id },
+    ]);
     return toAfterSalesOrderMutationResult(created);
   }
 
@@ -2644,6 +2751,9 @@ export class BusinessDataNestService {
       return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
+    ]);
     return toAfterSalesOrderMutationResult(updated);
   }
 
@@ -2767,6 +2877,9 @@ export class BusinessDataNestService {
       return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
+    ]);
     return toAfterSalesOrderMutationResult(updated);
   }
 
@@ -2842,6 +2955,9 @@ export class BusinessDataNestService {
       return attachAfterSalesCommissionAndPointsImpact(orderForLog, impact);
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
+    ]);
     return toAfterSalesOrderMutationResult(updated);
   }
 
@@ -2974,6 +3090,9 @@ export class BusinessDataNestService {
       throw error;
     }
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
+    ]);
     return toAfterSalesOrderMutationResult(updated);
   }
 
@@ -3124,6 +3243,9 @@ export class BusinessDataNestService {
       return attachAfterSalesCommissionAndPointsImpact(orderForReturn, impact);
     });
 
+    await this.reconcileTodoSources([
+      { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
+    ]);
     return toAfterSalesOrderMutationResult(updated);
   }
 
@@ -4047,12 +4169,12 @@ export class BusinessDataNestService {
     }
 
     if (actor?.role === 'front_desk' && kind === 'travel') {
-      return { createdById: actor.id };
+      return null;
     }
 
     if (actor?.role === 'sales') {
       if (kind === 'travel') {
-        return { visitDate: getShanghaiTodayDate() };
+        return buildSalesTravelGroupScope();
       }
       return { createdById: actor.id };
     }
@@ -4065,11 +4187,11 @@ export class BusinessDataNestService {
       return { visitDate: { gte: getShanghaiTodayDate() } };
     }
     if (actor?.role === 'front_desk') {
-      return { createdById: actor.id };
+      return null;
     }
 
     if (actor?.role === 'sales') {
-      return { visitDate: getShanghaiTodayDate() };
+      return buildSalesTravelGroupScope();
     }
 
     return null;
@@ -4110,19 +4232,12 @@ export class BusinessDataNestService {
     }
 
     if (actor?.role === 'front_desk' && kind === 'travel') {
-      if (group.createdById === actor.id) {
-        return;
-      }
-      throw createHttpError(
-        404,
-        'TRAVEL_GROUP_NOT_FOUND',
-        'Travel group does not exist.',
-      );
+      return;
     }
 
     if (actor?.role === 'sales') {
       if (kind === 'travel') {
-        if (formatDate(group.visitDate) === getShanghaiTodayBusinessDate()) {
+        if (canSalesHandleTravelGroup(group)) {
           return;
         }
         throw createHttpError(
@@ -4222,6 +4337,28 @@ export class BusinessDataNestService {
     }
     return group;
   }
+
+  private async reconcileTodoSources(
+    sources: Array<{
+      sourceType:
+        | 'TRAVEL_GROUP'
+        | 'SALES_ORDER'
+        | 'AFTER_SALES_ORDER';
+      sourceId: string | null | undefined;
+    }>,
+  ) {
+    if (!this.todoReminders) {
+      return;
+    }
+    for (const source of sources) {
+      if (source.sourceId) {
+        await this.todoReminders.safeReconcileSource(
+          source.sourceType,
+          source.sourceId,
+        );
+      }
+    }
+  }
 }
 
 function getGroupTable(kind: string) {
@@ -4249,6 +4386,7 @@ function getGroupInclude(kind: string, mode = 'list') {
       },
       taster: true,
       liaisonTaster: true,
+      lossConfirmedBy: true,
       salesOrders: {
         orderBy: {
           createdAt: 'desc',
@@ -4262,6 +4400,8 @@ function getGroupInclude(kind: string, mode = 'list') {
         sortOrder: 'asc',
       },
     },
+    taster: true,
+    lossConfirmedBy: true,
     salesOrders: {
       orderBy: {
         createdAt: 'desc',
@@ -5006,8 +5146,166 @@ function buildGroupData(payload: any, actor: any, creating: boolean) {
   return data;
 }
 
+function buildTravelGroupCreateGuestCounts(payload: any) {
+  if (hasOwn(payload, 'adultCount') || hasOwn(payload, 'childCount')) {
+    const adultCount = normalizeTravelGroupGuestCount(
+      payload?.adultCount,
+      'adultCount',
+      0,
+    );
+    const childCount = normalizeTravelGroupGuestCount(
+      payload?.childCount,
+      'childCount',
+      0,
+    );
+    return buildTravelGroupGuestCounts(adultCount, childCount);
+  }
+
+  const guestCount = normalizeTravelGroupGuestCount(
+    payload?.guestCount,
+    'guestCount',
+    0,
+  );
+  return {
+    adultCount: guestCount,
+    childCount: 0,
+    guestCount,
+  };
+}
+
+function buildTravelGroupUpdateGuestCounts(payload: any, current: any) {
+  const hasAdultCount = hasOwn(payload, 'adultCount');
+  const hasChildCount = hasOwn(payload, 'childCount');
+  if (hasAdultCount || hasChildCount) {
+    const currentCounts = readTravelGroupGuestCounts(current);
+    const adultCount = hasAdultCount
+      ? normalizeTravelGroupGuestCount(
+          payload.adultCount,
+          'adultCount',
+          0,
+        )
+      : currentCounts.adultCount;
+    const childCount = hasChildCount
+      ? normalizeTravelGroupGuestCount(
+          payload.childCount,
+          'childCount',
+          0,
+        )
+      : currentCounts.childCount;
+    return buildTravelGroupGuestCounts(adultCount, childCount);
+  }
+
+  if (!hasOwn(payload, 'guestCount')) {
+    return {};
+  }
+  const guestCount = normalizeTravelGroupGuestCount(
+    payload.guestCount,
+    'guestCount',
+    0,
+  );
+  return {
+    adultCount: guestCount,
+    childCount: 0,
+    guestCount,
+  };
+}
+
+function buildTravelGroupGuestCounts(
+  adultCount: number,
+  childCount: number,
+) {
+  if (adultCount > PRISMA_INT_MAX - childCount) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'adultCount and childCount total exceeds the supported integer range.',
+    );
+  }
+  return {
+    adultCount,
+    childCount,
+    guestCount: adultCount + childCount,
+  };
+}
+
+function readTravelGroupGuestCounts(group: any) {
+  const legacyGuestCount = normalizeStoredTravelGroupGuestCount(
+    group?.guestCount,
+    0,
+  );
+  const adultCount = normalizeStoredTravelGroupGuestCount(
+    group?.adultCount,
+    legacyGuestCount,
+  );
+  const childCount = normalizeStoredTravelGroupGuestCount(
+    group?.childCount,
+    0,
+  );
+  return {
+    adultCount,
+    childCount,
+    guestCount: adultCount + childCount,
+  };
+}
+
+function normalizeStoredTravelGroupGuestCount(
+  value: unknown,
+  fallback: number,
+) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) &&
+    numberValue >= 0 &&
+    numberValue <= PRISMA_INT_MAX
+    ? numberValue
+    : fallback;
+}
+
+function normalizeTravelGroupGuestCount(
+  value: unknown,
+  fieldName: string,
+  fallback: number,
+) {
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return fallback;
+  }
+
+  let numberValue: number;
+  if (typeof value === 'number') {
+    numberValue = value;
+  } else if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    numberValue = Number(value.trim());
+  } else {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a non-negative integer.`,
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(numberValue) ||
+    numberValue < 0 ||
+    numberValue > PRISMA_INT_MAX
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be a non-negative integer.`,
+    );
+  }
+  return numberValue;
+}
+
 function buildTravelGroupCreateData(payload: any, actor: any) {
   const now = new Date();
+  const guestCounts = buildTravelGroupCreateGuestCounts(payload);
   const data: any = {
     id: crypto.randomUUID(),
     visitDate: parseDate(payload?.visitDate, 'visitDate', true),
@@ -5016,16 +5314,21 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
       'travelAgency',
     ),
     guideId: normalizeRequiredString(payload?.guideId, 'guideId'),
-    guestCount: normalizeInt(payload?.guestCount, 'guestCount', 0),
+    ...guestCounts,
     createdById: actor.id,
     updatedById: actor.id,
     financeMark: false,
     parkingFeeCents: 500,
-    cigaretteFeeCents: normalizeCentsAmount(
-      payload?.cigaretteFeeCents,
-      'cigaretteFeeCents',
-      1,
-    ),
+    cigaretteFeeCents:
+      payload?.cigaretteFeeCents === undefined ||
+      payload?.cigaretteFeeCents === null ||
+      payload?.cigaretteFeeCents === ''
+        ? null
+        : normalizeCentsAmount(
+            payload.cigaretteFeeCents,
+            'cigaretteFeeCents',
+            1,
+          ),
     createdAt: now,
     updatedAt: now,
     status: 'UNMARKED',
@@ -5035,7 +5338,7 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
   assignNullableString(data, 'tastingRoomNo', payload?.tastingRoomNo);
   assignNullableString(data, 'tasterId', payload?.tasterId);
   assignNullableString(data, 'liaisonTasterId', payload?.liaisonTasterId);
-  assignNullableString(data, 'groupType', payload?.groupType);
+  assignOptionalTravelGroupType(data, payload?.groupType);
   assignNullableString(data, 'sourceRegion', payload?.sourceRegion);
   assignNullableString(data, 'ageInfo', payload?.ageInfo);
   assignNullableBoolean(data, 'mentionedFeitian', payload?.mentionedFeitian);
@@ -5050,9 +5353,10 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
     'expectedArrivalTime',
     payload?.expectedArrivalTime,
   );
-  assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
+  assignOptionalClockTime(data, 'arrivalTime', payload?.arrivalTime);
   assignNullableString(data, 'wineDetails', payload?.wineDetails);
-  assignNullableString(data, 'departureTime', payload?.departureTime);
+  assignOptionalClockTime(data, 'departureTime', payload?.departureTime);
+  assertDepartureNotBeforeArrival(data.arrivalTime, data.departureTime);
   assignNullableString(data, 'remarks', payload?.remarks);
   if (payload?.status !== undefined) {
     data.status = toPrismaGroupStatus(payload.status);
@@ -5074,11 +5378,12 @@ function buildTravelGroupCreateData(payload: any, actor: any) {
   return data;
 }
 
-function buildTravelGroupUpdateData(payload: any, actor: any) {
+function buildTravelGroupUpdateData(payload: any, actor: any, current: any) {
   const now = new Date();
   const data: any = {
     updatedById: actor.id,
     updatedAt: now,
+    ...buildTravelGroupUpdateGuestCounts(payload, current),
   };
 
   assignString(data, 'groupNo', payload?.groupNo, false, 'groupNo');
@@ -5092,7 +5397,6 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
   }
   assignNullableString(data, 'guideName', payload?.guideName);
   assignNullableString(data, 'guidePhone', payload?.guidePhone);
-  assignInt(data, 'guestCount', payload?.guestCount);
   assignNullableString(data, 'tastingRoomNo', payload?.tastingRoomNo);
   if (payload?.tasterId !== undefined) {
     data.tasterId = normalizeOptionalString(payload.tasterId);
@@ -5115,17 +5419,20 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
     'expectedArrivalTime',
     payload?.expectedArrivalTime,
   );
-  assignNullableString(data, 'arrivalTime', payload?.arrivalTime);
-  assignNullableString(data, 'groupType', payload?.groupType);
+  assignOptionalClockTime(data, 'arrivalTime', payload?.arrivalTime);
+  assignOptionalTravelGroupType(data, payload?.groupType);
   assignNullableString(data, 'wineDetails', payload?.wineDetails);
-  assignNullableString(data, 'departureTime', payload?.departureTime);
+  assignOptionalClockTime(data, 'departureTime', payload?.departureTime);
   assignNullableString(data, 'remarks', payload?.remarks);
   if (payload?.cigaretteFeeCents !== undefined) {
-    data.cigaretteFeeCents = normalizeCentsAmount(
-      payload.cigaretteFeeCents,
-      'cigaretteFeeCents',
-      0,
-    );
+    data.cigaretteFeeCents =
+      payload.cigaretteFeeCents === null || payload.cigaretteFeeCents === ''
+        ? null
+        : normalizeCentsAmount(
+            payload.cigaretteFeeCents,
+            'cigaretteFeeCents',
+            1,
+          );
   }
   if (payload?.status !== undefined) {
     data.status = toPrismaGroupStatus(payload.status);
@@ -5152,6 +5459,10 @@ function buildTravelGroupUpdateData(payload: any, actor: any) {
     data.tasterSummary = normalizeOptionalString(payload.tasterSummary);
     data.tasterSummaryAt = data.tasterSummary ? now : null;
   }
+  assertDepartureNotBeforeArrival(
+    hasOwn(data, 'arrivalTime') ? data.arrivalTime : current?.arrivalTime,
+    hasOwn(data, 'departureTime') ? data.departureTime : current?.departureTime,
+  );
   return data;
 }
 
@@ -5181,10 +5492,9 @@ function buildTravelGroupTastingItems(items: any[]) {
     }
     return {
       id: crypto.randomUUID(),
-      productId: normalizeRequiredString(
-        item?.productId,
-        `tastingItems[${index}].productId`,
-      ),
+      productId: normalizeOptionalString(item?.productId),
+      productName: normalizeOptionalString(item?.productName),
+      unit: normalizeOptionalString(item?.unit),
       quantity,
       note: normalizeOptionalString(item?.note),
       sortOrder: normalizeInt(
@@ -5202,6 +5512,29 @@ async function resolveTravelGroupTastingItems(prisma: any, items: any[]) {
   const resolved = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
+    if (!item.productId) {
+      if (item.productName !== '罐装酒') {
+        throw createHttpError(
+          400,
+          'VALIDATION_FAILED',
+          `tastingItems[${index}].productName must be 罐装酒 when productId is empty.`,
+        );
+      }
+      if (item.unit !== null && item.unit !== '瓶') {
+        throw createHttpError(
+          400,
+          'VALIDATION_FAILED',
+          `tastingItems[${index}].unit must be 瓶.`,
+        );
+      }
+      resolved.push({
+        ...item,
+        productId: null,
+        productName: '罐装酒',
+        unit: '瓶',
+      });
+      continue;
+    }
     const product = await findActiveProductOrThrow(
       prisma,
       item.productId,
@@ -5215,6 +5548,136 @@ async function resolveTravelGroupTastingItems(prisma: any, items: any[]) {
     });
   }
   return resolved;
+}
+
+function applyTravelGroupLossConfirmationData(
+  data: any,
+  actor: any,
+  payload: any,
+  current: any,
+  tastingItems: any[] | null,
+) {
+  const requestedStatus =
+    payload?.lossStatus === undefined
+      ? null
+      : normalizeTravelGroupLossStatus(payload.lossStatus);
+  const currentItems = Array.isArray(current?.tastingItems)
+    ? current.tastingItems
+    : [];
+  const effectiveItems = tastingItems === null ? currentItems : tastingItems;
+
+  if (effectiveItems.length > 0) {
+    if (requestedStatus === 'NO_LOSS' || requestedStatus === 'PENDING') {
+      throw createHttpError(
+        409,
+        'TRAVEL_GROUP_LOSS_STATUS_CONFLICT',
+        'Existing loss items must be cleared before changing the loss status.',
+      );
+    }
+    data.lossStatus = 'RECORDED';
+    data.lossConfirmedAt = new Date();
+    data.lossConfirmedById = actor.id;
+    return;
+  }
+
+  if (requestedStatus === 'RECORDED') {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'RECORDED loss status requires at least one tasting item.',
+    );
+  }
+  if (requestedStatus === 'NO_LOSS') {
+    if (tastingItems !== null && currentItems.length > 0) {
+      throw createHttpError(
+        409,
+        'TRAVEL_GROUP_LOSS_STATUS_CONFLICT',
+        'Clear the existing loss items before confirming no loss.',
+      );
+    }
+    data.lossStatus = 'NO_LOSS';
+    data.lossConfirmedAt = new Date();
+    data.lossConfirmedById = actor.id;
+    return;
+  }
+
+  data.lossStatus = 'PENDING';
+  data.lossConfirmedAt = null;
+  data.lossConfirmedById = null;
+}
+
+function normalizeTravelGroupLossStatus(value: unknown) {
+  const status = String(value || '')
+    .trim()
+    .toUpperCase();
+  if (!TRAVEL_GROUP_LOSS_STATUSES.has(status)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'lossStatus must be PENDING, RECORDED, or NO_LOSS.',
+    );
+  }
+  return status;
+}
+
+async function assertTravelGroupFrontDeskInfoComplete(
+  prisma: any,
+  group: any,
+) {
+  const missingFields = getTravelGroupFrontDeskMissingFields(group);
+  if (group?.tasterId) {
+    const taster = await prisma.user.findUnique({
+      where: { id: group.tasterId },
+    });
+    if (!isActiveTasterUser(taster) && !missingFields.includes('tasterId')) {
+      missingFields.push('tasterId');
+    }
+  }
+  if (missingFields.length === 0) {
+    return;
+  }
+  throw createHttpError(
+    409,
+    'TRAVEL_GROUP_FRONT_DESK_INFO_INCOMPLETE',
+    'Travel group front desk information is incomplete.',
+    { missingFields },
+  );
+}
+
+function getTravelGroupFrontDeskMissingFields(group: any) {
+  const missingFields: string[] = [];
+  if (!hasText(group?.licensePlate)) {
+    missingFields.push('licensePlate');
+  }
+  const guestCount = Number(group?.guestCount);
+  if (!Number.isSafeInteger(guestCount) || guestCount <= 0) {
+    missingFields.push('guestCount');
+  }
+  const cigaretteFeeCents = Number(group?.cigaretteFeeCents);
+  if (
+    group?.cigaretteFeeCents === null ||
+    group?.cigaretteFeeCents === undefined ||
+    !Number.isSafeInteger(cigaretteFeeCents) ||
+    cigaretteFeeCents <= 0
+  ) {
+    missingFields.push('cigaretteFeeCents');
+  }
+  if (!hasText(group?.tastingRoomNo)) {
+    missingFields.push('tastingRoomNo');
+  }
+  if (!hasText(group?.tasterId)) {
+    missingFields.push('tasterId');
+  }
+  if (!isValidClockTime(group?.arrivalTime)) {
+    missingFields.push('arrivalTime');
+  }
+  if (
+    !hasText(group?.groupType) ||
+    !TRAVEL_GROUP_TYPES.has(String(group.groupType).trim())
+  ) {
+    missingFields.push('groupType');
+  }
+  return missingFields;
 }
 
 function buildSalesOrderData(payload: any, actor: any, items: any[]) {
@@ -6407,6 +6870,10 @@ function buildStrikeBonusAwardData(payload: any) {
 
 function toGroupDto(group: any, kind: string, actor: any = null) {
   const pending = calculateGroupPendingState(group, kind);
+  const guestCounts =
+    kind === 'travel'
+      ? readTravelGroupGuestCounts(group)
+      : { guestCount: Number(group.guestCount || 0) };
   const rawSalesOrders = filterGroupSalesOrdersForActor(
     Array.isArray(group.salesOrders) ? group.salesOrders : [],
     group,
@@ -6425,7 +6892,7 @@ function toGroupDto(group: any, kind: string, actor: any = null) {
     licensePlate: group.licensePlate || null,
     guideName: group.guideName || null,
     guidePhone: group.guidePhone || null,
-    guestCount: Number(group.guestCount || 0),
+    ...guestCounts,
     tastingRoomNo: group.tastingRoomNo || null,
     tasterName: group.tasterName || null,
     sourceRegion: group.sourceRegion || null,
@@ -6463,6 +6930,18 @@ function toGroupDto(group: any, kind: string, actor: any = null) {
       group.cigaretteFeeCents === null
         ? null
         : Number(group.cigaretteFeeCents),
+    lossStatus: normalizeStoredTravelGroupLossStatus(group.lossStatus),
+    lossConfirmedAt: group.lossConfirmedAt
+      ? toIsoString(group.lossConfirmedAt)
+      : null,
+    lossConfirmedById: group.lossConfirmedById || null,
+    lossConfirmedBy: group.lossConfirmedBy
+      ? {
+          id: group.lossConfirmedBy.id,
+          name: group.lossConfirmedBy.name,
+          username: group.lossConfirmedBy.username,
+        }
+      : null,
     salesAmountCents: Number(group.salesAmountCents || 0),
     paidDepositCents: Number(group.paidDepositCents || 0),
     cashOnDeliveryCents: Number(group.cashOnDeliveryCents || 0),
@@ -6485,11 +6964,9 @@ function toGroupDto(group: any, kind: string, actor: any = null) {
       ? toIsoString(group.tasterSummaryAt)
       : null,
     tasterEditCount: Number(group.tasterEditCount || 0),
-    tasterEditLimit: 2,
-    tasterEditRemaining: Math.max(
-      0,
-      2 - Number(group.tasterEditCount || 0),
-    ),
+    tasterEditLimit: null,
+    tasterEditRemaining: null,
+    tasterEditUnlimited: true,
     tasterLastEditedAt: group.tasterLastEditedAt
       ? toIsoString(group.tasterLastEditedAt)
       : null,
@@ -6540,14 +7017,14 @@ function canEditTravelGroupForActor(group: any, actor: any) {
     return (
       formatDate(group?.visitDate) === getShanghaiTodayBusinessDate() &&
       (group?.tasterId === actor.id ||
-        group?.liaisonTasterId === actor.id) &&
-      Number(group?.tasterEditCount || 0) < 2
+        group?.liaisonTasterId === actor.id)
     );
   }
   return [
     'super_admin',
     'admin',
     'front_desk',
+    'sales',
     'finance',
   ].includes(actor?.role);
 }
@@ -6857,7 +7334,7 @@ function toFinancePendingLogisticsDto(order: any) {
   };
 }
 
-function buildFinancePendingLogisticsReasons(order: any) {
+export function buildFinancePendingLogisticsReasons(order: any) {
   const reasons: string[] = [];
   const shippingOrder = hasShippingDelivery(order);
   if (shippingOrder && !hasText(order.logisticsNo)) {
@@ -6880,7 +7357,11 @@ function hasShippingDelivery(order: any) {
   });
 }
 
-function calculateGroupPendingState(group: any, kind: string) {
+export function calculateGroupPendingState(
+  group: any,
+  kind: string,
+  now = new Date(),
+) {
   if (kind !== 'travel') {
     return {
       status: null,
@@ -6893,25 +7374,37 @@ function calculateGroupPendingState(group: any, kind: string) {
     findings.push({ status, reason });
   };
 
-  if (!hasText(group.guideName)) {
-    addFinding('pending_front_desk', 'missing_guide_name');
-  }
-  if (!hasText(group.guidePhone)) {
-    addFinding('pending_front_desk', 'missing_guide_phone');
-  }
-  if (!hasText(group.travelAgency)) {
-    addFinding('pending_front_desk', 'missing_travel_agency');
-  }
-  if (
-    group.cigaretteFeeCents === undefined ||
-    group.cigaretteFeeCents === null
-  ) {
-    addFinding('pending_front_desk', 'missing_cigarette_fee');
-  }
-
-  const guestCount = Number(group.guestCount || 0);
-  if (!Number.isFinite(guestCount) || guestCount < 0) {
-    addFinding('pending_front_desk', 'missing_guest_count');
+  const visitDate = formatDate(group.visitDate);
+  const today = getShanghaiTodayBusinessDate(now);
+  const handlingDateReached = Boolean(visitDate) && visitDate! <= today;
+  if (handlingDateReached) {
+    const missingFields = getTravelGroupFrontDeskMissingFields(group);
+    if (
+      hasText(group.tasterId) &&
+      group.taster !== undefined &&
+      !isActiveTasterUser(group.taster) &&
+      !missingFields.includes('tasterId')
+    ) {
+      missingFields.push('tasterId');
+    }
+    const reasonByField: Record<string, string> = {
+      licensePlate: 'missing_license_plate',
+      guestCount: 'missing_guest_count',
+      cigaretteFeeCents: 'missing_cigarette_fee',
+      tastingRoomNo: 'missing_tasting_room_no',
+      tasterId: 'missing_taster',
+      arrivalTime: 'missing_arrival_time',
+      groupType: 'missing_group_type',
+    };
+    for (const field of missingFields) {
+      addFinding('pending_front_desk', reasonByField[field]);
+    }
+    if (!hasText(group.departureTime)) {
+      addFinding('pending_sales', 'missing_departure_time');
+    }
+    if (normalizeStoredTravelGroupLossStatus(group.lossStatus) === 'PENDING') {
+      addFinding('pending_sales', 'loss_not_confirmed');
+    }
   }
 
   const salesOrders = getEffectiveSalesOrders(group.salesOrders);
@@ -6919,7 +7412,7 @@ function calculateGroupPendingState(group: any, kind: string) {
     addFinding('pending_taster', 'no_order_and_missing_taster_summary');
   }
 
-  if (!group.financeMark && isAfterVisitDayEnd(group.visitDate)) {
+  if (!group.financeMark && isAfterVisitDayEnd(group.visitDate, now)) {
     addFinding('pending_finance', 'finance_unmarked_after_day_end');
   }
 
@@ -6941,6 +7434,7 @@ function calculateGroupPendingState(group: any, kind: string) {
     [
       'abnormal',
       'pending_front_desk',
+      'pending_sales',
       'pending_taster',
       'pending_finance',
     ].find((candidate) =>
@@ -6976,14 +7470,21 @@ function hasText(value: unknown) {
     : value !== undefined && value !== null && value !== '';
 }
 
-function isAfterVisitDayEnd(value: unknown) {
+function normalizeStoredTravelGroupLossStatus(value: unknown) {
+  const status = String(value || 'PENDING')
+    .trim()
+    .toUpperCase();
+  return TRAVEL_GROUP_LOSS_STATUSES.has(status) ? status : 'PENDING';
+}
+
+function isAfterVisitDayEnd(value: unknown, now = new Date()) {
   const date = value instanceof Date ? value : new Date(String(value || ''));
   if (Number.isNaN(date.getTime())) {
     return false;
   }
   const end = new Date(date);
   end.setUTCHours(23, 59, 59, 999);
-  return Date.now() > end.getTime();
+  return now.getTime() > end.getTime();
 }
 
 function parseClockMinutes(value: unknown) {
@@ -7466,6 +7967,8 @@ function toTravelGroupExportRow(group: any) {
     licensePlate: group.licensePlate || '',
     guideName: group.guideName || '',
     guidePhone: group.guidePhone || '',
+    adultCount: Number(group.adultCount || 0),
+    childCount: Number(group.childCount || 0),
     guestCount: Number(group.guestCount || 0),
     tastingRoomNo: group.tastingRoomNo || '',
     tasterName: group.tasterName || '',
@@ -7910,7 +8413,7 @@ async function claimSalesOrderEditOpportunity(
   }
 }
 
-async function claimTravelGroupTasterEditOpportunity(
+async function recordTravelGroupTasterEditActivity(
   tx: any,
   actor: any,
   id: string,
@@ -7923,30 +8426,33 @@ async function claimTravelGroupTasterEditOpportunity(
     where: {
       id,
       visitDate: getShanghaiTodayDate(now),
-      tasterEditCount: {
-        lt: 2,
-      },
       OR: [
         { tasterId: actor.id },
         { liaisonTasterId: actor.id },
       ],
     },
     data: {
-      tasterEditCount: {
-        increment: 1,
-      },
       tasterLastEditedAt: now,
       updatedById: actor.id,
       updatedAt: now,
     },
   });
-  if (Number(result?.count || 0) !== 1) {
-    throw createHttpError(
-      409,
-      'TRAVEL_GROUP_TASTER_EDIT_LIMIT_REACHED',
-      'The travel group taster edit opportunities have been used.',
-    );
+  if (Number(result?.count || 0) === 1) {
+    return;
   }
+  const current = await tx.travelGroup.findUnique({
+    where: {
+      id,
+    },
+  });
+  if (current) {
+    assertTasterCanEditTravelGroup(actor, current);
+  }
+  throw createHttpError(
+    404,
+    'TRAVEL_GROUP_NOT_FOUND',
+    'Travel group does not exist.',
+  );
 }
 
 function assertTasterCanEditTravelGroup(actor: any, current: any) {
@@ -7987,6 +8493,18 @@ function assertTravelGroupCreateAllowedFields(actor: any, payload: any) {
       'FIELD_PERMISSION_DENIED',
       'parkingFeeCents is managed by the server.',
     );
+  }
+  if (actor?.role === 'front_desk') {
+    const salesFields = ['departureTime', 'tastingItems', 'lossStatus'].filter(
+      (field) => hasOwn(payload, field),
+    );
+    if (salesFields.length > 0) {
+      throw createHttpError(
+        403,
+        'FIELD_PERMISSION_DENIED',
+        `Fields are not allowed for front_desk: ${salesFields.join(', ')}.`,
+      );
+    }
   }
   const serverManagedAttachmentFields = [
     'keyCustomerPhotos',
@@ -8041,6 +8559,51 @@ function assertTravelGroupPatchAllowedFields(
       `Fields are not allowed for ${actor.role}: ${deniedFields.join(', ')}.`,
     );
   }
+}
+
+function assertSalesCanEditTravelGroup(actor: any, current: any) {
+  if (actor?.role !== 'sales') {
+    return;
+  }
+  if (canSalesHandleTravelGroup(current)) {
+    return;
+  }
+  throw createHttpError(
+    403,
+    'TRAVEL_GROUP_SALES_EDIT_NOT_ALLOWED',
+    'Sales can only edit today travel groups or overdue pending sales groups.',
+  );
+}
+
+function buildSalesTravelGroupScope(now = new Date()) {
+  const today = getShanghaiTodayDate(now);
+  return {
+    OR: [
+      { visitDate: today },
+      {
+        visitDate: { lt: today },
+        OR: [
+          { departureTime: null },
+          { departureTime: '' },
+          { lossStatus: 'PENDING' },
+        ],
+      },
+    ],
+  };
+}
+
+function canSalesHandleTravelGroup(group: any, now = new Date()) {
+  const visitDate = formatDate(group?.visitDate);
+  const today = getShanghaiTodayBusinessDate(now);
+  if (visitDate === today) {
+    return true;
+  }
+  return (
+    Boolean(visitDate) &&
+    visitDate! < today &&
+    (!hasText(group?.departureTime) ||
+      normalizeStoredTravelGroupLossStatus(group?.lossStatus) === 'PENDING')
+  );
 }
 
 function buildDateRange(startValue: unknown, endValue: unknown) {
@@ -8133,6 +8696,47 @@ function assignOptionalClockTime(data: any, key: string, value: unknown) {
     );
   }
   data[key] = normalized;
+}
+
+function assignOptionalTravelGroupType(data: any, value: unknown) {
+  if (value === undefined) {
+    return;
+  }
+  const normalized = normalizeOptionalString(value);
+  if (normalized !== null && !TRAVEL_GROUP_TYPES.has(normalized)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'groupType must be a supported travel group type.',
+    );
+  }
+  data.groupType = normalized;
+}
+
+function assertDepartureNotBeforeArrival(
+  arrivalTime: unknown,
+  departureTime: unknown,
+) {
+  const arrivalMinutes = parseClockMinutes(arrivalTime);
+  const departureMinutes = parseClockMinutes(departureTime);
+  if (
+    arrivalMinutes !== null &&
+    departureMinutes !== null &&
+    departureMinutes < arrivalMinutes
+  ) {
+    throw createHttpError(
+      400,
+      'DEPARTURE_BEFORE_ARRIVAL',
+      'departureTime must not be earlier than arrivalTime.',
+    );
+  }
+}
+
+function isValidClockTime(value: unknown) {
+  return (
+    typeof value === 'string' &&
+    /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.trim())
+  );
 }
 
 function assignInt(data: any, key: string, value: unknown) {

@@ -11,6 +11,7 @@ import 'package:jiangjiu_mobile_desktop/features/analytics/analytics_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rule_config_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/guide_management/guide_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/operation_logs/operation_logs_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
@@ -500,6 +501,37 @@ void main() {
     }
   });
 
+  testWidgets(
+      'guide management menu is visible only to super admin admin and front desk',
+      (_) async {
+    for (final role in [
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.frontDesk,
+    ]) {
+      expect(_roleIds(role), contains('guide_management'));
+      expect(
+        _destinationIds(['guide_management'], role),
+        contains('guide_management'),
+      );
+    }
+
+    for (final role in [
+      UserRole.boss,
+      UserRole.sales,
+      UserRole.finance,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('guide_management')));
+      expect(
+        _destinationIds(['guide_management'], role),
+        isNot(contains('guide_management')),
+      );
+    }
+  });
+
   testWidgets('product management menu is visible only to admin and finance',
       (_) async {
     for (final role in [UserRole.admin, UserRole.finance]) {
@@ -544,6 +576,7 @@ void main() {
     expect(_page('operation_logs'), isA<OperationLogsPage>());
     expect(_page('travel_group_form'), isA<TravelGroupFormPage>());
     expect(_page('travel_group_query'), isA<TravelGroupQueryPage>());
+    expect(_page('guide_management'), isA<GuideManagementPage>());
     expect(_page('travel_group_order_notes'), isA<TravelGroupOrderNotesPage>());
     expect(_page('order_form'), isA<OrderFormEntryPage>());
     expect(_page('order_query'), isA<OrderQueryPage>());

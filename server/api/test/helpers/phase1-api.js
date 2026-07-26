@@ -1002,17 +1002,24 @@ function createGuideDelegate(rows) {
       const row = rows.find((item) => matchesUnique(item, where));
       return row ? copyRow(row) : null;
     },
-    findMany: async ({ where, orderBy, take } = {}) => {
+    findMany: async ({ where, orderBy, skip, take } = {}) => {
       const result = sortRows(
         rows.filter((item) => matchesWhere(item, where)).map(copyRow),
         orderBy,
       );
-      return result.slice(0, take || result.length);
+      const start = skip || 0;
+      return result.slice(start, take ? start + take : result.length);
     },
+    count: async ({ where } = {}) =>
+      rows.filter((item) => matchesWhere(item, where)).length,
     create: async ({ data }) => {
+      if (rows.some((item) => item.phone === data.phone)) {
+        throw createPrismaUniqueError('phone');
+      }
       const row = {
         ...data,
         id: data.id || crypto.randomUUID(),
+        isActive: data.isActive ?? true,
         createdAt: asDate(data.createdAt) || new Date(),
         updatedAt: asDate(data.updatedAt) || new Date(),
       };
@@ -1023,6 +1030,14 @@ function createGuideDelegate(rows) {
       const index = rows.findIndex((item) => matchesUnique(item, where));
       if (index < 0) {
         throw new Error('Guide not found in test Prisma store.');
+      }
+      if (
+        data.phone !== undefined &&
+        rows.some(
+          (item) => item.id !== rows[index].id && item.phone === data.phone,
+        )
+      ) {
+        throw createPrismaUniqueError('phone');
       }
       rows[index] = {
         ...rows[index],
@@ -1509,8 +1524,13 @@ function createTravelGroupDelegate(rows, options = {}) {
       const row = {
         ...withoutNested(data, 'tastingItems'),
         id: data.id || crypto.randomUUID(),
+        adultCount: data.adultCount ?? data.guestCount ?? 0,
+        childCount: data.childCount ?? 0,
         parkingFeeCents: data.parkingFeeCents ?? 500,
         cigaretteFeeCents: data.cigaretteFeeCents ?? null,
+        lossStatus: data.lossStatus ?? 'PENDING',
+        lossConfirmedAt: asDate(data.lossConfirmedAt) || null,
+        lossConfirmedById: data.lossConfirmedById ?? null,
         tasterEditCount: data.tasterEditCount ?? 0,
         tasterLastEditedAt: asDate(data.tasterLastEditedAt) || null,
         createdAt: asDate(data.createdAt) || new Date(),
@@ -1697,6 +1717,8 @@ function seedTravelGroups(rows, seeds, now) {
       licensePlate: seedValue(seed, 'licensePlate', 'SEED-PLATE'),
       guideName: seedValue(seed, 'guideName', 'Seed Guide'),
       guidePhone: seedValue(seed, 'guidePhone', '13900000000'),
+      adultCount: seed.adultCount ?? seed.guestCount ?? 10,
+      childCount: seed.childCount ?? 0,
       guestCount: seed.guestCount ?? 10,
       tastingRoomNo: seedValue(seed, 'tastingRoomNo', 'Seed Room'),
       tasterName: seedValue(seed, 'tasterName', 'Seed Taster'),
@@ -1722,6 +1744,9 @@ function seedTravelGroups(rows, seeds, now) {
       status: seed.status || 'UNMARKED',
       parkingFeeCents: seed.parkingFeeCents ?? 500,
       cigaretteFeeCents: seedValue(seed, 'cigaretteFeeCents', null),
+      lossStatus: seed.lossStatus ?? 'PENDING',
+      lossConfirmedAt: asDate(seed.lossConfirmedAt) || null,
+      lossConfirmedById: seed.lossConfirmedById ?? null,
       salesAmountCents: seed.salesAmountCents ?? 0,
       paidDepositCents: seed.paidDepositCents ?? 0,
       cashOnDeliveryCents: seed.cashOnDeliveryCents ?? 0,
@@ -2243,6 +2268,12 @@ function withTravelGroupIncludes(group, include, relations) {
       (user) => user.id === group.liaisonTasterId,
     );
     row.liaisonTaster = liaisonTaster ? copyRow(liaisonTaster) : null;
+  }
+  if (include?.lossConfirmedBy) {
+    const lossConfirmedBy = users.find(
+      (user) => user.id === group.lossConfirmedById,
+    );
+    row.lossConfirmedBy = lossConfirmedBy ? copyRow(lossConfirmedBy) : null;
   }
   if (include?.salesOrders) {
     const includeConfig =
@@ -2926,7 +2957,14 @@ function assertErrorContract(result, statusCode, code) {
     Object.keys(result.body).sort(),
     statusCode >= 500 ? ['error', 'requestId'] : ['error'],
   );
-  assert.deepEqual(Object.keys(result.body.error).sort(), ['code', 'message']);
+  const errorKeys = Object.keys(result.body.error).sort();
+  assert.deepEqual(
+    errorKeys.filter((key) => key !== 'missingFields'),
+    ['code', 'message'],
+  );
+  if (errorKeys.includes('missingFields')) {
+    assert.equal(Array.isArray(result.body.error.missingFields), true);
+  }
   assert.equal(result.body.error.code, code);
   assert.equal(typeof result.body.error.message, 'string');
   if (statusCode >= 500) {

@@ -54,10 +54,12 @@ class SharedMenuEntry {
 
 const sharedMenuEntries = <SharedMenuEntry>[
   SharedMenuEntry(id: 'dashboard', label: '首页', phase: 1),
+  SharedMenuEntry(id: 'todo_reminders', label: '待办提醒', phase: 1),
   SharedMenuEntry(id: 'role_menu', label: '角色菜单', phase: 2),
   SharedMenuEntry(id: 'employee_accounts', label: '员工账号', phase: 1),
   SharedMenuEntry(id: 'travel_group_form', label: '旅行团录入', phase: 3),
   SharedMenuEntry(id: 'travel_group_query', label: '旅行团管理', phase: 3),
+  SharedMenuEntry(id: 'guide_management', label: '导游管理', phase: 3),
   SharedMenuEntry(id: 'travel_agency_management', label: '旅行社管理', phase: 7),
   SharedMenuEntry(
     id: 'travel_group_finance_supplement',
@@ -85,11 +87,13 @@ const sharedMenuEntries = <SharedMenuEntry>[
 const roleMenuIds = <UserRole, List<String>>{
   UserRole.superAdmin: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'operation_logs',
     'employee_accounts',
     'travel_group_form',
     'travel_group_query',
+    'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -109,11 +113,13 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.admin: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'operation_logs',
     'employee_accounts',
     'travel_group_form',
     'travel_group_query',
+    'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
     'travel_group_order_notes',
@@ -133,6 +139,7 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.boss: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'order_query',
@@ -142,12 +149,15 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.frontDesk: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_form',
     'travel_group_query',
+    'guide_management',
   ],
   UserRole.sales: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'travel_group_order_notes',
@@ -157,6 +167,7 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.finance: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'travel_agency_management',
@@ -171,6 +182,7 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.warehouse: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'order_query',
@@ -179,6 +191,7 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.afterSales: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'order_query',
@@ -188,6 +201,7 @@ const roleMenuIds = <UserRole, List<String>>{
   ],
   UserRole.taster: [
     'dashboard',
+    'todo_reminders',
     'role_menu',
     'travel_group_query',
     'order_query',

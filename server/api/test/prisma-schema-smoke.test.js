@@ -350,6 +350,22 @@ test('smoke: phase 2 Prisma migrations create and evolve business tables', () =>
     /MODIFY `travel_agency` VARCHAR\(120\) NULL/,
   );
 
+  const guideAgencyRemovalMigration = readMigration(
+    '20260725000400_drop_guide_travel_agency',
+  );
+  assert.match(
+    guideAgencyRemovalMigration,
+    /DROP INDEX `guides_travel_agency_idx` ON `guides`/,
+  );
+  assert.match(
+    guideAgencyRemovalMigration,
+    /ALTER TABLE `guides`\s+DROP COLUMN `travel_agency`/,
+  );
+  assert.doesNotMatch(
+    guideAgencyRemovalMigration,
+    /travel_groups|guide_carried_groups|pending_travel_groups/,
+  );
+
   const customersMigration = readMigration('20260629000300_add_customers');
   assert.match(customersMigration, /CREATE TABLE `customers`/);
   assert.match(customersMigration, /`phone` VARCHAR\(30\) NULL/);
@@ -591,6 +607,18 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
     'agencyRebateRules',
     'commissionRecords',
   ]);
+
+  const guide = extractPrismaBlock(schema, 'model Guide {');
+  assertBlockHasFields(guide, [
+    'id',
+    'name',
+    'phone',
+    'remarks',
+    'isActive',
+    'createdAt',
+    'updatedAt',
+  ]);
+  assert.doesNotMatch(guide, /travelAgency|travel_agency/);
 
   const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
   assertBlockHasFields(travelGroup, [
@@ -1161,6 +1189,104 @@ test('smoke: travel groups persist parking snapshots and nullable cigarette fees
   assert.match(migration, /`cigarette_fee_cents` INTEGER NULL/);
   assert.doesNotMatch(migration, /cigarette_fee_cents[^;]*DEFAULT 0/i);
   assert.doesNotMatch(migration, /CREATE (?:UNIQUE )?INDEX/i);
+});
+
+test('smoke: travel group guest breakdown migration backfills existing totals safely', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+  assert.match(
+    travelGroup,
+    /adultCount\s+Int\s+@default\(0\)\s+@map\("adult_count"\)/,
+  );
+  assert.match(
+    travelGroup,
+    /childCount\s+Int\s+@default\(0\)\s+@map\("child_count"\)/,
+  );
+  assert.match(
+    travelGroup,
+    /guestCount\s+Int\s+@default\(0\)\s+@map\("guest_count"\)/,
+  );
+
+  const migrationName = '20260725000200_travel_group_guest_breakdown';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /ADD COLUMN `adult_count` INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `child_count` INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.match(
+    migration,
+    /UPDATE `travel_groups`\s+SET\s+`adult_count` = `guest_count`,\s+`child_count` = 0;/s,
+  );
+  assert.doesNotMatch(migration, /SET[^;]*`guest_count`\s*=/i);
+  assert.doesNotMatch(migration, /\b(DELETE|DROP|TRUNCATE)\b/i);
+});
+
+test('smoke: travel group loss confirmation migration is additive and traceable', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const user = extractPrismaBlock(schema, 'model User {');
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+  const lossStatus = extractPrismaBlock(
+    schema,
+    'enum TravelGroupLossStatus {',
+  );
+  assert.match(lossStatus, /PENDING\s+@map\("pending"\)/);
+  assert.match(lossStatus, /RECORDED\s+@map\("recorded"\)/);
+  assert.match(lossStatus, /NO_LOSS\s+@map\("no_loss"\)/);
+  assert.match(
+    travelGroup,
+    /lossStatus\s+TravelGroupLossStatus\s+@default\(PENDING\)\s+@map\("loss_status"\)/,
+  );
+  assert.match(
+    travelGroup,
+    /lossConfirmedAt\s+DateTime\?\s+@map\("loss_confirmed_at"\)\s+@db\.DateTime\(0\)/,
+  );
+  assert.match(
+    travelGroup,
+    /lossConfirmedById\s+String\?\s+@map\("loss_confirmed_by_id"\)\s+@db\.Char\(36\)/,
+  );
+  assert.match(
+    travelGroup,
+    /lossConfirmedBy\s+User\?\s+@relation\("TravelGroupLossConfirmedBy", fields: \[lossConfirmedById\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(
+    user,
+    /lossConfirmedTravelGroups\s+TravelGroup\[\]\s+@relation\("TravelGroupLossConfirmedBy"\)/,
+  );
+
+  const migrationName =
+    '20260726000100_travel_group_loss_confirmation';
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /ADD COLUMN `loss_status` ENUM\('pending', 'recorded', 'no_loss'\)\s+NOT NULL DEFAULT 'pending'/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `loss_confirmed_at` DATETIME\(0\) NULL/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `loss_confirmed_by_id` CHAR\(36\) NULL/,
+  );
+  assert.match(migration, /travel_groups_loss_status_idx/);
+  assert.match(migration, /travel_groups_loss_confirmed_by_id_idx/);
+  assert.match(migration, /travel_groups_loss_confirmed_by_id_fkey/);
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`loss_confirmed_by_id`\) REFERENCES `users` \(`id`\)\s+ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE|^\s*UPDATE\s+`|INSERT\s+INTO/im,
+  );
 });
 
 function escapeRegExp(value) {

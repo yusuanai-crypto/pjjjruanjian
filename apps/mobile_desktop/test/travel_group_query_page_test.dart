@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/features/travel_group_attachments/downloaded_file_service.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_query/travel_group_query_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -150,7 +153,9 @@ void main() {
 
     final dialog = find.byType(AlertDialog);
     expect(_dialogText(dialog, '车牌号'), findsOneWidget);
-    expect(_dialogText(dialog, '人数'), findsOneWidget);
+    expect(_dialogText(dialog, '大人人数'), findsOneWidget);
+    expect(_dialogText(dialog, '小孩人数'), findsOneWidget);
+    expect(_dialogText(dialog, '人数'), findsNothing);
     expect(_dialogText(dialog, '客源地'), findsOneWidget);
     expect(_dialogText(dialog, '年龄描述'), findsOneWidget);
     expect(_dialogText(dialog, '是否提及飞天'), findsOneWidget);
@@ -200,6 +205,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(apiClient.lastPatchBody?['expectedArrivalTime'], '09:10');
+    expect(apiClient.lastPatchBody?['adultCount'], 20);
+    expect(apiClient.lastPatchBody?['childCount'], 4);
+    expect(apiClient.lastPatchBody?.containsKey('guestCount'), isFalse);
     expect(apiClient.lastPatchBody?.containsKey('travelAgency'), isFalse);
     expect(apiClient.lastPatchBody?.containsKey('groupNo'), isFalse);
     expect(apiClient.lastPatchBody?.containsKey('tastingRoomNo'), isFalse);
@@ -279,11 +287,11 @@ void main() {
     expect(find.text('上传'), findsNothing);
   });
 
-  testWidgets('taster group hides writes when shared edits are exhausted',
+  testWidgets('assigned taster keeps writes after the historical edit count',
       (tester) async {
     final apiClient = _FakeApiClient(
       tasterId: 'actor-1',
-      tasterEditCount: 2,
+      tasterEditCount: 7,
     );
     await _pumpQueryPage(
       tester,
@@ -293,9 +301,46 @@ void main() {
     );
     await _openDetailDialog(tester);
 
-    expect(find.textContaining('两次共享修改机会已用完'), findsOneWidget);
-    expect(find.text('共享剩余修改次数：0'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
+    expect(find.textContaining('共享剩余修改次数'), findsNothing);
+    expect(find.textContaining('共享修改机会已用完'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('travel-group-taster-edit-remaining')),
+      findsNothing,
+    );
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '总结'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '上传'), findsNWidgets(2));
+  });
+
+  testWidgets(
+      'mobile download shows open-with action and reports external open failure',
+      (tester) async {
+    final downloadService = _QueryFakeDownloadedFileService();
+    final apiClient = _FakeApiClient(includeAttachment: true);
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.admin,
+      currentUserId: 'admin-1',
+      downloadedFileService: downloadService,
+    );
+    await _openDetailDialog(tester);
+
+    final downloadButton = find.widgetWithText(TextButton, '下载');
+    await tester.ensureVisible(downloadButton);
+    await tester.tap(downloadButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('附件已下载'), findsOneWidget);
+    expect(find.text('用其他应用打开'), findsOneWidget);
+
+    await tester.tap(find.text('用其他应用打开'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(downloadService.openCalls, 1);
+    expect(find.text('打开附件失败，请稍后重试。'), findsOneWidget);
   });
 }
 
@@ -304,6 +349,7 @@ Future<void> _pumpQueryPage(
   required ApiClient apiClient,
   required UserRole role,
   required String currentUserId,
+  DownloadedFileService? downloadedFileService,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -313,6 +359,7 @@ Future<void> _pumpQueryPage(
           token: 'test-token',
           role: role,
           currentUserId: currentUserId,
+          downloadedFileService: downloadedFileService,
         ),
       ),
     ),
@@ -353,12 +400,14 @@ class _FakeApiClient extends ApiClient {
     this.liaisonTasterId = 'liaison-1',
     this.visitDate,
     this.tasterEditCount = 0,
+    this.includeAttachment = false,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final String? tasterId;
   final String? liaisonTasterId;
   final String? visitDate;
   final int tasterEditCount;
+  final bool includeAttachment;
   final List<String> travelGroupGetPaths = [];
 
   String? lastPatchPath;
@@ -385,6 +434,7 @@ class _FakeApiClient extends ApiClient {
               liaisonTasterId: liaisonTasterId,
               visitDate: visitDate,
               tasterEditCount: tasterEditCount,
+              includeAttachment: includeAttachment,
             ),
           ],
         },
@@ -423,11 +473,25 @@ class _FakeApiClient extends ApiClient {
             liaisonTasterId: liaisonTasterId,
             visitDate: visitDate,
             tasterEditCount: tasterEditCount,
+            includeAttachment: includeAttachment,
           ),
           ...?body,
         },
       },
     };
+  }
+
+  @override
+  Future<ApiDownloadedFile> getBytes(
+    String path, {
+    required String defaultFileName,
+    String? token,
+  }) async {
+    return ApiDownloadedFile(
+      bytes: Uint8List.fromList('%PDF-1.7'.codeUnits),
+      fileName: defaultFileName,
+      contentType: 'application/pdf',
+    );
   }
 }
 
@@ -436,7 +500,6 @@ Map<String, dynamic> _guideJson() {
     'id': 'guide-1',
     'name': '李导',
     'phone': '13900001111',
-    'travelAgency': '876',
     'isActive': true,
   };
 }
@@ -454,6 +517,7 @@ Map<String, dynamic> _travelGroupJson({
   String? liaisonTasterId = 'liaison-1',
   String? visitDate,
   int tasterEditCount = 0,
+  bool includeAttachment = false,
 }) {
   final resolvedVisitDate = visitDate ?? _todayDate();
   final associated = tasterId == 'actor-1' || liaisonTasterId == 'actor-1';
@@ -467,16 +531,18 @@ Map<String, dynamic> _travelGroupJson({
     'guideId': 'guide-1',
     'guideName': '王莉',
     'guidePhone': '13900001111',
+    'adultCount': 20,
+    'childCount': 4,
     'guestCount': 24,
     'tastingRoomNo': '5',
     'tasterId': tasterId,
     'tasterName': '王莉',
     'liaisonTasterId': liaisonTasterId,
     'tasterEditCount': tasterEditCount,
-    'tasterEditLimit': 2,
-    'tasterEditRemaining': (2 - tasterEditCount).clamp(0, 2),
-    'canEditByCurrentUser':
-        associated && resolvedVisitDate == _todayDate() && tasterEditCount < 2,
+    'tasterEditLimit': null,
+    'tasterEditRemaining': null,
+    'tasterEditUnlimited': true,
+    'canEditByCurrentUser': associated && resolvedVisitDate == _todayDate(),
     'liaisonTasterName': '赵对接',
     'sourceRegion': '遵义',
     'ageInfo': '40-55 岁',
@@ -484,7 +550,17 @@ Map<String, dynamic> _travelGroupJson({
     'previousStopOrderStatus': '熊猫',
     'keyCustomerInfo': '重点客户两位',
     'keyCustomerPhotos': const [],
-    'guestInfoAttachments': const [],
+    'guestInfoAttachments': includeAttachment
+        ? const [
+            {
+              'id': 'attachment-1',
+              'category': 'guest_info',
+              'originalName': '客人名单.pdf',
+              'contentType': 'application/pdf',
+              'size': 1024,
+            },
+          ]
+        : const [],
     'expectedArrivalTime': '09:10',
     'arrivalTime': '9:25',
     'groupType': 'KB团',
@@ -529,4 +605,34 @@ String _tomorrowDate() {
   return '${now.year.toString().padLeft(4, '0')}-'
       '${now.month.toString().padLeft(2, '0')}-'
       '${now.day.toString().padLeft(2, '0')}';
+}
+
+class _QueryFakeDownloadedFileService extends DownloadedFileService {
+  int openCalls = 0;
+
+  @override
+  bool get isMobile => true;
+
+  @override
+  Future<DownloadedFileSaveResult> save({
+    required String originalFileName,
+    required Uint8List bytes,
+  }) async {
+    return const DownloadedFileSaveResult(
+      path: 'D:\\fake-download\\客人名单.pdf',
+      cancelled: false,
+    );
+  }
+
+  @override
+  Future<ExternalOpenResult> open({
+    required String filePath,
+    required String mimeType,
+  }) async {
+    openCalls += 1;
+    return const ExternalOpenResult(
+      ExternalOpenStatus.failed,
+      message: '打开附件失败，请稍后重试。',
+    );
+  }
 }

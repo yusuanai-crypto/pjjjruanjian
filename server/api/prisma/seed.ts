@@ -172,19 +172,16 @@ async function main() {
       {
         name: '李导',
         phone: '13800006666',
-        travelAgency: '黔程旅行社',
         remarks: '系统示例旅行团导游',
       },
       {
         name: '王导',
         phone: '13900008888',
-        travelAgency: '导游自带',
         remarks: '系统示例导游自带团导游',
       },
       {
         name: '赵导',
         phone: '13700009999',
-        travelAgency: '山水国旅',
         remarks: '系统示例旅行团导游',
       },
     ],
@@ -201,6 +198,8 @@ async function main() {
       licensePlate: '贵A12345',
       guideName: '李导',
       guidePhone: '13800006666',
+      adultCount: 32,
+      childCount: 0,
       guestCount: 32,
       tastingRoomNo: 'KB馆',
       tasterName: '周品鉴师',
@@ -234,6 +233,8 @@ async function main() {
       licensePlate: '贵A12345',
       guideName: '李导',
       guidePhone: '13800006666',
+      adultCount: 32,
+      childCount: 0,
       guestCount: 32,
       tastingRoomNo: 'KB馆',
       tasterName: '周品鉴师',
@@ -1148,14 +1149,13 @@ async function upsertGuideSnapshots(
   guides: Array<{
     name: string;
     phone: string;
-    travelAgency: string;
     remarks?: string;
   }>,
   updatedAt: Date,
 ) {
   const uniqueGuides = new Map<
     string,
-    { name: string; phone: string; travelAgency: string; remarks?: string }
+    { name: string; phone: string; remarks?: string }
   >();
   for (const guide of guides) {
     if (!guide.phone) {
@@ -1171,7 +1171,6 @@ async function upsertGuideSnapshots(
       },
       update: {
         name: guide.name,
-        travelAgency: guide.travelAgency,
         remarks: guide.remarks ?? null,
         isActive: true,
         updatedAt,
@@ -1179,7 +1178,6 @@ async function upsertGuideSnapshots(
       create: {
         name: guide.name,
         phone: guide.phone,
-        travelAgency: guide.travelAgency,
         remarks: guide.remarks ?? null,
         isActive: true,
         createdAt: updatedAt,
@@ -2534,6 +2532,8 @@ async function upsertStage7TravelGroup({
     guideName,
     guidePhone,
     guideId,
+    adultCount: 18,
+    childCount: 0,
     guestCount: 18,
     tastingRoomNo: 'stage7-smoke-room',
     tasterName: 'Stage7 Smoke Taster',
@@ -3814,6 +3814,8 @@ async function upsertStage8TravelGroup({
     guideName,
     guidePhone,
     guideId,
+    adultCount: guestCount,
+    childCount: 0,
     guestCount,
     tastingRoomNo: 'stage8-smoke-room',
     tasterName: taster.name,

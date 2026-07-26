@@ -183,7 +183,6 @@ class BusinessApi {
 
   Future<List<GuideRecord>> listGuides({
     String? keyword,
-    String? travelAgency,
     bool? isActive,
     int limit = 50,
   }) async {
@@ -191,21 +190,43 @@ class BusinessApi {
     if (keyword != null && keyword.trim().isNotEmpty) {
       query['keyword'] = keyword.trim();
     }
-    if (travelAgency != null && travelAgency.trim().isNotEmpty) {
-      query['travelAgency'] = travelAgency.trim();
-    }
     if (isActive != null) {
       query['isActive'] = '$isActive';
     }
 
-    final payload = await _apiClient.getJson(
-      _path('/api/guides', query),
-      token: _token,
-    );
-    final data = _data(payload);
-    return _list(data['guides'])
-        .map((item) => GuideRecord.fromJson(item))
-        .toList();
+    return _withGuideApiError(() async {
+      final payload = await _apiClient.getJson(
+        _path('/api/guides', query),
+        token: _token,
+      );
+      final data = _data(payload);
+      return _list(data['guides'])
+          .map((item) => GuideRecord.fromJson(item))
+          .toList();
+    });
+  }
+
+  Future<GuidePage> listGuidesPage({
+    int page = 1,
+    int pageSize = 20,
+    String? keyword,
+    bool? isActive,
+  }) async {
+    final query = <String, String>{
+      'page': '$page',
+      'pageSize': '$pageSize',
+    };
+    _putNonEmpty(query, 'keyword', keyword);
+    if (isActive != null) {
+      query['isActive'] = '$isActive';
+    }
+    return _withGuideApiError(() async {
+      final payload = await _apiClient.getJson(
+        _path('/api/guides', query),
+        token: _token,
+      );
+      return GuidePage.fromJson(_data(payload));
+    });
   }
 
   Future<List<TravelAgencyRecord>> listTravelAgencies({
@@ -469,32 +490,69 @@ class BusinessApi {
   }
 
   Future<GuideRecord> createGuide(Map<String, dynamic> body) async {
-    final payload = await _apiClient.postJson(
-      '/api/guides',
-      body: body,
-      token: _token,
-    );
-    return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    return _withGuideApiError(() async {
+      final payload = await _apiClient.postJson(
+        '/api/guides',
+        body: body,
+        token: _token,
+      );
+      return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    });
   }
 
   Future<GuideRecord> getGuide(String id) async {
-    final payload = await _apiClient.getJson(
-      '/api/guides/$id',
-      token: _token,
-    );
-    return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    return _withGuideApiError(() async {
+      final payload = await _apiClient.getJson(
+        '/api/guides/$id',
+        token: _token,
+      );
+      return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    });
   }
 
   Future<GuideRecord> updateGuide(
     String id,
     Map<String, dynamic> body,
   ) async {
-    final payload = await _apiClient.patchJson(
-      '/api/guides/$id',
-      body: body,
-      token: _token,
-    );
-    return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    return _withGuideApiError(() async {
+      final payload = await _apiClient.patchJson(
+        '/api/guides/$id',
+        body: body,
+        token: _token,
+      );
+      return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    });
+  }
+
+  Future<GuideRecord> disableGuide(String id) async {
+    return _setGuideActive(id, false);
+  }
+
+  Future<GuideRecord> enableGuide(String id) async {
+    return _setGuideActive(id, true);
+  }
+
+  Future<GuideRecord> _setGuideActive(String id, bool isActive) async {
+    return _withGuideApiError(() async {
+      final action = isActive ? 'enable' : 'disable';
+      final payload = await _apiClient.postJson(
+        '/api/guides/$id/$action',
+        token: _token,
+      );
+      return GuideRecord.fromJson(_map(_data(payload)['guide']));
+    });
+  }
+
+  Future<T> _withGuideApiError<T>(Future<T> Function() request) async {
+    try {
+      return await request();
+    } on ApiException catch (error) {
+      throw ApiException(
+        statusCode: error.statusCode,
+        code: error.code,
+        message: guideApiErrorMessage(error),
+      );
+    }
   }
 
   Future<List<TasterOption>> listTasters() async {
@@ -573,7 +631,7 @@ class BusinessApi {
       '/api/travel-groups/${Uri.encodeComponent(travelGroupId)}/attachments/'
       '${category.apiValue}',
       files: files,
-      maxFileSizeBytes: 20 * 1024 * 1024,
+      maxFileSizeBytes: 10 * 1024 * 1024,
       token: _token,
     );
     return TravelGroupAttachmentUploadResult.fromJson(_data(payload));
@@ -2411,7 +2469,6 @@ class GuideRecord {
     required this.id,
     required this.name,
     required this.phone,
-    required this.travelAgency,
     required this.remarks,
     required this.isActive,
     required this.createdAt,
@@ -2421,7 +2478,6 @@ class GuideRecord {
   final String id;
   final String name;
   final String phone;
-  final String travelAgency;
   final String? remarks;
   final bool isActive;
   final String? createdAt;
@@ -2432,12 +2488,55 @@ class GuideRecord {
       id: '${json['id'] ?? ''}',
       name: '${json['name'] ?? ''}',
       phone: '${json['phone'] ?? ''}',
-      travelAgency: '${json['travelAgency'] ?? ''}',
       remarks: _stringOrNull(json['remarks']),
       isActive: _boolValue(json['isActive'] ?? true),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
     );
+  }
+}
+
+class GuidePage {
+  const GuidePage({
+    required this.guides,
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final List<GuideRecord> guides;
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory GuidePage.fromJson(Map<String, dynamic> json) {
+    final pagination = _map(json['pagination']);
+    return GuidePage(
+      guides: _list(json['guides']).map(GuideRecord.fromJson).toList(),
+      page: _intValue(pagination['page']),
+      pageSize: _intValue(pagination['pageSize']),
+      total: _intValue(pagination['total']),
+      totalPages: _intValue(pagination['totalPages']),
+    );
+  }
+}
+
+String guideApiErrorMessage(ApiException error) {
+  switch (error.code) {
+    case 'GUIDE_PHONE_EXISTS':
+      return '该手机号已被其他导游使用。';
+    case 'GUIDE_DISABLED':
+      return '该手机号对应的导游已停用，请在列表中找到该导游并点击“恢复”。';
+    case 'GUIDE_NOT_FOUND':
+      return '导游不存在或已被移除。';
+    case 'PERMISSION_DENIED':
+      return '当前账号没有导游管理权限。';
+    case 'VALIDATION_FAILED':
+      return '请检查导游姓名、手机号和备注是否填写正确。';
+    default:
+      return error.message;
   }
 }
 
@@ -2622,6 +2721,8 @@ class TravelGroupRecord {
     required this.guideId,
     required this.guideName,
     required this.guidePhone,
+    required this.adultCount,
+    required this.childCount,
     required this.guestCount,
     required this.tastingRoomNo,
     required this.tasterId,
@@ -2645,6 +2746,10 @@ class TravelGroupRecord {
     required this.status,
     required this.parkingFeeCents,
     required this.cigaretteFeeCents,
+    this.lossStatus = 'PENDING',
+    this.lossConfirmedAt,
+    this.lossConfirmedById,
+    this.lossConfirmedByName,
     required this.salesAmountCents,
     required this.paidDepositCents,
     required this.cashOnDeliveryCents,
@@ -2661,8 +2766,9 @@ class TravelGroupRecord {
     required this.tasterSummary,
     required this.tasterSummaryAt,
     this.tasterEditCount = 0,
-    this.tasterEditLimit = 2,
-    this.tasterEditRemaining = 2,
+    this.tasterEditLimit,
+    this.tasterEditRemaining,
+    this.tasterEditUnlimited = true,
     this.canEditByCurrentUser = false,
     required this.tastingItems,
     required this.salesOrders,
@@ -2682,6 +2788,8 @@ class TravelGroupRecord {
   final String? guideId;
   final String? guideName;
   final String? guidePhone;
+  final int adultCount;
+  final int childCount;
   final int guestCount;
   final String? tastingRoomNo;
   final String? tasterId;
@@ -2705,6 +2813,10 @@ class TravelGroupRecord {
   final String status;
   final int parkingFeeCents;
   final int? cigaretteFeeCents;
+  final String lossStatus;
+  final String? lossConfirmedAt;
+  final String? lossConfirmedById;
+  final String? lossConfirmedByName;
   final int salesAmountCents;
   final int paidDepositCents;
   final int cashOnDeliveryCents;
@@ -2721,8 +2833,9 @@ class TravelGroupRecord {
   final String? tasterSummary;
   final String? tasterSummaryAt;
   final int tasterEditCount;
-  final int tasterEditLimit;
-  final int tasterEditRemaining;
+  final int? tasterEditLimit;
+  final int? tasterEditRemaining;
+  final bool tasterEditUnlimited;
   final bool canEditByCurrentUser;
   final List<TravelGroupTastingItemRecord> tastingItems;
   final List<TravelGroupOrderRecord> salesOrders;
@@ -2733,6 +2846,12 @@ class TravelGroupRecord {
   final String? updatedAt;
 
   factory TravelGroupRecord.fromJson(Map<String, dynamic> json) {
+    final guestCount = _intValue(json['guestCount']);
+    final adultCount = json.containsKey('adultCount')
+        ? _intValue(json['adultCount'])
+        : guestCount;
+    final childCount =
+        json.containsKey('childCount') ? _intValue(json['childCount']) : 0;
     final orderSummary = _map(json['orderSummary']);
     final liaisonTasterId = _stringOrNull(json['liaisonTasterId']);
     final liaisonTasterName = _stringOrNull(json['liaisonTasterName']);
@@ -2756,7 +2875,9 @@ class TravelGroupRecord {
       guideId: _stringOrNull(json['guideId']),
       guideName: _stringOrNull(json['guideName']),
       guidePhone: _stringOrNull(json['guidePhone']),
-      guestCount: _intValue(json['guestCount']),
+      adultCount: adultCount,
+      childCount: childCount,
+      guestCount: guestCount,
       tastingRoomNo: _stringOrNull(json['tastingRoomNo']),
       tasterId: _stringOrNull(json['tasterId']),
       tasterName: _stringOrNull(json['tasterName']),
@@ -2787,6 +2908,11 @@ class TravelGroupRecord {
       cigaretteFeeCents: json['cigaretteFeeCents'] == null
           ? null
           : _intValue(json['cigaretteFeeCents']),
+      lossStatus: '${json['lossStatus'] ?? 'PENDING'}'.toUpperCase(),
+      lossConfirmedAt: _stringOrNull(json['lossConfirmedAt']),
+      lossConfirmedById: _stringOrNull(json['lossConfirmedById']),
+      lossConfirmedByName:
+          _stringOrNull(_map(json['lossConfirmedBy'])['name']),
       salesAmountCents: _intValue(json['salesAmountCents']),
       paidDepositCents: _intValue(json['paidDepositCents']),
       cashOnDeliveryCents: _intValue(json['cashOnDeliveryCents']),
@@ -2803,12 +2929,16 @@ class TravelGroupRecord {
       tasterSummary: _stringOrNull(json['tasterSummary']),
       tasterSummaryAt: _stringOrNull(json['tasterSummaryAt']),
       tasterEditCount: _intValue(json['tasterEditCount']),
-      tasterEditLimit: json.containsKey('tasterEditLimit')
-          ? _intValue(json['tasterEditLimit'])
-          : 2,
-      tasterEditRemaining: json.containsKey('tasterEditRemaining')
-          ? _intValue(json['tasterEditRemaining'])
-          : 2,
+      tasterEditLimit: json['tasterEditLimit'] == null
+          ? null
+          : _intValue(json['tasterEditLimit']),
+      tasterEditRemaining: json['tasterEditRemaining'] == null
+          ? null
+          : _intValue(json['tasterEditRemaining']),
+      tasterEditUnlimited: json.containsKey('tasterEditUnlimited')
+          ? _boolValue(json['tasterEditUnlimited'])
+          : json['tasterEditLimit'] == null &&
+              json['tasterEditRemaining'] == null,
       canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
       tastingItems: _list(json['tastingItems'])
           .map((item) => TravelGroupTastingItemRecord.fromJson(item))

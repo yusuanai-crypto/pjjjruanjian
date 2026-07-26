@@ -22,6 +22,12 @@ const appDestinations = <AppDestination>[
   AppDestination(
       id: 'dashboard', label: '首页', icon: Icons.dashboard_rounded, phase: 1),
   AppDestination(
+    id: 'todo_reminders',
+    label: '待办提醒',
+    icon: Icons.notifications_active_rounded,
+    phase: 1,
+  ),
+  AppDestination(
       id: 'role_menu',
       label: '角色菜单',
       icon: Icons.account_tree_rounded,
@@ -45,6 +51,11 @@ const appDestinations = <AppDestination>[
       id: 'travel_group_query',
       label: '旅行团管理',
       icon: Icons.manage_search_rounded,
+      phase: 3),
+  AppDestination(
+      id: 'guide_management',
+      label: '导游管理',
+      icon: Icons.badge_rounded,
       phase: 3),
   AppDestination(
       id: 'travel_agency_management',
@@ -183,6 +194,11 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       role != UserRole.warehouse) {
     ids.remove('moutai_inventory');
   }
+  if (role != UserRole.superAdmin &&
+      role != UserRole.admin &&
+      role != UserRole.frontDesk) {
+    ids.remove('guide_management');
+  }
   switch (role) {
     case UserRole.sales:
       ids
@@ -241,6 +257,7 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
     case UserRole.frontDesk:
       ids
         ..remove('travel_agency_management')
+        ..remove('travel_group_order_notes')
         ..remove('analytics');
       _removeStage7Destinations(ids);
       break;

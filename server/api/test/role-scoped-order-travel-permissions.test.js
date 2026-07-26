@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   assertErrorContract,
   login,
+  requestJson: rawRequestJson,
   requestJsonWithStage10ProductFixtures: requestJson,
   withPhase1Server,
 } = require('./helpers/phase1-api');
@@ -14,7 +15,7 @@ const TASTER_RECEPTION_ID = 'usr_scope_taster_reception';
 const TASTER_LIAISON_ID = 'usr_scope_taster_liaison';
 const TASTER_OTHER_ID = 'usr_scope_taster_other';
 
-test('contract: sales and taster reads use Beijing date scopes without createdBy or liaison fallback', async () => {
+test('contract: sales reads include today and overdue pending-sales groups while taster date scope remains', async () => {
   const dates = shanghaiFixtureDates();
   await withPhase1Server(
     async (baseUrl) => {
@@ -88,11 +89,15 @@ test('contract: sales and taster reads use Beijing date scopes without createdBy
       assert.equal(salesGroups.response.status, 200);
       assert.deepEqual(
         new Set(salesGroups.body.data.travelGroups.map((group) => group.id)),
-        new Set(['group-today-reception', 'group-today-liaison']),
+        new Set([
+          'group-yesterday',
+          'group-today-reception',
+          'group-today-liaison',
+        ]),
       );
       assert.equal(
         salesGroups.body.data.travelGroups.every(
-          (group) => group.canEditByCurrentUser === false,
+          (group) => group.canEditByCurrentUser === true,
         ),
         true,
       );
@@ -109,7 +114,11 @@ test('contract: sales and taster reads use Beijing date scopes without createdBy
         '/api/travel-groups/group-yesterday',
         { token: sales.token },
       );
-      assertErrorContract(salesPastGroup, 404, 'TRAVEL_GROUP_NOT_FOUND');
+      assert.equal(salesPastGroup.response.status, 200);
+      assert.equal(
+        salesPastGroup.body.data.travelGroup.pendingStatus,
+        'pending_sales',
+      );
 
       const tasterGroups = await requestJson(baseUrl, '/api/travel-groups', {
         token: taster.token,
@@ -154,7 +163,7 @@ test('contract: sales and taster reads use Beijing date scopes without createdBy
   );
 });
 
-test('contract: sales edit and taster edits atomically share their limits', async () => {
+test('contract: sales keeps one edit while assigned tasters can edit without a limit', async () => {
   const dates = shanghaiFixtureDates();
   await withPhase1Server(
     async (baseUrl) => {
@@ -167,6 +176,11 @@ test('contract: sales edit and taster edits atomically share their limits', asyn
       const liaison = await login(
         baseUrl,
         'scope-taster-liaison',
+        'Password123',
+      );
+      const otherTaster = await login(
+        baseUrl,
+        'scope-taster-other',
         'Password123',
       );
 
@@ -249,43 +263,69 @@ test('contract: sales edit and taster edits atomically share their limits', asyn
         [200, 409],
       );
 
-      const receptionEdit = await requestJson(
+      for (let index = 1; index <= 3; index += 1) {
+        const receptionEdit = await requestJson(
+          baseUrl,
+          '/api/travel-groups/group-taster-shared',
+          {
+            method: 'PATCH',
+            token: taster.token,
+            body: {
+              guestCount: 20 + index,
+              remarks: `reception edit ${index}`,
+            },
+          },
+        );
+        assert.equal(receptionEdit.response.status, 200);
+        assert.equal(receptionEdit.body.data.travelGroup.tasterEditCount, 2);
+        assert.equal(receptionEdit.body.data.travelGroup.tasterEditLimit, null);
+        assert.equal(
+          receptionEdit.body.data.travelGroup.tasterEditRemaining,
+          null,
+        );
+        assert.equal(
+          receptionEdit.body.data.travelGroup.tasterEditUnlimited,
+          true,
+        );
+        assert.equal(
+          receptionEdit.body.data.travelGroup.canEditByCurrentUser,
+          true,
+        );
+      }
+
+      for (let index = 1; index <= 2; index += 1) {
+        const liaisonSummary = await requestJson(
+          baseUrl,
+          '/api/travel-groups/group-taster-shared/taster-summary',
+          {
+            method: 'POST',
+            token: liaison.token,
+            body: { tasterSummary: `liaison summary ${index}` },
+          },
+        );
+        assert.equal(liaisonSummary.response.status, 201);
+        assert.equal(liaisonSummary.body.data.travelGroup.tasterEditCount, 2);
+        assert.equal(
+          liaisonSummary.body.data.travelGroup.tasterEditUnlimited,
+          true,
+        );
+        assert.equal(
+          liaisonSummary.body.data.travelGroup.canEditByCurrentUser,
+          true,
+        );
+      }
+
+      const liaisonEdit = await requestJson(
         baseUrl,
         '/api/travel-groups/group-taster-shared',
         {
           method: 'PATCH',
-          token: taster.token,
-          body: { guestCount: 21, expectedArrivalTime: '10:30' },
-        },
-      );
-      assert.equal(receptionEdit.response.status, 200);
-      assert.equal(receptionEdit.body.data.travelGroup.tasterEditCount, 1);
-      const liaisonSummary = await requestJson(
-        baseUrl,
-        '/api/travel-groups/group-taster-shared/taster-summary',
-        {
-          method: 'POST',
           token: liaison.token,
-          body: { tasterSummary: 'shared second edit' },
+          body: { expectedArrivalTime: '10:30' },
         },
       );
-      assert.equal(liaisonSummary.response.status, 201);
-      assert.equal(liaisonSummary.body.data.travelGroup.tasterEditCount, 2);
-      assert.equal(liaisonSummary.body.data.travelGroup.tasterEditRemaining, 0);
-      const thirdEdit = await requestJson(
-        baseUrl,
-        '/api/travel-groups/group-taster-shared',
-        {
-          method: 'PATCH',
-          token: taster.token,
-          body: { remarks: 'third edit' },
-        },
-      );
-      assertErrorContract(
-        thirdEdit,
-        409,
-        'TRAVEL_GROUP_TASTER_EDIT_LIMIT_REACHED',
-      );
+      assert.equal(liaisonEdit.response.status, 200);
+      assert.equal(liaisonEdit.body.data.travelGroup.tasterEditCount, 2);
 
       const concurrentTaster = await Promise.all([
         requestJson(
@@ -310,16 +350,7 @@ test('contract: sales edit and taster edits atomically share their limits', asyn
       const concurrentTasterStatuses = concurrentTaster.map(
         (result) => result.response.status,
       );
-      assert.equal(
-        concurrentTasterStatuses.filter((status) => status === 409).length,
-        1,
-      );
-      assert.equal(
-        concurrentTasterStatuses.filter((status) =>
-          [200, 201].includes(status),
-        ).length,
-        1,
-      );
+      assert.deepEqual(concurrentTasterStatuses.sort(), [200, 201]);
 
       const futureEdit = await requestJson(
         baseUrl,
@@ -335,6 +366,16 @@ test('contract: sales edit and taster edits atomically share their limits', asyn
         403,
         'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
       );
+      const unrelatedEdit = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-taster-shared',
+        {
+          method: 'PATCH',
+          token: otherTaster.token,
+          body: { remarks: 'unrelated denied' },
+        },
+      );
+      assertErrorContract(unrelatedEdit, 403, 'PERMISSION_DENIED');
       const forbiddenField = await requestJson(
         baseUrl,
         '/api/travel-groups/group-taster-forbidden',
@@ -466,6 +507,298 @@ test('contract: boss and after-sales are order read-only and sales cannot use le
   );
 });
 
+test('contract: staged front-desk completion gates orders and sales confirms loss explicitly', async () => {
+  const dates = shanghaiFixtureDates();
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const frontDesk = await login(
+        baseUrl,
+        'scope-front-desk',
+        'Password123',
+      );
+      const sales = await login(baseUrl, 'scope-sales-one', 'Password123');
+      const orderBody = {
+        orderType: 'travel_group',
+        travelGroupId: 'group-incomplete',
+        orderDate: dates.today,
+        customer: { name: '分阶段补录客户' },
+        items: [
+          {
+            productName: '订单商品',
+            quantity: 1,
+            unitPriceCents: 100,
+            deliveryType: 'self_pickup',
+          },
+        ],
+      };
+
+      const blockedOrder = await requestJson(baseUrl, '/api/sales-orders', {
+        method: 'POST',
+        token: admin.token,
+        body: orderBody,
+      });
+      assertErrorContract(
+        blockedOrder,
+        409,
+        'TRAVEL_GROUP_FRONT_DESK_INFO_INCOMPLETE',
+      );
+      assert.deepEqual(
+        blockedOrder.body.error.missingFields,
+        [
+          'licensePlate',
+          'guestCount',
+          'cigaretteFeeCents',
+          'tastingRoomNo',
+          'tasterId',
+          'arrivalTime',
+          'groupType',
+        ],
+      );
+
+      const firstPartialSave = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-incomplete',
+        {
+          method: 'PATCH',
+          token: frontDesk.token,
+          body: { licensePlate: '贵A88888' },
+        },
+      );
+      assert.equal(firstPartialSave.response.status, 200);
+      assert.equal(
+        firstPartialSave.body.data.travelGroup.pendingStatus,
+        'pending_front_desk',
+      );
+      assert.equal(
+        firstPartialSave.body.data.travelGroup.pendingReasons.includes(
+          'missing_license_plate',
+        ),
+        false,
+      );
+
+      const completedFrontDesk = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-incomplete',
+        {
+          method: 'PATCH',
+          token: frontDesk.token,
+          body: {
+            guestCount: 12,
+            cigaretteFeeCents: 100,
+            tastingRoomNo: 'A08',
+            tasterId: TASTER_RECEPTION_ID,
+            arrivalTime: '09:00',
+            groupType: '其他',
+          },
+        },
+      );
+      assert.equal(completedFrontDesk.response.status, 200);
+      assert.equal(
+        completedFrontDesk.body.data.travelGroup.pendingStatus,
+        'pending_sales',
+      );
+
+      const createdOrder = await requestJson(baseUrl, '/api/sales-orders', {
+        method: 'POST',
+        token: admin.token,
+        body: orderBody,
+      });
+      assert.equal(createdOrder.response.status, 201);
+
+      const frontDeskLossDenied = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-incomplete',
+        {
+          method: 'PATCH',
+          token: frontDesk.token,
+          body: {
+            tastingItems: [
+              {
+                productName: '罐装酒',
+                quantity: 1,
+                unit: '瓶',
+              },
+            ],
+          },
+        },
+      );
+      assertErrorContract(
+        frontDeskLossDenied,
+        403,
+        'FIELD_PERMISSION_DENIED',
+      );
+
+      const salesFrontFieldDenied = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-incomplete',
+        {
+          method: 'PATCH',
+          token: sales.token,
+          body: { licensePlate: '贵A99999' },
+        },
+      );
+      assertErrorContract(
+        salesFrontFieldDenied,
+        403,
+        'FIELD_PERMISSION_DENIED',
+      );
+
+      const recordedLoss = await rawRequestJson(
+        baseUrl,
+        '/api/travel-groups/group-incomplete',
+        {
+          method: 'PATCH',
+          token: sales.token,
+          body: {
+            departureTime: '16:00',
+            tastingItems: [
+              {
+                productName: '罐装酒',
+                quantity: 2,
+                unit: '瓶',
+              },
+            ],
+          },
+        },
+      );
+      assert.equal(recordedLoss.response.status, 200);
+      assert.equal(recordedLoss.body.data.travelGroup.lossStatus, 'RECORDED');
+      assert.equal(
+        recordedLoss.body.data.travelGroup.lossConfirmedById,
+        SALES_ONE_ID,
+      );
+      assert.equal(
+        typeof recordedLoss.body.data.travelGroup.lossConfirmedAt,
+        'string',
+      );
+      assert.deepEqual(
+        recordedLoss.body.data.travelGroup.tastingItems.map((item) => ({
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          unit: item.unit,
+        })),
+        [
+          {
+            productId: null,
+            productName: '罐装酒',
+            quantity: 2,
+            unit: '瓶',
+          },
+        ],
+      );
+
+      const noLoss = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-no-loss',
+        {
+          method: 'PATCH',
+          token: sales.token,
+          body: {
+            departureTime: '16:00',
+            lossStatus: 'NO_LOSS',
+          },
+        },
+      );
+      assert.equal(noLoss.response.status, 200);
+      assert.equal(noLoss.body.data.travelGroup.lossStatus, 'NO_LOSS');
+      assert.equal(
+        noLoss.body.data.travelGroup.lossConfirmedById,
+        SALES_ONE_ID,
+      );
+
+      const emptyUnconfirmed = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-empty-unconfirmed',
+        {
+          method: 'PATCH',
+          token: sales.token,
+          body: {
+            departureTime: '16:00',
+            tastingItems: [],
+          },
+        },
+      );
+      assert.equal(emptyUnconfirmed.response.status, 200);
+      assert.equal(
+        emptyUnconfirmed.body.data.travelGroup.lossStatus,
+        'PENDING',
+      );
+      assert.equal(
+        emptyUnconfirmed.body.data.travelGroup.pendingStatus,
+        'pending_sales',
+      );
+      assert.ok(
+        emptyUnconfirmed.body.data.travelGroup.pendingReasons.includes(
+          'loss_not_confirmed',
+        ),
+      );
+
+      const pastPending = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-past-pending',
+        { token: sales.token },
+      );
+      assert.equal(pastPending.response.status, 200);
+      const completedPast = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-past-pending',
+        {
+          method: 'PATCH',
+          token: sales.token,
+          body: {
+            departureTime: '16:00',
+            lossStatus: 'NO_LOSS',
+          },
+        },
+      );
+      assert.equal(completedPast.response.status, 200);
+      const hiddenPast = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-past-pending',
+        { token: sales.token },
+      );
+      assertErrorContract(hiddenPast, 404, 'TRAVEL_GROUP_NOT_FOUND');
+    },
+    {
+      prisma: {
+        users: [
+          ...fixtureUsers(),
+          user('usr_scope_front_desk', 'scope-front-desk', 'front_desk'),
+        ],
+        travelGroups: [
+          {
+            ...group(
+              'group-incomplete',
+              dates.today,
+              TASTER_RECEPTION_ID,
+            ),
+            licensePlate: null,
+            guestCount: 0,
+            cigaretteFeeCents: null,
+            tastingRoomNo: null,
+            tasterId: null,
+            arrivalTime: null,
+            groupType: null,
+          },
+          group('group-no-loss', dates.today, TASTER_RECEPTION_ID),
+          group(
+            'group-empty-unconfirmed',
+            dates.today,
+            TASTER_RECEPTION_ID,
+          ),
+          group(
+            'group-past-pending',
+            dates.yesterday,
+            TASTER_RECEPTION_ID,
+          ),
+        ],
+      },
+    },
+  );
+});
+
 function buildScopeFixture(dates) {
   return {
     users: fixtureUsers(),
@@ -524,12 +857,15 @@ function buildLimitFixture(dates) {
   return {
     users: fixtureUsers(),
     travelGroups: [
-      group(
-        'group-taster-shared',
-        dates.today,
-        TASTER_RECEPTION_ID,
-        TASTER_LIAISON_ID,
-      ),
+      {
+        ...group(
+          'group-taster-shared',
+          dates.today,
+          TASTER_RECEPTION_ID,
+          TASTER_LIAISON_ID,
+        ),
+        tasterEditCount: 2,
+      },
       {
         ...group(
           'group-taster-last-slot',
@@ -602,6 +938,11 @@ function group(id, visitDate, tasterId, liaisonTasterId = null) {
     visitDate,
     tasterId,
     liaisonTasterId,
+    licensePlate: '贵A12345',
+    guestCount: 10,
+    tastingRoomNo: 'A01',
+    arrivalTime: '09:00',
+    groupType: '其他',
     financeMark: false,
     parkingFeeCents: 500,
     cigaretteFeeCents: 100,
