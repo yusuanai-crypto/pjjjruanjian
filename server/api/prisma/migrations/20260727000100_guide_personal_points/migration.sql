@@ -36,7 +36,7 @@ ALTER TABLE `sales_orders`
 
 CREATE TABLE `guide_points_summaries` (
   `id` CHAR(36) NOT NULL,
-  `travel_group_id` CHAR(36) NOT NULL,
+  `travel_group_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   `guide_id` CHAR(36) NOT NULL,
   `guide_name_snapshot` VARCHAR(80) NOT NULL,
   `order_count` INTEGER NOT NULL DEFAULT 0,
