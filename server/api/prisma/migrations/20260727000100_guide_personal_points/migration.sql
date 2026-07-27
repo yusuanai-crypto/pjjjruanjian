@@ -37,7 +37,10 @@ ALTER TABLE `sales_orders`
 CREATE TABLE `guide_points_summaries` (
   `id` CHAR(36) NOT NULL,
   `travel_group_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `guide_id` CHAR(36) NOT NULL,
+  `guide_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci
+NOT NULL,
   `guide_name_snapshot` VARCHAR(80) NOT NULL,
   `order_count` INTEGER NOT NULL DEFAULT 0,
   `total_sales_amount_cents` INTEGER NOT NULL DEFAULT 0,
@@ -52,15 +55,21 @@ CREATE TABLE `guide_points_summaries` (
   `paid_points_cents` INTEGER NOT NULL DEFAULT 0,
   `unpaid_points_cents` INTEGER NOT NULL DEFAULT 0,
   `daily_points_paid` BOOLEAN NOT NULL DEFAULT false,
-  `daily_points_paid_by_id` CHAR(36) NULL,
+  `daily_points_paid_by_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci,
   `daily_points_paid_at` DATETIME(0) NULL,
   `monthly_points_paid` BOOLEAN NOT NULL DEFAULT false,
-  `monthly_points_paid_by_id` CHAR(36) NULL,
+  `monthly_points_paid_by_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci,
   `monthly_points_paid_at` DATETIME(0) NULL,
   `notes` TEXT NULL,
   `calculation_version` VARCHAR(40) NOT NULL DEFAULT 'guide_points_v1',
   `source_snapshot` JSON NULL,
-  `updated_by_id` CHAR(36) NULL,
+  `updated_by_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci,
   `created_at` DATETIME(0) NOT NULL DEFAULT CURRENT_TIMESTAMP(0),
   `updated_at` DATETIME(0) NOT NULL,
 
