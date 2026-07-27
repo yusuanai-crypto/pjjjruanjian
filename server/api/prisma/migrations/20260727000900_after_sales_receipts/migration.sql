@@ -131,7 +131,7 @@ CREATE TABLE `after_sales_receipts` (
   INDEX `after_sales_receipts_reversed_by_id_idx` (`reversed_by_id`),
   INDEX `after_sales_receipts_created_by_id_idx` (`created_by_id`),
   INDEX `after_sales_receipts_updated_by_id_idx` (`updated_by_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `after_sales_receipt_lines` (
   `id` CHAR(36) NOT NULL,
@@ -162,7 +162,7 @@ CREATE TABLE `after_sales_receipt_lines` (
     (`after_sales_order_item_id`),
   INDEX `after_sales_receipt_lines_inventory_batch_id_idx`
     (`inventory_batch_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `after_sales_receipt_serialized_units` (
   `id` CHAR(36) NOT NULL,
@@ -219,7 +219,7 @@ CREATE TABLE `after_sales_receipt_serialized_units` (
     (`normalized_scanned_logistics_code`),
   INDEX `after_sales_receipt_serialized_previous_warehouse_id_idx`
     (`previous_warehouse_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `after_sales_receipts`
   ADD CONSTRAINT `after_sales_receipts_after_sales_order_id_fkey`
@@ -258,10 +258,10 @@ ALTER TABLE `after_sales_receipt_serialized_units`
     ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT `after_sales_receipt_serialized_units_original_unit_id_fkey`
     FOREIGN KEY (`original_serialized_unit_id`) REFERENCES `serialized_inventory_units`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `after_sales_receipt_serialized_units_previous_warehouse_id_fkey`
     FOREIGN KEY (`previous_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `after_sales_receipt_serialized_units_movement_id_fkey`
     FOREIGN KEY (`inventory_movement_id`) REFERENCES `inventory_movements`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+    ON DELETE RESTRICT ON UPDATE RESTRICT;

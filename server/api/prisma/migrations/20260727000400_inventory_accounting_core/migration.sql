@@ -57,7 +57,7 @@ CREATE TABLE `inventory_post_commit_tasks` (
   INDEX `inventory_post_commit_tasks_receipt_status_idx`
     (`command_receipt_id`, `status`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `inventory_post_commit_tasks`
   ADD CONSTRAINT `inventory_post_commit_tasks_command_receipt_id_fkey`

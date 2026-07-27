@@ -255,7 +255,7 @@ CREATE TABLE `stocktakes` (
   INDEX `stocktakes_reversed_by_id_idx` (`reversed_by_id`),
   INDEX `stocktakes_created_by_id_idx` (`created_by_id`),
   INDEX `stocktakes_updated_by_id_idx` (`updated_by_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `stocktake_lines` (
   `id` CHAR(36) NOT NULL,
@@ -299,7 +299,7 @@ CREATE TABLE `stocktake_lines` (
     ),
   INDEX `stocktake_lines_snapshot_last_movement_id_idx`
     (`snapshot_last_movement_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `stocktake_serialized_scans` (
   `id` CHAR(36) NOT NULL,
@@ -361,42 +361,42 @@ CREATE TABLE `stocktake_serialized_scans` (
   INDEX `stocktake_serialized_scans_match_status_idx` (`match_status`),
   INDEX `stocktake_serialized_scans_expected_warehouse_id_idx`
     (`expected_warehouse_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `stocktakes`
   ADD CONSTRAINT `stocktakes_warehouse_id_fkey`
     FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_product_id_fkey`
     FOREIGN KEY (`product_id`) REFERENCES `products`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_quantity_document_id_fkey`
     FOREIGN KEY (`quantity_document_id`) REFERENCES `inventory_documents`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_unavailable_document_id_fkey`
     FOREIGN KEY (`unavailable_document_id`) REFERENCES `inventory_documents`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_submitted_by_id_fkey`
     FOREIGN KEY (`submitted_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_approved_by_id_fkey`
     FOREIGN KEY (`approved_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_rejected_by_id_fkey`
     FOREIGN KEY (`rejected_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_posted_by_id_fkey`
     FOREIGN KEY (`posted_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_reversed_by_id_fkey`
     FOREIGN KEY (`reversed_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_created_by_id_fkey`
     FOREIGN KEY (`created_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktakes_updated_by_id_fkey`
     FOREIGN KEY (`updated_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE;
+    ON DELETE SET NULL ON UPDATE RESTRICT;
 
 ALTER TABLE `stocktake_lines`
   ADD CONSTRAINT `stocktake_lines_stocktake_id_fkey`
@@ -412,10 +412,10 @@ ALTER TABLE `stocktake_serialized_scans`
     ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT `stocktake_serialized_scans_unit_id_fkey`
     FOREIGN KEY (`serialized_unit_id`) REFERENCES `serialized_inventory_units`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktake_serialized_scans_expected_warehouse_id_fkey`
     FOREIGN KEY (`expected_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `stocktake_serialized_scans_action_movement_id_fkey`
     FOREIGN KEY (`action_movement_id`) REFERENCES `inventory_movements`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+    ON DELETE RESTRICT ON UPDATE RESTRICT;

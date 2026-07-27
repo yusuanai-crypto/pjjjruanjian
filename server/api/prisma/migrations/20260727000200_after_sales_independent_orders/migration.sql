@@ -196,7 +196,7 @@ SET aso.`deduction_calculation_mode` = CASE
             COALESCE(cr.`calculation_note`, ''),
             COALESCE(CAST(cr.`rule_snapshot` AS CHAR), ''),
             COALESCE(CAST(cr.`source_snapshot` AS CHAR), '')
-          ) LIKE '%effective_sales_rate%'
+          ) LIKE _utf8mb4'%effective_sales_rate%' COLLATE utf8mb4_bin
       ) THEN 'effective_sales_rate'
       ELSE 'manual_product_reference'
     END,
@@ -223,7 +223,7 @@ SET aso.`deduction_calculation_mode` = CASE
             COALESCE(cr.`calculation_note`, ''),
             COALESCE(CAST(cr.`rule_snapshot` AS CHAR), ''),
             COALESCE(CAST(cr.`source_snapshot` AS CHAR), '')
-          ) LIKE '%effective_sales_rate%'
+          ) LIKE _utf8mb4'%effective_sales_rate%' COLLATE utf8mb4_bin
       ) AND source_order.`total_amount_cents` > 0
         THEN LEAST(
           aso.`refund_amount_cents`,

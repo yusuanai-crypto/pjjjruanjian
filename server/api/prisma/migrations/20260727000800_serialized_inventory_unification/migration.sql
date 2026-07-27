@@ -45,7 +45,7 @@ CREATE TABLE `serialized_inventory_assignments` (
   INDEX `serialized_inventory_assignments_reserved_by_id_idx` (`reserved_by_id`),
   INDEX `serialized_inventory_assignments_outbound_by_id_idx` (`outbound_by_id`),
   INDEX `serialized_inventory_assignments_released_by_id_idx` (`released_by_id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `serialized_inventory_assignments`
   ADD CONSTRAINT `serialized_inventory_assignments_reservation_id_fkey`
@@ -53,16 +53,16 @@ ALTER TABLE `serialized_inventory_assignments`
     ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT `serialized_inventory_assignments_serialized_unit_id_fkey`
     FOREIGN KEY (`serialized_unit_id`) REFERENCES `serialized_inventory_units`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `serialized_inventory_assignments_reserved_by_id_fkey`
     FOREIGN KEY (`reserved_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `serialized_inventory_assignments_outbound_by_id_fkey`
     FOREIGN KEY (`outbound_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `serialized_inventory_assignments_released_by_id_fkey`
     FOREIGN KEY (`released_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE;
+    ON DELETE SET NULL ON UPDATE RESTRICT;
 
 ALTER TABLE `inventory_transfer_receipt_lines`
   ADD COLUMN `serialized_unit_ids` JSON NULL AFTER `difference_qty`;

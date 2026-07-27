@@ -41,4 +41,4 @@ CREATE TABLE `todo_reconcile_cursors` (
   CONSTRAINT `todo_reconcile_cursors_scan_type_key`
     UNIQUE (`scan_type`),
   INDEX `todo_reconcile_cursors_updated_at_idx` (`updated_at`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;

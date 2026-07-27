@@ -43,7 +43,7 @@ CREATE TABLE `inventory_alerts` (
   INDEX `inventory_alerts_type_status_detected_idx`
     (`type`, `status`, `last_detected_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `inventory_alerts`
   ADD CONSTRAINT `inventory_alerts_warehouse_id_fkey`

@@ -82,7 +82,7 @@ CREATE TABLE `warehouses` (
   INDEX `warehouses_created_by_id_idx` (`created_by_id`),
   INDEX `warehouses_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_configurations` (
   `id` CHAR(36) NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE `inventory_configurations` (
   INDEX `inventory_configurations_created_by_id_idx` (`created_by_id`),
   INDEX `inventory_configurations_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `warehouse_product_stocks` (
   `id` CHAR(36) NOT NULL,
@@ -136,7 +136,7 @@ CREATE TABLE `warehouse_product_stocks` (
   INDEX `warehouse_product_stocks_warehouse_updated_idx`
     (`warehouse_id`, `updated_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_documents` (
   `id` CHAR(36) NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE `inventory_documents` (
   INDEX `inventory_documents_created_by_id_idx` (`created_by_id`),
   INDEX `inventory_documents_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_document_lines` (
   `id` CHAR(36) NOT NULL,
@@ -234,7 +234,7 @@ CREATE TABLE `inventory_document_lines` (
   INDEX `inventory_document_lines_product_id_idx` (`product_id`),
   INDEX `inventory_document_lines_batch_id_idx` (`batch_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_batches` (
   `id` CHAR(36) NOT NULL,
@@ -290,7 +290,7 @@ CREATE TABLE `inventory_batches` (
   INDEX `inventory_batches_created_by_id_idx` (`created_by_id`),
   INDEX `inventory_batches_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_movements` (
   `id` CHAR(36) NOT NULL,
@@ -359,7 +359,7 @@ CREATE TABLE `inventory_movements` (
     (`serialized_unit_id`, `business_at`),
   INDEX `inventory_movements_operator_user_id_idx` (`operator_user_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_command_receipts` (
   `id` CHAR(36) NOT NULL,
@@ -396,7 +396,7 @@ CREATE TABLE `inventory_command_receipts` (
   INDEX `inventory_command_receipts_actor_user_id_idx` (`actor_user_id`),
   INDEX `inventory_command_receipts_request_id_idx` (`request_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_reservations` (
   `id` CHAR(36) NOT NULL,
@@ -447,7 +447,7 @@ CREATE TABLE `inventory_reservations` (
     (`sales_order_item_id`),
   INDEX `inventory_reservations_product_id_idx` (`product_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_transfers` (
   `id` CHAR(36) NOT NULL,
@@ -490,7 +490,7 @@ CREATE TABLE `inventory_transfers` (
   INDEX `inventory_transfers_created_by_id_idx` (`created_by_id`),
   INDEX `inventory_transfers_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_transfer_lines` (
   `id` CHAR(36) NOT NULL,
@@ -516,7 +516,7 @@ CREATE TABLE `inventory_transfer_lines` (
     (`transfer_id`, `line_no`),
   INDEX `inventory_transfer_lines_product_id_idx` (`product_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_transfer_receipts` (
   `id` CHAR(36) NOT NULL,
@@ -558,7 +558,7 @@ CREATE TABLE `inventory_transfer_receipts` (
   INDEX `inventory_transfer_receipts_confirmed_by_id_idx`
     (`confirmed_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `inventory_transfer_receipt_lines` (
   `id` CHAR(36) NOT NULL,
@@ -585,7 +585,7 @@ CREATE TABLE `inventory_transfer_receipt_lines` (
   INDEX `inventory_transfer_receipt_lines_transfer_line_id_idx`
     (`transfer_line_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `stock_alert_configs` (
   `id` CHAR(36) NOT NULL,
@@ -607,7 +607,7 @@ CREATE TABLE `stock_alert_configs` (
   INDEX `stock_alert_configs_created_by_id_idx` (`created_by_id`),
   INDEX `stock_alert_configs_updated_by_id_idx` (`updated_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `product_inventory_mode_changes` (
   `id` CHAR(36) NOT NULL,
@@ -650,7 +650,7 @@ CREATE TABLE `product_inventory_mode_changes` (
   INDEX `product_inventory_mode_changes_applied_by_id_idx`
     (`applied_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE UNIQUE INDEX `sales_order_items_inventory_line_key`
   ON `sales_order_items` (`inventory_line_key`);
@@ -766,13 +766,13 @@ ALTER TABLE `inventory_movements`
     ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT `inventory_movements_serialized_unit_id_fkey`
     FOREIGN KEY (`serialized_unit_id`) REFERENCES `serialized_inventory_units`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_movements_operator_user_id_fkey`
     FOREIGN KEY (`operator_user_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_movements_reversal_of_movement_id_fkey`
     FOREIGN KEY (`reversal_of_movement_id`) REFERENCES `inventory_movements`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+    ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 ALTER TABLE `warehouse_product_stocks`
   ADD CONSTRAINT `warehouse_product_stocks_warehouse_id_fkey`
@@ -810,22 +810,22 @@ ALTER TABLE `inventory_reservations`
 ALTER TABLE `inventory_transfers`
   ADD CONSTRAINT `inventory_transfers_from_warehouse_id_fkey`
     FOREIGN KEY (`from_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_transfers_to_warehouse_id_fkey`
     FOREIGN KEY (`to_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_transfers_outbound_document_id_fkey`
     FOREIGN KEY (`outbound_document_id`) REFERENCES `inventory_documents`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_transfers_outbound_by_id_fkey`
     FOREIGN KEY (`outbound_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_transfers_created_by_id_fkey`
     FOREIGN KEY (`created_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
+    ON DELETE SET NULL ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_transfers_updated_by_id_fkey`
     FOREIGN KEY (`updated_by_id`) REFERENCES `users`(`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE;
+    ON DELETE SET NULL ON UPDATE RESTRICT;
 
 ALTER TABLE `inventory_transfer_lines`
   ADD CONSTRAINT `inventory_transfer_lines_transfer_id_fkey`
