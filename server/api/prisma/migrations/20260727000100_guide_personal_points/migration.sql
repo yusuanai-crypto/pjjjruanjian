@@ -1,13 +1,22 @@
 ALTER TABLE `sales_orders`
   ADD COLUMN `points_destination` ENUM('travel_agency', 'guide_personal')
     NOT NULL DEFAULT 'travel_agency',
-  ADD COLUMN `personal_points_guide_id` CHAR(36) NULL,
+  ADD COLUMN `personal_points_guide_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci
+NULL,
   ADD COLUMN `personal_guide_name_snapshot` VARCHAR(80) NULL,
   ADD COLUMN `personal_daily_rebate_rate` DECIMAL(5, 4) NULL,
   ADD COLUMN `personal_monthly_rebate_rate` DECIMAL(5, 4) NULL,
-  ADD COLUMN `points_destination_changed_by_id` CHAR(36) NULL,
+  ADD COLUMN `points_destination_changed_by_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci
+NULL,
   ADD COLUMN `points_destination_changed_at` DATETIME(0) NULL,
-  ADD COLUMN `personal_rates_updated_by_id` CHAR(36) NULL,
+  ADD COLUMN `personal_rates_updated_by_id` CHAR(36)
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci
+NULL,
   ADD COLUMN `personal_rates_updated_at` DATETIME(0) NULL;
 
 CREATE INDEX `sales_orders_points_destination_idx`
@@ -87,7 +96,7 @@ COLLATE utf8mb4_0900_ai_ci,
   INDEX `guide_points_summaries_updated_by_id_idx` (`updated_by_id`),
   INDEX `guide_points_summaries_updated_at_idx` (`updated_at`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `guide_points_summaries`
   ADD CONSTRAINT `guide_points_summaries_travel_group_id_fkey`
