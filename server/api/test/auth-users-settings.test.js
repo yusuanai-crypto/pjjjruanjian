@@ -24,6 +24,39 @@ const {
   withPhase1Server,
 } = require('./helpers/phase1-api');
 
+const INVENTORY_READ_PERMISSIONS = [
+  'inventory:configuration:read',
+  'inventory:warehouses:read',
+  'inventory:stocks:read',
+  'inventory:movements:read',
+  'inventory:inbounds:read',
+  'inventory:transfers:read',
+  'inventory:alert_configs:read',
+];
+const INVENTORY_COST_READ_PERMISSIONS = [
+  'inventory:purchase_costs:read',
+];
+const INVENTORY_MANAGE_PERMISSIONS = [
+  'inventory:configuration:manage',
+  'inventory:warehouses:manage',
+  'inventory:alert_configs:manage',
+  'inventory:rebuild_check',
+];
+const INVENTORY_INBOUND_WRITE_PERMISSIONS = [
+  'inventory:inbounds:create',
+  'inventory:inbounds:reverse',
+];
+const INVENTORY_COST_WRITE_PERMISSIONS = [
+  'inventory:batch_costs:write',
+];
+const INVENTORY_QUANTITY_WRITE_PERMISSIONS = [
+  'inventory:transfers:create',
+  'inventory:transfers:confirm_outbound',
+  'inventory:transfers:receive',
+  'inventory:transfers:reverse',
+  'inventory:unavailable:write',
+];
+
 const EXPECTED_ROLE_PERMISSIONS = {
   super_admin: [
     'auth:me',
@@ -45,6 +78,12 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'settings:global_mark:enable',
     'settings:global_mark:restore',
     'operation_logs:list',
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_MANAGE_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     'travel_groups:list',
     'travel_groups:read',
     'travel_groups:create',
@@ -69,6 +108,12 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:read',
     'sales_orders:create',
     'sales_orders:finance_mark',
+    'guide_points_summaries:list',
+    'guide_points_summaries:read',
+    'guide_points_summaries:update',
+    'guide_points_orders:update_rates',
+    'guide_points_summaries:update_payment_status',
+    'sales_orders:update_points_destination',
     'finance:overview',
     'reconciliations:read',
     'reconciliations:review',
@@ -95,6 +140,12 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'settings:global_mark:enable',
     'settings:global_mark:restore',
     'operation_logs:list',
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_MANAGE_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     'travel_groups:list',
     'travel_groups:read',
     'travel_groups:create',
@@ -119,6 +170,12 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:read',
     'sales_orders:create',
     'sales_orders:finance_mark',
+    'guide_points_summaries:list',
+    'guide_points_summaries:read',
+    'guide_points_summaries:update',
+    'guide_points_orders:update_rates',
+    'guide_points_summaries:update_payment_status',
+    'sales_orders:update_points_destination',
     'finance:overview',
     'reconciliations:read',
     'reconciliations:review',
@@ -152,6 +209,11 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'customers:read',
     'sales_orders:list',
     'sales_orders:read',
+    'guide_points_summaries:list',
+    'guide_points_summaries:read',
+    'sales_orders:update_points_destination',
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
   ],
   front_desk: [
     'auth:me',
@@ -232,11 +294,20 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:read',
     'sales_orders:create',
     'sales_orders:finance_mark',
+    'guide_points_summaries:list',
+    'guide_points_summaries:read',
+    'guide_points_summaries:update',
+    'guide_points_orders:update_rates',
+    'guide_points_summaries:update_payment_status',
+    'sales_orders:update_points_destination',
     'finance:overview',
     'reconciliations:read',
     'reconciliations:upsert',
     'strike_bonus_awards:list',
     'strike_bonus_awards:create',
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
   ],
   warehouse: [
     'auth:me',
@@ -252,6 +323,9 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'travel_groups:read',
     'sales_orders:list',
     'sales_orders:read',
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
   ],
   after_sales: [
     'auth:me',

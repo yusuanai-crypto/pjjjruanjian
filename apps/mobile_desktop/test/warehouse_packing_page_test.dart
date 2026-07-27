@@ -103,6 +103,16 @@ void main() {
       find.widgetWithText(OutlinedButton, '标记异常'),
       findsNothing,
     );
+    final packingMarkField = find.byKey(
+      const ValueKey('warehouse-has-packing-mark-field'),
+    );
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isFalse);
+    expect(find.text('否'), findsOneWidget);
+    await tester.ensureVisible(packingMarkField);
+    await tester.tap(packingMarkField);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isTrue);
+    expect(find.text('是'), findsOneWidget);
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('warehouse-package-count-field')),
@@ -133,9 +143,59 @@ void main() {
     expect(apiClient.lastPackingBody?['packingStatus'], 'packed');
     expect(apiClient.lastPackingBody?['packageCount'], 3);
     expect(apiClient.lastPackingBody?['warehouseRemark'], '外箱加固');
+    expect(apiClient.lastPackingBody?['hasPackingMark'], isTrue);
     expect(
         find.byKey(const ValueKey('warehouse-packing-editor')), findsNothing);
     expect(apiClient.warehouseOrderListPaths.length, greaterThan(1));
+  });
+
+  testWidgets('saves packing and refreshes when tracking number is empty',
+      (tester) async {
+    final apiClient = _FakeApiClient(logisticsNo: null);
+    await _pumpWarehousePacking(tester, apiClient);
+
+    expect(find.text('物流单号待补'), findsWidgets);
+    await _openPackingEditor(tester);
+
+    final saveButton = find.widgetWithText(FilledButton, '保存打包');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastPackingBody?['packingStatus'], 'packed');
+    expect(apiClient.lastPackingBody?.containsKey('logisticsNo'), isFalse);
+    expect(
+      find.byKey(const ValueKey('warehouse-packing-editor')),
+      findsNothing,
+    );
+    expect(apiClient.warehouseOrderListPaths.length, greaterThan(1));
+  });
+
+  testWidgets('reopens a marked order and can save it as unmarked',
+      (tester) async {
+    final apiClient = _FakeApiClient(hasPackingMark: true);
+    await _pumpWarehousePacking(tester, apiClient);
+    await _openPackingEditor(tester);
+
+    final packingMarkField = find.byKey(
+      const ValueKey('warehouse-has-packing-mark-field'),
+    );
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isTrue);
+    expect(find.text('是'), findsOneWidget);
+
+    await tester.ensureVisible(packingMarkField);
+    await tester.tap(packingMarkField);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isFalse);
+    expect(find.text('否'), findsOneWidget);
+
+    final saveButton = find.widgetWithText(FilledButton, '保存打包');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastPackingBody?['hasPackingMark'], isFalse);
+    expect(apiClient.hasPackingMark, isFalse);
   });
 
   testWidgets('highlights abnormal orders in the queue', (tester) async {
@@ -158,6 +218,14 @@ void main() {
     await _pumpWarehousePacking(tester, apiClient);
     await _openPackingEditor(tester);
 
+    final packingMarkField = find.byKey(
+      const ValueKey('warehouse-has-packing-mark-field'),
+    );
+    await tester.ensureVisible(packingMarkField);
+    await tester.tap(packingMarkField);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isTrue);
+
     final saveButton = find.widgetWithText(FilledButton, '保存打包');
     await tester.ensureVisible(saveButton);
     await tester.pumpAndSettle();
@@ -167,6 +235,7 @@ void main() {
     expect(find.text('打包状态非法'), findsOneWidget);
     expect(
         find.byKey(const ValueKey('warehouse-packing-editor')), findsOneWidget);
+    expect(tester.widget<SwitchListTile>(packingMarkField).value, isTrue);
   });
 
   testWidgets('boss can inspect warehouse orders without packing buttons',
@@ -207,6 +276,19 @@ void main() {
       ),
     );
     expect(logisticsDropdown.onChanged, isNull);
+    final packingMarkField = find.byKey(
+      const ValueKey('warehouse-has-packing-mark-field'),
+    );
+    final packingMarkTile = tester.widget<SwitchListTile>(packingMarkField);
+    expect(packingMarkTile.value, isFalse);
+    expect(packingMarkTile.onChanged, isNull);
+    await tester.ensureVisible(packingMarkField);
+    await tester.tap(packingMarkField);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<SwitchListTile>(packingMarkField).value,
+      isFalse,
+    );
 
     expect(apiClient.packingPatchPaths, isEmpty);
   });
@@ -241,8 +323,11 @@ Future<void> _pumpWarehousePacking(
 }
 
 class _FakeApiClient extends ApiClient {
-  _FakeApiClient({this.failPackingPatch = false})
-      : super(baseUrl: 'http://127.0.0.1:3000');
+  _FakeApiClient({
+    this.failPackingPatch = false,
+    this.hasPackingMark = false,
+    this.logisticsNo = 'SF123456789',
+  }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool failPackingPatch;
   final List<String> warehouseOrderListPaths = <String>[];
@@ -253,6 +338,8 @@ class _FakeApiClient extends ApiClient {
   int packageCount = 1;
   String warehouseRemark = '注意防震';
   String logisticsMethod = '顺丰';
+  bool hasPackingMark;
+  final String? logisticsNo;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -274,6 +361,8 @@ class _FakeApiClient extends ApiClient {
                     packageCount: packageCount,
                     warehouseRemark: warehouseRemark,
                     logisticsMethod: logisticsMethod,
+                    hasPackingMark: hasPackingMark,
+                    logisticsNo: logisticsNo,
                   ),
                 ]
               : const [],
@@ -306,6 +395,9 @@ class _FakeApiClient extends ApiClient {
           : packageCount;
       warehouseRemark = '${body?['warehouseRemark'] ?? warehouseRemark}';
       logisticsMethod = '${body?['logisticsMethod'] ?? logisticsMethod}';
+      if (body?['hasPackingMark'] is bool) {
+        hasPackingMark = body!['hasPackingMark'] as bool;
+      }
       return {
         'data': {
           'warehouseOrder': _orderJson(
@@ -313,6 +405,8 @@ class _FakeApiClient extends ApiClient {
             packageCount: packageCount,
             warehouseRemark: warehouseRemark,
             logisticsMethod: logisticsMethod,
+            hasPackingMark: hasPackingMark,
+            logisticsNo: logisticsNo,
           ),
         },
       };
@@ -327,6 +421,8 @@ Map<String, dynamic> _orderJson({
   required int packageCount,
   required String warehouseRemark,
   required String logisticsMethod,
+  required bool hasPackingMark,
+  required String? logisticsNo,
 }) {
   return {
     'id': 'order-1',
@@ -352,7 +448,8 @@ Map<String, dynamic> _orderJson({
     'logisticsMethod': logisticsMethod,
     'packageCount': packageCount,
     'warehouseRemark': warehouseRemark,
-    'logisticsNo': 'SF123456789',
+    'hasPackingMark': hasPackingMark,
+    'logisticsNo': logisticsNo,
     'logisticsFeeCents': 1800,
     'invoiceRequired': true,
     'invoiceIssued': false,

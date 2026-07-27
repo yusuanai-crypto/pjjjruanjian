@@ -62,9 +62,54 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
   assert.equal(result.estimatedProfitCents, 3700);
   assert.equal(result.estimatedProfitRate, 0.37);
   assert.equal(
+    result.employeeCommissionCents,
+    result.salesCommissionCents +
+      result.outreachCommissionCents +
+      result.leaderCommissionCents,
+  );
+  assert.equal(
+    result.totalExpenseCents,
+    result.actualProductCostCents +
+      result.logisticsFeeCents +
+      result.parkingFeeCents +
+      result.cigaretteFeeCents +
+      result.employeeCommissionCents +
+      result.tasterCommissionCents +
+      result.dailyAgencyRebateCents +
+      result.monthlyAgencyRebateCents,
+  );
+  assert.equal(
     result.estimatedProfitCents,
     10000 - 3000 - 500 - 500 - 200 - 100 - 200 - 300 - 400 - 500 - 600,
   );
+});
+
+test('unit: a stale zeroed employee commission snapshot no longer enters profit expenses', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-stale'),
+    salesOrders: [
+      order('order-stale', {
+        totalAmountCents: 10000,
+        items: [item('line-stale', 10000, 3000)],
+      }),
+    ],
+    commissionRecords: [
+      {
+        ...commission('order-stale', 'OUTREACH_COMMISSION', 0),
+        commissionRuleId: null,
+        calculationNote: 'stale auto record zeroed',
+      },
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.outreachCommissionCents, 0);
+  assert.equal(result.employeeCommissionCents, 0);
+  assert.equal(result.totalExpenseCents, 3700);
+  assert.equal(result.estimatedProfitCents, 6300);
 });
 
 test('unit: missing cost snapshots make profit incomplete instead of treating cost as zero', () => {

@@ -489,14 +489,15 @@ function buildSalesPerformanceMarkPrisma() {
       order('order-marked', {
         orderDate: '2026-07-01',
         salesUserId: 'sales-mark',
-        customerId: 'customer-marked',
+        customerId: 'customer-unmarked',
         totalAmountCents: 10000,
       }),
       order('order-unmarked', {
         orderDate: '2026-07-01',
         salesUserId: 'sales-mark',
-        customerId: 'customer-unmarked',
+        customerId: 'customer-marked',
         totalAmountCents: 20000,
+        financeMark: false,
       }),
     ],
     afterSalesOrders: [
@@ -558,6 +559,7 @@ function order(id, overrides = {}) {
     totalAmountCents: overrides.totalAmountCents || 0,
     status: overrides.status || 'VALID',
     travelGroupId: null,
+    financeMark: overrides.financeMark ?? true,
   };
 }
 

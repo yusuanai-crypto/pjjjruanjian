@@ -10,6 +10,7 @@ import '../features/dashboard/dashboard_page.dart';
 import '../features/employee_accounts/employee_accounts_page.dart';
 import '../features/finance/finance_query_page.dart';
 import '../features/guide_management/guide_management_page.dart';
+import '../features/guide_points/guide_points_table_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
 import '../features/operation_logs/operation_logs_page.dart';
@@ -31,6 +32,7 @@ import '../features/travel_group_order_notes/travel_group_order_notes_page.dart'
 import '../features/travel_group_query/travel_group_query_page.dart';
 import '../features/travel_groups/travel_group_form_page.dart';
 import '../features/warehouse/warehouse_packing_page.dart';
+import '../features/warehouse_management/warehouse_management_page.dart';
 import 'destinations.dart';
 
 Widget buildPageForDestination({
@@ -100,6 +102,12 @@ Widget buildPageForDestination({
         apiClient: apiClient,
         token: token,
       );
+    case 'guide_points_table':
+      return GuidePointsTablePage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'travel_group_order_notes':
       return TravelGroupOrderNotesPage(
         apiClient: apiClient,
@@ -159,6 +167,13 @@ Widget buildPageForDestination({
         apiClient: apiClient,
         token: token,
         role: role,
+      );
+    case 'warehouse_management':
+      return WarehouseManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        onOpenDestination: onOpenDestination,
       );
     case 'after_sales_form':
       return AfterSalesFormPage(

@@ -119,7 +119,7 @@ void main() {
 
     expect(
       apiClient.getPaths.single,
-      startsWith('/api/travel-group-finance-summaries'),
+      startsWith('/api/travel-group-finance-summaries/finance-rows'),
     );
     expect(find.text('TG-HIDDEN-001'), findsNothing);
     expect(find.text('团号'), findsNothing);
@@ -127,16 +127,22 @@ void main() {
     expect(find.byKey(const ValueKey('group-1:select')), findsOneWidget);
     expect(find.byType(Checkbox), findsNWidgets(2));
     expect(find.text('月返积分'), findsOneWidget);
+    expect(find.text('积分/日返积分'), findsOneWidget);
+    expect(find.text('货到付款'), findsOneWidget);
+    expect(find.text('已付定金'), findsOneWidget);
     expect(find.text('已确认退款'), findsOneWidget);
     expect(find.text('有效销售额'), findsOneWidget);
+    expect(find.text('扣酒成本'), findsWidgets);
     expect(find.text('售后影响'), findsOneWidget);
     expect(find.text('已返月返积分'), findsOneWidget);
     expect(find.text('未返月返积分'), findsOneWidget);
     expect(find.byKey(const ValueKey('group-1:guideImage')), findsOneWidget);
+    expect(find.text('旅行社积分导游联络图'), findsWidgets);
     expect(
       find.byKey(const ValueKey('group-1:travelAgencyImage')),
       findsOneWidget,
     );
+    expect(find.text('旅行社图片'), findsWidgets);
     expect(
       find.byKey(const ValueKey('group-1:agencyDeductionInput')),
       findsOneWidget,
@@ -227,6 +233,44 @@ void main() {
     expect(apiClient.postPaths.single, '/api/commission-records/recalculate');
   });
 
+  testWidgets(
+      'all-personal group keeps an existing ordinary summary row with zero order amounts',
+      (tester) async {
+    final summary = _summaryJson();
+    for (final field in [
+      'totalSalesAmountCents',
+      'totalCashOnDeliveryCents',
+      'totalPaidDepositCents',
+      'confirmedRefundAmountCents',
+      'effectiveSalesAmountCents',
+      'totalAgencyDeductionCents',
+      'totalAgencyNetAmountCents',
+      'totalDailyRebateCents',
+      'totalMonthlyRebateCents',
+      'paidRebateCents',
+      'unpaidRebateCents',
+      'paidDailyRebateCents',
+      'unpaidDailyRebateCents',
+      'paidMonthlyRebateCents',
+      'unpaidMonthlyRebateCents',
+    ]) {
+      summary[field] = 0;
+    }
+    summary['sourceSnapshot'] = {
+      'orders': const [],
+      'pointsDestinationFilter': 'TRAVEL_AGENCY',
+    };
+    final apiClient = _FakeFinanceApiClient(summaries: [summary]);
+    await _pumpPage(tester, apiClient: apiClient);
+
+    expect(
+      find.byKey(const ValueKey('group-1:rowTapTarget')),
+      findsOneWidget,
+    );
+    expect(find.text('未生成汇总'), findsNothing);
+    expect(find.text('¥0.00'), findsAtLeastNWidgets(10));
+  });
+
   testWidgets('clicking a data row toggles its manual checkbox',
       (tester) async {
     await _pumpPage(tester, apiClient: _FakeFinanceApiClient());
@@ -252,6 +296,145 @@ void main() {
           .value,
       isFalse,
     );
+  });
+
+  testWidgets('selected Excel export button follows visible selection',
+      (tester) async {
+    await _pumpPage(tester, apiClient: _FakeFinanceApiClient());
+
+    final button = find.byKey(
+      const ValueKey('finance-export-selected-excel-button'),
+    );
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+  });
+
+  testWidgets(
+      'selected Excel export writes visible selected rows without overwriting',
+      (tester) async {
+    final documentsDirectory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp(
+        'jiangjiu-points-table-excel-test-',
+      ),
+    ))!;
+    addTearDown(() {
+      if (documentsDirectory.existsSync()) {
+        documentsDirectory.deleteSync(recursive: true);
+      }
+    });
+    final apiClient = _FakeFinanceApiClient(
+      summaries: [
+        _summaryJson(index: 1, agencyName: '甲旅行社'),
+        _summaryJson(index: 2, agencyName: '乙旅行社'),
+      ],
+      excelDownloadFileName: 'points:table-selected.xlsx',
+    );
+    await _pumpPage(
+      tester,
+      apiClient: apiClient,
+      documentsDirectoryProvider: () async => documentsDirectory,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('finance-select-all')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('finance-filter-agency')),
+      '甲',
+    );
+    await tester.pump();
+
+    final exportButton = find.byKey(
+      const ValueKey('finance-export-selected-excel-button'),
+    );
+    await tester.tap(exportButton);
+    await _pumpUntil(
+      tester,
+      () =>
+          apiClient.postBytesPaths.length == 1 &&
+          find.textContaining('已导出 1 行积分信息：').evaluate().isNotEmpty,
+    );
+
+    expect(apiClient.postBytesPaths.single,
+        '/api/travel-group-finance-summaries/finance-rows/export');
+    expect(apiClient.postBytesBodies.single, {
+      'financeRowIds': ['group-1'],
+    });
+    expect(
+      apiClient.postBytesDefaultFileNames.single,
+      'finance-rows-selected.xlsx',
+    );
+    final exportDirectory = Directory(
+      '${documentsDirectory.path}${Platform.pathSeparator}exports',
+    );
+    var files = exportDirectory.listSync().whereType<File>().toList();
+    expect(files, hasLength(1));
+    expect(files.single.path, endsWith('points_table-selected.xlsx'));
+    expect(files.single.readAsBytesSync(), [1, 2, 3, 4]);
+    expect(find.textContaining(files.single.absolute.path), findsOneWidget);
+
+    await tester.tap(exportButton);
+    await _pumpUntil(
+      tester,
+      () =>
+          apiClient.postBytesPaths.length == 2 &&
+          find.textContaining(' (1).xlsx').evaluate().isNotEmpty,
+    );
+    files = exportDirectory.listSync().whereType<File>().toList();
+    expect(files, hasLength(2));
+    expect(
+      files.map((file) => file.path),
+      contains(endsWith('points_table-selected (1).xlsx')),
+    );
+
+    await tester.enterText(
+      find.byKey(const ValueKey('finance-filter-agency')),
+      '',
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-1:select')))
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<Checkbox>(find.byKey(const ValueKey('group-2:select')))
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('group-1:guideInfoSent')),
+          )
+          .onChanged,
+      isNull,
+    );
+  });
+
+  testWidgets('selected Excel export failure restores the button',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(failExcelExport: true);
+    await _pumpPage(tester, apiClient: apiClient);
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+
+    final button = find.byKey(
+      const ValueKey('finance-export-selected-excel-button'),
+    );
+    await tester.tap(button);
+    await _pumpUntil(
+      tester,
+      () => find.textContaining('Excel 导出暂时失败').evaluate().isNotEmpty,
+    );
+
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+    expect(find.text('导出所选 Excel'), findsOneWidget);
+    expect(find.text('Excel 导出中'), findsNothing);
   });
 
   testWidgets('select-all and filtered select-all affect visible rows only',
@@ -357,7 +540,7 @@ void main() {
     );
 
     expect(saver.saved.single.album, financeImageAlbumName);
-    expect(saver.saved.single.name, contains('导游积分表'));
+    expect(saver.saved.single.name, contains('旅行社积分导游联络表'));
     expect(find.textContaining('系统相册：贵州酱酒馆积分表'), findsWidgets);
     expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNotNull);
     expect(
@@ -444,6 +627,126 @@ void main() {
           .onChanged,
       isNull,
     );
+  });
+
+  testWidgets('single agency image only shows the requested export fields',
+      (tester) async {
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(),
+    );
+
+    tester
+        .widget<OutlinedButton>(
+          find.descendant(
+            of: find.byKey(const ValueKey('group-1:travelAgencyImage')),
+            matching: find.byType(OutlinedButton),
+          ),
+        )
+        .onPressed!();
+    await tester.pump();
+
+    final image = find.byKey(
+      const ValueKey('finance-export-single-image-travelAgency'),
+    );
+    expect(image, findsOneWidget);
+    for (final label in [
+      '日期',
+      '旅行社',
+      '导游',
+      '车牌',
+      '人数',
+      '品鉴师',
+      '销售额',
+      '上单金额',
+    ]) {
+      expect(find.descendant(of: image, matching: find.text(label)),
+          findsOneWidget);
+    }
+    for (final label in [
+      '旅行社图片',
+      '已付定金',
+      '货到付款',
+      '已确认退款',
+      '有效销售额',
+      '扣酒成本',
+      '日返积分',
+      '月返积分',
+      '售后影响',
+    ]) {
+      expect(
+          find.descendant(of: image, matching: find.text(label)), findsNothing);
+    }
+  });
+
+  testWidgets('single guide image hides title and after-sales impact',
+      (tester) async {
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(),
+    );
+
+    tester
+        .widget<OutlinedButton>(
+          find.descendant(
+            of: find.byKey(const ValueKey('group-1:guideImage')),
+            matching: find.byType(OutlinedButton),
+          ),
+        )
+        .onPressed!();
+    await tester.pump();
+
+    final image =
+        find.byKey(const ValueKey('finance-export-single-image-guide'));
+    expect(image, findsOneWidget);
+    for (final label in [
+      '日期',
+      '旅行社',
+      '导游',
+      '车牌',
+      '人数',
+      '品鉴师',
+      '上单金额',
+    ]) {
+      expect(find.descendant(of: image, matching: find.text(label)),
+          findsOneWidget);
+    }
+    for (final label in ['旅行社积分导游联络图', '售后影响']) {
+      expect(
+          find.descendant(of: image, matching: find.text(label)), findsNothing);
+    }
+  });
+
+  testWidgets('single image file names omit image labels and stay distinct',
+      (tester) async {
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(),
+      imageSaver: saver.call,
+    );
+
+    for (final key in ['travelAgencyImage', 'guideImage']) {
+      tester
+          .widget<OutlinedButton>(
+            find.descendant(
+              of: find.byKey(ValueKey('group-1:$key')),
+              matching: find.byType(OutlinedButton),
+            ),
+          )
+          .onPressed!();
+      await _pumpUntil(
+        tester,
+        () => saver.saved.length == (key == 'travelAgencyImage' ? 1 : 2),
+      );
+    }
+
+    final names = saver.saved.map((image) => image.name).toList();
+    expect(names[0], endsWith('-积分表'));
+    expect(names[1], endsWith('-旅行社积分导游联络表'));
+    expect(names.toSet(), hasLength(2));
+    expect(names.every((name) => !name.contains('旅行社图片')), isTrue);
+    expect(names.every((name) => !name.contains('导游图片')), isTrue);
   });
 
   testWidgets(
@@ -601,7 +904,7 @@ void main() {
     );
   });
 
-  testWidgets('after-sales impact and pending refund appear in export table',
+  testWidgets('agency export table has aligned requested columns only',
       (tester) async {
     final renderer = _FakeTableImageRenderer();
     final saver = _FakeImageSaver();
@@ -623,10 +926,51 @@ void main() {
     await _pumpUntil(tester, () => saver.attempts == 1);
 
     final page = renderer.pages.single;
-    expect(page.headers, contains('已确认退款'));
-    expect(page.headers, contains('有效销售额'));
-    expect(page.headers, contains('售后影响'));
-    expect(page.rows.single.cells, contains('退款待确认 ¥0.25'));
+    expect(page.headers, ['日期', '旅行社', '导游', '销售额', '上单金额']);
+    expect(page.columnWidths, hasLength(page.headers.length));
+    expect(
+      page.rows.every((row) => row.cells.length == page.headers.length),
+      isTrue,
+    );
+  });
+
+  testWidgets('guide export table omits after-sales impact and stays aligned',
+      (tester) async {
+    final renderer = _FakeTableImageRenderer();
+    final saver = _FakeImageSaver();
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(
+        afterSalesImpactStatus: 'refund_pending_confirmation',
+        pendingAfterSalesRefundAmountCents: 2500,
+      ),
+      imageSaver: saver.call,
+      tableImageRenderer: renderer.call,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-export-guide-images-button')),
+    );
+    await _pumpUntil(tester, () => saver.attempts == 1);
+
+    final page = renderer.pages.single;
+    expect(page.headers, [
+      '日期',
+      '旅行社',
+      '导游',
+      '车牌',
+      '人数',
+      '品鉴师',
+      '上单金额',
+    ]);
+    expect(page.headers, isNot(contains('售后影响')));
+    expect(page.columnWidths, hasLength(page.headers.length));
+    expect(
+      page.rows.every((row) => row.cells.length == page.headers.length),
+      isTrue,
+    );
   });
 
   testWidgets('export table component repeats headers and has no controls',
@@ -918,11 +1262,63 @@ void main() {
     expect(apiClient.postBodies.single, {
       'travelGroupIds': ['group-1'],
       'agencyOnly': true,
+      'allowLatestAgencyRebateRuleFallback': true,
     });
+    expect(apiClient.getPaths.length, 2);
     expect(find.text('¥0.70'), findsWidgets);
     expect(find.text('¥0.02'), findsWidgets);
     expect(find.text('¥0.01'), findsWidgets);
     expect(find.textContaining('订单 1 笔'), findsOneWidget);
+  });
+
+  testWidgets('recalculate reloads and shows fallback feedback',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(
+      recalculationWarnings: const [
+        {
+          'code': 'agency_rebate_rule_fallback_applied',
+          'message': '该历史订单已使用当前启用的旅行社返点规则补算。',
+          'context': {'salesOrderId': 'order-1'},
+        },
+      ],
+    );
+    await _pumpPage(tester, apiClient: apiClient);
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-recalculate-button')),
+    );
+    await _pumpUntil(tester, () => apiClient.getPaths.length == 2);
+    expect(find.textContaining('部分历史订单使用当前启用的返点规则补算'), findsOneWidget);
+  });
+
+  testWidgets('recalculate shows explicit all-orders missing-rule feedback',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(
+      recalculationWarnings: const [
+        {
+          'code': 'missing_agency_daily_rebate_rule',
+          'message': '未找到日返规则。',
+          'context': {'salesOrderId': 'order-1'},
+        },
+        {
+          'code': 'missing_agency_monthly_rebate_rule',
+          'message': '未找到月返规则。',
+          'context': {'salesOrderId': 'order-1'},
+        },
+      ],
+    );
+    await _pumpPage(tester, apiClient: apiClient);
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-recalculate-button')),
+    );
+    await _pumpUntil(tester, () => apiClient.getPaths.length == 2);
+    expect(
+      find.text('未找到适用的旅行社返点规则，日返和月返未更新'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('after-sales pending impact overrides ordinary row status',
@@ -948,6 +1344,7 @@ Future<void> _pumpPage(
   FinanceImageSaver? imageSaver,
   FinanceFolderOpener? folderOpener,
   FinanceTableImageRenderer? tableImageRenderer,
+  Future<Directory> Function()? documentsDirectoryProvider,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(2200, 1200);
@@ -966,6 +1363,7 @@ Future<void> _pumpPage(
           imageSaver: imageSaver ?? _FakeImageSaver().call,
           folderOpener: folderOpener ?? (_) async {},
           tableImageRenderer: tableImageRenderer,
+          documentsDirectoryProvider: documentsDirectoryProvider,
         ),
       ),
     ),
@@ -1052,6 +1450,9 @@ class _FakeFinanceApiClient extends ApiClient {
     this.failAgencyDeduction = false,
     String afterSalesImpactStatus = 'none',
     int pendingAfterSalesRefundAmountCents = 0,
+    this.recalculationWarnings = const [],
+    this.failExcelExport = false,
+    this.excelDownloadFileName = 'points-table-selected.xlsx',
   }) : super(baseUrl: 'http://127.0.0.1:3000') {
     final source = summaries ??
         [
@@ -1073,17 +1474,23 @@ class _FakeFinanceApiClient extends ApiClient {
 
   late List<Map<String, dynamic>> _summaries;
   final bool failAgencyDeduction;
+  final List<Map<String, dynamic>> recalculationWarnings;
+  final bool failExcelExport;
+  final String excelDownloadFileName;
   final getPaths = <String>[];
   final patchPaths = <String>[];
   final patchBodies = <Map<String, dynamic>>[];
   final postPaths = <String>[];
   final postBodies = <Map<String, dynamic>>[];
+  final postBytesPaths = <String>[];
+  final postBytesBodies = <Map<String, dynamic>>[];
+  final postBytesDefaultFileNames = <String>[];
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     getPaths.add(path);
     return {
-      'data': {'travelGroupFinanceSummaries': _summaries},
+      'data': {'financeRows': _summaries},
     };
   }
 
@@ -1186,10 +1593,35 @@ class _FakeFinanceApiClient extends ApiClient {
         'generatedRecords': const [],
         'updatedRecords': const [],
         'unchangedRecords': const [],
-        'warnings': const [],
+        'warnings': recalculationWarnings,
         'travelGroupFinanceSummaries': [updated],
       },
     };
+  }
+
+  @override
+  Future<ApiDownloadedFile> postBytes(
+    String path, {
+    required Map<String, dynamic> body,
+    required String defaultFileName,
+    String? token,
+  }) async {
+    postBytesPaths.add(path);
+    postBytesBodies.add(Map<String, dynamic>.from(body));
+    postBytesDefaultFileNames.add(defaultFileName);
+    if (failExcelExport) {
+      throw const ApiException(
+        statusCode: 503,
+        code: 'EXCEL_EXPORT_FAILED',
+        message: 'Excel 导出暂时失败，请稍后重试。',
+      );
+    }
+    return ApiDownloadedFile(
+      bytes: Uint8List.fromList([1, 2, 3, 4]),
+      fileName: excelDownloadFileName,
+      contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
   }
 }
 

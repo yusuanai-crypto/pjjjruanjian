@@ -22,7 +22,11 @@ import {
   type AiPolicyDecision,
 } from './ai-policy.service';
 import { AiPromptBuilder } from './ai-prompt.builder';
-import { AiResponseFormatter } from './ai-response.formatter';
+import {
+  AiResponseFormatter,
+  formatHistoricalAiAnswer,
+  sanitizeAiUserWarnings,
+} from './ai-response.formatter';
 import {
   AiToolsService,
   type AiToolInput,
@@ -434,22 +438,33 @@ export class AiChatService {
       };
     }
 
+    const answer = this.responseFormatter.ensureCompliantAnswer(
+      modelResult.answer,
+      modelInput,
+    );
+    modelResult = {
+      ...modelResult,
+      answer,
+    };
+
     await this.saveChatMessage(state, {
-      answer: modelResult.answer,
+      answer,
       toolResults,
       warnings,
       modelResult,
       errorCode,
     });
 
-    return buildResponse(state, modelResult.answer, toolResults, warnings);
+    return buildResponse(state, answer, toolResults, warnings);
   }
 
   private async buildAndSavePolicyRefusal(
     state: AiChatExecutionState,
   ): Promise<AiChatResponse> {
     const intent = state.policy.rejectionIntent || state.parsed.intent;
-    const warnings = appendWarnings(state.parsed.warnings, state.policy.warnings);
+    const warnings = sanitizeAiUserWarnings(
+      appendWarnings(state.parsed.warnings, state.policy.warnings),
+    );
     const answer = this.responseFormatter.formatRefusal(
       {
         userRole: state.actor.role,
@@ -513,10 +528,19 @@ export class AiChatService {
   ) {
     try {
       const sanitizedQuestion = sanitizeAiHistoryText(state.question);
-      const sanitizedAnswer = sanitizeAiHistoryText(input.answer, 8000);
-      const sanitizedWarnings = input.warnings.map((warning) =>
-        sanitizeAiHistoryText(warning),
+      const complianceInput = buildModelInput(
+        state,
+        input.toolResults,
+        input.warnings,
       );
+      const sanitizedAnswer = sanitizeAiHistoryText(
+        this.responseFormatter.ensureCompliantAnswer(
+          input.answer,
+          complianceInput,
+        ),
+        8000,
+      );
+      const sanitizedWarnings = sanitizeAiUserWarnings(input.warnings);
       await (this.prisma as any).aiChatMessage.create({
         data: {
           conversationId: state.conversationId,
@@ -687,7 +711,7 @@ function buildResponse(
     intent: state.parsed.intent,
     range: state.parsed.dateRange,
     sourceSummary: buildSourceSummary(toolResults),
-    warnings: uniqueStrings(warnings),
+    warnings: sanitizeAiUserWarnings(warnings),
   };
 }
 
@@ -802,16 +826,17 @@ async function countAiChatMessages(delegate: any, where: Record<string, unknown>
 }
 
 function toHistoryItem(row: any): AiChatHistoryItem {
+  const storedAnswer = sanitizeAiHistoryText(row?.answer, 8000);
   return {
     id: String(row?.id || ''),
     conversationId: String(row?.conversationId || ''),
     question: sanitizeAiHistoryText(row?.question),
-    answer: sanitizeAiHistoryText(row?.answer, 8000),
+    answer: formatHistoricalAiAnswer(storedAnswer),
     intent: String(row?.intent || ''),
     dataScope: sanitizeHistoryDataScope(row?.dataScope),
     toolCalls: sanitizeHistoryToolCalls(row?.toolCalls),
     sourceSummary: sanitizeHistorySourceSummary(row?.sourceSummary),
-    warnings: normalizeStringList(row?.warnings),
+    warnings: sanitizeAiUserWarnings(normalizeStringList(row?.warnings)),
     modelProvider: nullableString(row?.modelProvider),
     modelName: nullableString(row?.modelName),
     promptTokens: nullableNumber(row?.promptTokens),
@@ -830,7 +855,7 @@ function sanitizeHistoryToolCalls(value: unknown): AiChatHistoryToolCall[] {
       toolName: String(source.toolName || ''),
       rowCount: safeInteger(source.rowCount),
       globalMarkedFilterEnabled: Boolean(source.globalMarkedFilterEnabled),
-      warnings: normalizeStringList(source.warnings),
+      warnings: sanitizeAiUserWarnings(normalizeStringList(source.warnings)),
     };
   });
 }
@@ -845,7 +870,9 @@ function sanitizeHistorySourceSummary(value: unknown): AiChatSourceSummary[] {
       ...(source.dateFrom ? { dateFrom: String(source.dateFrom) } : {}),
       ...(source.dateTo ? { dateTo: String(source.dateTo) } : {}),
       globalMarkedFilterEnabled: Boolean(source.globalMarkedFilterEnabled),
-      scopeDescription: sanitizeAiHistoryText(source.scopeDescription),
+      scopeDescription: source.scopeDescription
+        ? '当前账号可以查看的数据'
+        : '',
     };
   });
 }

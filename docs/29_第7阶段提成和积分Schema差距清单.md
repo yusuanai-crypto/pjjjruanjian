@@ -81,7 +81,7 @@
 | 订单状态 | `status` | `VALID`、`PARTIAL_REFUND`、`REFUNDED`、`CANCELLED`。 |
 | 订单明细 | `items` | 可按 `productName + quantity` 匹配扣单/扣酒规则。 |
 | 售后记录 | `afterSalesOrders` | 可汇总 `financeConfirmed=true` 的 `refundAmountCents`。 |
-| 标记过滤 | `financeMark`、`customer.financeMark`、`travelGroup.financeMark` | 订单查询和导出需要复用现有标记作用域。 |
+| 标记过滤 | `financeMark`、`customer.financeMark`、`travelGroup.financeMark` | 订单查询和导出只复用订单自身标记作用域；客户和旅行团各自使用自身作用域。 |
 
 当前缺少 `outreachUserId`，因此无法生成外联提成。第 7 阶段应新增可空字段，历史订单默认为空。
 
@@ -582,8 +582,8 @@ enum CommissionTargetType {
 
 当前全局开关开启时，订单必须满足：
 
-- 关联客户 `financeMark=true`。
-- 如果有关联旅行团，则旅行团 `financeMark=true`。
+- 订单自身 `SalesOrder.financeMark=true`。
+- 关联客户或旅行团的标记不参与该订单及其提成记录的可见性判断。
 
 第 7 阶段应按以下方式复用：
 

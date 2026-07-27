@@ -4,6 +4,7 @@ import { AuthUserGuard } from '../../common/guards/auth-user.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { AuthModule } from '../auth/auth.module';
 import { CommissionsModule } from '../commissions/commissions.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { OperationLogsModule } from '../operation-logs/operation-logs.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TodoRemindersModule } from '../todo-reminders/todo-reminders.module';
@@ -35,6 +36,7 @@ import {
     OperationLogsModule,
     SettingsModule,
     CommissionsModule,
+    InventoryModule,
     TodoRemindersModule,
   ],
   controllers: [

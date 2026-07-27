@@ -39,6 +39,882 @@ function assertBlockHasFields(block, fields) {
   }
 }
 
+test('smoke: phase 11 inventory foundation is expand-only and database-enforced', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000300_inventory_expand_foundation',
+  );
+
+  for (const model of [
+    'Warehouse',
+    'InventoryConfiguration',
+    'WarehouseProductStock',
+    'InventoryBatch',
+    'InventoryDocument',
+    'InventoryDocumentLine',
+    'InventoryMovement',
+    'InventoryCommandReceipt',
+    'InventoryReservation',
+    'InventoryTransfer',
+    'InventoryTransferLine',
+    'InventoryTransferReceipt',
+    'InventoryTransferReceiptLine',
+    'StockAlertConfig',
+    'ProductInventoryModeChange',
+  ]) {
+    assert.match(schema, new RegExp(`model ${model} \\{`));
+  }
+
+  const trackingMode = extractPrismaBlock(
+    schema,
+    'enum InventoryTrackingMode {',
+  );
+  for (const value of ['NONE', 'QUANTITY', 'SERIALIZED']) {
+    assert.match(trackingMode, new RegExp(`\\b${value}\\b`));
+  }
+
+  const serializedStatus = extractPrismaBlock(
+    schema,
+    'enum SerializedInventoryStatus {',
+  );
+  for (const value of [
+    'PENDING_COST',
+    'AVAILABLE',
+    'ALLOCATED',
+    'RESERVED',
+    'OUTBOUND',
+    'UNAVAILABLE',
+    'VOID',
+  ]) {
+    assert.match(serializedStatus, new RegExp(`\\b${value}\\b`));
+  }
+
+  const warehouse = extractPrismaBlock(schema, 'model Warehouse {');
+  assertBlockHasFields(warehouse, [
+    'normalizedCode',
+    'normalizedName',
+    'managerUserId',
+    'isActive',
+    'isDefault',
+    'activeDefaultKey',
+  ]);
+  assert.match(
+    warehouse,
+    /activeDefaultKey\s+String\?\s+@unique\(map: "warehouses_active_default_key_key"\)/,
+  );
+
+  const stock = extractPrismaBlock(
+    schema,
+    'model WarehouseProductStock {',
+  );
+  assertBlockHasFields(stock, [
+    'onHandQty',
+    'reservedQty',
+    'unavailableQty',
+    'inTransitQty',
+    'version',
+    'lastMovementId',
+  ]);
+
+  const batch = extractPrismaBlock(schema, 'model InventoryBatch {');
+  assertBlockHasFields(batch, [
+    'sourceDocumentLineId',
+    'sourceLineKey',
+    'purchaseOrderNo',
+    'productionBatch',
+    'purchaseUnitCostCents',
+    'costStatus',
+    'fifoAt',
+    'version',
+  ]);
+
+  const movement = extractPrismaBlock(schema, 'model InventoryMovement {');
+  assert.match(
+    movement,
+    /sourceKey\s+String\s+@unique\(map: "inventory_movements_source_key"\)/,
+  );
+  assertBlockHasFields(movement, [
+    'onHandDelta',
+    'reservedDelta',
+    'unavailableDelta',
+    'inTransitDelta',
+    'reversalOfMovementId',
+    'operatorNameSnapshot',
+    'operatorRoleSnapshot',
+  ]);
+
+  const receipt = extractPrismaBlock(
+    schema,
+    'model InventoryCommandReceipt {',
+  );
+  assertBlockHasFields(receipt, [
+    'sourceKey',
+    'idempotencyKey',
+    'requestHash',
+    'commandType',
+    'resultDocumentId',
+    'actorNameSnapshot',
+  ]);
+
+  const salesOrder = extractPrismaBlock(schema, 'model SalesOrder {');
+  assertBlockHasFields(salesOrder, [
+    'fulfillmentWarehouseId',
+    'inventoryAppliedAt',
+    'inventoryPolicyVersion',
+    'inventoryVersion',
+    'inventoryReservations',
+  ]);
+  const salesOrderItem = extractPrismaBlock(
+    schema,
+    'model SalesOrderItem {',
+  );
+  assert.match(
+    salesOrderItem,
+    /inventoryLineKey\s+String\?\s+@unique\(map: "sales_order_items_inventory_line_key"\)/,
+  );
+
+  const serializedUnit = extractPrismaBlock(
+    schema,
+    'model SerializedInventoryUnit {',
+  );
+  assertBlockHasFields(serializedUnit, [
+    'warehouseId',
+    'inventoryBatchId',
+    'version',
+    'inventoryMovements',
+  ]);
+
+  for (const table of [
+    'warehouses',
+    'inventory_configurations',
+    'warehouse_product_stocks',
+    'inventory_batches',
+    'inventory_documents',
+    'inventory_document_lines',
+    'inventory_movements',
+    'inventory_command_receipts',
+    'inventory_reservations',
+    'inventory_transfers',
+    'inventory_transfer_lines',
+    'inventory_transfer_receipts',
+    'inventory_transfer_receipt_lines',
+    'stock_alert_configs',
+    'product_inventory_mode_changes',
+  ]) {
+    assert.match(migration, new RegExp(`CREATE TABLE \`${table}\``));
+  }
+
+  assert.match(
+    migration,
+    /ENUM\('none', 'serialized', 'quantity'\)[\s\S]*NOT NULL DEFAULT 'none'/,
+  );
+  for (const databaseValue of [
+    "'pending_cost'",
+    "'available'",
+    "'allocated'",
+    "'void'",
+    "'reserved'",
+    "'outbound'",
+    "'unavailable'",
+  ]) {
+    assert.match(migration, new RegExp(databaseValue));
+  }
+  assert.match(
+    migration,
+    /'pending_cost',\s*'available',\s*'allocated',\s*'void',\s*'reserved',\s*'outbound',\s*'unavailable'/,
+  );
+  for (const check of [
+    'warehouses_active_default_key_check',
+    'warehouse_product_stocks_quantity_check',
+    'inventory_batches_quantity_check',
+    'inventory_movements_source_key_not_blank_check',
+    'inventory_movements_nonzero_delta_check',
+    'inventory_command_receipts_idempotency_key_not_blank_check',
+    'inventory_reservations_line_key_not_blank_check',
+    'inventory_transfers_distinct_warehouses_check',
+  ]) {
+    assert.match(migration, new RegExp(`CONSTRAINT \`${check}\`\\s+CHECK`));
+  }
+  assert.match(
+    migration,
+    /UNIQUE INDEX `warehouses_active_default_key_key` \(`active_default_key`\)/,
+  );
+  for (const uniqueIndex of [
+    'warehouse_product_stocks_warehouse_product_key',
+    'inventory_batches_source_line_key',
+    'inventory_documents_source_key',
+    'inventory_movements_source_key',
+    'inventory_command_receipts_source_key',
+    'inventory_command_receipts_idempotency_key',
+    'inventory_reservations_source_key',
+    'inventory_reservations_order_line_key',
+    'inventory_transfers_source_key',
+    'inventory_transfer_receipts_source_key',
+    'inventory_transfer_receipts_idempotency_key',
+    'stock_alert_configs_warehouse_product_key',
+    'sales_order_items_inventory_line_key',
+  ]) {
+    assert.match(migration, new RegExp(`UNIQUE INDEX \`${uniqueIndex}\``));
+  }
+  assert.match(
+    migration,
+    /`source_key` VARCHAR\(191\) NOT NULL[\s\S]*UNIQUE INDEX `inventory_movements_source_key` \(`source_key`\)/,
+  );
+  assert.match(
+    migration,
+    /inventory_movements_no_update[\s\S]*INVENTORY_MOVEMENT_IMMUTABLE/,
+  );
+  assert.match(
+    migration,
+    /inventory_movements_no_delete[\s\S]*INVENTORY_MOVEMENT_IMMUTABLE/,
+  );
+  assert.match(
+    migration,
+    /sales_orders_fulfillment_warehouse_id_fkey[\s\S]*ON DELETE RESTRICT/,
+  );
+  assert.match(
+    migration,
+    /inventory_movements_operator_user_id_fkey[\s\S]*ON DELETE SET NULL/,
+  );
+  for (const foreignKey of [
+    'warehouse_product_stocks_warehouse_id_fkey',
+    'warehouse_product_stocks_product_id_fkey',
+    'inventory_batches_source_document_line_id_fkey',
+    'inventory_document_lines_document_id_fkey',
+    'inventory_movements_document_line_id_fkey',
+    'inventory_movements_serialized_unit_id_fkey',
+    'inventory_reservations_sales_order_id_fkey',
+    'inventory_reservations_sales_order_item_id_fkey',
+    'inventory_transfers_from_warehouse_id_fkey',
+    'inventory_transfer_receipts_transfer_id_fkey',
+    'inventory_transfer_receipt_lines_transfer_line_id_fkey',
+    'serialized_inventory_units_warehouse_id_fkey',
+    'serialized_inventory_units_inventory_batch_id_fkey',
+  ]) {
+    assert.match(migration, new RegExp(`CONSTRAINT \`${foreignKey}\``));
+  }
+  assert.doesNotMatch(migration, /ON DELETE CASCADE/);
+  assert.match(
+    migration,
+    /ADD COLUMN `fulfillment_warehouse_id` CHAR\(36\) NULL/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `inventory_line_key` VARCHAR\(191\) NULL/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `warehouse_id` CHAR\(36\) NULL[\s\S]*ADD COLUMN `inventory_batch_id` CHAR\(36\) NULL/,
+  );
+  assert.match(migration, /metadata locks/i);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\s+`?(products|sales_orders|sales_order_items|serialized_inventory_units)`?\b/i,
+  );
+});
+
+test('smoke: serialized inventory unification is additive, keeps ALLOCATED and enforces one active assignment per bottle', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000800_serialized_inventory_unification',
+  );
+  const statuses = extractPrismaBlock(
+    schema,
+    'enum SerializedInventoryStatus {',
+  );
+  const assignmentStatuses = extractPrismaBlock(
+    schema,
+    'enum SerializedInventoryAssignmentStatus {',
+  );
+  const assignment = extractPrismaBlock(
+    schema,
+    'model SerializedInventoryAssignment {',
+  );
+  const receiptLine = extractPrismaBlock(
+    schema,
+    'model InventoryTransferReceiptLine {',
+  );
+
+  assert.match(statuses, /\bALLOCATED\b/);
+  for (const value of ['RESERVED', 'OUTBOUND', 'RELEASED']) {
+    assert.match(assignmentStatuses, new RegExp(`\\b${value}\\b`));
+  }
+  assertBlockHasFields(assignment, [
+    'reservationId',
+    'serializedUnitId',
+    'sourceKey',
+    'activeUnitKey',
+    'purchaseCostSnapshotCents',
+    'reservedAt',
+    'outboundAt',
+    'releasedAt',
+    'version',
+  ]);
+  assert.match(
+    assignment,
+    /activeUnitKey\s+String\?\s+@unique\(map: "serialized_inventory_assignments_active_unit_key"\)/,
+  );
+  assertBlockHasFields(receiptLine, ['serializedUnitIds']);
+  assert.match(
+    migration,
+    /CREATE TABLE `serialized_inventory_assignments`/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `serialized_inventory_assignments_active_key_consistent`\s+CHECK/,
+  );
+  assert.match(
+    migration,
+    /UNIQUE \(`active_unit_key`\)/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `serialized_unit_ids` JSON NULL/,
+  );
+  assert.match(
+    migration,
+    /DROP CHECK `inventory_movements_nonzero_delta_check`/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /UPDATE\s+`?serialized_inventory_units`?/i,
+  );
+  assert.doesNotMatch(
+    migration,
+    /DROP\s+(COLUMN|TABLE).*allocated/i,
+  );
+});
+
+test('smoke: after-sales physical receipts are expand-only, concurrency-safe and never inferred from historical finance fields', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000900_after_sales_receipts',
+  );
+  const status = extractPrismaBlock(
+    schema,
+    'enum AfterSalesReceiptStatus {',
+  );
+  const condition = extractPrismaBlock(
+    schema,
+    'enum AfterSalesReceiptCondition {',
+  );
+  const matchStatus = extractPrismaBlock(
+    schema,
+    'enum AfterSalesReceiptSerializedMatchStatus {',
+  );
+  const item = extractPrismaBlock(
+    schema,
+    'model AfterSalesOrderItem {',
+  );
+  const receipt = extractPrismaBlock(
+    schema,
+    'model AfterSalesReceipt {',
+  );
+  const line = extractPrismaBlock(
+    schema,
+    'model AfterSalesReceiptLine {',
+  );
+  const serializedFact = extractPrismaBlock(
+    schema,
+    'model AfterSalesReceiptSerializedUnit {',
+  );
+
+  for (const value of ['DRAFT', 'POSTED', 'REVERSED']) {
+    assert.match(status, new RegExp(`\\b${value}\\b`));
+  }
+  for (const value of ['SALEABLE', 'UNAVAILABLE', 'EXCEPTION']) {
+    assert.match(condition, new RegExp(`\\b${value}\\b`));
+  }
+  for (const value of ['MATCHED', 'UNKNOWN', 'CONFLICT']) {
+    assert.match(matchStatus, new RegExp(`\\b${value}\\b`));
+  }
+  assertBlockHasFields(item, [
+    'returnRequired',
+    'expectedReturnQty',
+    'postedReceivedQty',
+    'returnVersion',
+    'receiptLines',
+  ]);
+  assertBlockHasFields(receipt, [
+    'afterSalesOrderId',
+    'warehouseId',
+    'sourceKey',
+    'idempotencyKey',
+    'requestHash',
+    'postSourceKey',
+    'postIdempotencyKey',
+    'postRequestHash',
+    'reverseSourceKey',
+    'reverseIdempotencyKey',
+    'reverseRequestHash',
+    'confirmedByNameSnapshot',
+    'reversedByNameSnapshot',
+    'version',
+  ]);
+  assertBlockHasFields(line, [
+    'afterSalesOrderItemId',
+    'lineNo',
+    'receivedQty',
+    'condition',
+    'inventoryBatchId',
+    'exceptionReason',
+  ]);
+  assert.match(
+    line,
+    /@@unique\(\[receiptId, lineNo\], map: "after_sales_receipt_lines_receipt_line_key"\)/,
+  );
+  assertBlockHasFields(serializedFact, [
+    'originalSerializedUnitId',
+    'scannedLogisticsCodeSnapshot',
+    'normalizedScannedLogisticsCode',
+    'matchStatus',
+    'activeOriginalUnitKey',
+    'previousWarehouseId',
+    'previousStatus',
+    'inventoryMovementId',
+  ]);
+  assert.match(
+    serializedFact,
+    /activeOriginalUnitKey\s+String\?\s+@unique\(map: "after_sales_receipt_serialized_active_unit_key"\)/,
+  );
+
+  assert.match(
+    migration,
+    /ADD COLUMN `return_required` BOOLEAN NOT NULL DEFAULT false/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `expected_return_qty` INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `posted_received_qty` INTEGER NOT NULL DEFAULT 0/,
+  );
+  for (const table of [
+    'after_sales_receipts',
+    'after_sales_receipt_lines',
+    'after_sales_receipt_serialized_units',
+  ]) {
+    assert.match(migration, new RegExp(`CREATE TABLE \`${table}\``));
+  }
+  for (const constraint of [
+    'after_sales_order_items_return_quantity_check',
+    'after_sales_order_items_return_version_check',
+    'after_sales_receipts_source_key_not_blank',
+    'after_sales_receipts_idempotency_key_not_blank',
+    'after_sales_receipts_request_hash_check',
+    'after_sales_receipts_post_envelope_check',
+    'after_sales_receipts_reverse_envelope_check',
+    'after_sales_receipts_status_audit_check',
+    'after_sales_receipt_lines_quantity_check',
+    'after_sales_receipt_lines_exception_check',
+    'after_sales_receipt_serialized_scan_not_blank',
+    'after_sales_receipt_serialized_match_check',
+    'after_sales_receipt_serialized_active_key_check',
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(`CONSTRAINT \`${constraint}\`\\s+CHECK`),
+    );
+  }
+  assert.match(
+    migration,
+    /CONSTRAINT `after_sales_receipt_lines_receipt_line_key`[\s\S]*UNIQUE \(`receipt_id`, `line_no`\)/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `after_sales_receipt_serialized_active_unit_key`[\s\S]*UNIQUE \(`active_original_unit_key`\)/,
+  );
+  assert.match(
+    migration,
+    /after_sales_receipts_after_sales_order_id_fkey[\s\S]*ON DELETE RESTRICT/,
+  );
+  assert.match(
+    migration,
+    /after_sales_receipts_confirmed_by_id_fkey[\s\S]*ON DELETE SET NULL/,
+  );
+  assert.doesNotMatch(migration, /ON DELETE CASCADE/);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\s+`?(after_sales_orders|after_sales_order_items|inventory_movements|warehouse_product_stocks|serialized_inventory_units)`?\b/i,
+  );
+});
+
+test('smoke: stocktakes enforce one active warehouse-product count and immutable adjustment envelopes', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727001000_inventory_stocktakes',
+  );
+  const status = extractPrismaBlock(
+    schema,
+    'enum StocktakeStatus {',
+  );
+  const matchStatus = extractPrismaBlock(
+    schema,
+    'enum StocktakeSerializedMatchStatus {',
+  );
+  const stocktake = extractPrismaBlock(schema, 'model Stocktake {');
+  const line = extractPrismaBlock(schema, 'model StocktakeLine {');
+  const scan = extractPrismaBlock(
+    schema,
+    'model StocktakeSerializedScan {',
+  );
+
+  for (const value of [
+    'DRAFT',
+    'SUBMITTED',
+    'APPROVED',
+    'REJECTED',
+    'POSTED',
+    'REVERSED',
+  ]) {
+    assert.match(status, new RegExp(`\\b${value}\\b`));
+  }
+  for (const value of ['MATCHED', 'MISSING', 'UNKNOWN', 'CONFLICT']) {
+    assert.match(matchStatus, new RegExp(`\\b${value}\\b`));
+  }
+  assertBlockHasFields(stocktake, [
+    'warehouseId',
+    'productId',
+    'trackingModeSnapshot',
+    'activeKey',
+    'sourceKey',
+    'idempotencyKey',
+    'requestHash',
+    'submitIdempotencyKey',
+    'approveIdempotencyKey',
+    'rejectIdempotencyKey',
+    'reverseIdempotencyKey',
+    'quantityDocumentId',
+    'unavailableDocumentId',
+    'submittedAt',
+    'approvedAt',
+    'postedAt',
+    'reversedAt',
+    'version',
+  ]);
+  assert.match(
+    stocktake,
+    /activeKey\s+String\?\s+@unique\(map: "stocktakes_active_key_key"\)/,
+  );
+  assertBlockHasFields(line, [
+    'snapshotStockVersion',
+    'snapshotLastMovementId',
+    'snapshotOnHandQty',
+    'snapshotUnavailableQty',
+    'countedOnHandQty',
+    'countedUnavailableQty',
+    'onHandDifferenceQty',
+    'unavailableDifferenceQty',
+  ]);
+  assertBlockHasFields(scan, [
+    'serializedUnitId',
+    'scannedLogisticsCodeSnapshot',
+    'normalizedLogisticsCodeSnapshot',
+    'matchStatus',
+    'expectedUnitStatus',
+    'expectedUnitVersion',
+    'countedCondition',
+    'actionMovementId',
+  ]);
+  assert.match(
+    scan,
+    /@@unique\(\[stocktakeId, normalizedLogisticsCodeSnapshot\], map: "stocktake_serialized_scans_stocktake_code_key"\)/,
+  );
+
+  for (const table of [
+    'stocktakes',
+    'stocktake_lines',
+    'stocktake_serialized_scans',
+  ]) {
+    assert.match(migration, new RegExp(`CREATE TABLE \`${table}\``));
+  }
+  for (const constraint of [
+    'stocktakes_create_envelope_check',
+    'stocktakes_submit_envelope_check',
+    'stocktakes_approve_envelope_check',
+    'stocktakes_reject_envelope_check',
+    'stocktakes_reverse_envelope_check',
+    'stocktakes_active_key_check',
+    'stocktakes_status_audit_check',
+    'stocktake_lines_values_check',
+    'stocktake_serialized_scans_values_check',
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(`CONSTRAINT \`${constraint}\`\\s+CHECK`),
+    );
+  }
+  assert.match(
+    migration,
+    /CONSTRAINT `stocktakes_active_key_key` UNIQUE \(`active_key`\)/,
+  );
+  assert.match(
+    migration,
+    /stocktakes_warehouse_id_fkey[\s\S]*ON DELETE RESTRICT/,
+  );
+  assert.match(
+    migration,
+    /stocktakes_submitted_by_id_fkey[\s\S]*ON DELETE SET NULL/,
+  );
+  assert.doesNotMatch(migration, /ON DELETE CASCADE/);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\s+`?(stocktakes|inventory_movements|warehouse_product_stocks|serialized_inventory_units)`?\b/i,
+  );
+});
+
+test('smoke: phase 11 accounting core adds reservation traceability and a durable post-commit queue', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000400_inventory_accounting_core',
+  );
+  const documentType = extractPrismaBlock(
+    schema,
+    'enum InventoryDocumentType {',
+  );
+  const movement = extractPrismaBlock(
+    schema,
+    'model InventoryMovement {',
+  );
+  const postCommitTask = extractPrismaBlock(
+    schema,
+    'model InventoryPostCommitTask {',
+  );
+
+  assert.match(documentType, /\bRESERVATION_ADJUSTMENT\b/);
+  assertBlockHasFields(movement, [
+    'reservationId',
+    'reservation',
+  ]);
+  assertBlockHasFields(postCommitTask, [
+    'sourceKey',
+    'commandReceiptId',
+    'taskType',
+    'payload',
+    'status',
+    'attempts',
+    'nextAttemptAt',
+    'lastErrorCode',
+  ]);
+  assert.match(
+    migration,
+    /CREATE TABLE `inventory_post_commit_tasks`/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `inventory_post_commit_tasks_source_key_not_blank_check`\s+CHECK/,
+  );
+  assert.match(
+    migration,
+    /UNIQUE INDEX `inventory_post_commit_tasks_source_key`/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `inventory_movements_reservation_id_fkey`[\s\S]*ON DELETE RESTRICT/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `inventory_post_commit_tasks_command_receipt_id_fkey`[\s\S]*ON DELETE RESTRICT/,
+  );
+  assert.match(migration, /metadata lock/i);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\s+`?(products|sales_orders|sales_order_items|serialized_inventory_units|inventory_movements|warehouse_product_stocks)`?\b/i,
+  );
+  assert.doesNotMatch(migration, /ON DELETE CASCADE/);
+});
+
+test('smoke: phase 11 inbound-cost flow is additive and has a database opening guard', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000500_inventory_inbound_cost_flow',
+  );
+  const batch = extractPrismaBlock(schema, 'model InventoryBatch {');
+  const document = extractPrismaBlock(
+    schema,
+    'model InventoryDocument {',
+  );
+
+  assert.match(
+    batch,
+    /openingEntryKey\s+String\?\s+@unique\(map: "inventory_batches_opening_entry_key"\)/,
+  );
+  assert.match(
+    document,
+    /attachmentMetadata\s+Json\?\s+@map\("attachment_metadata"\)/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `attachment_metadata` JSON NULL/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `opening_entry_key` VARCHAR\(191\) NULL/,
+  );
+  assert.match(
+    migration,
+    /CONSTRAINT `inventory_batches_opening_entry_key_not_blank_check`\s+CHECK/,
+  );
+  assert.match(
+    migration,
+    /UNIQUE INDEX `inventory_batches_opening_entry_key`/,
+  );
+  assert.match(migration, /metadata lock/i);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\b|\bDELETE\s+FROM\b/i,
+  );
+  assert.doesNotMatch(
+    migration,
+    /UNIQUE INDEX[^\n]*(purchase_order_no|production_batch)/i,
+  );
+});
+
+test('smoke: phase 11 transfer flow adds immutable receipt envelopes and explicit difference facts without backfill', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000600_inventory_transfer_unavailable_flow',
+  );
+  const documentType = extractPrismaBlock(
+    schema,
+    'enum InventoryDocumentType {',
+  );
+  const movementType = extractPrismaBlock(
+    schema,
+    'enum InventoryMovementType {',
+  );
+  const transfer = extractPrismaBlock(
+    schema,
+    'model InventoryTransfer {',
+  );
+  const transferLine = extractPrismaBlock(
+    schema,
+    'model InventoryTransferLine {',
+  );
+  const transferReceipt = extractPrismaBlock(
+    schema,
+    'model InventoryTransferReceipt {',
+  );
+
+  assert.match(documentType, /\bTRANSFER_DIFFERENCE\b/);
+  assert.match(movementType, /\bTRANSFER_DIFFERENCE\b/);
+  assertBlockHasFields(transfer, [
+    'outboundSourceKey',
+    'outboundIdempotencyKey',
+    'outboundRequestHash',
+    'version',
+  ]);
+  assertBlockHasFields(transferLine, [
+    'sourceLineKey',
+    'trackingModeSnapshot',
+    'unavailableQty',
+    'serializedUnitIds',
+    'version',
+  ]);
+  assertBlockHasFields(transferReceipt, [
+    'sourceKey',
+    'idempotencyKey',
+    'requestHash',
+    'confirmedByNameSnapshot',
+    'confirmedAt',
+    'reversalOfReceiptId',
+    'version',
+  ]);
+  for (const constraint of [
+    'inventory_transfers_outbound_envelope_check',
+    'inventory_transfers_version_check',
+    'inventory_transfer_lines_source_line_key_check',
+    'inventory_transfer_lines_flow_quantity_check',
+    'inventory_transfer_receipts_version_check',
+    'inventory_transfer_receipt_lines_difference_check',
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(`CONSTRAINT \`${constraint}\`\\s+CHECK`),
+    );
+  }
+  for (const uniqueIndex of [
+    'inventory_transfers_outbound_source_key',
+    'inventory_transfers_outbound_idempotency_key',
+    'inventory_transfer_lines_source_line_key',
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(`UNIQUE INDEX \`${uniqueIndex}\``),
+    );
+  }
+  assert.match(
+    migration,
+    /`outbound_request_hash` REGEXP '\^\[0-9a-f\]\{64\}\$'/,
+  );
+  assert.match(
+    migration,
+    /`unavailable_qty` <= `received_qty`[\s\S]*`received_qty` \+ `difference_qty` <= `outbound_qty`/,
+  );
+  assert.match(migration, /metadata locks/i);
+  assert.doesNotMatch(
+    migration,
+    /\bINSERT\s+INTO\b|\bUPDATE\b|\bDELETE\s+FROM\b|\bTRUNCATE\b/i,
+  );
+});
+
+test('smoke: sales order packing mark migration is non-null and defaults historical rows to false', () => {
+  const migration = readMigration(
+    '20260726000200_sales_order_packing_mark',
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `has_packing_mark` BOOLEAN NOT NULL DEFAULT false/,
+  );
+});
+
+test('smoke: independent after-sales order schema and idempotent historical backfill are present', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260727000200_after_sales_independent_orders',
+  );
+  const salesOrder = extractPrismaBlock(schema, 'model SalesOrder {');
+  const afterSalesOrder = extractPrismaBlock(schema, 'model AfterSalesOrder {');
+  const afterSalesItem = extractPrismaBlock(
+    schema,
+    'model AfterSalesOrderItem {',
+  );
+
+  assertBlockHasFields(salesOrder, [
+    'sourceSalesOrderId',
+    'sourceSalesOrder',
+    'afterSalesSalesOrders',
+  ]);
+  assertBlockHasFields(afterSalesOrder, [
+    'afterSalesSalesOrderId',
+    'deductionCalculationMode',
+    'sourceAgencyDeductionCents',
+    'agencyDeductionAdjustmentCents',
+    'financialEffectStatus',
+    'items',
+  ]);
+  assertBlockHasFields(afterSalesItem, [
+    'sourceSalesOrderItemId',
+    'productName',
+    'quantity',
+    'originalUnitPriceCents',
+    'subtotalCents',
+    'isHistoricalPlaceholder',
+  ]);
+  assert.match(schema, /enum AfterSalesFinancialEffectStatus \{/);
+  assert.match(
+    migration,
+    /WHERE aso\.`after_sales_sales_order_id` IS NULL[\s\S]*generated_order\.`id` IS NULL/,
+  );
+  assert.match(
+    migration,
+    /WHERE NOT EXISTS \([\s\S]*`after_sales_order_items`/,
+  );
+  assert.match(migration, /'历史售后调整'/);
+  assert.match(migration, /'after_sales'/);
+});
+
 test('smoke: Prisma schema exposes phase 2 business models and scope fields', () => {
   const schema = readPrismaFile('schema.prisma');
 
@@ -132,7 +1008,7 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
   );
   assert.match(
     schema,
-    /salesOrder\s+SalesOrder\s+@relation\(fields: \[salesOrderId\], references: \[id\], onDelete: Restrict\)/,
+    /salesOrder\s+SalesOrder\s+@relation\("AfterSalesSourceOrder", fields: \[salesOrderId\], references: \[id\], onDelete: Restrict\)/,
   );
   for (const index of [
     'salesOrderId',
@@ -641,6 +1517,7 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
     'travelGroupId',
     'totalAmountCents',
     'status',
+    'hasPackingMark',
     'items',
     'afterSalesOrders',
     'commissionRecords',
@@ -648,6 +1525,10 @@ test('smoke: Prisma schema exposes stage 7 commission models, enums, and relatio
   assert.match(
     salesOrder,
     /outreachUserId\s+String\?\s+@map\("outreach_user_id"\) @db\.Char\(36\)/,
+  );
+  assert.match(
+    salesOrder,
+    /hasPackingMark\s+Boolean\s+@default\(false\)\s+@map\("has_packing_mark"\)/,
   );
   assert.match(
     salesOrder,
@@ -1286,6 +2167,147 @@ test('smoke: travel group loss confirmation migration is additive and traceable'
   assert.doesNotMatch(
     migration,
     /DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE|^\s*UPDATE\s+`|INSERT\s+INTO/im,
+  );
+});
+
+test('smoke: quantity order shortage alerts are additive, stable-keyed, and protect business facts', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const alertType = extractPrismaBlock(
+    schema,
+    'enum InventoryAlertType {',
+  );
+  const alertStatus = extractPrismaBlock(
+    schema,
+    'enum InventoryAlertStatus {',
+  );
+  const alert = extractPrismaBlock(schema, 'model InventoryAlert {');
+  assert.match(alertType, /ORDER_SHORTAGE\s+@map\("order_shortage"\)/);
+  assert.match(alertStatus, /ACTIVE\s+@map\("active"\)/);
+  assert.match(alertStatus, /RESOLVED\s+@map\("resolved"\)/);
+  assert.match(
+    alert,
+    /alertKey\s+String\s+@unique\(map: "inventory_alerts_alert_key"\)/,
+  );
+  assert.match(
+    alert,
+    /warehouse\s+Warehouse\s+@relation\(fields: \[warehouseId\], references: \[id\], onDelete: Restrict\)/,
+  );
+  assert.match(
+    alert,
+    /product\s+Product\s+@relation\(fields: \[productId\], references: \[id\], onDelete: Restrict\)/,
+  );
+  assert.match(
+    alert,
+    /salesOrder\s+SalesOrder\?\s+@relation\(fields: \[salesOrderId\], references: \[id\], onDelete: Restrict\)/,
+  );
+
+  const migrationName =
+    '20260727000700_sales_order_inventory_alerts';
+  assert.equal(
+    fs.existsSync(path.join(migrationsDir, migrationName, 'migration.sql')),
+    true,
+  );
+  const migration = readMigration(migrationName);
+  assert.match(migration, /CREATE TABLE `inventory_alerts`/);
+  assert.match(
+    migration,
+    /CHECK \(CHAR_LENGTH\(TRIM\(`alert_key`\)\) > 0\)/,
+  );
+  assert.match(
+    migration,
+    /UNIQUE INDEX `inventory_alerts_alert_key` \(`alert_key`\)/,
+  );
+  assert.match(
+    migration,
+    /inventory_alerts_warehouse_product_status_idx/,
+  );
+  assert.match(migration, /inventory_alerts_order_status_idx/);
+  assert.match(
+    migration,
+    /inventory_alerts_type_status_detected_idx/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`warehouse_id`\) REFERENCES `warehouses`\(`id`\)\s+ON DELETE RESTRICT ON UPDATE CASCADE/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`product_id`\) REFERENCES `products`\(`id`\)\s+ON DELETE RESTRICT ON UPDATE CASCADE/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`sales_order_id`\) REFERENCES `sales_orders`\(`id`\)\s+ON DELETE RESTRICT ON UPDATE CASCADE/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /\b(?:INSERT\s+INTO|UPDATE\s+`|DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE)\b/i,
+  );
+});
+
+test('smoke: inventory todo alerts add safe source types, active uniqueness, policy and durable cursors', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const todoSourceType = extractPrismaBlock(
+    schema,
+    'enum TodoSourceType {',
+  );
+  const configuration = extractPrismaBlock(
+    schema,
+    'model InventoryConfiguration {',
+  );
+  const inventoryAlert = extractPrismaBlock(
+    schema,
+    'model InventoryAlert {',
+  );
+  const cursor = extractPrismaBlock(
+    schema,
+    'model TodoReconcileCursor {',
+  );
+
+  assert.match(
+    todoSourceType,
+    /INVENTORY_ALERT\s+@map\("inventory_alert"\)/,
+  );
+  assert.match(todoSourceType, /STOCKTAKE\s+@map\("stocktake"\)/);
+  assert.match(
+    configuration,
+    /transferOverdueHours\s+Int\?\s+@map\("transfer_overdue_hours"\)/,
+  );
+  assert.match(
+    inventoryAlert,
+    /activeKey\s+String\?\s+@unique\(map: "inventory_alerts_active_key_key"\)\s+@map\("active_key"\)/,
+  );
+  assert.match(
+    cursor,
+    /scanType\s+String\s+@unique\(map: "todo_reconcile_cursors_scan_type_key"\)/,
+  );
+  assert.match(cursor, /cursorId\s+String\?\s+@map\("cursor_id"\)/);
+
+  const migrationName = '20260727001100_inventory_alert_todos';
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /'inventory_alert',\s+'stocktake'/s,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `transfer_overdue_hours` INTEGER NULL/,
+  );
+  assert.match(
+    migration,
+    /CHECK \(\s*`transfer_overdue_hours` IS NULL\s*OR `transfer_overdue_hours` > 0\s*\)/s,
+  );
+  assert.match(
+    migration,
+    /ADD UNIQUE INDEX `inventory_alerts_active_key_key` \(`active_key`\)/,
+  );
+  assert.match(migration, /CREATE TABLE `todo_reconcile_cursors`/);
+  assert.match(
+    migration,
+    /CONSTRAINT `todo_reconcile_cursors_scan_type_key`\s+UNIQUE \(`scan_type`\)/s,
+  );
+  assert.doesNotMatch(
+    migration,
+    /\b(?:INSERT\s+INTO|UPDATE\s+`|DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE)\b/i,
   );
 });
 

@@ -266,7 +266,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         _messages.add(
           _ChatMessage(
             fromUser: false,
-            text: response.answer,
+            text: _safeAssistantText(response.answer),
             intent: response.intent,
             range: response.range,
             sourceSummary: response.sourceSummary,
@@ -315,7 +315,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         ..add(
           _ChatMessage(
             fromUser: false,
-            text: item.answer,
+            text: _safeAssistantText(item.answer, history: true),
             intent: item.intent,
             range: _historyRange(item),
             sourceSummary: item.sourceSummary,
@@ -383,7 +383,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
       return '无权限';
     }
     if (_modelUnavailable(capabilities)) {
-      return '模型不可用';
+      return '暂不可用';
     }
     if (_sending) {
       return '生成中';
@@ -576,26 +576,20 @@ class _AiSidePanel extends StatelessWidget {
                 ),
               )
             else ...[
-              _InfoLine(label: '当前角色', value: role.value),
+              _InfoLine(label: '当前角色', value: role.label),
               _InfoLine(
                 label: '可用状态',
                 value: caps.canUseAi ? '可使用' : '不可使用',
               ),
               _InfoLine(
                 label: '可见范围',
-                value: caps.scopeDescription.isEmpty
-                    ? '以后端策略为准'
-                    : caps.scopeDescription,
+                value: _visibleScopeLabel(role),
               ),
               _InfoLine(
                 label: '问题长度',
                 value: caps.limits.maxQuestionLength > 0
                     ? '${caps.limits.maxQuestionLength} 字以内'
-                    : '以后端配置为准',
-              ),
-              _InfoLine(
-                label: '模型模式',
-                value: caps.model.mockMode ? '本地 mock' : '外部模型',
+                    : '以页面提示为准',
               ),
               if (availabilityMessage != null)
                 _NoticeBox(
@@ -740,9 +734,12 @@ class _HistoryDetailDialog extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _InfoLine(label: '提问时间', value: item.createdAt),
+              _InfoLine(
+                label: '提问时间',
+                value: _dateTimeLabel(item.createdAt),
+              ),
               if (item.intent.isNotEmpty)
-                _InfoLine(label: '识别意图', value: item.intent),
+                _InfoLine(label: '问题类型', value: _intentLabel(item.intent)),
               if (rangeLabel != null)
                 _InfoLine(label: '查询范围', value: rangeLabel),
               const SizedBox(height: 8),
@@ -751,7 +748,7 @@ class _HistoryDetailDialog extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 10),
-              Text(item.answer),
+              Text(_safeAssistantText(item.answer, history: true)),
               if (item.sourceSummary.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _SourceSummaryList(sources: item.sourceSummary),
@@ -821,7 +818,7 @@ class _MessageBubble extends StatelessWidget {
                   message.intent!.isNotEmpty)
                 _MetaLine(
                   icon: Icons.route_rounded,
-                  text: '意图：${message.intent}',
+                  text: '问题类型：${_intentLabel(message.intent!)}',
                 ),
               if (!isUser && message.sourceSummary.isNotEmpty) ...[
                 const SizedBox(height: 10),
@@ -851,7 +848,7 @@ class _SourceSummaryList extends StatelessWidget {
       children: [
         const _MetaLine(
           icon: Icons.dataset_rounded,
-          text: '来源摘要',
+          text: '查询情况',
           strong: true,
         ),
         const SizedBox(height: 6),
@@ -860,14 +857,13 @@ class _SourceSummaryList extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
               [
-                source.toolName,
-                '${source.rowCount} 行',
+                _toolLabel(source.toolName),
+                '找到 ${source.rowCount} 条记录',
                 if (source.dateFrom != null && source.dateTo != null)
                   '${source.dateFrom} 至 ${source.dateTo}',
                 source.globalMarkedFilterEnabled
-                    ? '全局标记过滤：已开启，仅已标记数据'
-                    : '全局标记过滤：未开启，按角色可见范围',
-                if (source.scopeDescription.isNotEmpty) source.scopeDescription,
+                    ? '目前只统计已标记的数据'
+                    : '按当前账号可查看的范围统计',
               ].join(' · '),
             ),
           ),
@@ -888,14 +884,14 @@ class _WarningList extends StatelessWidget {
       children: [
         const _MetaLine(
           icon: Icons.warning_amber_rounded,
-          text: '风险提示',
+          text: '请注意',
           strong: true,
         ),
         const SizedBox(height: 6),
         for (final warning in warnings)
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
-            child: Text(warning.message),
+            child: Text(_warningLabel(warning.message)),
           ),
       ],
     );
@@ -1114,14 +1110,205 @@ class _InfoLine extends StatelessWidget {
   }
 }
 
+String _visibleScopeLabel(UserRole role) {
+  switch (role) {
+    case UserRole.superAdmin:
+    case UserRole.admin:
+      return '当前账号可以查看的经营数据';
+    case UserRole.boss:
+      return '经营统计、排名、客户订单和财务汇总';
+    case UserRole.finance:
+      return '退款、费用、提成、积分和经营统计';
+    case UserRole.afterSales:
+      return '客户订单、售后记录和物流信息';
+    case UserRole.frontDesk:
+    case UserRole.sales:
+    case UserRole.warehouse:
+    case UserRole.taster:
+      return '当前账号可以查看的数据';
+  }
+}
+
+String _intentLabel(String intent) {
+  return switch (intent.trim()) {
+    'analytics_overview' => '经营概况',
+    'analytics_trend' => '经营趋势',
+    'taster_ranking' => '品鉴师排名',
+    'taster_detail' => '品鉴师详情',
+    'finance_summary' => '财务汇总',
+    'commission_query' => '提成查询',
+    'refund_query' => '退款查询',
+    'customer_lookup' => '客户查询',
+    'customer_order_lookup' => '客户订单',
+    'after_sales_lookup' => '售后查询',
+    'logistics_lookup' => '物流查询',
+    'management_suggestion' => '经营建议',
+    'permission_denied' => '权限提醒',
+    _ => '经营数据查询',
+  };
+}
+
+String _toolLabel(String toolName) {
+  return switch (toolName.trim()) {
+    'analytics.overview' => '经营概况',
+    'analytics.trends' => '经营趋势',
+    'analytics.tasterRankings' => '品鉴师排名',
+    'analytics.tasterDetail' => '品鉴师详情',
+    'finance.summary' => '财务汇总',
+    'commission.query' => '提成记录',
+    'refund.query' => '退款记录',
+    'customer.lookup' => '客户记录',
+    'customer.orderLookup' => '客户订单',
+    'afterSales.lookup' => '售后记录',
+    'logistics.lookup' => '物流记录',
+    _ => '经营记录',
+  };
+}
+
+String _safeAssistantText(String text, {bool history = false}) {
+  final trimmed = text.trim();
+  if (trimmed.isNotEmpty && !_containsTechnicalContent(trimmed)) {
+    return trimmed;
+  }
+  if (history) {
+    return '这条历史回答含有不适合直接展示的内容，已隐藏。请重新询问经营问题。';
+  }
+  return '这次回答含有不适合直接展示的内容，已隐藏。请重新询问经营问题。';
+}
+
+bool _containsTechnicalContent(String text) {
+  final lower = text.toLowerCase();
+  if (lower.contains('":') ||
+      lower.contains("':") ||
+      lower.contains('analytics.') ||
+      lower.contains('finance.') ||
+      lower.contains('customer.') ||
+      lower.contains('aftersales.') ||
+      lower.contains('logistics.') ||
+      lower.contains('commission.')) {
+    return true;
+  }
+  const forbiddenTerms = <String>[
+    '后端',
+    '接口地址',
+    '接口路径',
+    '模型',
+    '工具调用',
+    '数据工具',
+    '内部字段',
+    '内部英文标识',
+    '配置',
+    '技术配置',
+    '配置内容',
+    '数据库',
+    '数据表',
+    '程序代码',
+    '源代码',
+    '代码块',
+    '行内代码',
+    '网页标签',
+    '原始数据格式',
+    '返回行数',
+    'api key',
+    'access token',
+    'mock',
+    'provider',
+  ];
+  if (forbiddenTerms.any(lower.contains)) {
+    return true;
+  }
+  final patterns = <RegExp>[
+    RegExp(r'```|~~~|`[^`\r\n]+`'),
+    RegExp(r'<\/?[a-z][^>]*>', caseSensitive: false),
+    RegExp(r'https?:\/\/|\/(?:api|v\d+)\/', caseSensitive: false),
+    RegExp(
+      r'\b(?:select\s+.+\s+from|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+table|drop\s+table)\b',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(r'\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*='),
+    RegExp(r'\b(?:function|def|class)\s+[A-Za-z_$][\w$]*'),
+    RegExp(r'^\s*[\{\[]', multiLine: true),
+    RegExp(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b', caseSensitive: false),
+    RegExp(r'\b[a-z]+(?:[A-Z][a-z0-9]*)+\b'),
+    RegExp(
+      r'^\s*[A-Za-z][A-Za-z0-9_]*\s*:\s*(?:["\d\[\{\-]|true|false|null)',
+      caseSensitive: false,
+      multiLine: true,
+    ),
+    RegExp(
+      r'^(?:[A-Za-z][A-Za-z0-9_]*,){1,}[A-Za-z][A-Za-z0-9_]*\s*$',
+      multiLine: true,
+    ),
+    RegExp(
+      r'\b(?:sql|json|xml|yaml|html|css|python|javascript|java|dart|curl|powershell|bash|shell)\b',
+      caseSensitive: false,
+    ),
+    RegExp(r'第\s*\d+\s*阶段|返回\s*\d*\s*行'),
+  ];
+  return patterns.any((pattern) => pattern.hasMatch(text));
+}
+
+String _warningLabel(String message) {
+  final text = message.trim();
+  final lower = text.toLowerCase();
+  if (text.contains('已标记') || text.contains('标记数据')) {
+    return '目前只统计已标记的数据。';
+  }
+  if (text.contains('权限') || text.contains('无权')) {
+    return '当前账号不能查看这类数据。';
+  }
+  if (text.contains('手机号') ||
+      text.contains('地址') ||
+      text.contains('脱敏') ||
+      text.contains('隐私')) {
+    return '个人信息已按规则隐藏。';
+  }
+  if (text.contains('未指定时间') || text.contains('不限时间') || text.contains('行数')) {
+    return '没有指定时间，已按当前条件查找，并限制展示数量。';
+  }
+  if (_containsTechnicalContent(text) ||
+      text.contains('暂时不可用') ||
+      text.contains('失败') ||
+      text.contains('异常') ||
+      text.contains('超时') ||
+      lower.contains('api')) {
+    return '暂时无法完成查询，请稍后再试。';
+  }
+  return text.isEmpty ? '请以页面显示的经营数据为准。' : text;
+}
+
 String _historySubtitle(AiChatHistoryItem item) {
   final parts = <String>[
-    if (item.createdAt.isNotEmpty) item.createdAt,
-    if (item.intent.isNotEmpty) item.intent,
+    if (item.createdAt.isNotEmpty) _dateTimeLabel(item.createdAt),
+    if (item.intent.isNotEmpty) _intentLabel(item.intent),
     if (_rangeLabel(_historyRange(item)) != null)
       _rangeLabel(_historyRange(item))!,
   ];
   return parts.join(' | ');
+}
+
+String _dateTimeLabel(String value) {
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    return '时间未知';
+  }
+  final local = parsed.toLocal();
+  String twoDigits(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)} '
+      '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
+}
+
+String _rangePresetLabel(String preset) {
+  return switch (preset) {
+    'today' => '今天',
+    'yesterday' => '昨天',
+    'last_10_days' => '近 10 天',
+    'this_month' => '本月',
+    'last_month' => '上个月',
+    'this_year' => '今年',
+    _ => '当前查询范围',
+  };
 }
 
 AiDateRange? _historyRange(AiChatHistoryItem item) {
@@ -1194,13 +1381,13 @@ String? _availabilityMessage(AiCapabilities? capabilities) {
     return null;
   }
   if (!capabilities.enabled) {
-    return 'AI 助手未启用，请联系管理员开启第 9 阶段 AI 配置。';
+    return 'AI 助手暂未启用，请联系管理员。';
   }
   if (!capabilities.canUseAi || !capabilities.roleAllowed) {
-    return '当前角色暂无 AI 助手权限，或可用能力被后端策略关闭。';
+    return '当前账号不能使用 AI 助手。';
   }
   if (_modelUnavailable(capabilities)) {
-    return 'AI 模型未配置或暂不可用，请联系管理员确认 mock 模式或模型 API Key。';
+    return 'AI 助手暂时不可用，请稍后再试或联系管理员。';
   }
   return null;
 }
@@ -1223,9 +1410,9 @@ String _friendlyAiError(Object error) {
         return '当前角色没有使用 AI 助手的权限。';
       }
       if (code == 'AI_PERMISSION_DENIED') {
-        return '当前问题超出该角色可访问的 AI 数据范围。';
+        return '当前账号不能查看这类数据。';
       }
-      return 'AI 请求被拒绝，请确认当前账号权限或联系管理员。';
+      return '当前账号不能完成这项查询。';
     }
     if (error.statusCode == 429) {
       return 'AI 请求过于频繁，请稍后再试。';
@@ -1237,13 +1424,18 @@ String _friendlyAiError(Object error) {
         code.contains('PROVIDER') ||
         code.contains('MODEL') ||
         code.contains('TIMEOUT')) {
-      return 'AI 模型暂时不可用，系统没有暴露任何业务数据，请稍后重试或联系管理员。';
+      return 'AI 助手暂时不可用，请稍后重试或联系管理员。';
     }
     if (error.statusCode >= 500) {
       return 'AI 服务暂时不可用，请稍后重试。';
     }
-    final message = error.message.trim();
-    return message.isEmpty ? 'AI 请求失败，请稍后重试。' : message;
+    if (code == 'AI_QUESTION_REQUIRED') {
+      return '请先输入要查询的问题。';
+    }
+    if (code == 'AI_QUESTION_TOO_LONG') {
+      return '问题太长，请缩短后再试。';
+    }
+    return 'AI 请求失败，请稍后重试。';
   }
   return 'AI 助手请求失败，请稍后重试。';
 }
@@ -1252,12 +1444,11 @@ String? _rangeLabel(AiDateRange? range) {
   if (range == null) {
     return null;
   }
-  final timezone = range.timezone == null ? '' : '（${range.timezone}）';
   if (range.dateFrom != null && range.dateTo != null) {
-    return '${range.dateFrom} 至 ${range.dateTo}$timezone';
+    return '${range.dateFrom} 至 ${range.dateTo}';
   }
   if (range.preset != null && range.preset!.isNotEmpty) {
-    return '${range.preset}$timezone';
+    return _rangePresetLabel(range.preset!);
   }
   return null;
 }

@@ -182,8 +182,9 @@ test('GET /api/sales-orders/export.xlsx obeys global marked-record filtering', a
         .map((row) => row['系统单号'])
         .sort();
       assert.deepEqual(orderNos, [
-        'SO-GLOBAL-GROUP',
         'SO-GLOBAL-STANDALONE',
+        'SO-GLOBAL-UNMARKED-CUSTOMER',
+        'SO-GLOBAL-UNMARKED-GROUP',
       ]);
     },
     {
@@ -409,12 +410,14 @@ function buildSalesOrderExportPrismaOptions() {
         orderNo: 'SO-GLOBAL-STANDALONE',
         customerId: 'cust_global_standalone',
         customerName: 'Global Standalone',
+        financeMark: true,
       }),
       buildExportOrder({
         id: 'order_global_unmarked_customer',
         orderNo: 'SO-GLOBAL-UNMARKED-CUSTOMER',
         customerId: 'cust_global_unmarked',
         customerName: 'Global Unmarked Customer',
+        financeMark: true,
       }),
       buildExportOrder({
         id: 'order_global_group',
@@ -422,6 +425,7 @@ function buildSalesOrderExportPrismaOptions() {
         travelGroupId: 'tg_global_marked',
         customerId: 'cust_global_group',
         customerName: 'Global Group',
+        financeMark: false,
       }),
       buildExportOrder({
         id: 'order_global_unmarked_group',
@@ -429,6 +433,7 @@ function buildSalesOrderExportPrismaOptions() {
         travelGroupId: 'tg_global_unmarked',
         customerId: 'cust_global_unmarked_group',
         customerName: 'Global Unmarked Group',
+        financeMark: true,
       }),
     ],
   };

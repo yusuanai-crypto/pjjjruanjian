@@ -18,6 +18,7 @@ import { RequireRoles } from '../../common/guards/required-roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
+import { AfterSalesInventoryService } from '../inventory/after-sales-inventory.service';
 import { BusinessDataNestService } from './business-data.nest.service';
 import {
   buildAttachmentContentDisposition,
@@ -31,6 +32,7 @@ export class AfterSalesOrdersNestController {
     private readonly authService: AuthNestService,
     private readonly businessDataService: BusinessDataNestService,
     private readonly uploadConfig: AttachmentUploadConfigService,
+    private readonly afterSalesInventoryService: AfterSalesInventoryService,
   ) {}
 
   @Get()
@@ -56,6 +58,82 @@ export class AfterSalesOrdersNestController {
     );
   }
 
+  @Get(':id/receipts')
+  async listReceipts(@Param('id') id: string, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      afterSalesReceipts:
+        await this.afterSalesInventoryService.listReceipts(actor, id),
+    };
+  }
+
+  @Post(':id/receipts')
+  async createReceipt(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.afterSalesInventoryService.createReceipt(actor, id, body, {
+      requestId: request.requestId,
+      ipAddress: getRequestIp(request),
+    });
+  }
+
+  @Post('receipts/:receiptId/post')
+  async postReceipt(
+    @Param('receiptId') receiptId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.afterSalesInventoryService.postReceipt(
+      actor,
+      receiptId,
+      body,
+      {
+        requestId: request.requestId,
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
+  @Post('receipts/:receiptId/reverse')
+  async reverseReceipt(
+    @Param('receiptId') receiptId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.afterSalesInventoryService.reverseReceipt(
+      actor,
+      receiptId,
+      body,
+      {
+        requestId: request.requestId,
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
+  @Post(':id/fulfillment')
+  async fulfillReplacement(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.afterSalesInventoryService.fulfillReplacement(
+      actor,
+      id,
+      body,
+      {
+        requestId: request.requestId,
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
   @Get(':id')
   async get(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
@@ -76,6 +154,24 @@ export class AfterSalesOrdersNestController {
     const actor = await this.authService.authenticateRequest(request);
     return this.businessDataService.confirmAfterSalesOrderFinance(
       actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
+  @Patch(':id/agency-deduction')
+  @UseGuards(AuthUserGuard, RolesGuard)
+  @RequireRoles('admin', 'finance')
+  async updateAgencyDeduction(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    return this.businessDataService.updateAfterSalesAgencyDeduction(
+      request.currentUser,
       id,
       body,
       {

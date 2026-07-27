@@ -4,22 +4,18 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
 
 void main() {
-  testWidgets('shows loss notes UI without order binding requests or controls',
+  testWidgets('opens an editor dialog instead of a persistent form',
       (tester) async {
     final apiClient = _FakeApiClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TravelGroupOrderNotesPage(
-            apiClient: apiClient,
-            token: 'test-token',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpPage(tester, apiClient);
 
-    expect(find.text('损耗与离店备注'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('travel-group-notes-editor')), findsNothing);
+    expect(find.byKey(const ValueKey('departure-time-field')), findsNothing);
+    expect(
+      find.widgetWithText(FilledButton, '保存损耗与备注'),
+      findsNothing,
+    );
     expect(find.text('绑定订单'), findsNothing);
     expect(find.text('暂无可绑定订单'), findsNothing);
     expect(find.byType(CheckboxListTile), findsNothing);
@@ -29,22 +25,23 @@ void main() {
       ),
       isEmpty,
     );
+
+    await _openEditor(tester);
+
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('损耗与离店备注'), findsOneWidget);
+    expect(find.byKey(const ValueKey('departure-time-field')), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, '保存损耗与备注'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('clears departure time and only patches the travel group',
       (tester) async {
     final apiClient = _FakeApiClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TravelGroupOrderNotesPage(
-            apiClient: apiClient,
-            token: 'test-token',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpPage(tester, apiClient);
+    await _openEditor(tester);
 
     final fieldFinder = find.byKey(const ValueKey('departure-time-field'));
     expect(fieldFinder, findsOneWidget);
@@ -90,23 +87,19 @@ void main() {
     );
     expect(apiClient.patchCalls.single.body, containsPair('departureTime', ''));
     expect(apiClient.patchCalls.single.body, containsPair('remarks', ''));
-    expect(find.text('已暂存，未完成项目继续保留为待销售。'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('travel-group-notes-editor')), findsNothing);
+    expect(find.textContaining('保存成功'), findsWidgets);
   });
 
-  testWidgets('adds canned wine without a product id and records the loss',
+  testWidgets('save closes the editor and refreshes the list loss status',
       (tester) async {
     final apiClient = _FakeApiClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TravelGroupOrderNotesPage(
-            apiClient: apiClient,
-            token: 'test-token',
-          ),
-        ),
-      ),
-    );
+    await _pumpPage(tester, apiClient);
+
+    await tester.tap(find.text('全部'));
     await tester.pumpAndSettle();
+    await _openEditor(tester);
 
     final addCannedWine = find.byKey(
       const ValueKey('tasting_items_add_canned_wine'),
@@ -128,22 +121,17 @@ void main() {
     expect(items.single, containsPair('productName', '罐装酒'));
     expect(items.single, containsPair('quantity', 1));
     expect(items.single, containsPair('unit', '瓶'));
+    expect(
+        find.byKey(const ValueKey('travel-group-notes-editor')), findsNothing);
+    expect(find.text('已记录损耗'), findsOneWidget);
+    expect(find.text('保存成功：TG20260630001'), findsWidgets);
   });
 
   testWidgets('confirms no loss explicitly instead of saving an empty list',
       (tester) async {
     final apiClient = _FakeApiClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TravelGroupOrderNotesPage(
-            apiClient: apiClient,
-            token: 'test-token',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpPage(tester, apiClient);
+    await _openEditor(tester);
 
     final confirmButton = find.byKey(const ValueKey('confirm-no-loss'));
     await tester.ensureVisible(confirmButton);
@@ -159,15 +147,148 @@ void main() {
       apiClient.patchCalls.single.body.containsKey('tastingItems'),
       isFalse,
     );
-    expect(find.text('离店时间与无损耗确认均已完成。'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('travel-group-notes-editor')), findsNothing);
+    expect(find.textContaining('保存成功'), findsWidgets);
+  });
+
+  testWidgets('asks before closing an editor with unsaved changes',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+    await _openEditor(tester);
+
+    final remarksField = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.decoration?.labelText == '离店备注',
+    );
+    await tester.ensureVisible(remarksField);
+    await tester.enterText(remarksField, '尚未保存的备注');
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-editor-close')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('放弃未保存修改？'), findsOneWidget);
+    expect(find.byKey(const ValueKey('travel-group-notes-editor')),
+        findsOneWidget);
+
+    await tester.tap(find.text('继续编辑'));
+    await tester.pumpAndSettle();
+    expect(find.text('尚未保存的备注'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('放弃未保存修改？'), findsOneWidget);
+
+    await tester.tap(find.text('继续编辑'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+    expect(find.text('放弃未保存修改？'), findsOneWidget);
+
+    await tester.tap(find.text('放弃修改'));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const ValueKey('travel-group-notes-editor')), findsNothing);
+  });
+
+  testWidgets('keeps input and shows the backend reason when save fails',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      patchError: const ApiException(
+        statusCode: 400,
+        code: 'SAVE_FAILED',
+        message: '后端返回的具体错误原因',
+      ),
+    );
+    await _pumpPage(tester, apiClient);
+    await _openEditor(tester);
+
+    final remarksField = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.decoration?.labelText == '离店备注',
+    );
+    await tester.ensureVisible(remarksField);
+    await tester.enterText(remarksField, '失败后也要保留');
+    await tester.pump();
+
+    final saveButton = find.widgetWithText(FilledButton, '保存损耗与备注');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('保存失败'), findsOneWidget);
+    expect(find.text('后端返回的具体错误原因'), findsOneWidget);
+    expect(find.byKey(const ValueKey('travel-group-notes-editor')),
+        findsOneWidget);
+
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+    expect(find.text('失败后也要保留'), findsOneWidget);
+  });
+
+  testWidgets('uses a scrollable bottom sheet on a narrow screen',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(
+      tester,
+      apiClient,
+      size: const Size(390, 844),
+    );
+
+    await _openEditor(tester);
+
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('travel-group-notes-editor')),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsOneWidget,
+    );
   });
 }
 
+Future<void> _pumpPage(
+  WidgetTester tester,
+  _FakeApiClient apiClient, {
+  Size size = const Size(1200, 900),
+}) async {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: TravelGroupOrderNotesPage(
+          apiClient: apiClient,
+          token: 'test-token',
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openEditor(WidgetTester tester) async {
+  await tester.tap(find.text('TG20260630001').first);
+  await tester.pumpAndSettle();
+  expect(
+    find.byKey(const ValueKey('travel-group-notes-editor')),
+    findsOneWidget,
+  );
+}
+
 class _FakeApiClient extends ApiClient {
-  _FakeApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
+  _FakeApiClient({this.patchError}) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final List<String> getPaths = [];
   final List<_PatchCall> patchCalls = [];
+  final Object? patchError;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -199,12 +320,18 @@ class _FakeApiClient extends ApiClient {
   }) async {
     final patchBody = Map<String, dynamic>.from(body ?? const {});
     patchCalls.add(_PatchCall(path, patchBody));
+    if (patchError != null) {
+      throw patchError!;
+    }
     if (path.startsWith('/api/travel-groups/')) {
+      final tastingItems = patchBody['tastingItems'];
       return {
         'data': {
           'travelGroup': {
             ..._travelGroupJson(),
             ...patchBody,
+            if (tastingItems is List && tastingItems.isNotEmpty)
+              'lossStatus': 'RECORDED',
           },
         },
       };

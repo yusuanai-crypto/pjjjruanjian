@@ -9,7 +9,6 @@ import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
-import '../../shared/widgets/serialized_inventory_picker_dialog.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../customers/customer_picker_dialog.dart';
 
@@ -34,10 +33,13 @@ class OrderFormPage extends StatefulWidget {
 class _OrderFormPageState extends State<OrderFormPage> {
   late BusinessApi _businessApi;
   late DateTime _orderDate;
+  late DateTime _shippingDate;
+  bool _shippingDateManuallySpecified = false;
   late final TextEditingController _customerNameController;
   late final TextEditingController _customerPhoneController;
   late final TextEditingController _addressController;
   late final TextEditingController _orderDateController;
+  late final TextEditingController _shippingDateController;
   late final TextEditingController _cashOnDeliveryAmountController;
   late final TextEditingController _remarkController;
   late final List<String> _provinceOptions;
@@ -62,10 +64,13 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
     _orderDate = DateTime.now();
+    _shippingDate = _shanghaiToday().add(const Duration(days: 1));
     _customerNameController = TextEditingController();
     _customerPhoneController = TextEditingController();
     _addressController = TextEditingController();
     _orderDateController = TextEditingController(text: formatDate(_orderDate));
+    _shippingDateController =
+        TextEditingController(text: formatDate(_shippingDate));
     _cashOnDeliveryAmountController = TextEditingController();
     _remarkController = TextEditingController();
     _provinceOptions = administrativeProvinceNames();
@@ -112,6 +117,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _customerPhoneController.dispose();
     _addressController.dispose();
     _orderDateController.dispose();
+    _shippingDateController.dispose();
     _cashOnDeliveryAmountController.dispose();
     _remarkController.dispose();
     _disposeItems();
@@ -133,6 +139,26 @@ class _OrderFormPageState extends State<OrderFormPage> {
     setState(() {
       _orderDate = picked;
       _orderDateController.text = formatDate(picked);
+    });
+  }
+
+  Future<void> _pickShippingDate() async {
+    final today = _shanghaiToday();
+    final initialDate = _shippingDate.isBefore(today) ? today : _shippingDate;
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: today,
+      lastDate: DateTime(9999, 12, 31),
+      initialDate: initialDate,
+      locale: const Locale('zh', 'CN'),
+    );
+    if (picked == null) {
+      return;
+    }
+    setState(() {
+      _shippingDate = picked;
+      _shippingDateManuallySpecified = true;
+      _shippingDateController.text = formatDate(picked);
     });
   }
 
@@ -177,7 +203,10 @@ class _OrderFormPageState extends State<OrderFormPage> {
       }
       await _showOrderResultDialog(
         title: '录入成功',
-        message: '订单录入成功。系统单号：${order.orderNo}',
+        message: [
+          '订单录入成功。系统单号：${order.orderNo}',
+          for (final warning in order.shippingRiskWarnings) warning.message,
+        ].join('\n'),
       );
     } catch (error) {
       if (!mounted) {
@@ -245,6 +274,9 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _remarkController.clear();
     _orderDate = now;
     _orderDateController.text = formatDate(now);
+    _shippingDate = _shanghaiToday().add(const Duration(days: 1));
+    _shippingDateManuallySpecified = false;
+    _shippingDateController.text = formatDate(_shippingDate);
     _selectedCustomer = null;
     _province = null;
     _city = null;
@@ -256,6 +288,8 @@ class _OrderFormPageState extends State<OrderFormPage> {
     final payload = <String, dynamic>{
       'orderType': _orderEntryOrderType,
       'orderDate': formatDate(_orderDate),
+      'shippingDate': formatDate(_shippingDate),
+      'shippingDateManuallySpecified': _shippingDateManuallySpecified,
     };
     final travelGroupId = widget.travelGroupId?.trim() ?? '';
     if (validateRequired && travelGroupId.isEmpty) {
@@ -325,11 +359,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
       if (validateRequired && item.quantity <= 0) {
         throw _OrderFormValidationError('第 ${index + 1} 条明细数量必须大于 0。');
       }
-      if (validateRequired &&
-          item.usesSerializedInventory &&
-          item.serializedUnits.isEmpty) {
-        throw _OrderFormValidationError('第 ${index + 1} 条明细请选择物流码。');
-      }
       final subtotalCents = item.subtotalCentsOrNull;
       if (subtotalCents == null) {
         throw _OrderFormValidationError(
@@ -347,10 +376,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
         'subtotalCents': subtotalCents,
         'deliveryType': item.deliveryType.value,
         'sortOrder': payloads.length + 1,
-        if (item.usesSerializedInventory)
-          'serializedUnitIds': [
-            for (final unit in item.serializedUnits) unit.id,
-          ],
       };
       _putNonEmpty(itemPayload, 'notes', item.notes);
       payloads.add(itemPayload);
@@ -391,22 +416,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
 
   void _updateItemProduct(int index, ProductOptionRecord product) {
     setState(() => _items[index].selectProduct(product));
-  }
-
-  Future<void> _selectSerializedUnits(int index) async {
-    final item = _items[index];
-    final productId = item.productId;
-    if (productId == null || !item.usesSerializedInventory) return;
-    final selected = await showDialog<List<SerializedUnitSelection>>(
-      context: context,
-      builder: (context) => SerializedInventoryPickerDialog(
-        businessApi: _businessApi,
-        productId: productId,
-        initialUnits: item.serializedUnits,
-      ),
-    );
-    if (selected == null || !mounted) return;
-    setState(() => item.selectSerializedUnits(selected));
   }
 
   void _disposeItems() {
@@ -604,6 +613,25 @@ class _OrderFormPageState extends State<OrderFormPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  TextField(
+                    key: const ValueKey('order-shipping-date-field'),
+                    controller: _shippingDateController,
+                    readOnly: true,
+                    onTap: _pickShippingDate,
+                    decoration: const InputDecoration(
+                      labelText: '发货日期 *',
+                      suffixIcon: Icon(Icons.local_shipping_rounded),
+                    ),
+                  ),
+                  if (formatDate(_shippingDate) ==
+                      formatDate(_shanghaiToday())) ...[
+                    const SizedBox(height: 10),
+                    const _InlineNotice(
+                      message: '该订单计划当天发货，请确认仓库可及时处理。',
+                      tone: StatusTone.warning,
+                    ),
+                  ],
+                  const SizedBox(height: 12),
                   _OrderItemsEditor(
                     items: _items,
                     productOptions: _productOptions,
@@ -615,7 +643,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
                     onChanged: () => setState(() {}),
                     onDeliveryTypeChanged: _updateItemDeliveryType,
                     onProductChanged: _updateItemProduct,
-                    onSelectSerializedUnits: _selectSerializedUnits,
                   ),
                   const SizedBox(height: 12),
                   ResponsiveFormGrid(
@@ -651,6 +678,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
           ),
           secondary: _OrderSummary(
             orderDate: _orderDate,
+            shippingDate: _shippingDate,
             customerName: _customerNameController.text,
             customerPhone: _customerPhoneController.text,
             totalAmountCents: totalAmountCents,
@@ -722,7 +750,6 @@ class _OrderItemsEditor extends StatelessWidget {
     required this.onChanged,
     required this.onDeliveryTypeChanged,
     required this.onProductChanged,
-    required this.onSelectSerializedUnits,
   });
 
   final List<_OrderItemDraft> items;
@@ -736,7 +763,6 @@ class _OrderItemsEditor extends StatelessWidget {
   final void Function(int index, DeliveryType deliveryType)
       onDeliveryTypeChanged;
   final void Function(int index, ProductOptionRecord product) onProductChanged;
-  final ValueChanged<int> onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -790,7 +816,6 @@ class _OrderItemsEditor extends StatelessWidget {
                   onRetryProductOptions: onRetryProductOptions,
                   onProductChanged: (product) =>
                       onProductChanged(index, product),
-                  onSelectSerializedUnits: () => onSelectSerializedUnits(index),
                 ),
                 if (index != items.length - 1) const Divider(height: 20),
               ],
@@ -813,7 +838,6 @@ class _ItemRow extends StatelessWidget {
     required this.productOptionsError,
     required this.onRetryProductOptions,
     required this.onProductChanged,
-    required this.onSelectSerializedUnits,
   });
 
   final int index;
@@ -826,7 +850,6 @@ class _ItemRow extends StatelessWidget {
   final String? productOptionsError;
   final VoidCallback onRetryProductOptions;
   final ValueChanged<ProductOptionRecord> onProductChanged;
-  final VoidCallback onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -872,14 +895,12 @@ class _ItemRow extends StatelessWidget {
         final quantityField = TextField(
           key: ValueKey('order-item-quantity-$index'),
           controller: item.quantityController,
-          readOnly: item.usesSerializedInventory,
           onChanged: (_) => onChanged(),
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
+          decoration: const InputDecoration(
             labelText: '数量',
-            helperText: item.usesSerializedInventory ? '由所选物流码数量自动生成' : null,
           ),
         );
         final subtotalField = TextField(
@@ -924,13 +945,6 @@ class _ItemRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 productField,
-                if (item.usesSerializedInventory) ...[
-                  const SizedBox(height: 8),
-                  _SerializedSelectionSummary(
-                    units: item.serializedUnits,
-                    onPressed: onSelectSerializedUnits,
-                  ),
-                ],
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -959,13 +973,6 @@ class _ItemRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     productField,
-                    if (item.usesSerializedInventory) ...[
-                      const SizedBox(height: 8),
-                      _SerializedSelectionSummary(
-                        units: item.serializedUnits,
-                        onPressed: onSelectSerializedUnits,
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -997,35 +1004,10 @@ class _ItemRow extends StatelessWidget {
   }
 }
 
-class _SerializedSelectionSummary extends StatelessWidget {
-  const _SerializedSelectionSummary({
-    required this.units,
-    required this.onPressed,
-  });
-
-  final List<SerializedUnitSelection> units;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      key: const Key('order-select-serialized-units'),
-      onPressed: onPressed,
-      icon: const Icon(Icons.qr_code_scanner_rounded),
-      label: Text(
-        units.isEmpty
-            ? '选择物流码'
-            : '已选 ${units.length} 瓶\n${units.map((unit) => unit.logisticsCode).join('、')}',
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-}
-
 class _OrderSummary extends StatelessWidget {
   const _OrderSummary({
     required this.orderDate,
+    required this.shippingDate,
     required this.customerName,
     required this.customerPhone,
     required this.totalAmountCents,
@@ -1034,6 +1016,7 @@ class _OrderSummary extends StatelessWidget {
   });
 
   final DateTime orderDate;
+  final DateTime shippingDate;
   final String customerName;
   final String customerPhone;
   final int totalAmountCents;
@@ -1050,6 +1033,8 @@ class _OrderSummary extends StatelessWidget {
           const SizedBox(height: 10),
         ],
         _SummaryLine(label: '订单日期', value: formatDate(orderDate)),
+        const SizedBox(height: 10),
+        _SummaryLine(label: '发货日期', value: formatDate(shippingDate)),
         const SizedBox(height: 10),
         _SummaryLine(
           label: '客户',
@@ -1142,25 +1127,15 @@ class _OrderItemDraft {
   final TextEditingController notesController;
   DeliveryType deliveryType;
   String inventoryTrackingMode = 'none';
-  List<SerializedUnitSelection> serializedUnits = const [];
-
-  bool get usesSerializedInventory => inventoryTrackingMode == 'serialized';
 
   void selectProduct(ProductOptionRecord product) {
     if (productId != product.id) {
-      serializedUnits = const [];
-      quantityController.text = product.usesSerializedInventory ? '0' : '1';
+      quantityController.text = '1';
     }
     productId = product.id;
     snapshotName = product.name;
     snapshotUnit = product.unit;
     inventoryTrackingMode = product.inventoryTrackingMode;
-  }
-
-  void selectSerializedUnits(List<SerializedUnitSelection> units) {
-    serializedUnits = List.unmodifiable(units);
-    quantityController.text = '${units.length}';
-    if (units.isNotEmpty) snapshotName = units.first.moutaiName;
   }
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
@@ -1219,6 +1194,12 @@ class _InlineNotice extends StatelessWidget {
 }
 
 const _orderEntryOrderType = 'travel_group';
+
+DateTime _shanghaiToday() {
+  final shanghaiNow =
+      DateTime.now().toUtc().add(const Duration(hours: 8));
+  return DateTime(shanghaiNow.year, shanghaiNow.month, shanghaiNow.day);
+}
 
 List<_OrderItemDraft> _initialOrderItems() {
   return [

@@ -9,6 +9,7 @@ import { CommissionRulesModule } from './modules/commission-rules/commission-rul
 import { CommissionsModule } from './modules/commissions/commissions.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { GuidesModule } from './modules/guides/guides.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
 import { OperationLogNestController } from './modules/operation-logs/operation-log.nest.controller';
 import { OperationLogsModule } from './modules/operation-logs/operation-logs.module';
 import { PreparationConfirmationModule } from './modules/preparation-confirmation/preparation-confirmation.module';
@@ -29,6 +30,7 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     PreparationConfirmationModule,
     SettingsModule,
+    InventoryModule,
     SerializedInventoryModule,
     AiModule,
     BusinessDataModule,

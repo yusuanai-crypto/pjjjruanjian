@@ -24,6 +24,7 @@ test('unit: maps the three supported carrier codes and legacy names', () => {
   );
   assert.equal(normalizeLogisticsProviderCode(null, '韵达快递'), 'yunda');
   assert.equal(normalizeLogisticsProviderCode(null, '自提'), 'self_carry');
+  assert.equal(normalizeLogisticsProviderCode(null, '客户自提'), 'self_carry');
 });
 
 test('unit: self-carry and missing tracking numbers never query provider', async () => {
@@ -44,7 +45,7 @@ test('unit: self-carry and missing tracking numbers never query provider', async
     }),
   );
   const missingNo = await service.resolveForSalesSheet(
-    buildOrder({ logisticsNo: null }),
+    buildOrder({ packingStatus: 'PACKED', logisticsNo: null }),
   );
 
   assert.equal(queryCount, 0);

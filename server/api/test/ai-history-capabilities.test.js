@@ -43,6 +43,13 @@ test('contract: AI chat history returns only the current user records and saniti
       assert.equal(serialized.includes('select * from customers'), false);
       assert.equal(serialized.includes('13900000000'), false);
       assert.equal(serialized.includes('secret-raw-data'), false);
+      const hiddenHistory = all.body.data.items.find(
+        (item) => item.id === 'msg-stage9-own-a',
+      );
+      assert.match(hiddenHistory.answer, /已隐藏/);
+      assert.match(hiddenHistory.answer, /请重新询问销售额、退款、排名、客户订单、售后或物流/);
+      assert.equal(hiddenHistory.answer.includes('```'), false);
+      assert.equal(hiddenHistory.answer.includes('select'), false);
       assert.deepEqual(Object.keys(all.body.data.items[0].toolCalls[0]).sort(), [
         'globalMarkedFilterEnabled',
         'rowCount',
@@ -93,6 +100,7 @@ test('contract: AI chat history returns only the current user records and saniti
             userId: 'usr-stage9-history-boss',
             userRole: 'boss',
             question: 'own finance summary question',
+            answer: '```sql\nselect * from finance_records;\n```',
             intent: 'finance_summary',
             createdAt: '2026-07-02T04:00:00.000Z',
           }),
@@ -432,7 +440,7 @@ function chatMessage(overrides = {}) {
     userId: 'usr-stage9-history-boss',
     userRole: 'boss',
     question: 'history question',
-    answer: 'history answer',
+    answer: '历史回答：暂无可用数据。',
     intent: 'analytics_overview',
     dataScope: {
       range: {

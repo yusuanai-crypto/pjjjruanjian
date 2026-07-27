@@ -23,10 +23,10 @@ test('unit: stage7 travel group finance summary service creates summary', async 
     totalSalesAmountCents: 1500000,
     totalCashOnDeliveryCents: 300000,
     totalPaidDepositCents: 1200000,
-    confirmedRefundAmountCents: 100000,
-    effectiveSalesAmountCents: 1400000,
+    confirmedRefundAmountCents: 0,
+    effectiveSalesAmountCents: 1500000,
     totalAgencyDeductionCents: 170000,
-    totalAgencyNetAmountCents: 1230000,
+    totalAgencyNetAmountCents: 1330000,
     totalDailyRebateCents: 36900,
     totalMonthlyRebateCents: 24600,
     paidRebateCents: 0,
@@ -125,8 +125,8 @@ test('unit: stage7 travel group finance summary calculates effective sales amoun
 
   assertSummaryAmounts(prisma.__store.summaries[0], {
     totalSalesAmountCents: 1000000,
-    confirmedRefundAmountCents: 150000,
-    effectiveSalesAmountCents: 150000,
+    confirmedRefundAmountCents: 0,
+    effectiveSalesAmountCents: 700000,
   });
 });
 
@@ -164,7 +164,7 @@ test('unit: stage7 travel group finance summary source snapshot keeps traceabili
   assert.equal(snapshot.travelGroup.guidePhone, '18800000000');
   assert.equal(snapshot.orders.length, 2);
   assert.equal(snapshot.orders[0].items.length, 2);
-  assert.equal(snapshot.confirmedRefunds.length, 1);
+  assert.equal(snapshot.confirmedRefunds.length, 0);
   assert.equal(snapshot.unconfirmedRefundSummary.count, 1);
   assert.equal(snapshot.afterSalesCount, 2);
   assert.equal(snapshot.activeAfterSalesCount, 1);
@@ -268,7 +268,7 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
   assert.equal(prisma.__store.travelGroup.paidDepositCents, 1200000);
   assert.equal(prisma.__store.travelGroup.cashOnDeliveryCents, 300000);
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 170000);
-  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1230000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1330000);
 });
 
 test('unit: after-sales after paid rebate preserves paid fact and requires finance handling', async () => {
@@ -347,10 +347,10 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
   assertSummaryAmounts(updated, {
     totalAgencyDeductionCents: 300000,
     totalAgencyNetAmountCents: 1100000,
-    totalDailyRebateCents: 40857,
-    totalMonthlyRebateCents: 22000,
+    totalDailyRebateCents: 44000,
+    totalMonthlyRebateCents: 24000,
     paidRebateCents: 0,
-    unpaidRebateCents: 62857,
+    unpaidRebateCents: 68000,
   });
   assert.equal(updated.agencyDeductionConfirmed, false);
   assert.equal(updated.agencyDeductionConfirmedById, null);
@@ -384,9 +384,9 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
   await service.refreshTravelGroupFinanceSummary('group-stage7');
 
   assert.equal(prisma.__store.summaries[0].totalAgencyDeductionCents, 300000);
-  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1100000);
-  assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 40857);
-  assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 22000);
+  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1200000);
+  assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 44000);
+  assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 24000);
 });
 
 function createService(prisma) {
@@ -670,6 +670,7 @@ function salesOrder(overrides = {}) {
   return {
     id: overrides.id || 'order-stage7',
     orderNo: overrides.orderNo || 'SO-STAGE7-SUMMARY',
+    orderType: overrides.orderType || 'TRAVEL_GROUP',
     orderDate: new Date('2026-07-15T00:00:00.000Z'),
     status: overrides.status || 'VALID',
     totalAmountCents: overrides.totalAmountCents || 0,
@@ -789,6 +790,13 @@ function matchesWhere(row, where = {}) {
   return Object.entries(where || {}).every(([key, value]) => {
     if (value && typeof value === 'object' && Array.isArray(value.in)) {
       return value.in.includes(row[key]);
+    }
+    if (
+      value &&
+      typeof value === 'object' &&
+      Object.prototype.hasOwnProperty.call(value, 'not')
+    ) {
+      return row[key] !== value.not;
     }
     if (value === null) {
       return row[key] === null || row[key] === undefined;

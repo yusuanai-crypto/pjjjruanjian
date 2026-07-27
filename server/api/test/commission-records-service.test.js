@@ -150,6 +150,77 @@ test('unit: stage7 commission record service skips leader when sales has no lead
   assertWarningCodes(result, ['missing_leader']);
 });
 
+test('unit: commission rule outside the order date does not generate the targeted employee commission', async () => {
+  const prisma = createCommissionPrisma({
+    commissionRules: [
+      commissionRule({
+        id: 'rule-outreach-future',
+        targetType: 'outreach_commission',
+        rate: '0.0080',
+        effectiveFrom: '2026-08-01',
+      }),
+    ],
+  });
+  const service = createService(prisma);
+
+  const result = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['OUTREACH_COMMISSION'],
+  });
+
+  assert.equal(result.generatedRecords.length, 0);
+  assert.equal(result.updatedRecords.length, 0);
+  assert.equal(prisma.__store.commissionRecords.length, 0);
+  assert.equal(
+    result.warnings.some(
+      (warning) =>
+        warning.code === 'missing_commission_rule' &&
+        warning.context.targetType === 'OUTREACH_COMMISSION',
+    ),
+    true,
+  );
+});
+
+test('unit: disabling an employee rule zeroes its stale snapshot without touching manual taster commission', async () => {
+  const prisma = createCommissionPrisma();
+  const service = createService(prisma);
+
+  await service.recalculateSalesOrderRecords('order-stage7');
+  const manualUpdatedAt = new Date('2026-07-20T00:00:00.000Z');
+  prisma.__store.commissionRecords.push({
+    id: 'manual-taster-record',
+    salesOrderId: 'order-stage7',
+    travelGroupId: 'travel-group-stage7',
+    targetType: 'TASTER_COMMISSION',
+    targetUserId: 'user-taster',
+    amountCents: 9999,
+    pointsCents: 0,
+    manualInput: true,
+    updatedAt: manualUpdatedAt,
+  });
+  const outreachRule = prisma.__store.commissionRules.find(
+    (rule) => rule.targetType === 'outreach_commission',
+  );
+  outreachRule.isActive = false;
+
+  const result = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['OUTREACH_COMMISSION'],
+  });
+
+  assert.equal(result.generatedRecords.length, 0);
+  assert.equal(result.updatedRecords.length, 1);
+  assertRecord(prisma, 'OUTREACH_COMMISSION', {
+    amountCents: 0,
+    commissionRuleId: null,
+    manualInput: false,
+  });
+  const manualTaster = prisma.__store.commissionRecords.find(
+    (record) => record.id === 'manual-taster-record',
+  );
+  assert.equal(manualTaster.amountCents, 9999);
+  assert.equal(manualTaster.updatedAt, manualUpdatedAt);
+  assertWarningCodes(result, ['missing_commission_rule']);
+});
+
 test('unit: stage7 commission record recalculation is idempotent and does not duplicate logs', async () => {
   const prisma = createCommissionPrisma();
   const service = createService(prisma);
@@ -162,6 +233,45 @@ test('unit: stage7 commission record recalculation is idempotent and does not du
   assert.equal(second.updatedRecords.length, 0);
   assert.equal(second.unchangedRecords.length, 5);
   assert.equal(prisma.__store.operationLogs.length, 5);
+});
+
+test('unit: commission record manual fallback creates rebates once with audited match mode', async () => {
+  const prisma = createCommissionPrisma({
+    agencyRebateRules: [
+      agencyRebateRule({
+        id: 'rule-later-rebate',
+        effectiveFrom: '2026-08-01',
+      }),
+    ],
+  });
+  const service = createService(prisma);
+
+  const strict = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'],
+  });
+  assertWarningCodes(strict, ['missing_agency_rebate_rule']);
+  assert.equal(prisma.__store.commissionRecords.length, 0);
+
+  const fallback = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'],
+    allowLatestAgencyRebateRuleFallback: true,
+  });
+  assertRecord(prisma, 'AGENCY_DAILY_REBATE', { pointsCents: 23400 });
+  assertRecord(prisma, 'AGENCY_MONTHLY_REBATE', { pointsCents: 15600 });
+  assertWarningCodes(fallback, ['agency_rebate_rule_fallback_applied']);
+  assert.equal(
+    findRecord(prisma, 'AGENCY_DAILY_REBATE').ruleSnapshot.agencyRebateRule
+      .matchMode,
+    'latest_active_manual_fallback',
+  );
+
+  const repeated = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'],
+    allowLatestAgencyRebateRuleFallback: true,
+  });
+  assert.equal(repeated.generatedRecords.length, 0);
+  assert.equal(repeated.updatedRecords.length, 0);
+  assert.equal(prisma.__store.commissionRecords.length, 2);
 });
 
 test('unit: stage7 commission record recalculation updates amounts after confirmed refund changes', async () => {

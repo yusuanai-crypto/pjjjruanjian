@@ -58,6 +58,114 @@ void main() {
     expect(fallback.message, contains('502'));
   });
 
+  test('SSE parser handles chunks, multiline data, and heartbeat comments',
+      () async {
+    final source = Stream<List<int>>.fromIterable([
+      utf8.encode(': heart'),
+      utf8.encode('beat\n\nevent: global-mark-query.changed\r\n'),
+      utf8.encode('id: 7\r\ndata: {"onlyShowMarkedRecords":true,\r\n'),
+      utf8.encode('data: "revision":7}\r\n\r\n'),
+    ]);
+
+    final events = await parseSseEvents(source).toList();
+
+    expect(events, hasLength(1));
+    expect(events.single.event, 'global-mark-query.changed');
+    expect(events.single.id, '7');
+    expect(events.single.data, contains('\n'));
+    expect(events.single.decodeJsonData(), {
+      'onlyShowMarkedRecords': true,
+      'revision': 7,
+    });
+  });
+
+  test('openSse sends Authorization and parses an event stream', () async {
+    final server = await _startServer((request) async {
+      expect(request.method, 'GET');
+      expect(
+        request.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer sse-token',
+      );
+      expect(
+        request.headers.value(HttpHeaders.acceptHeader),
+        'text/event-stream',
+      );
+      request.response.statusCode = 200;
+      request.response.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'text/event-stream',
+      );
+      request.response.write(
+        'event: global-mark-query.snapshot\n'
+        'data: {"onlyShowMarkedRecords":false,"revision":0}\n\n',
+      );
+      await request.response.close();
+    });
+    final client = ApiClient(baseUrl: server.baseUrl);
+    addTearDown(() => client.close(force: true));
+
+    final event = await client
+        .openSse(
+          '/api/settings/global-mark-query/events',
+          token: 'sse-token',
+        )
+        .first;
+    await server.handled;
+
+    expect(event.event, 'global-mark-query.snapshot');
+    expect(event.decodeJsonData()['onlyShowMarkedRecords'], false);
+  });
+
+  test('openSse refreshes an expired token before reconnecting', () async {
+    var requests = 0;
+    final server = await _startServer((request) async {
+      requests += 1;
+      final authorization =
+          request.headers.value(HttpHeaders.authorizationHeader);
+      if (requests == 1) {
+        expect(authorization, 'Bearer expired-token');
+        request.response.statusCode = 401;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'error': {
+              'code': 'AUTH_TOKEN_EXPIRED',
+              'message': 'Expired',
+            },
+          }),
+        );
+      } else {
+        expect(authorization, 'Bearer refreshed-token');
+        request.response.statusCode = 200;
+        request.response.headers.set(
+          HttpHeaders.contentTypeHeader,
+          'text/event-stream',
+        );
+        request.response.write(
+          'event: global-mark-query.snapshot\n'
+          'data: {"onlyShowMarkedRecords":true,"revision":1}\n\n',
+        );
+      }
+      await request.response.close();
+    });
+    final client = ApiClient(
+      baseUrl: server.baseUrl,
+      onAccessTokenExpired: () async => 'refreshed-token',
+    );
+    addTearDown(() => client.close(force: true));
+
+    final event = await client
+        .openSse(
+          '/api/settings/global-mark-query/events',
+          token: 'expired-token',
+        )
+        .first;
+    await server.handled;
+
+    expect(requests, 2);
+    expect(event.decodeJsonData()['onlyShowMarkedRecords'], true);
+  });
+
   test('getJson preserves an HTML 502 response as an HTTP error', () async {
     final server = await _startServer((request) async {
       request.response.statusCode = 502;

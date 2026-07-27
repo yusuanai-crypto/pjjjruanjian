@@ -279,6 +279,55 @@ void main() {
     expect(apiClient.lastOrderPackingBody?['packageCount'], 4);
   });
 
+  testWidgets(
+      'packed shipping order with provider and no tracking number can be saved',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient(
+      logisticsNo: null,
+      packingStatus: 'packed',
+    );
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+
+    final logisticsNoField = find.byKey(
+      const ValueKey('order-edit-logistics-no-field'),
+    );
+    await tester.ensureVisible(logisticsNoField);
+    expect(find.text('已打包，物流单号待财务补录'), findsOneWidget);
+
+    final saveButton = find.byKey(const ValueKey('order-edit-save-button'));
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.salesOrderUpdatePaths,
+      contains('/api/sales-orders/order-1'),
+    );
+    expect(
+      apiClient.financePatchPaths,
+      contains('/api/sales-orders/order-1/finance'),
+    );
+    expect(
+      apiClient.packingPatchPaths,
+      contains('/api/sales-orders/order-1/packing'),
+    );
+    expect(apiClient.lastOrderFinanceBody?['logisticsNo'], '');
+    expect(apiClient.lastOrderPackingBody?['packingStatus'], 'packed');
+    expect(find.text('邮寄订单进入已打包状态前必须选择物流公司。'), findsNothing);
+  });
+
   testWidgets('shows sales edit entry but hides finance mark buttons',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -669,6 +718,8 @@ class _FakeApiClient extends ApiClient {
   _FakeApiClient({
     this.salesSheetQrUrl,
     this.failDownload = false,
+    this.logisticsNo = 'SF123456789',
+    this.packingStatus = 'pending',
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final List<String> salesOrderListPaths = <String>[];
@@ -681,6 +732,8 @@ class _FakeApiClient extends ApiClient {
   final List<String> qrCodePaths = <String>[];
   final String? salesSheetQrUrl;
   final bool failDownload;
+  final String? logisticsNo;
+  final String packingStatus;
   Map<String, dynamic>? lastCustomerMarkBody;
   Map<String, dynamic>? lastOrderMarkBody;
   Map<String, dynamic>? lastOrderUpdateBody;
@@ -855,6 +908,8 @@ class _FakeApiClient extends ApiClient {
   Map<String, dynamic> _currentOrderJson() {
     final order = _orderJson(customerMark: customerMark, orderMark: orderMark);
     order.addAll({
+      'packingStatus': packingStatus,
+      'logisticsNo': logisticsNo,
       'salesEditCount': salesEdited ? 1 : 0,
       'salesEditLimit': 1,
       'salesEditRemaining': salesEdited ? 0 : 1,

@@ -409,6 +409,87 @@ class ApiClient {
     }
   }
 
+  Stream<ApiSseEvent> openSse(
+    String path, {
+    String? token,
+  }) {
+    return _openSse(
+      path,
+      token: token,
+      retryAfterRefresh: true,
+    );
+  }
+
+  Stream<ApiSseEvent> _openSse(
+    String path, {
+    required String? token,
+    required bool retryAfterRefresh,
+  }) async* {
+    try {
+      final request =
+          await _httpClient.openUrl('GET', Uri.parse('$_baseUrl$path'));
+      request.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+      request.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+      final effectiveToken = _effectiveToken(token);
+      if (effectiveToken != null && effectiveToken.isNotEmpty) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $effectiveToken',
+        );
+      }
+
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final bytesBuilder = BytesBuilder(copy: false);
+        await for (final chunk in response) {
+          bytesBuilder.add(chunk);
+        }
+        final error = apiExceptionFromResponseBytes(
+          response.statusCode,
+          bytesBuilder.takeBytes(),
+        );
+        await _notifySessionRevoked(error);
+        final refreshedToken = await _tokenForRetry(
+          error,
+          requestedToken: token,
+          path: path,
+          retryAfterRefresh: retryAfterRefresh,
+        );
+        if (refreshedToken != null) {
+          yield* _openSse(
+            path,
+            token: refreshedToken,
+            retryAfterRefresh: false,
+          );
+          return;
+        }
+        throw error;
+      }
+
+      yield* parseSseEvents(response);
+    } on ApiException {
+      rethrow;
+    } on SocketException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'NETWORK_ERROR',
+        message: '无法连接服务器，请检查服务器地址和网络。',
+      );
+    } on FormatException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_RESPONSE',
+        message: '服务器返回格式异常。',
+      );
+    } on ArgumentError {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'INVALID_SERVER_URL',
+        message: '服务器地址格式不正确。',
+      );
+    }
+  }
+
   void close({bool force = false}) {
     _httpClient.close(force: force);
   }
@@ -538,6 +619,99 @@ class ApiClient {
     return refreshedToken == null || refreshedToken.isEmpty
         ? null
         : refreshedToken;
+  }
+}
+
+class ApiSseEvent {
+  const ApiSseEvent({
+    required this.event,
+    required this.data,
+    this.id,
+    this.retry,
+  });
+
+  final String event;
+  final String data;
+  final String? id;
+  final Duration? retry;
+
+  Map<String, dynamic> decodeJsonData() {
+    final decoded = jsonDecode(data);
+    return decoded is Map
+        ? decoded.map((key, value) => MapEntry('$key', value))
+        : const <String, dynamic>{};
+  }
+}
+
+Stream<ApiSseEvent> parseSseEvents(Stream<List<int>> byteStream) async* {
+  var eventName = 'message';
+  String? eventId;
+  Duration? retry;
+  final dataLines = <String>[];
+
+  ApiSseEvent? takeEvent() {
+    if (dataLines.isEmpty) {
+      eventName = 'message';
+      eventId = null;
+      retry = null;
+      return null;
+    }
+    final event = ApiSseEvent(
+      event: eventName,
+      data: dataLines.join('\n'),
+      id: eventId,
+      retry: retry,
+    );
+    eventName = 'message';
+    eventId = null;
+    retry = null;
+    dataLines.clear();
+    return event;
+  }
+
+  await for (final line
+      in byteStream.transform(utf8.decoder).transform(const LineSplitter())) {
+    if (line.isEmpty) {
+      final event = takeEvent();
+      if (event != null) {
+        yield event;
+      }
+      continue;
+    }
+    if (line.startsWith(':')) {
+      continue;
+    }
+
+    final separator = line.indexOf(':');
+    final field = separator < 0 ? line : line.substring(0, separator);
+    var value = separator < 0 ? '' : line.substring(separator + 1);
+    if (value.startsWith(' ')) {
+      value = value.substring(1);
+    }
+    switch (field) {
+      case 'event':
+        eventName = value.isEmpty ? 'message' : value;
+        break;
+      case 'data':
+        dataLines.add(value);
+        break;
+      case 'id':
+        if (!value.contains('\u0000')) {
+          eventId = value;
+        }
+        break;
+      case 'retry':
+        final retryMilliseconds = int.tryParse(value);
+        if (retryMilliseconds != null && retryMilliseconds >= 0) {
+          retry = Duration(milliseconds: retryMilliseconds);
+        }
+        break;
+    }
+  }
+
+  final finalEvent = takeEvent();
+  if (finalEvent != null) {
+    yield finalEvent;
   }
 }
 

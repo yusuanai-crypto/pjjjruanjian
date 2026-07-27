@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_attachments/downloaded_file_service.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_query/travel_group_query_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/travel_groups/tasting_items_editor.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -168,6 +169,43 @@ void main() {
     expect(_dialogText(dialog, '实际进店时间'), findsNothing);
     expect(_dialogText(dialog, '团型'), findsNothing);
     expect(_dialogText(dialog, '香烟费用（元）'), findsNothing);
+  });
+
+  testWidgets('reception taster sees tasting item detail without editor',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'actor-1',
+      liaisonTasterId: 'other-liaison',
+    );
+
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(find.textContaining('2 '), findsOneWidget);
+    expect(find.byType(TastingItemsEditor), findsNothing);
+  });
+
+  testWidgets('liaison taster sees tasting item detail', (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'other-taster',
+      liaisonTasterId: 'actor-1',
+    );
+
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(find.textContaining('2 '), findsOneWidget);
+    expect(find.byType(TastingItemsEditor), findsNothing);
   });
 
   testWidgets('liaison taster cannot edit date or guide', (tester) async {

@@ -259,6 +259,7 @@ test('contract: stage7 commission record queries obey global mark filtering', as
       'rec-stage7-query-sales',
       'rec-stage7-query-taster-marked',
       'rec-stage7-query-taster-other',
+      'rec-stage7-query-unmarked-group',
     ]);
 
     const hidden = await requestJson(
@@ -277,7 +278,7 @@ test('contract: stage7 commission record queries obey global mark filtering', as
         token: boss.token,
       },
     );
-    assertErrorContract(hiddenGroup, 404, 'COMMISSION_RECORD_NOT_FOUND');
+    assert.equal(hiddenGroup.response.status, 200);
 
     const scopedTasterMe = await requestJson(
       baseUrl,
@@ -388,12 +389,12 @@ function buildCommissionRecordsQueryPrisma() {
       salesOrder({
         id: 'so-stage7-unmarked-customer',
         orderNo: 'SO-STAGE7-UNMARKED-CUSTOMER',
-        customerId: 'cust-stage7-query-unmarked',
+        customerId: 'cust-stage7-query-marked',
         travelGroupId: 'tg-stage7-marked',
         orderDate: '2026-07-01',
         salesUserId: 'usr-stage7-query-sales',
         customerName: 'Stage7 Query Unmarked Customer',
-        financeMark: true,
+        financeMark: false,
       }),
       salesOrder({
         id: 'so-stage7-unmarked-group',

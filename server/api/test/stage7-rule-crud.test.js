@@ -1148,6 +1148,7 @@ function assertCommissionRuleContract(rule) {
     'isActive',
     'notes',
     'rate',
+    'recalculation',
     'ruleName',
     'targetType',
     'updatedAt',
@@ -1158,6 +1159,24 @@ function assertCommissionRuleContract(rule) {
   assert.equal(typeof rule.targetType, 'string');
   assert.equal(typeof rule.rate, 'string');
   assert.equal(typeof rule.isActive, 'boolean');
+  for (const field of [
+    'source',
+    'ruleIds',
+    'orderCount',
+    'successCount',
+    'failureCount',
+    'skippedCount',
+    'generatedCount',
+    'updatedCount',
+    'unchangedCount',
+    'warnings',
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(rule.recalculation, field),
+      true,
+      `commissionRule.recalculation.${field}`,
+    );
+  }
 }
 
 function assertImportResultContract(result, successCount, failureCount) {

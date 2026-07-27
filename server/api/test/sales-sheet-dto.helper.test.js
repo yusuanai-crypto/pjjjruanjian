@@ -136,6 +136,9 @@ test('unit: sales sheet public view exposes only approved customer and logistics
     'serialized-unit-secret',
     '000000999',
     'purchaseCostCents',
+    'warehouse-internal-secret',
+    'inventory-cost-secret',
+    'inventory-line-secret',
   ]) {
     assert.equal(
       serialized.includes(forbidden),
@@ -186,6 +189,15 @@ function buildOrderFixture(overrides = {}) {
     packingStatus: 'PENDING',
     packageCount: 2,
     warehouseRemark: '库管内部备注',
+    fulfillmentWarehouseId: 'warehouse-internal-secret',
+    inventoryAppliedAt: new Date('2026-07-01T10:00:00.000Z'),
+    inventoryPolicyVersion: 99,
+    inventoryVersion: 99,
+    warehouseProductStock: {
+      onHandQty: 999,
+      availableQty: 998,
+      inventoryCost: 'inventory-cost-secret',
+    },
     logisticsNo: 'SF123456',
     trackingState: 'in_transit',
     trackingStateLabel: '运输中',
@@ -242,6 +254,7 @@ function buildOrderFixture(overrides = {}) {
         deliveryType: 'SHIPPING',
         notes: '内部明细备注 A',
         sortOrder: 2,
+        inventoryLineKey: 'inventory-line-secret',
         serializedInventoryUnits: [
           {
             id: 'serialized-unit-secret',

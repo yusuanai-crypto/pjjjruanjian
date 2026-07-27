@@ -1,4 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import * as crypto from 'node:crypto';
 
@@ -10,7 +11,13 @@ import {
   buildGlobalTravelGroupMarkScope as buildSharedGlobalTravelGroupMarkScope,
 } from '../analytics/analytics-scope.helper';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
+import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
 import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
+import {
+  SalesOrderInventoryService,
+  serverInventoryLineKey,
+  shouldAssignInventoryLineKeys,
+} from '../inventory/sales-order-inventory.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import {
   calculateOrderProductProfit,
@@ -56,6 +63,15 @@ import {
   logisticsProviderName,
   normalizeLogisticsProviderCode,
 } from './logistics-provider.helper';
+import {
+  assertShippingDateNotBeforeSubmission,
+  defaultBackfillShippingDate,
+  formatDateOnly,
+  isSameShanghaiNaturalDay,
+  parseRequiredShippingDate,
+  resolveSubmissionShippingDate,
+  SAME_DAY_SHIPPING_WARNING,
+} from './sales-order-shipping-date.helper';
 import {
   assertAttachmentAggregateSize,
   createAttachmentStorageKey,
@@ -109,6 +125,11 @@ const GROUP_STATUS_FROM_PRISMA: any = {
 };
 
 const PRISMA_INT_MAX = 2_147_483_647;
+const SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS = {
+  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  maxWait: 5_000,
+  timeout: 30_000,
+};
 const TRAVEL_GROUP_TYPES = new Set([
   'KB团',
   'AB团',
@@ -379,6 +400,7 @@ const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '系统单号', key: 'orderNo', width: 18 },
   { header: '销售单号', key: 'salesFormNo', width: 18 },
   { header: '订单日期', key: 'orderDate', width: 14 },
+  { header: '发货日期', key: 'shippingDate', width: 14 },
   { header: '客户姓名', key: 'customerName', width: 18 },
   { header: '客户电话', key: 'customerPhone', width: 16 },
   { header: '地址', key: 'address', width: 36 },
@@ -534,6 +556,8 @@ const SALES_ORDER_PACKING_PATCH_FIELDS = [
   'packingStatus',
   'packageCount',
   'warehouseRemark',
+  'hasPackingMark',
+  'fulfillmentWarehouseId',
 ];
 
 const SALES_ORDER_STATUS_PATCH_FIELDS = ['status', 'remark', 'statusReason'];
@@ -552,7 +576,9 @@ const SALES_ORDER_SALES_EDIT_FIELDS = new Set([
   'items',
   'status',
   ...SALES_ORDER_FINANCE_PATCH_FIELDS,
-  ...SALES_ORDER_PACKING_PATCH_FIELDS,
+  ...SALES_ORDER_PACKING_PATCH_FIELDS.filter(
+    (field) => field !== 'fulfillmentWarehouseId',
+  ),
 ]);
 
 const SALES_ORDER_CUSTOMER_PATCH_FIELDS = [
@@ -567,10 +593,8 @@ const SALES_ORDER_CUSTOMER_PATCH_FIELDS = [
 
 const AFTER_SALES_ORDER_PATCH_FIELDS = [
   'issueType',
-  'actionType',
   'description',
   'resolution',
-  'refundAmountCents',
   'notes',
 ];
 
@@ -584,11 +608,6 @@ const AFTER_SALES_ORDER_FINANCE_CONFIRM_PATCH_FIELDS = ['financeConfirmed'];
 const AFTER_SALES_ORDER_WAREHOUSE_CONFIRM_PATCH_FIELDS = [
   'note',
   'warehouseConfirmNote',
-];
-
-const AFTER_SALES_ORDER_REFUND_LINK_STATUSES = [
-  'WAITING_REFUND',
-  'COMPLETED',
 ];
 
 const RECONCILIATION_MANUAL_PATCH_FIELDS = new Set([
@@ -606,7 +625,9 @@ export class BusinessDataNestService {
     private readonly settingsService: SettingsNestService,
     private readonly commissionRecordsService: CommissionRecordsNestService,
     private readonly travelGroupFinanceSummaryService: TravelGroupFinanceSummaryNestService,
+    private readonly guidePointsSummaryService: GuidePointsSummaryNestService,
     private readonly logisticsTrackingService: LogisticsTrackingService,
+    private readonly salesOrderInventoryService: SalesOrderInventoryService,
     @Optional()
     @Inject(TODO_REMINDERS_RECONCILER)
     private readonly todoReminders?: TodoRemindersReconciler,
@@ -633,6 +654,7 @@ export class BusinessDataNestService {
     const include = getGroupInclude(kind);
     const take = normalizeTake(filters.limit, 50);
     const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
+    const onlyShowMarkedRecords = await this.onlyShowMarkedRecords();
     const groups = await delegate.findMany({
       where,
       orderBy: {
@@ -643,7 +665,7 @@ export class BusinessDataNestService {
     });
     return filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, kind, actor),
+        toGroupDto(group, kind, actor, onlyShowMarkedRecords),
       ),
       filters,
     ).slice(0, take);
@@ -651,6 +673,7 @@ export class BusinessDataNestService {
 
   async exportTravelGroupsXlsx(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin', 'finance']);
+    const onlyShowMarkedRecords = await this.onlyShowMarkedRecords();
     const groups = await this.prisma.travelGroup.findMany({
       where: await this.buildScopedGroupWhere(
         'travel',
@@ -666,7 +689,12 @@ export class BusinessDataNestService {
 
     const groupDtos = filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, 'travel', actor),
+        toGroupDto(
+          group,
+          'travel',
+          actor,
+          onlyShowMarkedRecords,
+        ),
       ),
       filters,
     );
@@ -969,6 +997,7 @@ export class BusinessDataNestService {
     ]);
     const take = normalizeTake(filters.limit, 50);
     const pendingStatusFilter = normalizeOptionalString(filters.pendingStatus);
+    const onlyShowMarkedRecords = await this.onlyShowMarkedRecords();
     const groups = await this.prisma.travelGroup.findMany({
       where: await this.buildRoleScopedTravelGroupWhere(
         actor,
@@ -982,7 +1011,12 @@ export class BusinessDataNestService {
     });
     return filterGroupDtosByComputedFields(
       annotateDuplicateGroupNos(groups).map((group: any) =>
-        toGroupDto(group, 'travel', actor),
+        toGroupDto(
+          group,
+          'travel',
+          actor,
+          onlyShowMarkedRecords,
+        ),
       ),
       filters,
     )
@@ -1004,7 +1038,12 @@ export class BusinessDataNestService {
     const group = await this.findGroupOrThrow(kind, id, true);
     await this.assertCanReadGroup(kind, actor, group);
     await this.assertPassesGlobalGroupMarkScope(actor, group);
-    return toGroupDto(group, kind, actor);
+    return toGroupDto(
+      group,
+      kind,
+      actor,
+      await this.onlyShowMarkedRecords(),
+    );
   }
 
   async createGroup(
@@ -1442,9 +1481,7 @@ export class BusinessDataNestService {
         buildReadableSalesOrderWhere(actor, filters),
       ),
       include: getSalesOrderInclude(),
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: buildSalesOrderOrderBy(filters),
       take: normalizeTake(filters.limit, 50),
     });
     return orders.map((order: any) => toSalesOrderDtoForActor(order, actor));
@@ -1458,9 +1495,7 @@ export class BusinessDataNestService {
         buildSalesOrderWhere(filters),
       ),
       include: getSalesOrderInclude({ includeSalesUser: true }),
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: buildSalesOrderOrderBy(filters),
       take: SALES_ORDER_EXPORT_MAX_ROWS + 1,
     });
 
@@ -1660,9 +1695,26 @@ export class BusinessDataNestService {
 
   async createSalesOrder(actor: any, payload: any, metadata: any = {}) {
     requireAnyRole(actor, ['admin', 'sales', 'finance']);
+    assertSalesOrderInventoryFieldsAreServerOwned(payload);
     const itemInputs = buildSalesOrderItems(payload?.items);
-    const data = buildSalesOrderData(payload, actor, itemInputs);
+    const submittedAt = new Date();
+    const data = buildSalesOrderData(
+      payload,
+      actor,
+      itemInputs,
+      submittedAt,
+    );
+    const inventoryReceiptIds: string[] = [];
     const order = await this.prisma.$transaction(async (tx: any) => {
+      const inventoryActivation =
+        await this.salesOrderInventoryService.prepareNewOrder(
+          tx,
+          data.orderType,
+          submittedAt,
+        );
+      if (inventoryActivation) {
+        Object.assign(data, inventoryActivation);
+      }
       const customerResult = await resolveSalesOrderCustomer(
         tx,
         payload,
@@ -1727,6 +1779,12 @@ export class BusinessDataNestService {
         tx,
         itemInputs,
         data.orderDate,
+        [],
+        false,
+        {
+          assignQuantityInventoryLineKeys:
+            shouldAssignInventoryLineKeys(data.inventoryAppliedAt),
+        },
       );
       data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
       data.items = {
@@ -1752,11 +1810,16 @@ export class BusinessDataNestService {
             include: getSalesOrderInclude(),
           });
 
-          await synchronizeSerializedInventoryUnits(
-            tx,
-            createdOrder.id,
-            orderItems,
-            [],
+          const inventorySync =
+            await this.salesOrderInventoryService.synchronize(
+              tx,
+              actor,
+              null,
+              createdOrder,
+              metadata,
+            );
+          inventoryReceiptIds.push(
+            ...inventorySync.commandReceiptIds,
           );
           let orderForLog =
             (await tx.salesOrder.findUnique({
@@ -1824,8 +1887,11 @@ export class BusinessDataNestService {
           return orderForLog;
         },
       );
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: order.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: order.travelGroupId },
@@ -1846,6 +1912,7 @@ export class BusinessDataNestService {
       ? buildSalesOrderItems(payload.items)
       : null;
 
+    const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = {
         ...buildSalesOrderUpdateData(payload, actor),
@@ -1937,6 +2004,12 @@ export class BusinessDataNestService {
           finalOrderDate,
           current.items || [],
           orderDateChanged,
+          {
+            assignQuantityInventoryLineKeys:
+              shouldAssignInventoryLineKeys(
+                current.inventoryAppliedAt,
+              ),
+          },
         );
         data.totalAmountCents =
           sumSalesOrderItemSubtotals(resolvedOrderItems);
@@ -1954,6 +2027,12 @@ export class BusinessDataNestService {
           finalOrderDate,
           current.items || [],
           true,
+          {
+            assignQuantityInventoryLineKeys:
+              shouldAssignInventoryLineKeys(
+                current.inventoryAppliedAt,
+              ),
+          },
         );
         data.totalAmountCents =
           sumSalesOrderItemSubtotals(resolvedOrderItems);
@@ -1980,9 +2059,9 @@ export class BusinessDataNestService {
           : current.logisticsNo,
         items: resolvedOrderItems || current.items,
       };
-      assertPackedLogisticsNoPresent(current, data);
+      assertExistingPackedLogisticsNoNotCleared(current, data);
       assertPackingProviderDetails(current, data);
-      assertShippedLogisticsComplete(validationCurrent, data);
+      assertPackedLogisticsProviderPresent(validationCurrent, data);
 
       await claimSalesOrderEditOpportunity(tx, actor, id, new Date());
       const updatedOrder = await tx.salesOrder.update({
@@ -1990,14 +2069,15 @@ export class BusinessDataNestService {
         data,
         include: getSalesOrderInclude(),
       });
-      if (resolvedOrderItems) {
-        await synchronizeSerializedInventoryUnits(
+      const inventorySync =
+        await this.salesOrderInventoryService.synchronize(
           tx,
-          id,
-          resolvedOrderItems,
-          current.items || [],
+          actor,
+          current,
+          updatedOrder,
+          metadata,
         );
-      }
+      inventoryReceiptIds.push(...inventorySync.commandReceiptIds);
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
         current,
@@ -2051,8 +2131,11 @@ export class BusinessDataNestService {
         );
       }
       return orderForLog;
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: updated.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
@@ -2088,6 +2171,7 @@ export class BusinessDataNestService {
       ? buildSalesOrderItems(payload.items)
       : null;
 
+    const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = buildSalesOrderUpdateData(payload, actor);
       const customerResult = await resolveSalesOrderPatchCustomer(
@@ -2182,6 +2266,12 @@ export class BusinessDataNestService {
           finalOrderDate,
           current.items || [],
           orderDateChanged,
+          {
+            assignQuantityInventoryLineKeys:
+              shouldAssignInventoryLineKeys(
+                current.inventoryAppliedAt,
+              ),
+          },
         );
         resolvedOrderItems = orderItems;
         data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
@@ -2199,6 +2289,12 @@ export class BusinessDataNestService {
           finalOrderDate,
           current.items || [],
           true,
+          {
+            assignQuantityInventoryLineKeys:
+              shouldAssignInventoryLineKeys(
+                current.inventoryAppliedAt,
+              ),
+          },
         );
         resolvedOrderItems = orderItems;
         data.totalAmountCents = sumSalesOrderItemSubtotals(orderItems);
@@ -2215,14 +2311,15 @@ export class BusinessDataNestService {
         data,
         include: getSalesOrderInclude(),
       });
-      if (resolvedOrderItems) {
-        await synchronizeSerializedInventoryUnits(
+      const inventorySync =
+        await this.salesOrderInventoryService.synchronize(
           tx,
-          id,
-          resolvedOrderItems,
-          current.items || [],
+          actor,
+          current,
+          updatedOrder,
+          metadata,
         );
-      }
+      inventoryReceiptIds.push(...inventorySync.commandReceiptIds);
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
         current,
@@ -2273,8 +2370,11 @@ export class BusinessDataNestService {
         );
       }
       return orderForLog;
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: updated.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
@@ -2307,6 +2407,7 @@ export class BusinessDataNestService {
     }
     assertCanReadSalesOrder(actor, current);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
+    const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const financeData = buildSalesOrderFinanceUpdateData(payload, actor);
       if (
@@ -2316,7 +2417,7 @@ export class BusinessDataNestService {
       ) {
         Object.assign(financeData, clearTrackingCacheData());
       }
-      assertPackedLogisticsNoPresent(current, financeData);
+      assertExistingPackedLogisticsNoNotCleared(current, financeData);
       const updatedOrder = await tx.salesOrder.update({
         where: {
           id,
@@ -2324,6 +2425,15 @@ export class BusinessDataNestService {
         data: financeData,
         include: getSalesOrderInclude(),
       });
+      const inventorySync =
+        await this.salesOrderInventoryService.synchronize(
+          tx,
+          actor,
+          current,
+          updatedOrder,
+          metadata,
+        );
+      inventoryReceiptIds.push(...inventorySync.commandReceiptIds);
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
         current,
@@ -2357,8 +2467,11 @@ export class BusinessDataNestService {
         tx,
       );
       return orderForLog;
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: updated.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
@@ -2373,7 +2486,11 @@ export class BusinessDataNestService {
     metadata: any = {},
   ) {
     requireAnyRole(actor, ['admin', 'warehouse', 'finance']);
-    assertSalesOrderPackingPatchAllowedFields(payload);
+    assertSalesOrderPackingPatchAllowedFields(payload, actor);
+    const serializedAssignments =
+      normalizeSerializedPackingAssignments(
+        payload.serializedAssignments,
+      );
 
     const current = await this.prisma.salesOrder.findUnique({
       where: {
@@ -2391,13 +2508,14 @@ export class BusinessDataNestService {
     assertCanReadSalesOrder(actor, current);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
 
+    const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const packingData = buildSalesOrderPackingUpdateData(payload, actor);
       if (packingUpdateChangesProvider(current, packingData)) {
         Object.assign(packingData, clearTrackingCacheData());
       }
       assertPackingProviderDetails(current, packingData);
-      assertShippedLogisticsComplete(current, packingData);
+      assertPackedLogisticsProviderPresent(current, packingData);
       const updatedOrder = await tx.salesOrder.update({
         where: {
           id,
@@ -2405,6 +2523,23 @@ export class BusinessDataNestService {
         data: packingData,
         include: getSalesOrderInclude(),
       });
+      const inventorySync =
+        await this.salesOrderInventoryService.synchronize(
+          tx,
+          actor,
+          current,
+          updatedOrder,
+          {
+            ...metadata,
+            serializedAssignments,
+          },
+        );
+      inventoryReceiptIds.push(...inventorySync.commandReceiptIds);
+      const orderForResponse =
+        (await tx.salesOrder.findUnique({
+          where: { id: updatedOrder.id },
+          include: getSalesOrderInclude(),
+        })) || updatedOrder;
 
       await this.operationLogsService.appendLog(
         {
@@ -2413,17 +2548,119 @@ export class BusinessDataNestService {
           entityType: 'sales_order',
           entityId: updatedOrder.id,
           beforeData: toSalesOrderDto(current),
-          afterData: toSalesOrderDto(updatedOrder),
+          afterData: toSalesOrderDto(orderForResponse),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return orderForResponse;
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
+
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
+    await this.reconcileTodoSources([
+      { sourceType: 'SALES_ORDER', sourceId: updated.id },
+      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
+    ]);
+    return toSalesOrderDtoForActor(updated, actor);
+  }
+
+  async updateSalesOrderShippingDate(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['sales', 'finance', 'after_sales', 'warehouse']);
+    assertShippingDatePatchAllowedFields(payload);
+    const shippingDate = parseRequiredShippingDate(payload.shippingDate);
+    const reason = normalizeOptionalString(payload.reason);
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.salesOrder.findUnique({
+        where: { id },
+        include: getSalesOrderInclude(),
+      });
+      if (!current) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          'Sales order does not exist.',
+        );
+      }
+      assertCanUpdateSalesOrderShippingDate(actor, current);
+      await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
+      assertShippingDateNotBeforeSubmission(shippingDate, current.createdAt);
+      if (current.packingStatus === 'PACKED') {
+        throw salesOrderAlreadyOutboundError();
+      }
+
+      const previousDate = current.shippingDate
+        ? formatDateOnly(current.shippingDate)
+        : null;
+      const nextDate = formatDateOnly(shippingDate);
+      if (previousDate === nextDate) {
+        return current;
+      }
+
+      const claimed = await tx.salesOrder.updateMany({
+        where: {
+          id,
+          packingStatus: {
+            not: 'PACKED',
+          },
+        },
+        data: {
+          shippingDate,
+          shippingDateSource: 'USER_SPECIFIED',
+          shippingDateBackfillBatchId: null,
+          updatedById: actor.id,
+          updatedAt: new Date(),
+        },
+      });
+      if (claimed.count !== 1) {
+        throw salesOrderAlreadyOutboundError();
+      }
+
+      const updatedOrder = await tx.salesOrder.findUnique({
+        where: { id },
+        include: getSalesOrderInclude(),
+      });
+      if (!updatedOrder) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          'Sales order does not exist.',
+        );
+      }
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          actorRoleSnapshot: actor.role,
+          action: 'sales_orders.shipping_date.update',
+          entityType: 'sales_order',
+          entityId: id,
+          beforeData: {
+            id,
+            orderNo: current.orderNo,
+            shippingDate: previousDate,
+          },
+          afterData: {
+            id,
+            orderNo: updatedOrder.orderNo,
+            shippingDate: nextDate,
+            reason,
+          },
           ipAddress: metadata.ipAddress || null,
         },
         tx,
       );
       return updatedOrder;
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: updated.id },
-      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
     ]);
     return toSalesOrderDtoForActor(updated, actor);
   }
@@ -2451,6 +2688,7 @@ export class BusinessDataNestService {
       );
     }
 
+    const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const updatedOrder = await tx.salesOrder.update({
         where: {
@@ -2459,6 +2697,15 @@ export class BusinessDataNestService {
         data: buildSalesOrderStatusUpdateData(payload, actor),
         include: getSalesOrderInclude(),
       });
+      const inventorySync =
+        await this.salesOrderInventoryService.synchronize(
+          tx,
+          actor,
+          current,
+          updatedOrder,
+          metadata,
+        );
+      inventoryReceiptIds.push(...inventorySync.commandReceiptIds);
 
       for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
         current,
@@ -2507,8 +2754,11 @@ export class BusinessDataNestService {
         },
       );
       return orderForLog;
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await this.salesOrderInventoryService.dispatchCommittedReceipts(
+      inventoryReceiptIds,
+    );
     await this.reconcileTodoSources([
       { sourceType: 'SALES_ORDER', sourceId: updated.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
@@ -2585,7 +2835,7 @@ export class BusinessDataNestService {
       },
       take: normalizeTake(filters.limit, 50),
     });
-    return orders.map(toAfterSalesOrderDto);
+    return orders.map((order: any) => toAfterSalesOrderDto(order, actor));
   }
 
   async createAfterSalesOrder(
@@ -2596,20 +2846,122 @@ export class BusinessDataNestService {
     requireAnyRole(actor, ['admin', 'after_sales']);
     const body = normalizeOptionalObjectPayload(payload);
     const salesOrderId = normalizeRequiredString(
-      body.salesOrderId,
+      body.sourceSalesOrderId || body.salesOrderId,
       'salesOrderId',
     );
-    const salesOrder = await this.findReadableSalesOrderOrThrow(
+    const readableSalesOrder = await this.findReadableSalesOrderOrThrow(
       actor,
       salesOrderId,
     );
-    const data = buildAfterSalesOrderCreateData(body, actor, salesOrder);
+    if (readableSalesOrder.orderType === 'AFTER_SALES') {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_SOURCE_ORDER_INVALID',
+        'After-sales orders must reference an original sales order.',
+      );
+    }
 
-    const created = await this.prisma.$transaction(async (tx: any) => {
-      return withGeneratedAfterSalesNo(
-        tx.afterSalesOrder,
-        data.createdAt,
-        async (afterSalesNo) => {
+    const created = await this.prisma.$transaction(
+      async (tx: any) => {
+        const salesOrder = await tx.salesOrder.findUnique({
+          where: {
+            id: salesOrderId,
+          },
+          include: {
+            items: {
+              orderBy: {
+                sortOrder: 'asc',
+              },
+            },
+            customer: true,
+            travelGroup: true,
+            afterSalesOrders: {
+              include: {
+                items: true,
+              },
+            },
+          },
+        });
+        if (!salesOrder) {
+          throw createHttpError(
+            404,
+            'SALES_ORDER_NOT_FOUND',
+            'Sales order does not exist.',
+          );
+        }
+        if (salesOrder.orderType === 'AFTER_SALES') {
+          throw createHttpError(
+            400,
+            'AFTER_SALES_SOURCE_ORDER_INVALID',
+            'After-sales orders must reference an original sales order.',
+          );
+        }
+
+        const now = new Date();
+        const calculationDate = getShanghaiTodayDate(now);
+        const actionType = toPrismaAfterSalesActionType(
+          normalizeRequiredString(body.actionType, 'actionType'),
+        );
+        const items = resolveAfterSalesOrderItems(
+          body.items,
+          salesOrder,
+          actionType,
+        );
+        validateAfterSalesAvailableQuantity(items, salesOrder.afterSalesOrders);
+        const refundAmountCents = items.reduce(
+          (sum: number, item: any) => sum + item.subtotalCents,
+          0,
+        );
+        validateAfterSalesRefundAmount(
+          body,
+          salesOrder,
+          salesOrder.afterSalesOrders,
+          actionType,
+          refundAmountCents,
+        );
+        const calculationSnapshot =
+          await this.resolveAfterSalesCalculationSnapshot(
+            tx,
+            salesOrder,
+            refundAmountCents,
+            calculationDate,
+          );
+        const afterSalesOrderId = crypto.randomUUID();
+
+        return withGeneratedAfterSalesNo(
+          tx.afterSalesOrder,
+          now,
+          async (afterSalesNo) => {
+            const afterSalesSalesOrderId = crypto.randomUUID();
+            const generatedSalesOrder = await tx.salesOrder.create({
+              data: buildAfterSalesSalesOrderCreateData({
+                id: afterSalesSalesOrderId,
+                afterSalesNo,
+                sourceSalesOrder: salesOrder,
+                items,
+                refundAmountCents,
+                orderDate: calculationDate,
+                actor,
+                now,
+              }),
+              include: getSalesOrderInclude(),
+            });
+
+            const data = buildAfterSalesOrderCreateData(
+              body,
+              actor,
+              salesOrder,
+              {
+                id: afterSalesOrderId,
+                afterSalesSalesOrderId,
+                refundAmountCents,
+                actionType,
+                calculationDate,
+                calculationSnapshot,
+                items,
+                now,
+              },
+            );
           const createdOrder = await tx.afterSalesOrder.create({
             data: {
               ...data,
@@ -2617,16 +2969,13 @@ export class BusinessDataNestService {
             },
             include: getAfterSalesOrderInclude(),
           });
-          const impact =
-            await this.refreshAfterSalesCommissionAndPointsImpact(
+
+            const impact = await this.refreshAfterSalesAdjustmentRecords(
             tx,
             createdOrder,
             salesOrder,
             actor,
             metadata,
-            {
-              trigger: 'after_sales_create',
-            },
           );
           const orderForLog =
             (await tx.afterSalesOrder.findUnique({
@@ -2647,16 +2996,37 @@ export class BusinessDataNestService {
             },
             tx,
           );
+            await this.operationLogsService.appendLog(
+              {
+                userId: actor.id,
+                action: 'sales_orders.create',
+                entityType: 'sales_order',
+                entityId: generatedSalesOrder.id,
+                beforeData: null,
+                afterData: toSalesOrderDto(generatedSalesOrder),
+                ipAddress: metadata.ipAddress || null,
+              },
+              tx,
+            );
           return attachAfterSalesCommissionAndPointsImpact(
             orderForLog,
             impact,
           );
-        },
-      );
-    });
+          },
+          tx.salesOrder,
+        );
+      },
+      {
+        isolationLevel: 'Serializable',
+      },
+    );
 
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: created.id },
+      {
+        sourceType: 'SALES_ORDER',
+        sourceId: created.afterSalesSalesOrderId,
+      },
     ]);
     return toAfterSalesOrderMutationResult(created);
   }
@@ -2684,7 +3054,7 @@ export class BusinessDataNestService {
     }
     assertCanReadSalesOrder(actor, order.salesOrder);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, order.salesOrder);
-    return toAfterSalesOrderDto(order);
+    return toAfterSalesOrderDto(order, actor);
   }
 
   async updateAfterSalesOrder(
@@ -2719,15 +3089,12 @@ export class BusinessDataNestService {
         include: getAfterSalesOrderInclude(),
       });
       const impact =
-        await this.refreshAfterSalesCommissionAndPointsImpact(
+        await this.refreshAfterSalesAdjustmentRecords(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
-        {
-          trigger: 'after_sales_update',
-        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2804,23 +3171,31 @@ export class BusinessDataNestService {
     if (
       status === 'WAITING_REFUND' &&
       ['WAITING_RECEIVE', 'WAITING_RESEND'].includes(current.status) &&
-      !current.warehouseConfirmedAt
+      !isAfterSalesPhysicalReturnComplete(current)
     ) {
       throw createHttpError(
         400,
-        'AFTER_SALES_WAREHOUSE_CONFIRM_REQUIRED',
-        'Warehouse confirmation is required before waiting refund.',
+        hasReturnRequiredItems(current)
+          ? 'AFTER_SALES_RECEIPT_REQUIRED'
+          : 'AFTER_SALES_WAREHOUSE_CONFIRM_REQUIRED',
+        hasReturnRequiredItems(current)
+          ? 'All required goods must be posted through actual warehouse receipts before waiting refund.'
+          : 'Warehouse confirmation is required before waiting refund.',
       );
     }
     if (status === 'COMPLETED') {
       if (
         ['WAITING_RECEIVE', 'WAITING_RESEND'].includes(current.status) &&
-        !current.warehouseConfirmedAt
+        !isAfterSalesPhysicalReturnComplete(current)
       ) {
         throw createHttpError(
           400,
-          'AFTER_SALES_WAREHOUSE_CONFIRM_REQUIRED',
-          'Warehouse confirmation is required before completion.',
+          hasReturnRequiredItems(current)
+            ? 'AFTER_SALES_RECEIPT_REQUIRED'
+            : 'AFTER_SALES_WAREHOUSE_CONFIRM_REQUIRED',
+          hasReturnRequiredItems(current)
+            ? 'All required goods must be posted through actual warehouse receipts before completion.'
+            : 'Warehouse confirmation is required before completion.',
         );
       }
       if (
@@ -2845,15 +3220,12 @@ export class BusinessDataNestService {
         include: getAfterSalesOrderInclude(),
       });
       const impact =
-        await this.refreshAfterSalesCommissionAndPointsImpact(
+        await this.refreshAfterSalesAdjustmentRecords(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
-        {
-          trigger: 'after_sales_status_update',
-        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2923,15 +3295,12 @@ export class BusinessDataNestService {
         include: getAfterSalesOrderInclude(),
       });
       const impact =
-        await this.refreshAfterSalesCommissionAndPointsImpact(
+        await this.refreshAfterSalesAdjustmentRecords(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
-        {
-          trigger: 'after_sales_warehouse_confirm',
-        },
       );
       const orderForLog =
         (await tx.afterSalesOrder.findUnique({
@@ -2996,6 +3365,7 @@ export class BusinessDataNestService {
         'After-sales order has no refund amount to confirm.',
       );
     }
+    assertAfterSalesAgencyDeductionReadyForConfirmation(current);
     if (!Array.isArray(files) || files.length === 0) {
       throw createHttpError(
         400,
@@ -3047,6 +3417,7 @@ export class BusinessDataNestService {
           data: buildAfterSalesOrderFinanceRefundConfirmData(
             actor,
             nextProofs,
+            current,
           ),
           include: getAfterSalesOrderInclude(),
         });
@@ -3063,15 +3434,12 @@ export class BusinessDataNestService {
           tx,
         );
         const impact =
-          await this.refreshAfterSalesCommissionAndPointsImpact(
+          await this.refreshAfterSalesAdjustmentRecords(
           tx,
           updatedOrder,
           current.salesOrder,
           actor,
           metadata,
-          {
-            trigger: 'after_sales_finance_refund_confirm',
-          },
         );
         const orderForReturn =
           (await tx.afterSalesOrder.findUnique({
@@ -3146,6 +3514,137 @@ export class BusinessDataNestService {
     };
   }
 
+  async updateAfterSalesAgencyDeduction(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const current = await this.prisma.afterSalesOrder.findUnique({
+      where: {
+        id,
+      },
+      include: getAfterSalesOrderInclude(),
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'AFTER_SALES_ORDER_NOT_FOUND',
+        'After-sales order does not exist.',
+      );
+    }
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
+    if (current.deductionCalculationMode !== 'manual_product_reference') {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_DEDUCTION_NOT_MANUAL',
+        'Only manual_product_reference after-sales orders can be edited.',
+      );
+    }
+    const agencyDeductionAdjustmentCents = normalizeNonNegativeInt(
+      normalizeOptionalObjectPayload(payload)
+        .agencyDeductionAdjustmentCents,
+      'agencyDeductionAdjustmentCents',
+    );
+    if (
+      agencyDeductionAdjustmentCents >
+      Number(current.refundAmountCents || 0)
+    ) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_DEDUCTION_EXCEEDS_REFUND',
+        'After-sales deduction cannot exceed the refund amount.',
+      );
+    }
+
+    const siblings = await this.prisma.afterSalesOrder.findMany({
+      where: {
+        salesOrderId: current.salesOrderId,
+        id: {
+          not: current.id,
+        },
+        agencyDeductionAdjustmentCents: {
+          not: null,
+        },
+      },
+      select: {
+        agencyDeductionAdjustmentCents: true,
+      },
+    });
+    const usedDeductionCents = siblings.reduce(
+      (sum: number, order: any) =>
+        sum + Math.max(0, Number(order.agencyDeductionAdjustmentCents || 0)),
+      0,
+    );
+    if (
+      Number(current.sourceAgencyDeductionCents || 0) > 0 &&
+      usedDeductionCents + agencyDeductionAdjustmentCents >
+        Number(current.sourceAgencyDeductionCents)
+    ) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_DEDUCTION_EXCEEDS_SOURCE_COST',
+        'Cumulative after-sales deduction exceeds the source order deduction.',
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.afterSalesOrder.update({
+        where: {
+          id,
+        },
+        data: {
+          agencyDeductionAdjustmentCents,
+          financialEffectStatus:
+            current.financialEffectStatus === 'PENDING_RECOVERY'
+              ? 'PENDING_RECOVERY'
+              : current.financeConfirmed
+                ? 'CONFIRMED'
+                : 'PENDING_CONFIRMATION',
+          updatedById: actor.id,
+          updatedAt: new Date(),
+        },
+        include: getAfterSalesOrderInclude(),
+      });
+      await this.refreshAfterSalesAdjustmentRecords(
+        tx,
+        updatedOrder,
+        current.salesOrder,
+        actor,
+        metadata,
+      );
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'after_sales_orders.agency_deduction.update',
+          entityType: 'after_sales_order',
+          entityId: updatedOrder.id,
+          beforeData: {
+            agencyDeductionAdjustmentCents:
+              current.agencyDeductionAdjustmentCents,
+          },
+          afterData: {
+            agencyDeductionAdjustmentCents,
+          },
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return (
+        (await tx.afterSalesOrder.findUnique({
+          where: {
+            id,
+          },
+          include: getAfterSalesOrderInclude(),
+        })) || updatedOrder
+      );
+    });
+    return {
+      afterSalesOrder: toAfterSalesOrderDto(updated),
+    };
+  }
+
   async confirmAfterSalesOrderFinance(
     actor: any,
     id: string,
@@ -3181,6 +3680,7 @@ export class BusinessDataNestService {
       );
     }
     if (financeConfirmed) {
+      assertAfterSalesAgencyDeductionReadyForConfirmation(current);
       if (current.status !== 'WAITING_REFUND') {
         throw createHttpError(
           400,
@@ -3203,6 +3703,7 @@ export class BusinessDataNestService {
         data: buildAfterSalesOrderFinanceConfirmData(
           financeConfirmed,
           actor,
+          current,
         ),
         include: getAfterSalesOrderInclude(),
       });
@@ -3221,17 +3722,12 @@ export class BusinessDataNestService {
         tx,
       );
       const impact =
-        await this.refreshAfterSalesCommissionAndPointsImpact(
+        await this.refreshAfterSalesAdjustmentRecords(
         tx,
         updatedOrder,
         current.salesOrder,
         actor,
         metadata,
-        {
-          trigger: financeConfirmed
-            ? 'after_sales_finance_confirm'
-            : 'after_sales_finance_unconfirm',
-        },
       );
       const orderForReturn =
         (await tx.afterSalesOrder.findUnique({
@@ -3254,7 +3750,11 @@ export class BusinessDataNestService {
     // Finance overview uses orderDate for order-side metrics and after-sales createdAt for refund metrics.
     const orderWhere = await this.buildScopedSalesOrderWhere(
       actor,
-      buildSalesOrderWhere(filters),
+      andWhere(buildSalesOrderWhere(filters), {
+        orderType: {
+          not: 'AFTER_SALES',
+        },
+      }),
     );
     const afterSalesWhere = await this.buildScopedAfterSalesOrderWhere(
       actor,
@@ -3290,7 +3790,14 @@ export class BusinessDataNestService {
       await Promise.all([
         this.prisma.salesOrder.findMany({
           where: orderWhere,
-          include: getSalesOrderInclude(),
+          include: {
+            ...getSalesOrderInclude(),
+            afterSalesOrders: {
+              select: {
+                id: true,
+              },
+            },
+          },
           orderBy: {
             createdAt: 'desc',
           },
@@ -3375,7 +3882,11 @@ export class BusinessDataNestService {
     const orders = await this.prisma.salesOrder.findMany({
       where: await this.buildScopedSalesOrderWhere(
         actor,
-        buildSalesOrderWhere(filters),
+        andWhere(buildSalesOrderWhere(filters), {
+          orderType: {
+            not: 'AFTER_SALES',
+          },
+        }),
       ),
       include: getSalesOrderProfitInclude(),
       orderBy: { orderDate: 'desc' },
@@ -3388,6 +3899,9 @@ export class BusinessDataNestService {
     const orders = await this.prisma.salesOrder.findMany({
       where: await this.buildScopedSalesOrderWhere(actor, {
         id: normalizeRequiredString(id, 'id'),
+        orderType: {
+          not: 'AFTER_SALES',
+        },
       }),
       include: getSalesOrderProfitInclude(),
       take: 1,
@@ -3405,6 +3919,7 @@ export class BusinessDataNestService {
   async getFinanceWorkbench(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin', 'finance']);
     const limit = normalizeTake(filters.limit, 20);
+    const onlyShowMarkedRecords = await this.onlyShowMarkedRecords();
     const overview = await this.getFinanceOverview(actor, filters);
     const orderWhere = await this.buildScopedSalesOrderWhere(
       actor,
@@ -3451,7 +3966,9 @@ export class BusinessDataNestService {
         .slice(0, limit)
         .map((order: any) => toSalesOrderDtoForActor(order, actor)),
       pendingAfterSales,
-      pendingMarks: buildFinancePendingMarks(effectiveOrders, limit),
+      pendingMarks: onlyShowMarkedRecords
+        ? []
+        : buildFinancePendingMarks(effectiveOrders, limit),
       pendingLogistics: effectiveOrders
         .map(toFinancePendingLogisticsDto)
         .filter((item: any) => item.reasons.length > 0)
@@ -3482,7 +3999,7 @@ export class BusinessDataNestService {
     metadata: any = {},
   ) {
     requireAnyRole(actor, ['admin', 'warehouse']);
-    assertSalesOrderPackingPatchAllowedFields(payload);
+    assertSalesOrderPackingPatchAllowedFields(payload, actor);
     const current = await this.prisma.salesOrder.findUnique({
       where: {
         id,
@@ -3684,6 +4201,7 @@ export class BusinessDataNestService {
       this.prisma.salesOrder.findMany({
         where: {
           orderDate: { gte: orderDateFrom, lte: orderDateTo },
+          orderType: { not: 'AFTER_SALES' },
           status: { in: [...RECONCILIATION_INCLUDED_ORDER_STATUSES] },
         },
       }),
@@ -3791,193 +4309,219 @@ export class BusinessDataNestService {
     });
   }
 
-  private async syncSalesOrderStatusFromAfterSales(
+  private async resolveAfterSalesCalculationSnapshot(
     tx: any,
-    afterSalesOrder: any,
-    currentSalesOrder: any,
-    actor: any,
-    metadata: any = {},
+    salesOrder: any,
+    refundAmountCents: number,
+    calculationDate: Date,
   ) {
-    if (!afterSalesOrder?.salesOrderId || !currentSalesOrder) {
-      return {
-        salesOrder: currentSalesOrder || null,
-        statusChanged: false,
-        affectedTravelGroupIds: normalizeIdList([
-          currentSalesOrder?.travelGroupId,
-        ]),
-      };
-    }
-
-    const refundOrders = await tx.afterSalesOrder.findMany({
+    const records = await tx.commissionRecord.findMany({
       where: {
-        salesOrderId: afterSalesOrder.salesOrderId,
-        status: {
-          in: AFTER_SALES_ORDER_REFUND_LINK_STATUSES,
-        },
+        salesOrderId: salesOrder.id,
+        afterSalesOrderId: null,
       },
-      select: {
-        refundAmountCents: true,
+      orderBy: {
+        createdAt: 'asc',
       },
     });
-    const refundAmountCents = refundOrders.reduce(
-      (sum: number, order: any) =>
-        sum + Math.max(0, Number(order.refundAmountCents || 0)),
+    const agencyRecords = records.filter((record: any) =>
+      ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'].includes(
+        String(record.targetType || '').toUpperCase(),
+      ),
+    );
+    const dailyRecord = agencyRecords.find(
+      (record: any) =>
+        String(record.targetType || '').toUpperCase() ===
+        'AGENCY_DAILY_REBATE',
+    );
+    const monthlyRecord = agencyRecords.find(
+      (record: any) =>
+        String(record.targetType || '').toUpperCase() ===
+        'AGENCY_MONTHLY_REBATE',
+    );
+    const sourceAgencyDeductionCents = agencyRecords.reduce(
+      (maximum: number, record: any) =>
+        Math.max(maximum, Math.abs(Number(record.deductionAmountCents || 0))),
       0,
     );
-    const targetStatus = resolveAfterSalesLinkedSalesOrderStatus(
-      afterSalesOrder,
-      currentSalesOrder,
-      refundAmountCents,
+    const deductionCalculationMode =
+      resolveAgencyDeductionModeFromRecords(agencyRecords);
+    const existingDeductionCents = (salesOrder.afterSalesOrders || []).reduce(
+      (sum: number, order: any) =>
+        sum +
+        (order.agencyDeductionAdjustmentCents === null ||
+        order.agencyDeductionAdjustmentCents === undefined
+          ? 0
+          : Math.max(0, Number(order.agencyDeductionAdjustmentCents))),
+      0,
     );
-    if (!targetStatus || currentSalesOrder.status === targetStatus) {
-      return {
-        salesOrder: currentSalesOrder,
-        statusChanged: false,
-        affectedTravelGroupIds: normalizeIdList([
-          currentSalesOrder.travelGroupId,
-        ]),
-      };
-    }
-
-    const updatedOrder = await tx.salesOrder.update({
-      where: {
-        id: currentSalesOrder.id,
-      },
-      data: buildSalesOrderAfterSalesSyncData(targetStatus, actor),
-      include: getSalesOrderInclude(),
-    });
-
-    for (const travelGroupId of getSalesOrderSummaryAffectedTravelGroupIds(
-      currentSalesOrder,
-      updatedOrder,
-    )) {
-      await this.refreshTravelGroupOrderSummary(
-        tx,
-        travelGroupId,
-        actor.id,
-      );
-    }
-
-    const orderForLog =
-      (await tx.salesOrder.findUnique({
-        where: {
-          id: updatedOrder.id,
-        },
-        include: getSalesOrderInclude(),
-      })) || updatedOrder;
-
-    await this.operationLogsService.appendLog(
-      {
-        userId: actor.id,
-        action: 'sales_orders.status.update',
-        entityType: 'sales_order',
-        entityId: orderForLog.id,
-        beforeData: toSalesOrderDto(currentSalesOrder),
-        afterData: toSalesOrderDto(orderForLog),
-        ipAddress: metadata.ipAddress || null,
-      },
-      tx,
+    const agencyDeductionAdjustmentCents =
+      refundAmountCents <= 0
+        ? 0
+        : deductionCalculationMode === 'effective_sales_rate'
+          ? calculateProportionalAfterSalesDeductionCents({
+              sourceAgencyDeductionCents,
+              refundAmountCents,
+              sourceOrderAmountCents: Number(
+                salesOrder.totalAmountCents || 0,
+              ),
+              existingDeductionCents,
+            })
+          : null;
+    const financeSummary = salesOrder.travelGroupId
+      ? await tx.travelGroupFinanceSummary.findUnique({
+          where: {
+            travelGroupId: salesOrder.travelGroupId,
+          },
+        })
+      : null;
+    const hasReturnedPoints = Boolean(
+      financeSummary?.dailyRebatePaid ||
+        financeSummary?.monthlyRebatePaid,
     );
+    const financialEffectStatus =
+      refundAmountCents <= 0 && agencyDeductionAdjustmentCents === 0
+        ? 'NO_FINANCIAL_EFFECT'
+        : hasReturnedPoints
+          ? 'PENDING_RECOVERY'
+          : 'PENDING_CONFIRMATION';
     return {
-      salesOrder: orderForLog,
-      statusChanged: true,
-      affectedTravelGroupIds: getStage7AffectedTravelGroupIds(
-        currentSalesOrder,
-        orderForLog,
-      ),
+      deductionCalculationMode,
+      sourceAgencyDeductionCents,
+      agencyDeductionRate:
+        Number(salesOrder.totalAmountCents || 0) > 0
+          ? (
+              sourceAgencyDeductionCents /
+              Number(salesOrder.totalAmountCents)
+            ).toFixed(4)
+          : null,
+      dailyRebateRate: normalizeRateSnapshot(dailyRecord?.rateSnapshot),
+      monthlyRebateRate: normalizeRateSnapshot(monthlyRecord?.rateSnapshot),
+      agencyDeductionRuleId:
+        findAgencyDeductionRuleId(agencyRecords) || null,
+      agencyRebateRuleId:
+        dailyRecord?.agencyRebateRuleId ||
+        monthlyRecord?.agencyRebateRuleId ||
+        null,
+      calculationDate,
+      agencyDeductionAdjustmentCents,
+      financialEffectStatus,
+      sourceRecords: records,
     };
   }
 
-  private async refreshAfterSalesCommissionAndPointsImpact(
+  private async refreshAfterSalesAdjustmentRecords(
     tx: any,
     afterSalesOrder: any,
     currentSalesOrder: any,
     actor: any,
     metadata: any = {},
-    context: any = {},
   ) {
-    const salesOrderId = normalizeOptionalString(
-      afterSalesOrder?.salesOrderId || currentSalesOrder?.id,
-    );
-    if (!salesOrderId) {
-      const warnings = [
-        {
-          code: 'missing_sales_order',
-          message: 'After-sales order is not linked to a sales order.',
-          context: {
-            afterSalesOrderId:
-              normalizeOptionalString(afterSalesOrder?.id) || null,
-          },
-        },
-      ];
-      await this.operationLogsService.appendLog(
-        {
-          userId: actor?.id || null,
-          action: 'commission_records.recalculate.trigger',
-          entityType: 'after_sales_order',
-          entityId:
-            normalizeOptionalString(afterSalesOrder?.id) ||
-            'after_sales_order',
-          beforeData: null,
-          afterData: {
-            trigger: context.trigger || 'after_sales_update',
-            salesOrderId: null,
-            afterSalesOrderId:
-              normalizeOptionalString(afterSalesOrder?.id) || null,
-            travelGroupIds: [],
-            pendingAfterSalesRefundAmountCents: Math.max(
-              0,
-              Number(afterSalesOrder?.refundAmountCents || 0),
-            ),
-            warningCodes: warnings.map((warning) => warning.code),
-            warnings,
-          },
-          ipAddress: metadata.ipAddress || null,
-        },
-        tx,
+    const sourceSalesOrder =
+      currentSalesOrder?.id === afterSalesOrder?.salesOrderId
+        ? currentSalesOrder
+        : await tx.salesOrder.findUnique({
+            where: {
+              id: afterSalesOrder.salesOrderId,
+            },
+          });
+    if (!sourceSalesOrder) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Source sales order does not exist.',
       );
-      return {
-        recalculation: null,
-        summaryResults: [],
-        tasterAdjustment: {
-          records: [],
-          recordIds: [],
-        },
-        warnings,
-      };
+    }
+    const sourceRecords = await tx.commissionRecord.findMany({
+      where: {
+        salesOrderId: sourceSalesOrder.id,
+        afterSalesOrderId: null,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+    const adjustmentRecords = buildAfterSalesCommissionAdjustmentRecords({
+      afterSalesOrder,
+      sourceSalesOrder,
+      sourceRecords,
+      actor,
+    });
+    const existingRecords = await tx.commissionRecord.findMany({
+      where: {
+        afterSalesOrderId: afterSalesOrder.id,
+      },
+    });
+    const touchedRecordIds: string[] = [];
+    for (const data of adjustmentRecords) {
+      const current = existingRecords.find((record: any) =>
+        isSameAfterSalesCommissionBusinessKey(record, data),
+      );
+      const record = current
+        ? await tx.commissionRecord.update({
+            where: {
+              id: current.id,
+            },
+            data: {
+              ...data,
+              updatedById: actor?.id || null,
+              updatedAt: new Date(),
+            },
+          })
+        : await tx.commissionRecord.create({
+            data: {
+              id: crypto.randomUUID(),
+              ...data,
+              createdById: actor?.id || null,
+              updatedById: actor?.id || null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+          });
+      touchedRecordIds.push(record.id);
     }
 
-    const statusSync = await this.syncSalesOrderStatusFromAfterSales(
-      tx,
-      afterSalesOrder,
-      currentSalesOrder,
-      actor,
-      metadata,
-    );
-    const refreshResult =
-      await this.refreshStage7SalesOrderCommissionAndSummary(
-        tx,
-        salesOrderId,
-        actor,
-        metadata,
-        {
-          trigger: statusSync.statusChanged
-            ? 'after_sales_order_status_sync'
-            : context.trigger || 'after_sales_update',
-          entityType: 'after_sales_order',
-          entityId: afterSalesOrder.id,
-          afterSalesOrderId: afterSalesOrder.id,
-          affectedTravelGroupIds: normalizeIdList([
-            ...(statusSync.affectedTravelGroupIds || []),
-            currentSalesOrder?.travelGroupId,
-            statusSync.salesOrder?.travelGroupId,
-          ]),
+    for (const staleRecord of existingRecords) {
+      if (touchedRecordIds.includes(staleRecord.id)) {
+        continue;
+      }
+      await tx.commissionRecord.update({
+        where: {
+          id: staleRecord.id,
         },
-      );
+        data: {
+          grossAmountCents: 0,
+          confirmedRefundAmountCents: 0,
+          baseAmountCents: 0,
+          deductionAmountCents: 0,
+          amountCents: 0,
+          pointsCents: 0,
+          isConfirmed: false,
+          confirmedById: null,
+          confirmedAt: null,
+          calculationNote: '售后调整来源已失效，保留记录用于审计。',
+          updatedById: actor?.id || null,
+          updatedAt: new Date(),
+        },
+      });
+    }
+
     return {
-      ...refreshResult,
-      statusSync,
-      warnings: refreshResult?.recalculation?.warnings || [],
+      recalculation: {
+        calculation: {
+          amounts: {
+            unconfirmedRefundAmountCents: afterSalesOrder.financeConfirmed
+              ? 0
+              : Math.max(0, Number(afterSalesOrder.refundAmountCents || 0)),
+          },
+        },
+      },
+      summaryResults: [],
+      adjustmentRecordIds: touchedRecordIds,
+      warnings: [],
+      metadata: {
+        ipAddress: metadata.ipAddress || null,
+      },
     };
   }
 
@@ -4014,6 +4558,7 @@ export class BusinessDataNestService {
       ...recalculation.records.map((record: any) => record.travelGroupId),
     ]);
     const summaryResults: any[] = [];
+    const guideSummaryResults: any[] = [];
     for (const travelGroupId of travelGroupIds) {
       summaryResults.push(
         await this.travelGroupFinanceSummaryService.refreshTravelGroupFinanceSummary(
@@ -4023,6 +4568,16 @@ export class BusinessDataNestService {
             actor,
             ipAddress: metadata.ipAddress || null,
             syncCompatibilityFields: false,
+          },
+        ),
+      );
+      guideSummaryResults.push(
+        await this.guidePointsSummaryService.refreshGuidePointsSummariesForTravelGroup(
+          travelGroupId,
+          {
+            prisma: tx,
+            actor,
+            ipAddress: metadata.ipAddress || null,
           },
         ),
       );
@@ -4070,6 +4625,10 @@ export class BusinessDataNestService {
             agencyDeductionConfirmationReset:
               result.agencyDeductionConfirmationReset,
           })),
+          guideSummaryRefreshes: guideSummaryResults.map((result: any) => ({
+            travelGroupId: result.travelGroupId,
+            summaryCount: result.summaries?.length || 0,
+          })),
           tasterManualAdjustmentRecordIds:
             tasterAdjustment.recordIds || [],
         },
@@ -4080,6 +4639,7 @@ export class BusinessDataNestService {
     return {
       recalculation,
       summaryResults,
+      guideSummaryResults,
       tasterAdjustment,
     };
   }
@@ -4133,8 +4693,11 @@ export class BusinessDataNestService {
 
   private async buildRoleScopedTravelGroupWhere(actor: any, baseWhere: any) {
     return andWhere(
-      baseWhere,
-      await this.buildPendingTravelGroupDataScope(actor),
+      andWhere(
+        baseWhere,
+        await this.buildPendingTravelGroupDataScope(actor),
+      ),
+      await this.buildGlobalGroupMarkScope(actor),
     );
   }
 
@@ -4164,7 +4727,12 @@ export class BusinessDataNestService {
   private async buildGroupDataScope(kind: string, actor: any) {
     if (actor?.role === 'taster') {
       return kind === 'travel'
-        ? { visitDate: { gte: getShanghaiTodayDate() } }
+        ? {
+            OR: [
+              { tasterId: actor.id },
+              { liaisonTasterId: actor.id },
+            ],
+          }
         : { tasterId: actor.id };
     }
 
@@ -4184,7 +4752,12 @@ export class BusinessDataNestService {
 
   private async buildPendingTravelGroupDataScope(actor: any) {
     if (actor?.role === 'taster') {
-      return { visitDate: { gte: getShanghaiTodayDate() } };
+      return {
+        OR: [
+          { tasterId: actor.id },
+          { liaisonTasterId: actor.id },
+        ],
+      };
     }
     if (actor?.role === 'front_desk') {
       return null;
@@ -4217,7 +4790,8 @@ export class BusinessDataNestService {
     if (actor?.role === 'taster') {
       if (
         kind === 'travel' &&
-        formatDate(group.visitDate) >= getShanghaiTodayBusinessDate()
+        (group.tasterId === actor.id ||
+          group.liaisonTasterId === actor.id)
       ) {
         return;
       }
@@ -4257,19 +4831,13 @@ export class BusinessDataNestService {
     }
   }
 
-  private async buildGlobalGroupMarkScope(actor: any) {
-    if (actor?.role === 'sales' || actor?.role === 'taster') {
-      return null;
-    }
+  private async buildGlobalGroupMarkScope(_actor: any) {
     return buildSharedGlobalTravelGroupMarkScope(
       await this.onlyShowMarkedRecords(),
     );
   }
 
-  private async buildGlobalSalesOrderMarkScope(actor: any) {
-    if (actor?.role === 'sales' || actor?.role === 'taster') {
-      return null;
-    }
+  private async buildGlobalSalesOrderMarkScope(_actor: any) {
     return buildSharedGlobalSalesOrderMarkScope(
       await this.onlyShowMarkedRecords(),
     );
@@ -4281,10 +4849,7 @@ export class BusinessDataNestService {
     );
   }
 
-  private async assertPassesGlobalGroupMarkScope(actor: any, group: any) {
-    if (actor?.role === 'sales' || actor?.role === 'taster') {
-      return;
-    }
+  private async assertPassesGlobalGroupMarkScope(_actor: any, group: any) {
     if ((await this.onlyShowMarkedRecords()) && !group.financeMark) {
       throw createHttpError(
         404,
@@ -4294,17 +4859,14 @@ export class BusinessDataNestService {
     }
   }
 
-  private async assertPassesGlobalSalesOrderMarkScope(actor: any, order: any) {
-    if (actor?.role === 'sales' || actor?.role === 'taster') {
-      return;
-    }
+  private async assertPassesGlobalSalesOrderMarkScope(
+    _actor: any,
+    order: any,
+  ) {
     if (!(await this.onlyShowMarkedRecords())) {
       return;
     }
-    if (
-      order.customer?.financeMark &&
-      (!order.travelGroupId || order.travelGroup?.financeMark)
-    ) {
+    if (order.financeMark) {
       return;
     }
     throw createHttpError(
@@ -4496,6 +5058,24 @@ function buildSalesOrderWhere(filters: any = {}) {
         { customerPhone: { contains: query } },
         { address: { contains: query } },
         { logisticsNo: { contains: query } },
+        {
+          sourceSalesOrder: {
+            is: {
+              orderNo: {
+                contains: query,
+              },
+            },
+          },
+        },
+        {
+          sourceSalesOrder: {
+            is: {
+              salesFormNo: {
+                contains: query,
+              },
+            },
+          },
+        },
         { customer: { is: { name: { contains: query } } } },
         { customer: { is: { phone: { contains: query } } } },
         { travelGroup: { is: { groupNo: { contains: query } } } },
@@ -4571,7 +5151,44 @@ function buildSalesOrderWhere(filters: any = {}) {
   if (dateRange) {
     where.orderDate = dateRange;
   }
+  const shippingDateRange = buildDateRange(
+    filters.shippingDateFrom,
+    filters.shippingDateTo,
+  );
+  if (shippingDateRange) {
+    where.shippingDate = shippingDateRange;
+  }
   return where;
+}
+
+function buildSalesOrderOrderBy(
+  filters: any = {},
+):
+  | Prisma.SalesOrderOrderByWithRelationInput
+  | Prisma.SalesOrderOrderByWithRelationInput[] {
+  const sort = normalizeOptionalString(
+    filters.shippingDateSort || filters.sort,
+  )?.toLowerCase();
+  if (sort === 'shipping_date_asc' || sort === 'asc') {
+    return [
+      { shippingDate: 'asc' },
+      { createdAt: 'desc' },
+    ];
+  }
+  if (sort === 'shipping_date_desc' || sort === 'desc') {
+    return [
+      { shippingDate: 'desc' },
+      { createdAt: 'desc' },
+    ];
+  }
+  if (sort) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'shippingDateSort must be shipping_date_asc or shipping_date_desc.',
+    );
+  }
+  return { createdAt: 'desc' };
 }
 
 function buildReadableSalesOrderWhere(actor: any, filters: any = {}) {
@@ -4615,6 +5232,15 @@ function buildAfterSalesOrderWhere(filters: any = {}) {
         { salesOrder: { is: { customerName: { contains: query } } } },
         { salesOrder: { is: { customerPhone: { contains: query } } } },
         { salesOrder: { is: { logisticsNo: { contains: query } } } },
+        {
+          afterSalesSalesOrder: {
+            is: {
+              orderNo: {
+                contains: query,
+              },
+            },
+          },
+        },
         { customer: { is: { name: { contains: query } } } },
         { customer: { is: { phone: { contains: query } } } },
       ],
@@ -4748,6 +5374,54 @@ function assertSalesOrderPatchAllowedFields(actor: any, payload: any) {
   if (hasOwn(payload, 'customer')) {
     assertSalesOrderCustomerPatchAllowedFields(payload.customer);
   }
+  assertSalesOrderInventoryLineFieldsNotSubmitted(payload);
+}
+
+function assertSalesOrderInventoryFieldsAreServerOwned(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return;
+  }
+  const serverOwnedOrderFields = [
+    'fulfillmentWarehouseId',
+    'inventoryAppliedAt',
+    'inventoryPolicyVersion',
+    'inventoryVersion',
+  ];
+  const submittedOrderField = serverOwnedOrderFields.find((field) =>
+    hasOwn(payload, field),
+  );
+  const submittedLineField =
+    salesOrderInventoryLineFieldWasSubmitted(payload);
+  if (submittedOrderField || submittedLineField) {
+    throw createHttpError(
+      403,
+      'INVENTORY_FIELD_SERVER_OWNED',
+      'Inventory warehouse, line keys, and inventory state are assigned by the server.',
+    );
+  }
+}
+
+function assertSalesOrderInventoryLineFieldsNotSubmitted(payload: any) {
+  if (salesOrderInventoryLineFieldWasSubmitted(payload)) {
+    throw createHttpError(
+      403,
+      'INVENTORY_FIELD_SERVER_OWNED',
+      'Inventory line keys and inventory state are assigned by the server.',
+    );
+  }
+}
+
+function salesOrderInventoryLineFieldWasSubmitted(payload: any) {
+  return Array.isArray(payload?.items)
+    ? payload.items.some(
+        (item: any) =>
+          item &&
+          typeof item === 'object' &&
+          (hasOwn(item, 'inventoryLineKey') ||
+            hasOwn(item, 'inventoryReservation') ||
+            hasOwn(item, 'stock')),
+      )
+    : false;
 }
 
 function assertSalesOrderSalesEditAllowedFields(payload: any) {
@@ -4771,6 +5445,7 @@ function assertSalesOrderSalesEditAllowedFields(payload: any) {
   if (hasOwn(payload, 'customer')) {
     assertSalesOrderCustomerPatchAllowedFields(payload.customer);
   }
+  assertSalesOrderInventoryLineFieldsNotSubmitted(payload);
 }
 
 function assertSalesOrderFinancePatchAllowedFields(payload: any) {
@@ -4794,7 +5469,10 @@ function assertSalesOrderFinancePatchAllowedFields(payload: any) {
   }
 }
 
-function assertSalesOrderPackingPatchAllowedFields(payload: any) {
+function assertSalesOrderPackingPatchAllowedFields(
+  payload: any,
+  actor?: any,
+) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw createHttpError(
       400,
@@ -4803,6 +5481,7 @@ function assertSalesOrderPackingPatchAllowedFields(payload: any) {
     );
   }
   const allowedFields = new Set(SALES_ORDER_PACKING_PATCH_FIELDS);
+  allowedFields.add('serializedAssignments');
   const deniedFields = Object.keys(payload).filter(
     (field) => !allowedFields.has(field),
   );
@@ -4811,6 +5490,26 @@ function assertSalesOrderPackingPatchAllowedFields(payload: any) {
       403,
       'FIELD_PERMISSION_DENIED',
       `Fields are not allowed for sales order packing: ${deniedFields.join(', ')}.`,
+    );
+  }
+  if (
+    hasOwn(payload, 'fulfillmentWarehouseId') &&
+    !['super_admin', 'admin', 'warehouse'].includes(actor?.role)
+  ) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      'Only warehouse or administrator roles may change the fulfillment warehouse.',
+    );
+  }
+  if (
+    hasOwn(payload, 'serializedAssignments') &&
+    !['super_admin', 'admin', 'warehouse'].includes(actor?.role)
+  ) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      'Only warehouse or administrator roles may select serialized units for fulfillment.',
     );
   }
 }
@@ -4839,6 +5538,27 @@ function assertSalesOrderStatusPatchAllowedFields(payload: any) {
       400,
       'VALIDATION_FAILED',
       'status is required.',
+    );
+  }
+}
+
+function assertShippingDatePatchAllowedFields(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowedFields = new Set(['shippingDate', 'reason']);
+  const deniedFields = Object.keys(payload).filter(
+    (field) => !allowedFields.has(field),
+  );
+  if (deniedFields.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for shipping date update: ${deniedFields.join(', ')}.`,
     );
   }
 }
@@ -5009,6 +5729,34 @@ function assertCanReadSalesOrder(actor: any, order: any) {
       'Sales order does not exist.',
     );
   }
+}
+
+function assertCanUpdateSalesOrderShippingDate(actor: any, order: any) {
+  if (
+    actor?.role === 'finance' ||
+    actor?.role === 'after_sales'
+  ) {
+    return;
+  }
+  if (actor?.role === 'sales' && order.salesUserId === actor.id) {
+    return;
+  }
+  if (actor?.role === 'warehouse' && isWarehouseReadableSalesOrder(order)) {
+    return;
+  }
+  throw createHttpError(
+    403,
+    'PERMISSION_DENIED',
+    'You do not have permission to update the shipping date.',
+  );
+}
+
+function salesOrderAlreadyOutboundError() {
+  return createHttpError(
+    409,
+    'SALES_ORDER_ALREADY_OUTBOUND',
+    '订单已出库，发货日期不可修改。',
+  );
 }
 
 function isWarehouseReadableSalesOrder(order: any) {
@@ -5680,7 +6428,12 @@ function getTravelGroupFrontDeskMissingFields(group: any) {
   return missingFields;
 }
 
-function buildSalesOrderData(payload: any, actor: any, items: any[]) {
+function buildSalesOrderData(
+  payload: any,
+  actor: any,
+  items: any[],
+  submittedAt = new Date(),
+) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw createHttpError(
       400,
@@ -5688,7 +6441,8 @@ function buildSalesOrderData(payload: any, actor: any, items: any[]) {
       'Request body must be an object.',
     );
   }
-  const now = new Date();
+  const now = submittedAt;
+  const shippingDate = resolveSubmissionShippingDate(payload, submittedAt);
   const totalAmountCents = items.reduce(
     (sum: number, item: any) => sum + item.subtotalCents,
     0,
@@ -5699,6 +6453,9 @@ function buildSalesOrderData(payload: any, actor: any, items: any[]) {
     orderType: toPrismaOrderType(payload?.orderType || 'travel_group'),
     travelGroupId: normalizeOptionalString(payload?.travelGroupId),
     orderDate: parseDate(payload?.orderDate, 'orderDate', true),
+    shippingDate: shippingDate.shippingDate,
+    shippingDateSource: shippingDate.source,
+    shippingDateBackfillBatchId: null,
     salesFormNo: normalizeOptionalString(payload?.salesFormNo),
     totalAmountCents,
     cashOnDeliveryAmountCents: normalizeInt(
@@ -5713,6 +6470,7 @@ function buildSalesOrderData(payload: any, actor: any, items: any[]) {
       : 'PACKED',
     packageCount: 0,
     warehouseRemark: null,
+    hasPackingMark: false,
     logisticsNo: null,
     ...clearTrackingCacheData(),
     logisticsFeeCents: 0,
@@ -5864,8 +6622,91 @@ function buildSalesOrderPackingUpdateData(payload: any, actor: any) {
   if (hasOwn(payload, 'warehouseRemark')) {
     data.warehouseRemark = normalizeOptionalString(payload.warehouseRemark);
   }
+  if (hasOwn(payload, 'hasPackingMark')) {
+    data.hasPackingMark = normalizeStrictBoolean(
+      payload.hasPackingMark,
+      'hasPackingMark',
+    );
+  }
+  if (hasOwn(payload, 'fulfillmentWarehouseId')) {
+    data.fulfillmentWarehouseId = normalizeRequiredString(
+      payload.fulfillmentWarehouseId,
+      'fulfillmentWarehouseId',
+    );
+  }
 
   return data;
+}
+
+function normalizeSerializedPackingAssignments(value: unknown) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'serializedAssignments must be an array.',
+    );
+  }
+  const lineKeys = new Set<string>();
+  const unitIds = new Set<string>();
+  return value.map((raw: any, index: number) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `serializedAssignments[${index}] must be an object.`,
+      );
+    }
+    const unsupported = Object.keys(raw).find(
+      (key) => !['inventoryLineKey', 'unitIds'].includes(key),
+    );
+    if (unsupported) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `Unsupported serialized assignment field: ${unsupported}.`,
+      );
+    }
+    const inventoryLineKey = normalizeRequiredString(
+      raw.inventoryLineKey,
+      `serializedAssignments[${index}].inventoryLineKey`,
+    );
+    if (lineKeys.has(inventoryLineKey)) {
+      throw createHttpError(
+        400,
+        'SERIALIZED_ASSIGNMENT_LINE_DUPLICATE',
+        'A packing request cannot repeat an inventory line key.',
+      );
+    }
+    lineKeys.add(inventoryLineKey);
+    if (!Array.isArray(raw.unitIds)) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `serializedAssignments[${index}].unitIds must be an array.`,
+      );
+    }
+    const normalizedUnitIds = raw.unitIds.map(
+      (id: unknown, unitIndex: number) =>
+        normalizeRequiredString(
+          id,
+          `serializedAssignments[${index}].unitIds[${unitIndex}]`,
+        ),
+    );
+    for (const unitId of normalizedUnitIds) {
+      if (unitIds.has(unitId)) {
+        throw createHttpError(
+          400,
+          'SERIALIZED_ASSIGNMENT_UNIT_DUPLICATE',
+          'A bottle cannot be selected more than once in a packing request.',
+        );
+      }
+      unitIds.add(unitId);
+    }
+    return { inventoryLineKey, unitIds: normalizedUnitIds };
+  });
 }
 
 function packingUpdateChangesProvider(current: any, data: any) {
@@ -5900,7 +6741,7 @@ function assertPackingProviderDetails(current: any, data: any) {
   }
 }
 
-function assertShippedLogisticsComplete(current: any, data: any) {
+function assertPackedLogisticsProviderPresent(current: any, data: any) {
   const enteringPacked =
     data.packingStatus === 'PACKED' &&
     String(current?.packingStatus || '').toUpperCase() !== 'PACKED';
@@ -5923,18 +6764,17 @@ function assertShippedLogisticsComplete(current: any, data: any) {
   }
   if (
     !providerCode ||
-    (providerCode === 'other' && !hasText(logisticsMethod)) ||
-    !hasText(current?.logisticsNo)
+    (providerCode === 'other' && !hasText(logisticsMethod))
   ) {
     throw createHttpError(
       400,
-      'SHIPPED_LOGISTICS_REQUIRED',
-      'A shipped order requires a logistics provider and tracking number.',
+      'SHIPPED_LOGISTICS_PROVIDER_REQUIRED',
+      '邮寄订单进入已打包状态前必须选择物流公司。',
     );
   }
 }
 
-function assertPackedLogisticsNoPresent(current: any, data: any) {
+function assertExistingPackedLogisticsNoNotCleared(current: any, data: any) {
   if (
     !hasOwn(data, 'logisticsNo') ||
     String(current?.packingStatus || '').toUpperCase() !== 'PACKED' ||
@@ -5943,14 +6783,22 @@ function assertPackedLogisticsNoPresent(current: any, data: any) {
     return;
   }
   const providerCode = normalizeLogisticsProviderCode(
-    current?.logisticsProviderCode,
-    current?.logisticsMethod,
+    hasOwn(data, 'logisticsProviderCode')
+      ? data.logisticsProviderCode
+      : current?.logisticsProviderCode,
+    hasOwn(data, 'logisticsMethod')
+      ? data.logisticsMethod
+      : current?.logisticsMethod,
   );
-  if (providerCode !== 'self_carry' && !hasText(data.logisticsNo)) {
+  if (
+    providerCode !== 'self_carry' &&
+    hasText(current?.logisticsNo) &&
+    !hasText(data.logisticsNo)
+  ) {
     throw createHttpError(
       400,
-      'SHIPPED_LOGISTICS_REQUIRED',
-      'A shipped order requires a logistics provider and tracking number.',
+      'PACKED_LOGISTICS_NO_CANNOT_BE_CLEARED',
+      '已打包订单已有物流单号，不能清空。',
     );
   }
 }
@@ -5972,62 +6820,38 @@ function buildSalesOrderStatusUpdateData(payload: any, actor: any) {
   return data;
 }
 
-function buildSalesOrderAfterSalesSyncData(status: string, actor: any) {
-  return {
-    status,
-    updatedById: actor.id,
-    updatedAt: new Date(),
-  };
-}
-
-function resolveAfterSalesLinkedSalesOrderStatus(
-  afterSalesOrder: any,
-  salesOrder: any,
-  refundAmountCents: number,
-) {
-  const orderTotalAmountCents = Number(salesOrder.totalAmountCents || 0);
-  if (refundAmountCents > orderTotalAmountCents) {
-    throw createHttpError(
-      400,
-      'AFTER_SALES_REFUND_EXCEEDS_ORDER_TOTAL',
-      'After-sales refund amount exceeds sales order total amount.',
-    );
-  }
-  if (afterSalesOrder.actionType === 'CANCEL_ORDER') {
-    return 'CANCELLED';
-  }
-  if (refundAmountCents <= 0) {
-    return null;
-  }
-  return refundAmountCents < orderTotalAmountCents
-    ? 'PARTIAL_REFUND'
-    : 'REFUNDED';
-}
-
 function buildAfterSalesOrderCreateData(
   payload: any,
   actor: any,
   salesOrder: any,
+  options: any,
 ) {
-  const now = new Date();
+  const now = options.now;
   const status = toPrismaAfterSalesStatus(payload?.status || 'negotiating');
+  const calculation = options.calculationSnapshot;
   return {
-    id: crypto.randomUUID(),
+    id: options.id,
     salesOrderId: salesOrder.id,
+    afterSalesSalesOrderId: options.afterSalesSalesOrderId,
     customerId: salesOrder.customerId || null,
     issueType: toPrismaAfterSalesIssueType(
       normalizeRequiredString(payload?.issueType, 'issueType'),
     ),
-    actionType: toPrismaAfterSalesActionType(
-      normalizeRequiredString(payload?.actionType, 'actionType'),
-    ),
+    actionType: options.actionType,
     description: normalizeRequiredString(payload?.description, 'description'),
     resolution: normalizeOptionalString(payload?.resolution),
-    refundAmountCents: normalizeNonNegativeInt(
-      payload?.refundAmountCents,
-      'refundAmountCents',
-      0,
-    ),
+    refundAmountCents: options.refundAmountCents,
+    deductionCalculationMode: calculation.deductionCalculationMode,
+    sourceAgencyDeductionCents: calculation.sourceAgencyDeductionCents,
+    agencyDeductionRate: calculation.agencyDeductionRate,
+    dailyRebateRate: calculation.dailyRebateRate,
+    monthlyRebateRate: calculation.monthlyRebateRate,
+    agencyDeductionRuleId: calculation.agencyDeductionRuleId,
+    agencyRebateRuleId: calculation.agencyRebateRuleId,
+    calculationDate: options.calculationDate,
+    agencyDeductionAdjustmentCents:
+      calculation.agencyDeductionAdjustmentCents,
+    financialEffectStatus: calculation.financialEffectStatus,
     status,
     financeConfirmed: false,
     financeConfirmedById: null,
@@ -6040,11 +6864,662 @@ function buildAfterSalesOrderCreateData(
     handledAt: now,
     completedAt: status === 'COMPLETED' ? now : null,
     notes: normalizeOptionalString(payload?.notes),
+    items: {
+      create: options.items.map((item: any, index: number) => ({
+        id: crypto.randomUUID(),
+        sourceSalesOrderItemId: item.sourceSalesOrderItemId,
+        productId: item.productId,
+        productName: item.productName,
+        unit: item.unit,
+        quantity: item.quantity,
+        originalUnitPriceCents: item.originalUnitPriceCents,
+        subtotalCents: item.subtotalCents,
+        returnRequired: item.returnRequired,
+        expectedReturnQty: item.expectedReturnQty,
+        postedReceivedQty: 0,
+        returnVersion: 0,
+        isHistoricalPlaceholder: false,
+        notes: null,
+        sortOrder: index,
+        createdAt: now,
+      })),
+    },
     createdById: actor.id,
     updatedById: actor.id,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function buildAfterSalesSalesOrderCreateData(options: any) {
+  const source = options.sourceSalesOrder;
+  const shippingDate = defaultBackfillShippingDate(options.now);
+  return {
+    id: options.id,
+    orderNo: options.afterSalesNo,
+    orderType: 'AFTER_SALES',
+    sourceSalesOrderId: source.id,
+    travelGroupId: source.travelGroupId || null,
+    customerId: source.customerId || null,
+    customerName: source.customerName,
+    customerPhone: source.customerPhone || null,
+    province: source.province || null,
+    city: source.city || null,
+    district: source.district || null,
+    address: source.address || null,
+    orderDate: options.orderDate,
+    shippingDate,
+    shippingDateSource: 'SYSTEM_DEFAULT',
+    shippingDateBackfillBatchId: null,
+    salesFormNo: options.afterSalesNo,
+    totalAmountCents: options.refundAmountCents,
+    cashOnDeliveryAmountCents: 0,
+    logisticsMethod: null,
+    logisticsProviderCode: null,
+    packingStatus: 'PACKED',
+    packageCount: 0,
+    warehouseRemark: null,
+    hasPackingMark: false,
+    logisticsNo: null,
+    ...clearTrackingCacheData(),
+    logisticsFeeCents: 0,
+    invoiceRequired: false,
+    invoiceIssued: false,
+    financeRemark: null,
+    remark: `关联原销售订单 ${source.orderNo}`,
+    status: 'VALID',
+    financeMark: Boolean(source.financeMark),
+    markedById: source.financeMark ? source.markedById || null : null,
+    markedAt: source.financeMark ? source.markedAt || null : null,
+    salesUserId: source.salesUserId || null,
+    outreachUserId: source.outreachUserId || null,
+    pointsDestination: source.pointsDestination || 'TRAVEL_AGENCY',
+    personalPointsGuideId: source.personalPointsGuideId || null,
+    personalGuideNameSnapshot: source.personalGuideNameSnapshot || null,
+    personalDailyRebateRate: source.personalDailyRebateRate || null,
+    personalMonthlyRebateRate: source.personalMonthlyRebateRate || null,
+    items: {
+      create: options.items.map((item: any, index: number) => ({
+        id: crypto.randomUUID(),
+        productId: item.productId,
+        productName: item.productName,
+        unit: item.unit,
+        quantity: item.quantity,
+        unitPriceCents: item.originalUnitPriceCents,
+        subtotalCents: item.subtotalCents,
+        deliveryType: 'SELF_PICKUP',
+        notes: `售后明细，来源销售明细 ${item.sourceSalesOrderItemId}`,
+        sortOrder: index,
+        createdAt: options.now,
+      })),
+    },
+    createdById: options.actor.id,
+    updatedById: options.actor.id,
+    createdAt: options.now,
+    updatedAt: options.now,
+  };
+}
+
+function resolveAfterSalesOrderItems(
+  value: unknown,
+  salesOrder: any,
+  actionType: string,
+) {
+  const requiresItems = actionType !== 'RECORD_ONLY';
+  if (value === undefined || value === null) {
+    if (!requiresItems) {
+      return [];
+    }
+    throw createHttpError(
+      400,
+      'AFTER_SALES_ITEMS_REQUIRED',
+      'items is required for this after-sales action.',
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'items must be an array.',
+    );
+  }
+  if (requiresItems && value.length === 0) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_ITEMS_REQUIRED',
+      'items is required for this after-sales action.',
+    );
+  }
+  const sourceItems = new Map(
+    (salesOrder.items || []).map((item: any) => [item.id, item]),
+  );
+  const seen = new Set<string>();
+  return value.map((input: any, index: number) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `items[${index}] must be an object.`,
+      );
+    }
+    const sourceSalesOrderItemId = normalizeRequiredString(
+      input.sourceSalesOrderItemId,
+      `items[${index}].sourceSalesOrderItemId`,
+    );
+    if (seen.has(sourceSalesOrderItemId)) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_ITEM_DUPLICATED',
+        'The same source sales order item cannot be submitted twice.',
+      );
+    }
+    seen.add(sourceSalesOrderItemId);
+    const sourceItem = sourceItems.get(sourceSalesOrderItemId) as any;
+    if (!sourceItem) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_ITEM_NOT_IN_SOURCE_ORDER',
+        'After-sales items must belong to the source sales order.',
+      );
+    }
+    const quantity = Number(input.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_ITEM_QUANTITY_INVALID',
+        'After-sales item quantity must be a positive integer.',
+      );
+    }
+    const subtotalCents = Number(input.totalPriceCents);
+    if (!Number.isSafeInteger(subtotalCents) || subtotalCents < 0) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_ITEM_TOTAL_PRICE_INVALID',
+        'After-sales item totalPriceCents must be a non-negative integer.',
+      );
+    }
+    const returnRequired = normalizeAfterSalesReturnRequired(
+      input.returnRequired,
+      `items[${index}].returnRequired`,
+    );
+    const expectedReturnQty = normalizeExpectedReturnQty(
+      input.expectedReturnQty,
+      returnRequired,
+      quantity,
+      index,
+    );
+    return {
+      sourceSalesOrderItemId,
+      productId: sourceItem.productId || null,
+      productName: sourceItem.productName,
+      unit: sourceItem.unit || null,
+      quantity,
+      originalQuantity: Number(sourceItem.quantity || 0),
+      originalUnitPriceCents: Number(sourceItem.unitPriceCents || 0),
+      subtotalCents,
+      returnRequired,
+      expectedReturnQty,
+    };
+  });
+}
+
+function normalizeAfterSalesReturnRequired(
+  value: unknown,
+  field: string,
+) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value !== 'boolean') {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${field} must be a boolean.`,
+    );
+  }
+  return value;
+}
+
+function normalizeExpectedReturnQty(
+  value: unknown,
+  returnRequired: boolean,
+  quantity: number,
+  index: number,
+) {
+  if (!returnRequired) {
+    if (
+      value !== undefined &&
+      value !== null &&
+      Number(value) !== 0
+    ) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_EXPECTED_RETURN_QTY_INVALID',
+        `items[${index}].expectedReturnQty must be 0 when returnRequired is false.`,
+      );
+    }
+    return 0;
+  }
+  const expectedReturnQty = Number(value);
+  if (
+    !Number.isSafeInteger(expectedReturnQty) ||
+    expectedReturnQty <= 0 ||
+    expectedReturnQty > quantity
+  ) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_EXPECTED_RETURN_QTY_INVALID',
+      `items[${index}].expectedReturnQty must be a positive integer no greater than quantity.`,
+    );
+  }
+  return expectedReturnQty;
+}
+
+function hasReturnRequiredItems(order: any) {
+  return (order?.items || []).some(
+    (item: any) =>
+      Boolean(item.returnRequired) &&
+      Number(item.expectedReturnQty || 0) > 0,
+  );
+}
+
+function isAfterSalesPhysicalReturnComplete(order: any) {
+  const returnItems = (order?.items || []).filter(
+    (item: any) =>
+      Boolean(item.returnRequired) &&
+      Number(item.expectedReturnQty || 0) > 0,
+  );
+  if (returnItems.length === 0) {
+    return Boolean(order?.warehouseConfirmedAt);
+  }
+  return returnItems.every(
+    (item: any) =>
+      Number(item.postedReceivedQty || 0) >=
+      Number(item.expectedReturnQty || 0),
+  );
+}
+
+function validateAfterSalesAvailableQuantity(
+  items: any[],
+  existingOrders: any[],
+) {
+  const usedQuantity = new Map<string, number>();
+  for (const order of existingOrders || []) {
+    for (const item of order.items || []) {
+      const sourceItemId = normalizeOptionalString(
+        item.sourceSalesOrderItemId,
+      );
+      if (!sourceItemId) {
+        continue;
+      }
+      usedQuantity.set(
+        sourceItemId,
+        (usedQuantity.get(sourceItemId) || 0) +
+          Math.max(0, Number(item.quantity || 0)),
+      );
+    }
+  }
+  for (const item of items) {
+    const remaining =
+      item.originalQuantity -
+      (usedQuantity.get(item.sourceSalesOrderItemId) || 0);
+    if (item.quantity > remaining) {
+      throw createHttpError(
+        400,
+        'AFTER_SALES_ITEM_QUANTITY_EXCEEDED',
+        `After-sales quantity exceeds the remaining quantity for ${item.productName}.`,
+      );
+    }
+  }
+}
+
+function validateAfterSalesRefundAmount(
+  payload: any,
+  salesOrder: any,
+  existingOrders: any[],
+  actionType: string,
+  refundAmountCents: number,
+) {
+  if (
+    ['REFUND', 'RETURN_REFUND', 'CANCEL_ORDER'].includes(actionType) &&
+    refundAmountCents <= 0
+  ) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_REFUND_AMOUNT_REQUIRED',
+      'Refund actions require a positive item total.',
+    );
+  }
+  if (
+    hasOwn(payload, 'refundAmountCents') &&
+    normalizeNonNegativeInt(
+      payload.refundAmountCents,
+      'refundAmountCents',
+    ) !== refundAmountCents
+  ) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_REFUND_AMOUNT_MISMATCH',
+      'refundAmountCents must equal the sum of item totalPriceCents.',
+    );
+  }
+  const existingRefundAmountCents = (existingOrders || []).reduce(
+    (sum: number, order: any) =>
+      sum + Math.max(0, Number(order.refundAmountCents || 0)),
+    0,
+  );
+  if (
+    existingRefundAmountCents + refundAmountCents >
+    Number(salesOrder.totalAmountCents || 0)
+  ) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_REFUND_EXCEEDS_ORDER_TOTAL',
+      'Cumulative after-sales refunds exceed the source sales order total.',
+    );
+  }
+}
+
+function resolveAgencyDeductionModeFromRecords(records: any[]) {
+  for (const record of records || []) {
+    const snapshotText = JSON.stringify({
+      calculationNote: record.calculationNote || null,
+      ruleSnapshot: record.ruleSnapshot || null,
+      sourceSnapshot: record.sourceSnapshot || null,
+    });
+    if (snapshotText.includes('effective_sales_rate')) {
+      return 'effective_sales_rate';
+    }
+  }
+  return 'manual_product_reference';
+}
+
+function findAgencyDeductionRuleId(records: any[]) {
+  for (const record of records || []) {
+    const rules = record?.ruleSnapshot?.agencyDeductionRules;
+    if (!Array.isArray(rules)) {
+      continue;
+    }
+    const rule = rules.find((item: any) => normalizeOptionalString(item?.id));
+    if (rule) {
+      return normalizeOptionalString(rule.id);
+    }
+  }
+  return null;
+}
+
+function normalizeRateSnapshot(value: unknown) {
+  const rate = Number(value || 0);
+  return Number.isFinite(rate) && rate >= 0 ? rate.toFixed(4) : '0.0000';
+}
+
+function roundCentsProductRatio(
+  left: number,
+  right: number,
+  denominator: number,
+) {
+  if (
+    !Number.isSafeInteger(left) ||
+    !Number.isSafeInteger(right) ||
+    !Number.isSafeInteger(denominator) ||
+    left <= 0 ||
+    right <= 0 ||
+    denominator <= 0
+  ) {
+    return 0;
+  }
+  const numerator = BigInt(left) * BigInt(right);
+  return Number(
+    (numerator + BigInt(Math.floor(denominator / 2))) / BigInt(denominator),
+  );
+}
+
+export function calculateProportionalAfterSalesDeductionCents(input: {
+  sourceAgencyDeductionCents: number;
+  refundAmountCents: number;
+  sourceOrderAmountCents: number;
+  existingDeductionCents?: number;
+}) {
+  const sourceDeductionCents = Math.max(
+    0,
+    Number(input.sourceAgencyDeductionCents || 0),
+  );
+  const refundAmountCents = Math.max(
+    0,
+    Number(input.refundAmountCents || 0),
+  );
+  const sourceOrderAmountCents = Math.max(
+    0,
+    Number(input.sourceOrderAmountCents || 0),
+  );
+  const existingDeductionCents = Math.max(
+    0,
+    Number(input.existingDeductionCents || 0),
+  );
+  if (
+    !Number.isSafeInteger(sourceDeductionCents) ||
+    !Number.isSafeInteger(refundAmountCents) ||
+    !Number.isSafeInteger(sourceOrderAmountCents) ||
+    !Number.isSafeInteger(existingDeductionCents) ||
+    sourceDeductionCents === 0 ||
+    refundAmountCents === 0 ||
+    sourceOrderAmountCents === 0
+  ) {
+    return 0;
+  }
+  const remainingDeductionCents = Math.max(
+    0,
+    sourceDeductionCents - existingDeductionCents,
+  );
+  return Math.min(
+    refundAmountCents,
+    remainingDeductionCents,
+    roundCentsProductRatio(
+      sourceDeductionCents,
+      refundAmountCents,
+      sourceOrderAmountCents,
+    ),
+  );
+}
+
+function multiplyCentsByRateSnapshot(cents: number, rateValue: unknown) {
+  if (!Number.isSafeInteger(cents) || cents === 0) {
+    return 0;
+  }
+  const rateUnits = Math.round(Number(rateValue || 0) * 10000);
+  if (!Number.isSafeInteger(rateUnits) || rateUnits <= 0) {
+    return 0;
+  }
+  const sign = cents < 0 ? -1 : 1;
+  const rounded = Number(
+    (BigInt(Math.abs(cents)) * BigInt(rateUnits) + 5000n) / 10000n,
+  );
+  return sign * rounded;
+}
+
+export function buildAfterSalesCommissionAdjustmentRecords(options: any) {
+  const afterSalesOrder = options.afterSalesOrder;
+  const sourceSalesOrder = options.sourceSalesOrder;
+  const actor = options.actor;
+  const refundAmountCents = Math.max(
+    0,
+    Number(afterSalesOrder.refundAmountCents || 0),
+  );
+  const sourceTotalAmountCents = Math.max(
+    1,
+    Number(sourceSalesOrder.totalAmountCents || 0),
+  );
+  const deductionCents =
+    afterSalesOrder.agencyDeductionAdjustmentCents === null ||
+    afterSalesOrder.agencyDeductionAdjustmentCents === undefined
+      ? null
+      : Math.max(
+          0,
+          Number(afterSalesOrder.agencyDeductionAdjustmentCents),
+        );
+  const isConfirmed =
+    Boolean(afterSalesOrder.financeConfirmed) && deductionCents !== null;
+  const now = new Date();
+  const common = {
+    salesOrderId: afterSalesOrder.afterSalesSalesOrderId || null,
+    travelGroupId: sourceSalesOrder.travelGroupId || null,
+    afterSalesOrderId: afterSalesOrder.id,
+    grossAmountCents: -refundAmountCents,
+    confirmedRefundAmountCents: -refundAmountCents,
+    manualInput: false,
+    isConfirmed,
+    confirmedById: isConfirmed
+      ? afterSalesOrder.financeConfirmedById || actor?.id || null
+      : null,
+    confirmedAt: isConfirmed
+      ? afterSalesOrder.financeConfirmedAt || now
+      : null,
+    calculationVersion: 'after_sales_v1',
+  };
+  const sourceRecords = options.sourceRecords || [];
+  const records: any[] = [];
+
+  for (const sourceRecord of sourceRecords) {
+    const targetType = String(sourceRecord.targetType || '').toUpperCase();
+    if (
+      ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'].includes(
+        targetType,
+      )
+    ) {
+      continue;
+    }
+    records.push({
+      ...common,
+      commissionRuleId: sourceRecord.commissionRuleId || null,
+      agencyRebateRuleId: null,
+      targetType,
+      targetUserId: sourceRecord.targetUserId || null,
+      agencyId: sourceRecord.agencyId || null,
+      agencyName: sourceRecord.agencyName || null,
+      baseAmountCents: -roundCentsProductRatio(
+        Math.abs(Number(sourceRecord.baseAmountCents || 0)),
+        refundAmountCents,
+        sourceTotalAmountCents,
+      ),
+      deductionAmountCents: -roundCentsProductRatio(
+        Math.abs(Number(sourceRecord.deductionAmountCents || 0)),
+        refundAmountCents,
+        sourceTotalAmountCents,
+      ),
+      rateSnapshot: sourceRecord.rateSnapshot || null,
+      amountCents: -roundCentsProductRatio(
+        Math.abs(Number(sourceRecord.amountCents || 0)),
+        refundAmountCents,
+        sourceTotalAmountCents,
+      ),
+      pointsCents: -roundCentsProductRatio(
+        Math.abs(Number(sourceRecord.pointsCents || 0)),
+        refundAmountCents,
+        sourceTotalAmountCents,
+      ),
+      calculationNote: `售后订单 ${afterSalesOrder.afterSalesNo} 的独立负向提成调整。`,
+      ruleSnapshot: {
+        sourceCommissionRecordId: sourceRecord.id,
+        sourceRuleSnapshot: sourceRecord.ruleSnapshot || null,
+        refundRatioNumerator: refundAmountCents,
+        refundRatioDenominator: sourceTotalAmountCents,
+      },
+      sourceSnapshot: {
+        afterSalesOrderId: afterSalesOrder.id,
+        afterSalesNo: afterSalesOrder.afterSalesNo,
+        sourceSalesOrderId: sourceSalesOrder.id,
+        sourceOrderNo: sourceSalesOrder.orderNo,
+      },
+    });
+  }
+
+  const agencyBaseAmountCents =
+    deductionCents === null ? 0 : -(refundAmountCents - deductionCents);
+  const agencyDeductionAmountCents =
+    deductionCents === null ? 0 : -deductionCents;
+  for (const targetType of [
+    'AGENCY_DAILY_REBATE',
+    'AGENCY_MONTHLY_REBATE',
+  ]) {
+    const sourceRecord = sourceRecords.find(
+      (record: any) =>
+        String(record.targetType || '').toUpperCase() === targetType,
+    );
+    const rateSnapshot =
+      targetType === 'AGENCY_DAILY_REBATE'
+        ? afterSalesOrder.dailyRebateRate
+        : afterSalesOrder.monthlyRebateRate;
+    records.push({
+      ...common,
+      commissionRuleId: null,
+      agencyRebateRuleId:
+        afterSalesOrder.agencyRebateRuleId ||
+        sourceRecord?.agencyRebateRuleId ||
+        null,
+      targetType,
+      targetUserId: null,
+      agencyId: sourceRecord?.agencyId || null,
+      agencyName:
+        sourceRecord?.agencyName ||
+        sourceSalesOrder.travelGroup?.travelAgency ||
+        null,
+      baseAmountCents: agencyBaseAmountCents,
+      deductionAmountCents: agencyDeductionAmountCents,
+      rateSnapshot: normalizeRateSnapshot(rateSnapshot),
+      amountCents: 0,
+      pointsCents:
+        deductionCents === null
+          ? 0
+          : multiplyCentsByRateSnapshot(
+              agencyBaseAmountCents,
+              rateSnapshot,
+            ),
+      calculationNote:
+        deductionCents === null
+          ? `售后订单 ${afterSalesOrder.afterSalesNo} 待财务填写扣酒成本。`
+          : `售后订单 ${afterSalesOrder.afterSalesNo} 的独立负向积分调整。`,
+      ruleSnapshot: {
+        deductionCalculationMode:
+          afterSalesOrder.deductionCalculationMode,
+        sourceAgencyDeductionCents: Number(
+          afterSalesOrder.sourceAgencyDeductionCents || 0,
+        ),
+        agencyDeductionRate:
+          afterSalesOrder.agencyDeductionRate === null
+            ? null
+            : Number(afterSalesOrder.agencyDeductionRate),
+        dailyRebateRate: Number(afterSalesOrder.dailyRebateRate || 0),
+        monthlyRebateRate: Number(afterSalesOrder.monthlyRebateRate || 0),
+        agencyDeductionRuleId:
+          afterSalesOrder.agencyDeductionRuleId || null,
+        agencyRebateRuleId:
+          afterSalesOrder.agencyRebateRuleId || null,
+        calculationDate: formatDate(afterSalesOrder.calculationDate),
+      },
+      sourceSnapshot: {
+        afterSalesOrderId: afterSalesOrder.id,
+        afterSalesNo: afterSalesOrder.afterSalesNo,
+        sourceSalesOrderId: sourceSalesOrder.id,
+        sourceOrderNo: sourceSalesOrder.orderNo,
+        refundAmountCents,
+        agencyDeductionAdjustmentCents: deductionCents,
+        financialEffectStatus: afterSalesOrder.financialEffectStatus,
+      },
+    });
+  }
+  return records;
+}
+
+export function isSameAfterSalesCommissionBusinessKey(
+  record: any,
+  data: any,
+) {
+  return (
+    String(record.targetType || '').toUpperCase() === data.targetType &&
+    (record.targetUserId || null) === (data.targetUserId || null) &&
+    (record.agencyId || null) === (data.agencyId || null) &&
+    (record.agencyName || null) === (data.agencyName || null)
+  );
 }
 
 function buildAfterSalesOrderUpdateData(payload: any, actor: any) {
@@ -6057,9 +7532,6 @@ function buildAfterSalesOrderUpdateData(payload: any, actor: any) {
   if (hasOwn(payload, 'issueType')) {
     data.issueType = toPrismaAfterSalesIssueType(payload.issueType);
   }
-  if (hasOwn(payload, 'actionType')) {
-    data.actionType = toPrismaAfterSalesActionType(payload.actionType);
-  }
   if (hasOwn(payload, 'description')) {
     data.description = normalizeRequiredString(
       payload.description,
@@ -6068,12 +7540,6 @@ function buildAfterSalesOrderUpdateData(payload: any, actor: any) {
   }
   if (hasOwn(payload, 'resolution')) {
     data.resolution = normalizeOptionalString(payload.resolution);
-  }
-  if (hasOwn(payload, 'refundAmountCents')) {
-    data.refundAmountCents = normalizeNonNegativeInt(
-      payload.refundAmountCents,
-      'refundAmountCents',
-    );
   }
   if (hasOwn(payload, 'notes')) {
     data.notes = normalizeOptionalString(payload.notes);
@@ -6129,12 +7595,17 @@ function buildAfterSalesOrderWarehouseConfirmData(payload: any, actor: any) {
 function buildAfterSalesOrderFinanceRefundConfirmData(
   actor: any,
   refundProofAttachments: any[],
+  current: any,
 ) {
   const now = new Date();
   return {
     financeConfirmed: true,
     financeConfirmedById: actor.id,
     financeConfirmedAt: now,
+    financialEffectStatus:
+      current.financialEffectStatus === 'PENDING_RECOVERY'
+        ? 'PENDING_RECOVERY'
+        : 'CONFIRMED',
     refundProofAttachments,
     updatedById: actor.id,
     updatedAt: now,
@@ -6144,12 +7615,21 @@ function buildAfterSalesOrderFinanceRefundConfirmData(
 function buildAfterSalesOrderFinanceConfirmData(
   financeConfirmed: boolean,
   actor: any,
+  current: any,
 ) {
   const now = new Date();
   const data: any = {
     financeConfirmed,
     financeConfirmedById: financeConfirmed ? actor.id : null,
     financeConfirmedAt: financeConfirmed ? now : null,
+    financialEffectStatus:
+      current.financialEffectStatus === 'NO_FINANCIAL_EFFECT'
+        ? 'NO_FINANCIAL_EFFECT'
+        : current.financialEffectStatus === 'PENDING_RECOVERY'
+          ? 'PENDING_RECOVERY'
+          : financeConfirmed
+            ? 'CONFIRMED'
+            : 'PENDING_CONFIRMATION',
     updatedById: actor.id,
     updatedAt: now,
   };
@@ -6157,6 +7637,20 @@ function buildAfterSalesOrderFinanceConfirmData(
     data.refundProofAttachments = [];
   }
   return data;
+}
+
+function assertAfterSalesAgencyDeductionReadyForConfirmation(order: any) {
+  if (
+    order?.deductionCalculationMode === 'manual_product_reference' &&
+    (order?.agencyDeductionAdjustmentCents === null ||
+      order?.agencyDeductionAdjustmentCents === undefined)
+  ) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_DEDUCTION_REQUIRED',
+      'Manual after-sales deduction must be filled before finance confirmation.',
+    );
+  }
 }
 
 async function resolveSalesOrderCustomer(tx: any, payload: any, actor: any) {
@@ -6396,21 +7890,14 @@ function buildSalesOrderItems(items: any[]) {
             `items[${index}].unitPriceCents`,
           )
         : Math.round(Number(subtotalCents || 0) / quantity);
-    const serializedUnitIds = Array.isArray(item?.serializedUnitIds)
-      ? item.serializedUnitIds.map((id: unknown, unitIndex: number) =>
-          normalizeRequiredString(
-            id,
-            `items[${index}].serializedUnitIds[${unitIndex}]`,
-          ),
-        )
-      : [];
-    if (new Set(serializedUnitIds).size !== serializedUnitIds.length) {
+    if (hasOwn(item || {}, 'serializedUnitIds')) {
       throw createHttpError(
-        400,
-        'VALIDATION_FAILED',
-        `items[${index}].serializedUnitIds must not contain duplicates.`,
+        403,
+        'SERIALIZED_SELECTION_SERVER_MANAGED',
+        `items[${index}].serializedUnitIds is server-managed; submit only product and quantity.`,
       );
     }
+    const serializedUnitIds: string[] = [];
     return {
       id: normalizeOptionalString(item?.id) || crypto.randomUUID(),
       productId: normalizeRequiredString(
@@ -6440,6 +7927,7 @@ async function resolveSalesOrderItemSnapshots(
   orderDate: Date,
   currentItems: any[] = [],
   forceCostRefresh = false,
+  options: any = {},
 ) {
   const resolved = [];
   for (let index = 0; index < items.length; index += 1) {
@@ -6472,95 +7960,39 @@ async function resolveSalesOrderItemSnapshots(
     let actualCostSubtotalCents: number | null;
 
     if (product.inventoryTrackingMode === 'SERIALIZED') {
-      if (item.quantity !== item.serializedUnitIds.length) {
-        throw createHttpError(
-          400,
-          'SERIALIZED_INVENTORY_QUANTITY_MISMATCH',
-          `items[${index}].quantity 必须等于所选物流码数量。`,
-        );
-      }
-      if (item.serializedUnitIds.length === 0) {
-        throw createHttpError(
-          400,
-          'SERIALIZED_INVENTORY_SELECTION_REQUIRED',
-          `items[${index}] 请选择物流码。`,
-        );
-      }
-      const units = await prisma.serializedInventoryUnit.findMany({
-        where: {
-          id: { in: item.serializedUnitIds },
-        },
-      });
-      if (units.length !== item.serializedUnitIds.length) {
-        throw inventoryUnitUnavailableError();
-      }
-      const unitsById = new Map(
-        units.map((unit: any) => [unit.id, unit]),
-      );
-      const orderedUnits = item.serializedUnitIds.map((id: string) =>
-        unitsById.get(id),
-      );
-      const currentIds = new Set(
-        (current?.serializedInventoryUnits || []).map(
-          (unit: any) => unit.id,
-        ),
-      );
-      const normalizedNames = new Set<string>();
-      const costSnapshots: number[] = [];
-      for (const unit of orderedUnits) {
-        const retained =
-          currentIds.has(unit.id) ||
-          (current?.id && unit.salesOrderItemId === current.id);
-        if (
-          unit.productId !== product.id ||
-          (!retained && unit.status !== 'AVAILABLE') ||
-          !isSerializedInventoryUnitComplete(unit) ||
-          unit.purchaseCostCents === null ||
-          unit.purchaseCostCents === undefined
-        ) {
-          throw inventoryUnitUnavailableError();
-        }
-        normalizedNames.add(
-          unit.normalizedMoutaiName ||
-            normalizeProductSnapshotName(unit.moutaiName),
-        );
-        costSnapshots.push(
-          retained && unit.orderCostSnapshotCents !== null
-            ? Number(unit.orderCostSnapshotCents)
-            : Number(unit.purchaseCostCents),
-        );
-      }
-      if (normalizedNames.size !== 1) {
-        throw createHttpError(
-          400,
-          'SERIALIZED_INVENTORY_MIXED_NAMES',
-          '同一订单明细只能选择相同商品名称的逐瓶库存。',
-        );
-      }
-      actualCostSubtotalCents = costSnapshots.reduce(
-        (sum, cost) => sum + cost,
-        0,
-      );
-      actualUnitCostCents = costSnapshots.every(
-        (cost) => cost === costSnapshots[0],
-      )
-        ? costSnapshots[0]
-        : null;
+      actualUnitCostCents =
+        sameProduct && current
+          ? nullableInteger(current.actualUnitCostCents)
+          : null;
+      actualCostSubtotalCents =
+        sameProduct && current
+          ? nullableInteger(current.actualCostSubtotalCents)
+          : null;
       resolved.push({
         ...item,
         id: current?.id || item.id,
+        inventoryLineKey: options.assignQuantityInventoryLineKeys
+          ? sameProduct && current?.inventoryLineKey
+            ? current.inventoryLineKey
+            : serverInventoryLineKey()
+          : current?.inventoryLineKey || null,
+        inventoryTrackingMode: product.inventoryTrackingMode,
         productId: product.id,
-        productName: orderedUnits[0].moutaiName,
+        productName: product.name,
         unit: product.unit,
         subtotalCents,
         actualUnitCostCents,
         actualCostSubtotalCents,
-        grossProfitCents: subtotalCents - actualCostSubtotalCents,
-        serializedUnitIds: item.serializedUnitIds,
+        grossProfitCents:
+          actualCostSubtotalCents === null
+            ? null
+            : subtotalCents - actualCostSubtotalCents,
+        serializedUnitIds: [],
         createdAt: current?.createdAt || item.createdAt || new Date(),
       });
       continue;
     }
+
     if (item.serializedUnitIds.length > 0) {
       throw createHttpError(
         400,
@@ -6588,6 +8020,14 @@ async function resolveSalesOrderItemSnapshots(
     resolved.push({
       ...item,
       id: current?.id || item.id,
+      inventoryLineKey:
+        product.inventoryTrackingMode === 'QUANTITY' &&
+        options.assignQuantityInventoryLineKeys
+          ? sameProduct && current?.inventoryLineKey
+            ? current.inventoryLineKey
+            : serverInventoryLineKey()
+          : current?.inventoryLineKey || null,
+      inventoryTrackingMode: product.inventoryTrackingMode,
       productId: product.id,
       productName: product.name,
       unit: product.unit,
@@ -6605,105 +8045,12 @@ async function resolveSalesOrderItemSnapshots(
 }
 
 function toSalesOrderItemCreateData(item: any) {
-  const { serializedUnitIds, ...data } = item;
+  const {
+    serializedUnitIds,
+    inventoryTrackingMode: _inventoryTrackingMode,
+    ...data
+  } = item;
   return data;
-}
-
-async function synchronizeSerializedInventoryUnits(
-  prisma: any,
-  salesOrderId: string,
-  orderItems: any[],
-  currentItems: any[],
-) {
-  const requestedIds = orderItems.flatMap((item: any) =>
-    Array.isArray(item.serializedUnitIds) ? item.serializedUnitIds : [],
-  );
-  if (new Set(requestedIds).size !== requestedIds.length) {
-    throw createHttpError(
-      400,
-      'SERIALIZED_INVENTORY_DUPLICATE_SELECTION',
-      '同一物流码不能在一个订单中重复选择。',
-    );
-  }
-  const currentIds = (currentItems || []).flatMap((item: any) =>
-    Array.isArray(item.serializedInventoryUnits)
-      ? item.serializedInventoryUnits.map((unit: any) => unit.id)
-      : [],
-  );
-  const requestedSet = new Set(requestedIds);
-  const removedIds = currentIds.filter((id: string) => !requestedSet.has(id));
-  if (removedIds.length > 0) {
-    await prisma.serializedInventoryUnit.updateMany({
-      where: {
-        id: { in: removedIds },
-        salesOrderId,
-      },
-      data: {
-        status: 'AVAILABLE',
-        salesOrderId: null,
-        salesOrderItemId: null,
-        orderCostSnapshotCents: null,
-        updatedAt: new Date(),
-      },
-    });
-  }
-
-  for (const item of orderItems) {
-    for (const unitId of item.serializedUnitIds || []) {
-      const unit = await prisma.serializedInventoryUnit.findUnique({
-        where: { id: unitId },
-      });
-      if (
-        !unit ||
-        (unit.status !== 'AVAILABLE' && unit.salesOrderId !== salesOrderId) ||
-        unit.purchaseCostCents === null ||
-        unit.purchaseCostCents === undefined
-      ) {
-        throw inventoryUnitUnavailableError();
-      }
-      const retained = unit.salesOrderId === salesOrderId;
-      const updateResult = await prisma.serializedInventoryUnit.updateMany({
-        where: {
-          id: unitId,
-          OR: [
-            { status: 'AVAILABLE' },
-            { salesOrderId },
-          ],
-        },
-        data: {
-          status: 'ALLOCATED',
-          salesOrderId,
-          salesOrderItemId: item.id,
-          orderCostSnapshotCents:
-            retained && unit.orderCostSnapshotCents !== null
-              ? unit.orderCostSnapshotCents
-              : unit.purchaseCostCents,
-          updatedAt: new Date(),
-        },
-      });
-      if (Number(updateResult?.count || 0) !== 1) {
-        throw inventoryUnitUnavailableError();
-      }
-    }
-  }
-}
-
-function isSerializedInventoryUnitComplete(unit: any) {
-  return Boolean(
-    normalizeOptionalString(unit?.moutaiName) &&
-      unit?.factoryDate &&
-      normalizeOptionalString(unit?.productionBatch) &&
-      normalizeOptionalString(unit?.batchSerialNo) &&
-      normalizeOptionalString(unit?.logisticsCode),
-  );
-}
-
-function inventoryUnitUnavailableError() {
-  return createHttpError(
-    409,
-    'INVENTORY_UNIT_UNAVAILABLE',
-    '所选物流码已被其他订单占用、尚未补齐成本或资料不完整，请刷新后重试。',
-  );
 }
 
 async function findActiveProductOrThrow(
@@ -6868,7 +8215,12 @@ function buildStrikeBonusAwardData(payload: any) {
   };
 }
 
-function toGroupDto(group: any, kind: string, actor: any = null) {
+function toGroupDto(
+  group: any,
+  kind: string,
+  actor: any = null,
+  onlyShowMarkedRecords = false,
+) {
   const pending = calculateGroupPendingState(group, kind);
   const guestCounts =
     kind === 'travel'
@@ -6878,6 +8230,7 @@ function toGroupDto(group: any, kind: string, actor: any = null) {
     Array.isArray(group.salesOrders) ? group.salesOrders : [],
     group,
     actor,
+    onlyShowMarkedRecords,
   );
   const salesOrders = rawSalesOrders.map(toTravelGroupOrderSummaryDto);
   const effectiveSalesOrders = getEffectiveSalesOrders(rawSalesOrders).map(
@@ -6993,9 +8346,13 @@ function filterGroupSalesOrdersForActor(
   orders: any[],
   group: any,
   actor: any,
+  onlyShowMarkedRecords = false,
 ) {
+  const globallyVisibleOrders = onlyShowMarkedRecords
+    ? orders.filter((order: any) => Boolean(order?.financeMark))
+    : orders;
   if (actor?.role === 'sales') {
-    return orders.filter(
+    return globallyVisibleOrders.filter(
       (order: any) =>
         order?.salesUserId === actor.id &&
         isWithinShanghaiToday(order?.createdAt),
@@ -7009,7 +8366,7 @@ function filterGroupSalesOrdersForActor(
       return [];
     }
   }
-  return orders;
+  return globallyVisibleOrders;
 }
 
 function canEditTravelGroupForActor(group: any, actor: any) {
@@ -7274,7 +8631,9 @@ function getEffectiveSalesOrders(salesOrders: any[]) {
     (order: any) =>
       ['VALID', 'PARTIAL_REFUND', 'valid', 'partial_refund'].includes(
         order?.status,
-      ),
+      ) ||
+      (Array.isArray(order?.afterSalesOrders) &&
+        order.afterSalesOrders.length > 0),
   );
 }
 
@@ -7527,10 +8886,24 @@ function getSalesOrderInclude(options: any = {}): any {
             createdAt: 'asc',
           },
         },
+        inventoryReservations: {
+          include: {
+            assignments: {
+              where: {
+                status: { in: ['RESERVED', 'OUTBOUND'] },
+              },
+              include: {
+                serializedUnit: true,
+              },
+              orderBy: [{ reservedAt: 'asc' }, { id: 'asc' }],
+            },
+          },
+        },
       },
     },
     customer: true,
     travelGroup: getSalesOrderTravelGroupInclude(),
+    personalPointsGuide: true,
     commissionRecords: getSalesOrderTasterCommissionInclude(),
     ...(options.includeSalesUser ? { salesUser: true } : {}),
   };
@@ -7570,14 +8943,54 @@ function getAfterSalesOrderInclude(): any {
     salesOrder: {
       include: getSalesOrderInclude(),
     },
+    afterSalesSalesOrder: {
+      include: getSalesOrderInclude(),
+    },
     customer: true,
+    items: {
+      orderBy: {
+        sortOrder: 'asc',
+      },
+    },
   };
 }
 
-function toAfterSalesOrderDto(order: any) {
+function toAfterSalesOrderDto(order: any, actor?: any) {
   return {
     id: order.id,
     afterSalesNo: order.afterSalesNo,
+    sourceSalesOrderId: order.salesOrderId,
+    sourceSalesOrder: order.salesOrder
+      ? toSalesOrderDto(order.salesOrder)
+      : null,
+    afterSalesSalesOrderId: order.afterSalesSalesOrderId || null,
+    afterSalesSalesOrder: order.afterSalesSalesOrder
+      ? toSalesOrderDto(order.afterSalesSalesOrder)
+      : null,
+    items: (order.items || []).map(toAfterSalesOrderItemDto),
+    deductionCalculationMode:
+      order.deductionCalculationMode || 'manual_product_reference',
+    sourceAgencyDeductionCents: Number(
+      order.sourceAgencyDeductionCents || 0,
+    ),
+    agencyDeductionRate:
+      order.agencyDeductionRate === null ||
+      order.agencyDeductionRate === undefined
+        ? null
+        : Number(order.agencyDeductionRate),
+    dailyRebateRate: Number(order.dailyRebateRate || 0),
+    monthlyRebateRate: Number(order.monthlyRebateRate || 0),
+    agencyDeductionRuleId: order.agencyDeductionRuleId || null,
+    agencyRebateRuleId: order.agencyRebateRuleId || null,
+    calculationDate: formatDate(order.calculationDate),
+    agencyDeductionAdjustmentCents:
+      order.agencyDeductionAdjustmentCents === null ||
+      order.agencyDeductionAdjustmentCents === undefined
+        ? null
+        : Number(order.agencyDeductionAdjustmentCents),
+    financialEffectStatus: String(
+      order.financialEffectStatus || 'PENDING_CONFIRMATION',
+    ).toLowerCase(),
     salesOrderId: order.salesOrderId,
     salesOrder: order.salesOrder ? toSalesOrderDto(order.salesOrder) : null,
     customerId: order.customerId || null,
@@ -7612,6 +9025,39 @@ function toAfterSalesOrderDto(order: any) {
     updatedById: order.updatedById || null,
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
+  };
+}
+
+function toAfterSalesOrderItemDto(item: any) {
+  const expectedReturnQty = Number(item.expectedReturnQty || 0);
+  const postedReceivedQty = Number(item.postedReceivedQty || 0);
+  return {
+    id: item.id,
+    afterSalesOrderId: item.afterSalesOrderId,
+    sourceSalesOrderItemId: item.sourceSalesOrderItemId || null,
+    productId: item.productId || null,
+    productName: item.productName,
+    unit: item.unit || null,
+    quantity: Number(item.quantity || 0),
+    originalUnitPriceCents: Number(item.originalUnitPriceCents || 0),
+    subtotalCents: Number(item.subtotalCents || 0),
+    returnRequired: Boolean(item.returnRequired),
+    expectedReturnQty,
+    postedReceivedQty,
+    remainingReturnQty: Math.max(
+      0,
+      expectedReturnQty - postedReceivedQty,
+    ),
+    returnProgressStatus: !item.returnRequired
+      ? 'not_required'
+      : postedReceivedQty <= 0
+        ? 'waiting_receive'
+        : postedReceivedQty < expectedReturnQty
+          ? 'partially_received'
+          : 'received',
+    isHistoricalPlaceholder: Boolean(item.isHistoricalPlaceholder),
+    notes: item.notes || null,
+    sortOrder: Number(item.sortOrder || 0),
   };
 }
 
@@ -7664,6 +9110,7 @@ function toSalesOrderDto(order: any) {
     id: order.id,
     orderNo: order.orderNo,
     orderType: ORDER_TYPE_FROM_PRISMA[order.orderType] || order.orderType,
+    sourceSalesOrderId: order.sourceSalesOrderId || null,
     travelGroupId: order.travelGroupId,
     travelGroup: order.travelGroup
       ? toGroupDto(order.travelGroup, 'travel')
@@ -7677,6 +9124,9 @@ function toSalesOrderDto(order: any) {
     district: order.district,
     address: order.address,
     orderDate: formatDate(order.orderDate),
+    shippingDate: formatDate(order.shippingDate),
+    shippingRiskWarnings: buildSalesOrderShippingRiskWarnings(order),
+    canEditShippingDate: false,
     salesFormNo: order.salesFormNo || null,
     totalAmountCents: Number(order.totalAmountCents || 0),
     entryAmountCents: Number(
@@ -7698,6 +9148,7 @@ function toSalesOrderDto(order: any) {
       : null,
     packageCount: Number(order.packageCount || 0),
     warehouseRemark: order.warehouseRemark || null,
+    hasPackingMark: Boolean(order.hasPackingMark),
     logisticsNo: order.logisticsNo || null,
     trackingState: order.trackingState || null,
     trackingStateLabel: order.trackingStateLabel || null,
@@ -7720,6 +9171,40 @@ function toSalesOrderDto(order: any) {
     markedAt: order.markedAt ? toIsoString(order.markedAt) : null,
     outreachUserId: order.outreachUserId || null,
     salesUserId: order.salesUserId || null,
+    pointsDestination: String(
+      order.pointsDestination || 'TRAVEL_AGENCY',
+    ),
+    personalPointsGuideId: order.personalPointsGuideId || null,
+    personalPointsGuide: order.personalPointsGuide
+      ? {
+          id: order.personalPointsGuide.id,
+          name: order.personalPointsGuide.name,
+          phone: order.personalPointsGuide.phone,
+          isActive: Boolean(order.personalPointsGuide.isActive),
+        }
+      : null,
+    personalGuideNameSnapshot:
+      order.personalGuideNameSnapshot || null,
+    personalDailyRebateRate:
+      order.personalDailyRebateRate === null ||
+      order.personalDailyRebateRate === undefined
+        ? null
+        : order.personalDailyRebateRate.toString(),
+    personalMonthlyRebateRate:
+      order.personalMonthlyRebateRate === null ||
+      order.personalMonthlyRebateRate === undefined
+        ? null
+        : order.personalMonthlyRebateRate.toString(),
+    pointsDestinationChangedById:
+      order.pointsDestinationChangedById || null,
+    pointsDestinationChangedAt: order.pointsDestinationChangedAt
+      ? toIsoString(order.pointsDestinationChangedAt)
+      : null,
+    personalRatesUpdatedById:
+      order.personalRatesUpdatedById || null,
+    personalRatesUpdatedAt: order.personalRatesUpdatedAt
+      ? toIsoString(order.personalRatesUpdatedAt)
+      : null,
     salesEditCount: Number(order.salesEditCount || 0),
     salesEditLimit: 1,
     salesEditRemaining: Math.max(
@@ -7745,6 +9230,15 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
       ? toGroupDto(order.travelGroup, 'travel', actor)
       : null,
     canEditByCurrentUser: canEditSalesOrderForActor(order, actor),
+    canEditShippingDate: canEditSalesOrderShippingDateForActor(
+      order,
+      actor,
+    ),
+    items: Array.isArray(order.items)
+      ? order.items.map((item: any) =>
+          toSalesOrderItemDto(item, actor),
+        )
+      : [],
   };
   if (actor?.role !== 'taster') {
     return dto;
@@ -7783,6 +9277,53 @@ function canEditSalesOrderForActor(order: any, actor: any) {
     isWithinShanghaiToday(order?.createdAt) &&
     Number(order?.salesEditCount || 0) < 1
   );
+}
+
+function canEditSalesOrderShippingDateForActor(order: any, actor: any) {
+  if (order?.packingStatus === 'PACKED') {
+    return false;
+  }
+  if (
+    actor?.role === 'finance' ||
+    actor?.role === 'after_sales'
+  ) {
+    return true;
+  }
+  if (actor?.role === 'sales') {
+    return order?.salesUserId === actor.id;
+  }
+  return actor?.role === 'warehouse' && isWarehouseReadableSalesOrder(order);
+}
+
+function buildSalesOrderShippingRiskWarnings(order: any) {
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (
+    isSameShanghaiNaturalDay(
+      order?.shippingDate,
+      order?.createdAt,
+    )
+  ) {
+    warnings.push({
+      code: 'SAME_DAY_SHIPPING',
+      message: SAME_DAY_SHIPPING_WARNING,
+    });
+  }
+  const hasInventoryShortage = (order?.items || []).some((item: any) =>
+    (item?.inventoryReservations || []).some((reservation: any) => {
+      const fulfilled =
+        Number(reservation?.reservedQty || 0) +
+        Number(reservation?.assignedQty || 0) +
+        Number(reservation?.outboundQty || 0);
+      return Number(reservation?.requestedQty || 0) > fulfilled;
+    }),
+  );
+  if (hasInventoryShortage) {
+    warnings.push({
+      code: 'INVENTORY_SHORTAGE',
+      message: '当前库存不足，订单可继续处理，请协调补货或调整仓库。',
+    });
+  }
+  return warnings;
 }
 
 function toSalesOrderTasterCommissionDto(order: any) {
@@ -7860,8 +9401,8 @@ function toSalesOrderCustomerDto(customer: any) {
   };
 }
 
-function toSalesOrderItemDto(item: any) {
-  return {
+function toSalesOrderItemDto(item: any, actor?: any) {
+  const dto: any = {
     id: item.id,
     productId: item.productId || null,
     productName: item.productName,
@@ -7873,13 +9414,47 @@ function toSalesOrderItemDto(item: any) {
       DELIVERY_TYPE_FROM_PRISMA[item.deliveryType] || item.deliveryType,
     notes: item.notes || null,
     sortOrder: Number(item.sortOrder || 0),
-    serializedUnitIds: Array.isArray(item.serializedInventoryUnits)
-      ? item.serializedInventoryUnits.map((unit: any) => unit.id)
-      : [],
-    serializedUnits: Array.isArray(item.serializedInventoryUnits)
-      ? item.serializedInventoryUnits.map(toSalesOrderSerializedUnitDto)
-      : [],
   };
+  if (
+    !['super_admin', 'admin', 'warehouse'].includes(actor?.role)
+  ) {
+    return dto;
+  }
+  const reservation = Array.isArray(item.inventoryReservations)
+    ? item.inventoryReservations[0]
+    : null;
+  if (!reservation) {
+    return dto;
+  }
+  const assignments = Array.isArray(reservation.assignments)
+    ? reservation.assignments.filter(
+        (assignment: any) =>
+          assignment.status === 'RESERVED' ||
+          assignment.status === 'OUTBOUND',
+      )
+    : [];
+  dto.inventoryLineKey = item.inventoryLineKey || null;
+  dto.serializedFulfillment = {
+    status: String(reservation.status || '').toLowerCase(),
+    requestedQty: Number(reservation.requestedQty || 0),
+    assignedQty: Number(reservation.assignedQty || 0),
+    outboundQty: Number(reservation.outboundQty || 0),
+    unassignedQty: Math.max(
+      0,
+      Number(reservation.requestedQty || 0) -
+        Number(reservation.outboundQty || 0) -
+        Number(reservation.assignedQty || 0),
+    ),
+    units: assignments.map((assignment: any) => ({
+      assignmentStatus: String(
+        assignment.status || '',
+      ).toLowerCase(),
+      ...toSalesOrderSerializedUnitDto(
+        assignment.serializedUnit || {},
+      ),
+    })),
+  };
+  return dto;
 }
 
 function toSalesOrderSerializedUnitDto(unit: any) {
@@ -8022,6 +9597,7 @@ function toSalesOrderExportRow(order: any) {
     orderNo: order.orderNo || '',
     salesFormNo: order.salesFormNo || '',
     orderDate: formatDate(order.orderDate) || '',
+    shippingDate: formatDate(order.shippingDate) || '',
     customerName: order.customerName || order.customer?.name || '',
     customerPhone: order.customerPhone || order.customer?.phone || '',
     address: buildSalesOrderExportAddress(order),
@@ -8782,6 +10358,17 @@ function normalizeBoolean(value: unknown, fieldName: string) {
   );
 }
 
+function normalizeStrictBoolean(value: unknown, fieldName: string) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  throw createHttpError(
+    400,
+    'VALIDATION_FAILED',
+    `${fieldName} must be a boolean.`,
+  );
+}
+
 function normalizeOptionalBoolean(
   value: unknown,
   fieldName: string,
@@ -9080,7 +10667,6 @@ function toIsoString(value: unknown) {
 export const serializedInventoryOrderTestHooks = {
   buildSalesOrderItems,
   resolveSalesOrderItemSnapshots,
-  synchronizeSerializedInventoryUnits,
   toSalesOrderItemCreateData,
   toSalesOrderItemDto,
 };

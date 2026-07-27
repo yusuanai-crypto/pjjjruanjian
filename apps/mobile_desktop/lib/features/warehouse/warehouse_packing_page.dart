@@ -3,6 +3,7 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
+import '../../core/business/inventory_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/state_views.dart';
@@ -26,6 +27,7 @@ class WarehousePackingPage extends StatefulWidget {
 
 class _WarehousePackingPageState extends State<WarehousePackingPage> {
   late BusinessApi _businessApi;
+  late InventoryApi _inventoryApi;
   late final TextEditingController _queryController;
   late final TextEditingController _packageCountController;
   late final TextEditingController _warehouseRemarkController;
@@ -33,11 +35,13 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   PackingStatus _filter = PackingStatus.pending;
   String _logisticsMethodFilter = _allLogisticsMethodFilter;
   String _logisticsMethod = logisticsMethods.first;
+  bool _hasPackingMark = false;
 
   List<SalesOrderRecord> _orders = const <SalesOrderRecord>[];
   SalesOrderRecord? _selectedOrder;
   bool _loading = true;
   bool _saving = false;
+  bool _changingWarehouse = false;
   String? _errorMessage;
   String? _formErrorMessage;
 
@@ -51,6 +55,11 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     super.initState();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _inventoryApi = InventoryApi(
+      apiClient: widget.apiClient,
+      token: widget.token,
+      role: widget.role,
+    );
     _queryController = TextEditingController();
     _packageCountController = TextEditingController(text: '0');
     _warehouseRemarkController = TextEditingController();
@@ -64,6 +73,11 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         oldWidget.token != widget.token) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+      _inventoryApi = InventoryApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+        role: widget.role,
+      );
       _loadOrders();
     }
   }
@@ -131,6 +145,79 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     await _showPackingEditor();
   }
 
+  Future<void> _changeFulfillmentWarehouse() async {
+    final order = _selectedOrder;
+    if (order == null || _changingWarehouse) {
+      return;
+    }
+    List<WarehouseRecord> warehouses;
+    try {
+      warehouses = await _inventoryApi.listWarehouses(isActive: true);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_messageForError(error))),
+      );
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+
+    final selectedWarehouseId = await showDialog<WarehouseRecord>(
+      context: context,
+      builder: (dialogContext) {
+        return _WarehousePickerDialog(
+          warehouses: warehouses,
+          currentWarehouseId: order.fulfillmentWarehouseId,
+        );
+      },
+    );
+
+    if (selectedWarehouseId == null) {
+      return;
+    }
+    if (selectedWarehouseId.id == order.fulfillmentWarehouseId) {
+      return;
+    }
+
+    setState(() => _changingWarehouse = true);
+    try {
+      final updated = await _businessApi.changeWarehouseOrderFulfillment(
+        order.id,
+        selectedWarehouseId.id,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _replaceOrder(updated);
+        _selectedOrder = updated;
+      });
+      _fillDraft(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${updated.orderNo} 履约仓库已切换为 ${updated.fulfillmentWarehouseName ?? selectedWarehouseId.name}。',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_messageForError(error))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _changingWarehouse = false);
+      }
+    }
+  }
+
   Future<bool> _savePacking({
     VoidCallback? closeEditor,
     VoidCallback? refreshEditor,
@@ -171,6 +258,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
           'packingStatus': PackingStatus.packed.value,
           'packageCount': packageCount,
           'warehouseRemark': _warehouseRemarkController.text.trim(),
+          'hasPackingMark': _hasPackingMark,
         },
       );
       if (!mounted) {
@@ -220,6 +308,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   void _fillDraft(SalesOrderRecord? order) {
     if (order == null) {
       _logisticsMethod = logisticsMethods.first;
+      _hasPackingMark = false;
       _packageCountController.text = '0';
       _warehouseRemarkController.clear();
       return;
@@ -229,6 +318,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     _logisticsMethod = logisticsMethod == null || logisticsMethod.isEmpty
         ? logisticsMethods.first
         : logisticsMethod;
+    _hasPackingMark = order.hasPackingMark;
     _packageCountController.text = '${order.packageCount}';
     _warehouseRemarkController.text = order.warehouseRemark ?? '';
   }
@@ -601,7 +691,14 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
             tone: _packingTone(order.packingStatus),
           ),
           children: [
-            _SelectedOrderSummary(order: order),
+            _SelectedOrderSummary(
+              order: order,
+              canEdit: _canEditPacking,
+              changingWarehouse: _changingWarehouse,
+              onChangeWarehouse: _canEditPacking && !_saving
+                  ? _changeFulfillmentWarehouse
+                  : null,
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -650,6 +747,18 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   readOnly: !_canEditPacking,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(labelText: '打包件数'),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('warehouse-has-packing-mark-field'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('是否有标记'),
+                  subtitle: Text(_hasPackingMark ? '是' : '否'),
+                  value: _hasPackingMark,
+                  onChanged: _canEditPacking
+                      ? (value) {
+                          updateDraft(() => _hasPackingMark = value);
+                        }
+                      : null,
                 ),
               ],
             ),
@@ -789,6 +898,7 @@ class _WarehouseOrderList extends StatelessWidget {
                       Text('电话 ${_display(order.customerPhone)}'),
                       Text('地址 ${_orderAddress(order)}'),
                       Text('明细 ${_itemSummary(order)}'),
+                      Text('发货 ${_display(order.shippingDate)}'),
                       Text('物流单号 ${_display(order.logisticsNo)}'),
                       Text('件数 ${order.packageCount}'),
                     ],
@@ -841,7 +951,7 @@ class _PackingActionBar extends StatelessWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.save_rounded),
-            label: Text(saving ? '保存中' : '保存打包'),
+            label: Text(saving ? '保存中...' : '保存打包'),
           ),
       ],
     );
@@ -885,12 +995,27 @@ class _InlineState extends StatelessWidget {
 }
 
 class _SelectedOrderSummary extends StatelessWidget {
-  const _SelectedOrderSummary({required this.order});
+  const _SelectedOrderSummary({
+    required this.order,
+    this.canEdit = false,
+    this.changingWarehouse = false,
+    this.onChangeWarehouse,
+  });
 
   final SalesOrderRecord order;
+  final bool canEdit;
+  final bool changingWarehouse;
+  final VoidCallback? onChangeWarehouse;
 
   @override
   Widget build(BuildContext context) {
+    final warehouseName = order.fulfillmentWarehouseName?.trim();
+    final warehouseLabel = (warehouseName == null || warehouseName.isEmpty)
+        ? '待分配'
+        : warehouseName;
+    final pendingPackages = order.packageCount > 0
+        ? '${order.packageCount} 件'
+        : '待配';
     return DecoratedBox(
       decoration: BoxDecoration(
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -902,6 +1027,10 @@ class _SelectedOrderSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _InfoRow(label: '订单号', value: order.orderNo),
+            _InfoRow(
+              label: '发货日期',
+              value: _display(order.shippingDate),
+            ),
             _InfoRow(label: '客户', value: _display(order.customerName)),
             _InfoRow(label: '电话', value: _display(order.customerPhone)),
             _InfoRow(label: '地址', value: _orderAddress(order)),
@@ -910,9 +1039,107 @@ class _SelectedOrderSummary extends StatelessWidget {
               label: '物流单号',
               value: _display(order.logisticsNo),
             ),
+            _InfoRow(
+              label: '履约仓库',
+              value: warehouseLabel,
+            ),
+            _InfoRow(
+              label: '待配数量',
+              value: pendingPackages,
+            ),
+            if (onChangeWarehouse != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('warehouse-packing-change-warehouse'),
+                  onPressed: changingWarehouse ? null : onChangeWarehouse,
+                  icon: changingWarehouse
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.swap_horiz_rounded),
+                  label: Text(changingWarehouse ? '切换中...' : '换仓'),
+                ),
+              ),
+            ],
+            if (order.shippingRiskWarnings.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final warning in order.shippingRiskWarnings)
+                      StatusTag(
+                        label: warning.message,
+                        tone: StatusTone.warning,
+                      ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _WarehousePickerDialog extends StatelessWidget {
+  const _WarehousePickerDialog({
+    required this.warehouses,
+    this.currentWarehouseId,
+  });
+
+  final List<WarehouseRecord> warehouses;
+  final String? currentWarehouseId;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('选择履约仓库'),
+      content: SizedBox(
+        width: 360,
+        child: warehouses.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('暂无可用仓库'),
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: warehouses.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final warehouse = warehouses[index];
+                  final selected = warehouse.id == currentWarehouseId;
+                  return ListTile(
+                    key: ValueKey(
+                      'warehouse-packing-change-warehouse-option-${warehouse.id}',
+                    ),
+                    title: Text(warehouse.name),
+                    subtitle: Text(
+                      warehouse.code.isEmpty
+                          ? warehouse.address
+                          : '${warehouse.code} · ${warehouse.address}',
+                    ),
+                    trailing: selected
+                        ? const Icon(Icons.check_circle_rounded)
+                        : null,
+                    onTap: () => Navigator.of(context).pop(warehouse),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey(
+            'warehouse-packing-change-warehouse-cancel',
+          ),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+      ],
     );
   }
 }

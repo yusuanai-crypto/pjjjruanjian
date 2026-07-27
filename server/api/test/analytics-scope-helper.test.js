@@ -14,7 +14,7 @@ const {
 test('unit: analytics scope helper leaves queries open when global mark is disabled', () => {
   assert.deepEqual(
     buildAnalyticsSalesOrderWhere({ onlyShowMarkedRecords: false }),
-    {},
+    { orderType: { not: 'AFTER_SALES' } },
   );
   assert.deepEqual(
     buildAnalyticsTravelGroupWhere({ onlyShowMarkedRecords: false }),
@@ -31,21 +31,7 @@ test('unit: analytics scope helper builds canonical global mark scopes', () => {
     financeMark: true,
   });
   assert.deepEqual(buildGlobalSalesOrderMarkScope(true), {
-    customer: {
-      is: {
-        financeMark: true,
-      },
-    },
-    OR: [
-      { travelGroupId: null },
-      {
-        travelGroup: {
-          is: {
-            financeMark: true,
-          },
-        },
-      },
-    ],
+    financeMark: true,
   });
   assert.deepEqual(buildGlobalAfterSalesOrderMarkScope(true), {
     salesOrder: {
@@ -66,6 +52,7 @@ test('unit: analytics scope helper composes date ranges and base where clauses',
     {
       AND: [
         { status: { in: ['VALID', 'PARTIAL_REFUND'] } },
+        { orderType: { not: 'AFTER_SALES' } },
         {
           orderDate: {
             gte: instant('2026-07-01T00:00:00.000Z'),
@@ -116,7 +103,7 @@ test('unit: analytics scope helper composes date ranges and base where clauses',
   );
 });
 
-test('unit: analytics sales order scope filters unmarked customers and groups', () => {
+test('unit: analytics sales order scope filters finance marks and excludes generated after-sales orders', () => {
   const where = buildAnalyticsSalesOrderWhere({
     onlyShowMarkedRecords: true,
   });
@@ -125,9 +112,10 @@ test('unit: analytics sales order scope filters unmarked customers and groups', 
     matchesWhere(
       {
         travelGroupId: 'group-marked',
-        financeMark: false,
-        customer: { financeMark: true },
-        travelGroup: { financeMark: true },
+        orderType: 'TRAVEL_GROUP',
+        financeMark: true,
+        customer: { financeMark: false },
+        travelGroup: { financeMark: false },
       },
       where,
     ),
@@ -137,8 +125,9 @@ test('unit: analytics sales order scope filters unmarked customers and groups', 
     matchesWhere(
       {
         travelGroupId: null,
-        financeMark: false,
-        customer: { financeMark: true },
+        orderType: 'EXTERNAL',
+        financeMark: true,
+        customer: { financeMark: false },
         travelGroup: null,
       },
       where,
@@ -149,8 +138,9 @@ test('unit: analytics sales order scope filters unmarked customers and groups', 
     matchesWhere(
       {
         travelGroupId: 'group-marked',
-        financeMark: true,
-        customer: { financeMark: false },
+        orderType: 'TRAVEL_GROUP',
+        financeMark: false,
+        customer: { financeMark: true },
         travelGroup: { financeMark: true },
       },
       where,
@@ -161,9 +151,20 @@ test('unit: analytics sales order scope filters unmarked customers and groups', 
     matchesWhere(
       {
         travelGroupId: 'group-unmarked',
-        financeMark: true,
+        orderType: 'TRAVEL_GROUP',
+        financeMark: false,
         customer: { financeMark: true },
         travelGroup: { financeMark: false },
+      },
+      where,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesWhere(
+      {
+        orderType: 'AFTER_SALES',
+        financeMark: true,
       },
       where,
     ),
@@ -192,9 +193,9 @@ test('unit: analytics after-sales scope filters through the linked sales order s
         financeConfirmed: true,
         salesOrder: {
           travelGroupId: 'group-marked',
-          financeMark: false,
-          customer: { financeMark: true },
-          travelGroup: { financeMark: true },
+          financeMark: true,
+          customer: { financeMark: false },
+          travelGroup: { financeMark: false },
         },
       },
       where,
@@ -208,7 +209,7 @@ test('unit: analytics after-sales scope filters through the linked sales order s
         financeConfirmed: true,
         salesOrder: {
           travelGroupId: 'group-unmarked',
-          financeMark: true,
+          financeMark: false,
           customer: { financeMark: true },
           travelGroup: { financeMark: false },
         },
@@ -231,7 +232,7 @@ test('unit: analytics after-sales scope filters through the linked sales order s
       },
       where,
     ),
-    false,
+    true,
   );
 });
 
@@ -330,12 +331,15 @@ function isScalarFilter(value) {
   return (
     value &&
     typeof value === 'object' &&
-    ('in' in value || 'gte' in value || 'lte' in value)
+    ('in' in value || 'not' in value || 'gte' in value || 'lte' in value)
   );
 }
 
 function matchesScalar(actual, filter) {
   if ('in' in filter && !filter.in.includes(actual)) {
+    return false;
+  }
+  if ('not' in filter && actual === filter.not) {
     return false;
   }
   if ('gte' in filter && toTime(actual) < toTime(filter.gte)) {

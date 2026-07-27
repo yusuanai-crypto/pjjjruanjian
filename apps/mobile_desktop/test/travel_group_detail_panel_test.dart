@@ -82,6 +82,15 @@ void main() {
     expect(find.text('超过当日未标记'), findsNothing);
     expect(find.text('超过当日待处理'), findsOneWidget);
   });
+  testWidgets('shows tasting item empty state', (tester) async {
+    await _pumpPanel(
+      tester,
+      role: UserRole.taster,
+      group: _emptyTastingGroup(),
+    );
+
+    expect(find.text('暂无品酒明细'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpPanel(
@@ -194,6 +203,27 @@ TravelGroupRecord _sampleGroup({required bool financeMark}) {
       'orderCount': 1,
       'totalAmountCents': 120000,
       'cashOnDeliveryAmountCents': 20000,
+    },
+  });
+}
+
+TravelGroupRecord _emptyTastingGroup() {
+  return TravelGroupRecord.fromJson({
+    'id': 'group-empty',
+    'kind': 'travel',
+    'groupNo': 'TG-EMPTY',
+    'visitDate': '2026-06-27',
+    'guestCount': 1,
+    'status': 'unmarked',
+    'financeMark': false,
+    'pendingStatus': 'pending_taster',
+    'pendingReasons': const [],
+    'tastingItems': const [],
+    'salesOrders': const [],
+    'orderSummary': const {
+      'orderCount': 0,
+      'totalAmountCents': 0,
+      'cashOnDeliveryAmountCents': 0,
     },
   });
 }

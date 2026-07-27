@@ -179,6 +179,39 @@ test('unit: recalculation API rejects an unbounded full-table request', async ()
   );
 });
 
+test('unit: explicit travel-group recalculation forwards manual rebate fallback only when requested', async () => {
+  const fixture = createFixture();
+  const service = createService(fixture);
+
+  await service.recalculateExplicit(
+    { id: 'finance-1', role: 'finance' },
+    {
+      travelGroupId: 'group-july',
+      agencyOnly: true,
+      allowLatestAgencyRebateRuleFallback: true,
+    },
+  );
+
+  assert.equal(
+    fixture.commissionCalls[0].options.allowLatestAgencyRebateRuleFallback,
+    true,
+  );
+  await assert.rejects(
+    service.recalculateExplicit(
+      { id: 'finance-1', role: 'finance' },
+      {
+        salesOrderId: 'order-agency-a-july',
+        agencyOnly: true,
+        allowLatestAgencyRebateRuleFallback: true,
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, 'AGENCY_REBATE_RULE_FALLBACK_SCOPE_INVALID');
+      return true;
+    },
+  );
+});
+
 test('unit: POST commission-records/recalculate authenticates and forwards a bounded scope', async () => {
   const calls = [];
   const controller = new CommissionRecordsNestController(

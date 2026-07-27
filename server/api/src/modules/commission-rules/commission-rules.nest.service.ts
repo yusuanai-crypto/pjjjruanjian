@@ -4,6 +4,7 @@ import * as crypto from 'node:crypto';
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AgencyRuleRecalculationNestService } from '../commissions/agency-rule-recalculation.nest.service';
+import { EmployeeCommissionRuleRecalculationNestService } from '../commissions/employee-commission-rule-recalculation.nest.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 
 const READ_RULE_ROLES = ['admin', 'finance', 'boss'];
@@ -142,6 +143,7 @@ export class CommissionRulesNestService {
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
     private readonly agencyRuleRecalculationService: AgencyRuleRecalculationNestService,
+    private readonly employeeCommissionRuleRecalculationService: EmployeeCommissionRuleRecalculationNestService,
   ) {}
 
   async listCommissionRules(actor: any, filters: any = {}) {
@@ -283,6 +285,21 @@ export class CommissionRulesNestService {
       afterData: dto,
       ipAddress: metadata.ipAddress || null,
     });
+    if (kind === 'commission') {
+      const recalculation = await this.triggerEmployeeCommissionRecalculation(
+        actor,
+        {
+          source: `${config.logPrefix}.create`,
+          rules: [created],
+          ruleIds: [created.id],
+        },
+        metadata,
+      );
+      return {
+        ...dto,
+        recalculation,
+      };
+    }
     if (!isAgencyRuleKind(kind)) {
       return dto;
     }
@@ -449,6 +466,21 @@ export class CommissionRulesNestService {
       afterData: dto,
       ipAddress: metadata.ipAddress || null,
     });
+    if (kind === 'commission') {
+      const recalculation = await this.triggerEmployeeCommissionRecalculation(
+        actor,
+        {
+          source: updateAction,
+          rules: [current, updated],
+          ruleIds: [updated.id],
+        },
+        metadata,
+      );
+      return {
+        ...dto,
+        recalculation,
+      };
+    }
     if (!isAgencyRuleKind(kind)) {
       return dto;
     }
@@ -529,6 +561,86 @@ export class CommissionRulesNestService {
         updatedRecords: [],
         unchangedRecords: [],
         travelGroupFinanceSummaries: [],
+        warnings: [warning],
+      };
+    }
+  }
+
+  private async triggerEmployeeCommissionRecalculation(
+    actor: any,
+    input: {
+      source: string;
+      rules: any[];
+      ruleIds: string[];
+    },
+    metadata: any,
+  ) {
+    try {
+      return await this.employeeCommissionRuleRecalculationService.recalculateForCommissionRuleChange(
+        actor,
+        input,
+        metadata,
+      );
+    } catch {
+      const targetTypes = Array.from(
+        new Set(
+          input.rules
+            .map(
+              (rule) =>
+                COMMISSION_TARGET_TYPE_TO_PRISMA[
+                  normalizeOptionalString(rule?.targetType) || ''
+                ],
+            )
+            .filter(Boolean),
+        ),
+      );
+      const warning = {
+        code: 'employee_commission_rule_recalculation_failed',
+        message:
+          '提成规则已保存，但员工提成自动重算失败；请稍后重试重算并核对利润分析。',
+      };
+      await this.operationLogsService.appendLog({
+        userId: actor.id,
+        action: 'commission_records.employee_scope.recalculate_failed',
+        entityType: 'employee_commission_rule_recalculation',
+        entityId: input.ruleIds[0] || null,
+        beforeData: null,
+        afterData: {
+          triggerSource: input.source,
+          ruleIds: input.ruleIds.slice(0, 50),
+          targetTypes,
+          orderRange: summarizeCommissionRuleRanges(input.rules),
+          orderCount: 0,
+          successCount: 0,
+          failureCount: 1,
+          skippedCount: 0,
+          generatedCount: 0,
+          updatedCount: 0,
+          unchangedCount: 0,
+          warningSummary: {
+            count: 1,
+            codes: { [warning.code]: 1 },
+            messageSamples: [warning.message],
+            truncated: false,
+          },
+        },
+        ipAddress: metadata.ipAddress || null,
+      });
+      return {
+        source: input.source,
+        ruleIds: input.ruleIds,
+        targetTypes,
+        orderCount: 0,
+        successCount: 0,
+        failureCount: 1,
+        skippedCount: 0,
+        generatedCount: 0,
+        updatedCount: 0,
+        unchangedCount: 0,
+        generatedRecords: [],
+        updatedRecords: [],
+        unchangedRecords: [],
+        orderRange: summarizeCommissionRuleRanges(input.rules),
         warnings: [warning],
       };
     }
@@ -1553,6 +1665,17 @@ function toDateOnly(value: unknown) {
   }
   const date = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
+}
+
+function summarizeCommissionRuleRanges(rules: any[]) {
+  return (rules || []).filter(Boolean).map((rule) => ({
+    targetType:
+      COMMISSION_TARGET_TYPE_TO_PRISMA[
+        normalizeOptionalString(rule.targetType) || ''
+      ] || null,
+    dateFrom: rule.effectiveFrom ? toDateOnly(rule.effectiveFrom) : null,
+    dateTo: rule.effectiveTo ? toDateOnly(rule.effectiveTo) : null,
+  }));
 }
 
 function toIsoString(value: unknown) {

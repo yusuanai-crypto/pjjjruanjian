@@ -16,6 +16,9 @@ const AGENCY_MONTHLY_REBATE = 'AGENCY_MONTHLY_REBATE';
 const READ_SUMMARY_ROLES = ['admin', 'finance', 'boss'];
 const WRITE_SUMMARY_ROLES = ['admin', 'finance'];
 const TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS = 5000;
+const FINANCE_ROW_FETCH_MAX_ROWS =
+  TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS + 1;
+const SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS = 200;
 
 @Injectable()
 export class TravelGroupFinanceSummaryNestService {
@@ -27,6 +30,13 @@ export class TravelGroupFinanceSummaryNestService {
 
   async listTravelGroupFinanceSummaries(actor: any, filters: any = {}) {
     requireAnyRole(actor, READ_SUMMARY_ROLES);
+    return this.findTravelGroupFinanceSummaryRows(filters);
+  }
+
+  private async findTravelGroupFinanceSummaryRows(
+    filters: any,
+    maxRows = 200,
+  ) {
     const travelGroups = await this.prisma.travelGroup.findMany({
       where: await this.buildTravelGroupQueryWhere(filters),
       include: getTravelGroupWithFinanceSummaryInclude(),
@@ -38,13 +48,135 @@ export class TravelGroupFinanceSummaryNestService {
           groupNo: 'asc',
         },
       ],
-      take: normalizeTake(filters?.limit),
+      take: normalizeTake(filters?.limit, 50, maxRows),
     });
     return travelGroups.map((travelGroup: any) =>
       toTravelGroupFinanceSummaryListDto(
         buildDisplayFinanceSummary(travelGroup),
       ),
     );
+  }
+
+  async listFinanceRows(actor: any, filters: any = {}) {
+    requireAnyRole(actor, READ_SUMMARY_ROLES);
+    const take = normalizeTake(
+      filters?.limit,
+      50,
+      FINANCE_ROW_FETCH_MAX_ROWS,
+    );
+    const originalRows = (
+      await this.findTravelGroupFinanceSummaryRows(
+        {
+          ...filters,
+          limit: take,
+        },
+        FINANCE_ROW_FETCH_MAX_ROWS,
+      )
+    ).map(toTravelGroupSummaryFinanceRowDto);
+    const afterSalesWhere = await this.buildAfterSalesFinanceRowWhere(
+      filters,
+    );
+    const afterSalesOrders = await this.prisma.afterSalesOrder.findMany({
+      where: afterSalesWhere,
+      include: {
+        salesOrder: {
+          include: {
+            travelGroup: true,
+          },
+        },
+        afterSalesSalesOrder: true,
+      },
+      orderBy: [
+        {
+          afterSalesSalesOrder: {
+            orderDate: 'desc',
+          },
+        },
+        {
+          createdAt: 'desc',
+        },
+      ],
+      take,
+    });
+    return [
+      ...originalRows,
+      ...afterSalesOrders.map(toAfterSalesFinanceRowDto),
+    ]
+      .sort(compareFinanceRows)
+      .slice(0, take);
+  }
+
+  async exportFinanceRowsXlsx(
+    actor: any,
+    filters: any = {},
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, READ_SUMMARY_ROLES);
+    const limit = normalizeExportLimit(
+      filters?.limit,
+      TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS,
+    );
+    const rows = await this.listFinanceRows(actor, {
+      ...filters,
+      limit: limit + 1,
+    });
+    if (rows.length > limit) {
+      throw createHttpError(
+        400,
+        'EXPORT_LIMIT_EXCEEDED',
+        `Finance row export exceeds ${limit} rows. Please narrow filters.`,
+      );
+    }
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'finance_rows.export',
+      entityType: 'finance_row',
+      entityId: 'finance_rows.export',
+      beforeData: null,
+      afterData: {
+        filters: summarizeExportFilters(filters),
+        rowCount: rows.length,
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+    return buildFinanceRowsExportResult(rows);
+  }
+
+  async exportSelectedFinanceRowsXlsx(
+    actor: any,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, READ_SUMMARY_ROLES);
+    const financeRowIds = normalizeSelectedFinanceRowIds(
+      payload?.financeRowIds,
+    );
+    const visibleRows = await this.listFinanceRows(actor, {
+      limit: TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS,
+    });
+    const selected = visibleRows.filter((row: any) =>
+      financeRowIds.includes(row.financeRowId),
+    );
+    if (selected.length !== financeRowIds.length) {
+      throw createHttpError(
+        404,
+        'FINANCE_ROW_NOT_FOUND',
+        'One or more selected finance rows do not exist or are not visible.',
+      );
+    }
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'finance_rows.export_selected',
+      entityType: 'finance_row',
+      entityId: 'finance_rows.export_selected',
+      beforeData: null,
+      afterData: {
+        financeRowIds,
+        rowCount: selected.length,
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+    return buildFinanceRowsExportResult(selected);
   }
 
   async getTravelGroupFinanceSummary(actor: any, travelGroupId: string) {
@@ -108,6 +240,62 @@ export class TravelGroupFinanceSummaryNestService {
     const xlsxData = await workbook.xlsx.writeBuffer();
     return {
       fileName: buildTravelGroupFinanceSummariesExportFileName(),
+      buffer: Buffer.from(xlsxData as any),
+      rowCount: summaries.length,
+    };
+  }
+
+  async exportSelectedTravelGroupFinanceSummariesXlsx(
+    actor: any,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, READ_SUMMARY_ROLES);
+    const travelGroupIds = normalizeSelectedTravelGroupIds(
+      payload?.travelGroupIds,
+    );
+    const travelGroups = await this.prisma.travelGroup.findMany({
+      where: andWhere(
+        {
+          id: {
+            in: travelGroupIds,
+          },
+        },
+        await this.buildTravelGroupQueryWhere(),
+      ),
+      include: getTravelGroupWithFinanceSummaryInclude(),
+      orderBy: [
+        {
+          visitDate: 'desc',
+        },
+        {
+          groupNo: 'asc',
+        },
+      ],
+    });
+    const summaries = travelGroups.map((travelGroup: any) =>
+      buildDisplayFinanceSummary(travelGroup),
+    );
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'travel_group_finance_summaries.export_selected',
+      entityType: 'travel_group_finance_summary',
+      entityId: 'travel_group_finance_summaries.export_selected',
+      beforeData: null,
+      afterData: {
+        mode: 'selected',
+        selectionCount: travelGroupIds.length,
+        rowCount: summaries.length,
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+
+    const workbook =
+      buildSelectedTravelGroupFinanceSummariesExportWorkbook(summaries);
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildSelectedTravelGroupFinanceSummariesExportFileName(),
       buffer: Buffer.from(xlsxData as any),
       rowCount: summaries.length,
     };
@@ -562,6 +750,9 @@ export class TravelGroupFinanceSummaryNestService {
     return prisma.salesOrder.findMany({
       where: {
         travelGroupId,
+        orderType: {
+          not: 'AFTER_SALES',
+        },
       },
       include: {
         items: {
@@ -585,6 +776,7 @@ export class TravelGroupFinanceSummaryNestService {
     return prisma.commissionRecord.findMany({
       where: {
         travelGroupId,
+        afterSalesOrderId: null,
         targetType: {
           in: [AGENCY_DAILY_REBATE, AGENCY_MONTHLY_REBATE],
         },
@@ -702,6 +894,100 @@ export class TravelGroupFinanceSummaryNestService {
     return andWhere(...clauses);
   }
 
+  private async buildAfterSalesFinanceRowWhere(filters: any = {}) {
+    const travelGroupClauses: any[] = [
+      (await this.buildGlobalGroupMarkScope()) || {},
+    ];
+    const travelGroupId = normalizeOptionalString(filters?.travelGroupId);
+    if (travelGroupId) {
+      travelGroupClauses.push({
+        id: travelGroupId,
+      });
+    }
+    const agencyName = normalizeOptionalString(filters?.agencyName);
+    if (agencyName) {
+      travelGroupClauses.push({
+        travelAgency: {
+          contains: agencyName,
+        },
+      });
+    }
+    const guideName = normalizeOptionalString(filters?.guideName);
+    if (guideName) {
+      travelGroupClauses.push({
+        guideName: {
+          contains: guideName,
+        },
+      });
+    }
+
+    const clauses: any[] = [
+      {
+        salesOrder: {
+          is: {
+            travelGroup: {
+              is: andWhere(...travelGroupClauses),
+            },
+          },
+        },
+      },
+    ];
+    const dateRange = buildDateRange(filters?.dateFrom, filters?.dateTo);
+    if (dateRange) {
+      clauses.push({
+        afterSalesSalesOrder: {
+          is: {
+            orderDate: dateRange,
+          },
+        },
+      });
+    }
+    const query = normalizeOptionalString(filters?.query);
+    if (query) {
+      clauses.push({
+        OR: [
+          {
+            afterSalesNo: {
+              contains: query,
+            },
+          },
+          {
+            salesOrder: {
+              is: {
+                orderNo: {
+                  contains: query,
+                },
+              },
+            },
+          },
+          {
+            salesOrder: {
+              is: {
+                customerName: {
+                  contains: query,
+                },
+              },
+            },
+          },
+          {
+            salesOrder: {
+              is: {
+                travelGroup: {
+                  is: {
+                    groupNo: {
+                      contains: query,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+    return andWhere(...clauses);
+  }
+
   private async findTravelGroupWithSummaryVisibleForApi(
     travelGroupId: string,
   ) {
@@ -785,14 +1071,26 @@ export class TravelGroupFinanceSummaryNestService {
   }
 }
 
-function buildTravelGroupFinanceCalculation(input: {
+export function buildTravelGroupFinanceCalculation(input: {
   travelGroup: any;
   salesOrders: any[];
   agencyRebateRecords: any[];
   current: any;
 }) {
-  const salesOrders = input.salesOrders || [];
-  const agencyRebateRecords = input.agencyRebateRecords || [];
+  const salesOrders = (input.salesOrders || []).filter(
+    isTravelAgencyPointsOrder,
+  );
+  const travelAgencyOrderIds = new Set(
+    salesOrders
+      .map((order: any) => normalizeOptionalString(order?.id))
+      .filter(Boolean),
+  );
+  const agencyRebateRecords = (input.agencyRebateRecords || []).filter(
+    (record: any) => {
+      const salesOrderId = normalizeOptionalString(record?.salesOrderId);
+      return !salesOrderId || travelAgencyOrderIds.has(salesOrderId);
+    },
+  );
   const orderSummaries = salesOrders.map(summarizeSalesOrderForFinance);
   const agencyRecordSummary = summarizeAgencyRebateRecords(
     agencyRebateRecords,
@@ -804,7 +1102,8 @@ function buildTravelGroupFinanceCalculation(input: {
   );
   const totalPaidDepositCents =
     totalSalesAmountCents - totalCashOnDeliveryCents;
-  const manualAgencyDeduction = getManualAgencyDeduction(input.current);
+  const manualAgencyDeduction =
+    salesOrders.length > 0 ? getManualAgencyDeduction(input.current) : null;
   const totalAgencyDeductionCents = manualAgencyDeduction
     ? toInteger(input.current.totalAgencyDeductionCents)
     : agencyRecordSummary.totalAgencyDeductionCents;
@@ -906,19 +1205,23 @@ function buildTravelGroupFinanceCalculation(input: {
   };
 }
 
+function isTravelAgencyPointsOrder(order: any) {
+  return (
+    normalizeEnumText(order?.orderType || 'TRAVEL_GROUP') !==
+      'AFTER_SALES' &&
+    normalizeEnumText(order?.pointsDestination || 'TRAVEL_AGENCY') ===
+    'TRAVEL_AGENCY'
+  );
+}
+
 function summarizeSalesOrderForFinance(order: any) {
   const afterSalesOrders = order.afterSalesOrders || [];
   const summarizedAfterSalesOrders = afterSalesOrders.map(summarizeRefund);
-  const confirmedRefunds = afterSalesOrders
-    .filter((item: any) => Boolean(item.financeConfirmed))
-    .map(summarizeRefund);
+  const confirmedRefunds: any[] = [];
   const unconfirmedRefunds = afterSalesOrders
     .filter((item: any) => !item.financeConfirmed && toInteger(item.refundAmountCents) > 0)
     .map(summarizeRefund);
-  const confirmedRefundAmountCents = sumBy(
-    confirmedRefunds,
-    'refundAmountCents',
-  );
+  const confirmedRefundAmountCents = 0;
   const totalAmountCents = toInteger(order.totalAmountCents);
   const cashOnDeliveryAmountCents = toInteger(
     order.cashOnDeliveryAmountCents,
@@ -933,9 +1236,12 @@ function summarizeSalesOrderForFinance(order: any) {
     cashOnDeliveryAmountCents,
     paidDepositCents: totalAmountCents - cashOnDeliveryAmountCents,
     confirmedRefundAmountCents,
-    effectiveAmountCents: isFullyRefundedOrCancelled(order.status)
-      ? 0
-      : Math.max(0, totalAmountCents - confirmedRefundAmountCents),
+    effectiveAmountCents:
+      afterSalesOrders.length > 0
+        ? totalAmountCents
+        : isFullyRefundedOrCancelled(order.status)
+          ? 0
+          : totalAmountCents,
     afterSalesOrders: summarizedAfterSalesOrders,
     confirmedRefunds,
     unconfirmedRefundSummary: {
@@ -1216,8 +1522,7 @@ function calculateAllocatedRebate(records: any[], deductionCents: number) {
     index,
     effectiveAmountCents: Math.max(
       0,
-      toInteger(record.grossAmountCents) -
-        toInteger(record.confirmedRefundAmountCents),
+      toInteger(record.grossAmountCents),
     ),
     allocatedDeductionCents: 0,
     remainder: BigInt(0),
@@ -1697,15 +2002,87 @@ const TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_AMOUNT_KEYS = new Set([
 ]);
 
 function buildTravelGroupFinanceSummariesExportWorkbook(summaries: any[]) {
+  return buildTravelGroupFinanceSummariesWorkbook({
+    worksheetName: '返积分汇总',
+    columns: TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS,
+    amountKeys: TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_AMOUNT_KEYS,
+    rows: summaries.map(toTravelGroupFinanceSummaryExportRow),
+  });
+}
+
+const SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS = [
+  { header: '团号', key: 'travelGroup', width: 20 },
+  { header: '日期', key: 'visitDate', width: 14 },
+  { header: '旅行社', key: 'travelAgency', width: 24 },
+  { header: '导游', key: 'guideName', width: 16 },
+  { header: '车牌', key: 'licensePlate', width: 14 },
+  { header: '人数', key: 'guestCount', width: 10 },
+  { header: '品鉴师', key: 'tasterName', width: 16 },
+  { header: '销售额', key: 'totalSalesYuan', width: 14 },
+  { header: '已确认退款', key: 'confirmedRefundYuan', width: 16 },
+  { header: '有效销售额', key: 'effectiveSalesYuan', width: 16 },
+  { header: '货到付款', key: 'cashOnDeliveryYuan', width: 14 },
+  { header: '已付定金', key: 'paidDepositYuan', width: 14 },
+  { header: '扣酒成本', key: 'totalAgencyDeductionYuan', width: 14 },
+  { header: '上单金额', key: 'totalAgencyNetYuan', width: 14 },
+  { header: '积分/日返积分', key: 'dailyRebateYuan', width: 16 },
+  { header: '已返积分', key: 'paidDailyRebateYuan', width: 14 },
+  { header: '未返积分', key: 'unpaidDailyRebateYuan', width: 14 },
+  { header: '日返状态', key: 'dailyRebateStatus', width: 14 },
+  { header: '月返积分', key: 'monthlyRebateYuan', width: 14 },
+  { header: '已返月返积分', key: 'paidMonthlyRebateYuan', width: 16 },
+  { header: '未返月返积分', key: 'unpaidMonthlyRebateYuan', width: 16 },
+  { header: '月返状态', key: 'monthlyRebateStatus', width: 14 },
+  { header: '售后影响', key: 'afterSalesImpact', width: 28 },
+  { header: '导游信息是否发送', key: 'guideInfoSent', width: 18 },
+  { header: '旅行社信息是否发送', key: 'travelAgencyInfoSent', width: 20 },
+  { header: '状态', key: 'status', width: 16 },
+  { header: '备注', key: 'notes', width: 30 },
+];
+
+const SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_AMOUNT_KEYS = new Set([
+  'totalSalesYuan',
+  'confirmedRefundYuan',
+  'effectiveSalesYuan',
+  'cashOnDeliveryYuan',
+  'paidDepositYuan',
+  'totalAgencyDeductionYuan',
+  'totalAgencyNetYuan',
+  'dailyRebateYuan',
+  'paidDailyRebateYuan',
+  'unpaidDailyRebateYuan',
+  'monthlyRebateYuan',
+  'paidMonthlyRebateYuan',
+  'unpaidMonthlyRebateYuan',
+]);
+
+function buildSelectedTravelGroupFinanceSummariesExportWorkbook(
+  summaries: any[],
+) {
+  return buildTravelGroupFinanceSummariesWorkbook({
+    worksheetName: '积分表所选信息',
+    columns: SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS,
+    amountKeys:
+      SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_AMOUNT_KEYS,
+    rows: summaries.map(toSelectedTravelGroupFinanceSummaryExportRow),
+  });
+}
+
+function buildTravelGroupFinanceSummariesWorkbook(options: {
+  worksheetName: string;
+  columns: any[];
+  amountKeys: Set<string>;
+  rows: any[];
+}) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'jiangjiu-api';
   workbook.created = new Date();
-  const worksheet = workbook.addWorksheet('返积分汇总');
-  worksheet.columns = TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS;
+  const worksheet = workbook.addWorksheet(options.worksheetName);
+  worksheet.columns = options.columns;
   for (const column of worksheet.columns) {
     if (
       column.key &&
-      TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_AMOUNT_KEYS.has(String(column.key))
+      options.amountKeys.has(String(column.key))
     ) {
       column.numFmt = '0.00';
     }
@@ -1716,7 +2093,7 @@ function buildTravelGroupFinanceSummariesExportWorkbook(summaries: any[]) {
     from: { row: 1, column: 1 },
     to: {
       row: 1,
-      column: TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_COLUMNS.length,
+      column: options.columns.length,
     },
   };
   worksheet.getRow(1).font = { bold: true };
@@ -1725,8 +2102,8 @@ function buildTravelGroupFinanceSummariesExportWorkbook(summaries: any[]) {
     horizontal: 'center',
   };
 
-  for (const summary of summaries) {
-    worksheet.addRow(toTravelGroupFinanceSummaryExportRow(summary));
+  for (const row of options.rows) {
+    worksheet.addRow(row);
   }
 
   return workbook;
@@ -1769,6 +2146,66 @@ function toTravelGroupFinanceSummaryExportRow(summary: any) {
     notes: summary.notes || '',
     guideInfoSent: booleanLabel(summary.guideInfoSent),
     travelAgencyInfoSent: booleanLabel(summary.travelAgencyInfoSent),
+  };
+}
+
+function toSelectedTravelGroupFinanceSummaryExportRow(summary: any) {
+  const travelGroup = summary.travelGroup || {};
+  const splitPaymentAmounts = deriveSummaryRebateSplitAmounts(summary);
+  return {
+    travelGroup: travelGroup.groupNo || '',
+    visitDate: toDateOnly(travelGroup.visitDate),
+    travelAgency: travelGroup.travelAgency || '',
+    guideName: travelGroup.guideName || '',
+    licensePlate: travelGroup.licensePlate || '',
+    guestCount: toInteger(travelGroup.guestCount),
+    tasterName: travelGroup.tasterName || '',
+    totalSalesYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalSalesAmountCents,
+    ),
+    confirmedRefundYuan: pointsTableSourceCentsToYuanNumber(
+      summary.confirmedRefundAmountCents,
+    ),
+    effectiveSalesYuan: pointsTableSourceCentsToYuanNumber(
+      summary.effectiveSalesAmountCents,
+    ),
+    cashOnDeliveryYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalCashOnDeliveryCents,
+    ),
+    paidDepositYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalPaidDepositCents,
+    ),
+    totalAgencyDeductionYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalAgencyDeductionCents,
+    ),
+    totalAgencyNetYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalAgencyNetAmountCents,
+    ),
+    dailyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalDailyRebateCents,
+    ),
+    paidDailyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      splitPaymentAmounts.paidDailyRebateCents,
+    ),
+    unpaidDailyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      splitPaymentAmounts.unpaidDailyRebateCents,
+    ),
+    dailyRebateStatus: booleanLabel(summary.dailyRebatePaid),
+    monthlyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      summary.totalMonthlyRebateCents,
+    ),
+    paidMonthlyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      splitPaymentAmounts.paidMonthlyRebateCents,
+    ),
+    unpaidMonthlyRebateYuan: pointsTableSourceCentsToYuanNumber(
+      splitPaymentAmounts.unpaidMonthlyRebateCents,
+    ),
+    monthlyRebateStatus: booleanLabel(summary.monthlyRebatePaid),
+    afterSalesImpact: selectedExportAfterSalesImpactLabel(summary),
+    guideInfoSent: booleanLabel(summary.guideInfoSent),
+    travelAgencyInfoSent: booleanLabel(summary.travelAgencyInfoSent),
+    status: selectedExportSummaryStatus(summary),
+    notes: summary.notes || '',
   };
 }
 
@@ -1927,6 +2364,250 @@ function toTravelGroupFinanceSummaryListDto(summary: any) {
     updatedBy: summarizePublicUser(summary.updatedBy),
     createdAt: normalizeDateString(summary.createdAt),
     updatedAt: normalizeDateString(summary.updatedAt),
+  };
+}
+
+function toTravelGroupSummaryFinanceRowDto(summary: any) {
+  return {
+    ...summary,
+    financeRowId: `travel_group:${summary.travelGroupId}`,
+    rowId: `travel_group:${summary.travelGroupId}`,
+    rowKind: 'travel_group_summary',
+    orderType: 'travel_group',
+    afterSalesNo: null,
+    sourceSalesOrderNo: null,
+    afterSalesStatus: null,
+    deductionCalculationMode: null,
+    agencyDeductionAdjustmentCents: null,
+    financialEffectStatus: null,
+    financeConfirmed: true,
+    financialAmountsReady: true,
+    includedInFormalTotals: true,
+    financeDate: summary.travelGroup?.visitDate || null,
+  };
+}
+
+function toAfterSalesFinanceRowDto(order: any) {
+  const sourceSalesOrder = order.salesOrder || {};
+  const generatedOrder = order.afterSalesSalesOrder || {};
+  const travelGroup = sourceSalesOrder.travelGroup || null;
+  const refundAmountCents = Math.max(
+    0,
+    toInteger(order.refundAmountCents),
+  );
+  const deductionCents =
+    order.agencyDeductionAdjustmentCents === null ||
+    order.agencyDeductionAdjustmentCents === undefined
+      ? null
+      : Math.max(0, toInteger(order.agencyDeductionAdjustmentCents));
+  const financialAmountsReady = deductionCents !== null;
+  const baseAdjustmentCents = financialAmountsReady
+    ? -(refundAmountCents - deductionCents)
+    : 0;
+  const dailyRebateCents = financialAmountsReady
+    ? multiplyFinanceCentsByRate(
+        baseAdjustmentCents,
+        order.dailyRebateRate,
+      )
+    : 0;
+  const monthlyRebateCents = financialAmountsReady
+    ? multiplyFinanceCentsByRate(
+        baseAdjustmentCents,
+        order.monthlyRebateRate,
+      )
+    : 0;
+  const financeRowId = `after_sales:${order.id}`;
+  return {
+    id: order.id,
+    summaryExists: true,
+    financeRowId,
+    rowId: financeRowId,
+    rowKind: 'after_sales_adjustment',
+    orderType: 'after_sales',
+    travelGroupId: sourceSalesOrder.travelGroupId || null,
+    travelGroup: summarizeTravelGroup(travelGroup, null),
+    financeDate: normalizeDateString(generatedOrder.orderDate),
+    afterSalesNo: order.afterSalesNo,
+    sourceSalesOrderNo: sourceSalesOrder.orderNo || null,
+    afterSalesStatus: normalizeEnumText(order.status).toLowerCase(),
+    deductionCalculationMode:
+      order.deductionCalculationMode || 'manual_product_reference',
+    agencyDeductionAdjustmentCents: deductionCents,
+    sourceAgencyDeductionCents: Math.max(
+      0,
+      toInteger(order.sourceAgencyDeductionCents),
+    ),
+    financialEffectStatus: normalizeEnumText(
+      order.financialEffectStatus,
+    ).toLowerCase(),
+    financeConfirmed: Boolean(order.financeConfirmed),
+    financialAmountsReady,
+    includedInFormalTotals:
+      Boolean(order.financeConfirmed) && financialAmountsReady,
+    totalSalesAmountCents: -refundAmountCents,
+    totalCashOnDeliveryCents: 0,
+    totalPaidDepositCents: -refundAmountCents,
+    confirmedRefundAmountCents: order.financeConfirmed
+      ? -refundAmountCents
+      : 0,
+    effectiveSalesAmountCents: -refundAmountCents,
+    totalAgencyDeductionCents: financialAmountsReady
+      ? -deductionCents
+      : 0,
+    agencyDeductionConfirmed:
+      Boolean(order.financeConfirmed) && financialAmountsReady,
+    agencyDeductionConfirmedById:
+      order.financeConfirmedById || null,
+    agencyDeductionConfirmedBy: null,
+    agencyDeductionConfirmedAt: normalizeDateString(
+      order.financeConfirmedAt,
+    ),
+    totalAgencyNetAmountCents: baseAdjustmentCents,
+    totalDailyRebateCents: dailyRebateCents,
+    totalMonthlyRebateCents: monthlyRebateCents,
+    paidRebateCents: 0,
+    unpaidRebateCents: dailyRebateCents + monthlyRebateCents,
+    paidDailyRebateCents: 0,
+    unpaidDailyRebateCents: dailyRebateCents,
+    paidMonthlyRebateCents: 0,
+    unpaidMonthlyRebateCents: monthlyRebateCents,
+    dailyRebatePaid: false,
+    dailyRebatePaidById: null,
+    dailyRebatePaidBy: null,
+    dailyRebatePaidAt: null,
+    monthlyRebatePaid: false,
+    monthlyRebatePaidById: null,
+    monthlyRebatePaidBy: null,
+    monthlyRebatePaidAt: null,
+    notes: order.notes || null,
+    guideInfoSent: false,
+    travelAgencyInfoSent: false,
+    calculationVersion: 'after_sales_v1',
+    afterSalesImpactStatus: normalizeEnumText(
+      order.financialEffectStatus,
+    ).toLowerCase(),
+    pendingAfterSalesRefundCount: order.financeConfirmed ? 0 : 1,
+    pendingAfterSalesRefundAmountCents: order.financeConfirmed
+      ? 0
+      : refundAmountCents,
+    confirmedAfterSalesRefundCount: order.financeConfirmed ? 1 : 0,
+    confirmedAfterSalesRefundAmountCents: order.financeConfirmed
+      ? refundAmountCents
+      : 0,
+    afterSalesRequiresFinance: !order.financeConfirmed,
+    updatedBy: null,
+    createdAt: normalizeDateString(order.createdAt),
+    updatedAt: normalizeDateString(order.updatedAt),
+  };
+}
+
+function multiplyFinanceCentsByRate(cents: number, rateValue: unknown) {
+  const rateUnits = Math.round(Number(rateValue || 0) * 10000);
+  if (!Number.isSafeInteger(cents) || !Number.isSafeInteger(rateUnits)) {
+    return 0;
+  }
+  const sign = cents < 0 ? -1 : 1;
+  return (
+    sign *
+    Number(
+      (BigInt(Math.abs(cents)) * BigInt(Math.max(0, rateUnits)) + 5000n) /
+        10000n,
+    )
+  );
+}
+
+function compareFinanceRows(left: any, right: any) {
+  const leftTime = dateTimeValue(left.financeDate) || 0;
+  const rightTime = dateTimeValue(right.financeDate) || 0;
+  if (leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+  return String(left.financeRowId).localeCompare(
+    String(right.financeRowId),
+  );
+}
+
+async function buildFinanceRowsExportResult(rows: any[]) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Jiangjiu';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet('统一积分财务行');
+  worksheet.columns = [
+    { header: '财务行ID', key: 'financeRowId', width: 45 },
+    { header: '行类型', key: 'rowKind', width: 20 },
+    { header: '订单类型', key: 'orderType', width: 16 },
+    { header: '日期', key: 'financeDate', width: 14 },
+    { header: '团号', key: 'groupNo', width: 20 },
+    { header: '售后单号', key: 'afterSalesNo', width: 20 },
+    { header: '关联原订单号', key: 'sourceSalesOrderNo', width: 22 },
+    { header: '售后状态', key: 'afterSalesStatus', width: 18 },
+    { header: '财务影响状态', key: 'financialEffectStatus', width: 20 },
+    { header: '旅行社', key: 'travelAgency', width: 24 },
+    { header: '导游', key: 'guideName', width: 16 },
+    { header: '车牌', key: 'licensePlate', width: 16 },
+    { header: '销售额调整', key: 'salesAmountYuan', width: 16 },
+    { header: '扣酒成本调整', key: 'deductionYuan', width: 18 },
+    { header: '上单金额调整', key: 'netAmountYuan', width: 18 },
+    { header: '日返积分调整', key: 'dailyPointsYuan', width: 18 },
+    { header: '月返积分调整', key: 'monthlyPointsYuan', width: 18 },
+    { header: '已计入正式合计', key: 'includedInFormalTotals', width: 18 },
+  ];
+  for (const row of rows) {
+    const group = row.travelGroup || {};
+    worksheet.addRow({
+      financeRowId: row.financeRowId,
+      rowKind: row.rowKind,
+      orderType: row.orderType,
+      financeDate: row.financeDate || group.visitDate || '',
+      groupNo: group.groupNo || '',
+      afterSalesNo: row.afterSalesNo || '',
+      sourceSalesOrderNo: row.sourceSalesOrderNo || '',
+      afterSalesStatus: row.afterSalesStatus || '',
+      financialEffectStatus: row.financialEffectStatus || '',
+      travelAgency: group.travelAgency || '',
+      guideName: group.guideName || '',
+      licensePlate: group.licensePlate || '',
+      salesAmountYuan: centsToYuanNumber(row.totalSalesAmountCents),
+      deductionYuan:
+        row.rowKind === 'after_sales_adjustment' &&
+        row.agencyDeductionAdjustmentCents === null
+          ? null
+          : centsToYuanNumber(row.totalAgencyDeductionCents),
+      netAmountYuan:
+        row.financialAmountsReady === false
+          ? null
+          : centsToYuanNumber(row.totalAgencyNetAmountCents),
+      dailyPointsYuan:
+        row.financialAmountsReady === false
+          ? null
+          : centsToYuanNumber(row.totalDailyRebateCents),
+      monthlyPointsYuan:
+        row.financialAmountsReady === false
+          ? null
+          : centsToYuanNumber(row.totalMonthlyRebateCents),
+      includedInFormalTotals: row.includedInFormalTotals ? '是' : '否',
+    });
+  }
+  for (const key of [
+    'salesAmountYuan',
+    'deductionYuan',
+    'netAmountYuan',
+    'dailyPointsYuan',
+    'monthlyPointsYuan',
+  ]) {
+    const column = worksheet.getColumn(key);
+    column.numFmt = '0.00;[Red]-0.00';
+  }
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = {
+    from: 'A1',
+    to: 'R1',
+  };
+  const xlsxData = await workbook.xlsx.writeBuffer();
+  return {
+    fileName: `finance-rows-${formatFileNameTimestamp(new Date())}.xlsx`,
+    buffer: Buffer.from(xlsxData as any),
+    rowCount: rows.length,
   };
 }
 
@@ -2219,6 +2900,78 @@ function normalizeIdList(values: unknown[]) {
         .filter((value): value is string => Boolean(value)),
     ),
   );
+}
+
+function normalizeSelectedTravelGroupIds(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'travelGroupIds must be an array.',
+    );
+  }
+  const travelGroupIds = Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+  if (travelGroupIds.length === 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'travelGroupIds must contain at least one non-empty string.',
+    );
+  }
+  if (
+    travelGroupIds.length >
+    SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `travelGroupIds cannot contain more than ${SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS} unique IDs.`,
+    );
+  }
+  return travelGroupIds;
+}
+
+function normalizeSelectedFinanceRowIds(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'financeRowIds must be an array.',
+    );
+  }
+  const financeRowIds = Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+  if (financeRowIds.length === 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'financeRowIds must contain at least one non-empty string.',
+    );
+  }
+  if (
+    financeRowIds.length >
+    SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `financeRowIds cannot contain more than ${SELECTED_TRAVEL_GROUP_FINANCE_SUMMARY_EXPORT_MAX_ROWS} unique IDs.`,
+    );
+  }
+  return financeRowIds;
 }
 
 function normalizeNullableString(value: unknown) {
@@ -2551,6 +3304,66 @@ function centsToYuanNumber(value: unknown) {
   return Number((toInteger(value) / 100).toFixed(2));
 }
 
+function scalePointsTableSourceCents(value: unknown) {
+  const sourceCents = toInteger(value);
+  const sign = sourceCents < 0 ? -1 : 1;
+  return sign * Math.trunc((Math.abs(sourceCents) + 50) / 100);
+}
+
+function pointsTableSourceCentsToYuanNumber(value: unknown) {
+  return Number((scalePointsTableSourceCents(value) / 100).toFixed(2));
+}
+
+function formatPointsTableSourceCents(value: unknown) {
+  const displayCents = scalePointsTableSourceCents(value);
+  const sign = displayCents < 0 ? '-' : '';
+  const absolute = Math.abs(displayCents);
+  return `${sign}¥${Math.trunc(absolute / 100)}.${String(
+    absolute % 100,
+  ).padStart(2, '0')}`;
+}
+
+function selectedExportAfterSalesImpactLabel(summary: any) {
+  const afterSalesImpact = readAfterSalesImpactFields(
+    summary?.sourceSnapshot,
+  );
+  switch (afterSalesImpact.afterSalesImpactStatus) {
+    case 'after_sales_processing':
+      return '售后处理中';
+    case 'refund_pending_confirmation':
+      return `退款待确认 ${formatPointsTableSourceCents(
+        afterSalesImpact.pendingAfterSalesRefundAmountCents,
+      )}`;
+    case 'refund_adjusted':
+      return '已按退款调整';
+    case 'after_rebate_paid_requires_finance':
+      return '已返后发生售后，需财务处理';
+    default:
+      return '无';
+  }
+}
+
+function selectedExportSummaryStatus(summary: any) {
+  if (summary?.summaryExists === false) {
+    return '未生成汇总';
+  }
+  const afterSalesImpactStatus = readAfterSalesImpactFields(
+    summary?.sourceSnapshot,
+  ).afterSalesImpactStatus;
+  switch (afterSalesImpactStatus) {
+    case 'after_rebate_paid_requires_finance':
+      return '需财务处理';
+    case 'refund_pending_confirmation':
+      return '退款待确认';
+    case 'after_sales_processing':
+      return '售后处理中';
+    default:
+      return deriveSummaryRebatePaymentAmounts(summary).unpaidRebateCents === 0
+        ? '已完成'
+        : '待返';
+  }
+}
+
 function booleanLabel(value: unknown) {
   return value ? '是' : '否';
 }
@@ -2622,6 +3435,12 @@ function isSensitiveExportFilterKey(key: string) {
 
 function buildTravelGroupFinanceSummariesExportFileName(date = new Date()) {
   return `travel-group-finance-summaries-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function buildSelectedTravelGroupFinanceSummariesExportFileName(
+  date = new Date(),
+) {
+  return `points-table-selected-${formatFileNameTimestamp(date)}.xlsx`;
 }
 
 function formatFileNameTimestamp(date: Date) {

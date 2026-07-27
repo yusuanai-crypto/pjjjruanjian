@@ -33,6 +33,67 @@ export class TravelGroupFinanceSummariesNestController {
     };
   }
 
+  @Get('finance-rows')
+  async listFinanceRows(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      financeRows: await this.summaryService.listFinanceRows(actor, query),
+    };
+  }
+
+  @Get('finance-rows/export')
+  async exportFinanceRows(
+    @Query() query: any,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult = await this.summaryService.exportFinanceRowsXlsx(
+      actor,
+      query,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
+  @Post('finance-rows/export')
+  async exportSelectedFinanceRows(
+    @Body() body: unknown,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult =
+      await this.summaryService.exportSelectedFinanceRowsXlsx(
+        actor,
+        body,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
   @Get('export')
   async exportXlsx(@Query() query: any, @Req() request: any, @Res() response: any) {
     const actor = await this.authService.authenticateRequest(request);
@@ -40,6 +101,33 @@ export class TravelGroupFinanceSummariesNestController {
       await this.summaryService.exportTravelGroupFinanceSummariesXlsx(
         actor,
         query,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
+  @Post('export')
+  async exportSelectedXlsx(
+    @Body() body: unknown,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult =
+      await this.summaryService.exportSelectedTravelGroupFinanceSummariesXlsx(
+        actor,
+        body,
         {
           ipAddress: getRequestIp(request),
         },

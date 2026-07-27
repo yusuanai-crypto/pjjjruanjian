@@ -13,7 +13,15 @@ test('operation log APIs enforce admin access and support complete online/archiv
     async (baseUrl) => {
       const superAdmin = await login(baseUrl, 'admin');
       const admin = await login(baseUrl, 'audit-admin', 'Password123');
-      for (const username of ['audit-boss', 'audit-finance', 'audit-sales']) {
+      for (const username of [
+        'audit-boss',
+        'audit-finance',
+        'audit-warehouse',
+        'audit-sales',
+        'audit-after-sales',
+        'audit-taster',
+        'audit-front-desk',
+      ]) {
         const session = await login(baseUrl, username, 'Password123');
         const forbidden = await requestJson(
           baseUrl,
@@ -73,6 +81,20 @@ test('operation log APIs enforce admin access and support complete online/archiv
       assert.deepEqual(detail.body.data.beforeData, { status: 'old' });
       assert.deepEqual(detail.body.data.afterData, { status: 'new' });
       assert.equal(detail.body.data.errorCode, 'TEST_FAILURE');
+      const detailText = JSON.stringify(detail.body.data);
+      for (const forbidden of [
+        'purchaseUnitCostCents',
+        'inventoryAmountCents',
+        'onHandQty',
+        'availableQty',
+        'bottleCode',
+        '987654321',
+        '876543210',
+        '765432109',
+        'inventory-bottle-secret',
+      ]) {
+        assert.equal(detailText.includes(forbidden), false);
+      }
 
       const history = await requestJson(
         baseUrl,
@@ -271,13 +293,58 @@ test('operation log Excel export uses filters, enforces its row limit, and sanit
       assert.equal(bytes.subarray(0, 2).toString('utf8'), 'PK');
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(bytes);
+      const worksheet = workbook.worksheets[0];
+      assert.deepEqual(
+        worksheet.getRow(1).values.slice(1),
+        [
+          '操作时间',
+          '操作人',
+          '所属模块',
+          '操作类型',
+          '操作对象',
+          '操作内容',
+          '结果',
+          '业务明细',
+        ],
+      );
       const values = [];
-      workbook.worksheets[0].eachRow((row) => {
+      worksheet.eachRow((row) => {
         values.push(row.values);
       });
       const serialized = JSON.stringify(values);
+      for (const technicalHeading of [
+        'HTTP 方法',
+        '请求路径',
+        '请求编号',
+        '状态码',
+        '错误码',
+        '耗时（毫秒）',
+        '修改前',
+        '修改后',
+        '请求摘要',
+      ]) {
+        assert.equal(serialized.includes(technicalHeading), false);
+      }
+      assert.equal(serialized.includes('single_export'), false);
+      assert.equal(serialized.includes('UPDATE'), false);
+      assert.equal(serialized.includes('SUCCESS'), false);
       assert.equal(serialized.includes('LegacyPlaintextPassword!'), false);
       assert.equal(serialized.includes('13800138000'), false);
+      for (const forbidden of [
+        'purchaseUnitCostCents',
+        'inventoryAmountCents',
+        'coverageStatus',
+        'onHandQty',
+        'availableQty',
+        'bottleCode',
+        '987654321',
+        '876543210',
+        'full-cost-coverage',
+        '765432109',
+        'inventory-bottle-secret',
+      ]) {
+        assert.equal(serialized.includes(forbidden), false);
+      }
       assert.equal(
         serialized.includes('138****8000') ||
           serialized.includes('[MASKED_PHONE]'),
@@ -327,7 +394,11 @@ function auditFixture() {
       user('usr-audit-admin', 'audit-admin', 'admin', true),
       user('usr-audit-boss', 'audit-boss', 'boss', true),
       user('usr-audit-finance', 'audit-finance', 'finance', true),
+      user('usr-audit-warehouse', 'audit-warehouse', 'warehouse', true),
       user('usr-audit-sales', 'audit-sales', 'sales', true),
+      user('usr-audit-after-sales', 'audit-after-sales', 'after_sales', true),
+      user('usr-audit-taster', 'audit-taster', 'taster', true),
+      user('usr-audit-front-desk', 'audit-front-desk', 'front_desk', true),
       user('usr-audit-disabled', 'audit-disabled', 'sales', false),
     ],
     operationLogs: [
@@ -345,7 +416,14 @@ function auditFixture() {
         entityId: 'customer-audit-2',
         ipAddress: '10.0.0.2',
         beforeData: { status: 'old' },
-        afterData: { status: 'new' },
+        afterData: {
+          status: 'new',
+          purchaseUnitCostCents: 987654321,
+          inventoryAmountCents: 876543210,
+          onHandQty: 765432109,
+          availableQty: 765432108,
+          bottleCode: 'inventory-bottle-secret',
+        },
         errorCode: 'TEST_FAILURE',
       }),
       log('audit-log-3', '2026-07-22T01:00:00.000Z', {
@@ -367,6 +445,12 @@ function auditFixture() {
         beforeData: {
           password: 'LegacyPlaintextPassword!',
           phone: '13800138000',
+          purchaseUnitCostCents: 987654321,
+          inventoryAmountCents: 876543210,
+          coverageStatus: 'full-cost-coverage',
+          onHandQty: 765432109,
+          availableQty: 765432108,
+          bottleCode: 'inventory-bottle-secret',
         },
       },
     ],

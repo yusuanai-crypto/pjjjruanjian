@@ -1559,15 +1559,16 @@ function buildAnalyticsTasterRankingMarkPrisma() {
         orderNo: 'SO-STAGE8-RANKING-MARKED',
         orderDate: '2026-07-02',
         travelGroupId: 'group-marked',
-        customerId: 'customer-marked',
+        customerId: 'customer-unmarked',
         totalAmountCents: 10000,
       }),
       salesOrder('order-unmarked-customer', {
         orderNo: 'SO-STAGE8-RANKING-UNMARKED-CUSTOMER',
         orderDate: '2026-07-02',
         travelGroupId: 'group-marked',
-        customerId: 'customer-unmarked',
+        customerId: 'customer-marked',
         totalAmountCents: 20000,
+        financeMark: false,
       }),
       salesOrder('order-unmarked-group', {
         orderNo: 'SO-STAGE8-RANKING-UNMARKED-GROUP',
@@ -1575,6 +1576,7 @@ function buildAnalyticsTasterRankingMarkPrisma() {
         travelGroupId: 'group-unmarked',
         customerId: 'customer-marked',
         totalAmountCents: 30000,
+        financeMark: false,
       }),
     ],
   };
@@ -1610,15 +1612,16 @@ function buildAnalyticsSourceMarkPrisma() {
         orderNo: 'SO-STAGE8-SOURCE-MARKED',
         orderDate: '2026-07-02',
         travelGroupId: 'group-marked',
-        customerId: 'customer-marked',
+        customerId: 'customer-unmarked',
         totalAmountCents: 10000,
       }),
       salesOrder('order-unmarked-customer', {
         orderNo: 'SO-STAGE8-SOURCE-UNMARKED-CUSTOMER',
         orderDate: '2026-07-02',
         travelGroupId: 'group-marked',
-        customerId: 'customer-unmarked',
+        customerId: 'customer-marked',
         totalAmountCents: 20000,
+        financeMark: false,
       }),
       salesOrder('order-unmarked-group', {
         orderNo: 'SO-STAGE8-SOURCE-UNMARKED-GROUP',
@@ -1626,6 +1629,7 @@ function buildAnalyticsSourceMarkPrisma() {
         travelGroupId: 'group-unmarked',
         customerId: 'customer-marked',
         totalAmountCents: 30000,
+        financeMark: false,
       }),
     ],
     afterSalesOrders: [
@@ -1724,6 +1728,7 @@ function salesOrder(id, overrides = {}) {
     totalAmountCents: 0,
     status: 'VALID',
     remark: 'stage8 ranking smoke test order',
+    financeMark: true,
     ...overrides,
   };
 }

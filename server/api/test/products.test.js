@@ -76,6 +76,23 @@ test('contract: product management requires admin or finance and supports paging
     });
     assertErrorContract(duplicate, 409, 'PRODUCT_NAME_EXISTS');
 
+    for (const mode of ['quantity', 'serialized']) {
+      const protectedCreate = await requestJson(baseUrl, '/api/products', {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          name: `Protected ${mode} Product`,
+          unit: 'bottle',
+          inventoryTrackingMode: mode,
+        },
+      });
+      assertErrorContract(
+        protectedCreate,
+        409,
+        'PRODUCT_INVENTORY_MODE_CHANGE_REQUIRES_COMMAND',
+      );
+    }
+
     const second = await requestJson(baseUrl, '/api/products', {
       method: 'POST',
       token: sessions.finance.token,
@@ -102,6 +119,23 @@ test('contract: product management requires admin or finance and supports paging
       totalPages: 1,
     });
 
+    for (const mode of ['quantity', 'serialized']) {
+      const protectedUpdate = await requestJson(
+        baseUrl,
+        `/api/products/${product.id}`,
+        {
+          method: 'PATCH',
+          token: sessions.finance.token,
+          body: { inventoryTrackingMode: mode },
+        },
+      );
+      assertErrorContract(
+        protectedUpdate,
+        409,
+        'PRODUCT_INVENTORY_MODE_CHANGE_REQUIRES_COMMAND',
+      );
+    }
+
     const updated = await requestJson(baseUrl, `/api/products/${product.id}`, {
       method: 'PATCH',
       token: sessions.finance.token,
@@ -109,7 +143,7 @@ test('contract: product management requires admin or finance and supports paging
         name: 'Stage 10 Reserve',
         unit: 'case',
         notes: null,
-        inventoryTrackingMode: 'serialized',
+        inventoryTrackingMode: 'none',
       },
     });
     assert.equal(updated.response.status, 200);
@@ -118,7 +152,7 @@ test('contract: product management requires admin or finance and supports paging
     assert.equal(updated.body.data.product.notes, null);
     assert.equal(
       updated.body.data.product.inventoryTrackingMode,
-      'serialized',
+      'none',
     );
 
     const disabled = await requestJson(

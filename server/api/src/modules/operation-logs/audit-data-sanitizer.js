@@ -144,6 +144,10 @@ function sanitizeValue(value, key, depth, seen, config, reportState) {
     reportState.redactedCategories.add('address');
     return value === null || value === undefined ? null : MASKED_ADDRESS;
   }
+  if (fieldCategory === 'inventory_sensitive') {
+    reportState.redactedCategories.add('inventory_sensitive');
+    return OMIT_VALUE;
+  }
 
   if (value === null || value === undefined) {
     return null;
@@ -383,6 +387,29 @@ function classifyField(key) {
     )
   ) {
     return 'secret';
+  }
+  if (
+    normalized.includes('purchaseunitcost') ||
+    normalized.includes('purchasecost') ||
+    normalized.includes('inventoryamount') ||
+    normalized.includes('costcoverage') ||
+    normalized.includes('coveragestatus') ||
+    normalized === 'coststatus' ||
+    normalized.includes('coveredqty') ||
+    normalized.includes('uncoveredqty') ||
+    normalized.includes('onhandqty') ||
+    normalized.includes('reservedqty') ||
+    normalized.includes('unavailableqty') ||
+    normalized.includes('intransitqty') ||
+    normalized.includes('availableqty') ||
+    normalized.includes('shortageqty') ||
+    normalized.includes('bottlecode') ||
+    normalized.includes('serialnumber') ||
+    normalized.includes('serialno') ||
+    normalized.includes('logisticscode') ||
+    normalized.includes('batchserialno')
+  ) {
+    return 'inventory_sensitive';
   }
   if (!normalized) {
     return 'normal';

@@ -257,10 +257,12 @@ test('unit: warehouse creates PENDING_COST without cost exposure and finance com
   const service = new SerializedInventoryNestService(
     fixture.prisma,
     fixture.logs,
+    fixture.accounting,
   );
   const warehouseResult = await service.createMany(
     { id: 'warehouse-1', role: 'warehouse' },
     {
+      warehouseId: 'warehouse-main',
       productId: 'product-moutai',
       defaults: {
         moutaiName: '飞天茅台',
@@ -298,12 +300,26 @@ test('unit: warehouse creates PENDING_COST without cost exposure and finance com
   );
   assert.equal(Object.hasOwn(warehouseView, 'purchaseCostCents'), false);
 
-  const salesSelection = await service.listAvailable(
-    { id: 'sales-1', role: 'sales' },
-    { productId: 'product-moutai' },
+  await assert.rejects(
+    () =>
+      service.listAvailable(
+        { id: 'sales-1', role: 'sales' },
+        {
+          warehouseId: 'warehouse-main',
+          productId: 'product-moutai',
+        },
+      ),
+    (error) => error.code === 'PERMISSION_DENIED',
+  );
+  const warehouseSelection = await service.listAvailable(
+    { id: 'warehouse-1', role: 'warehouse' },
+    {
+      warehouseId: 'warehouse-main',
+      productId: 'product-moutai',
+    },
   );
   assert.deepEqual(
-    Object.keys(salesSelection.units[0]).sort(),
+    Object.keys(warehouseSelection.units[0]).sort(),
     [
       'batchSerialNo',
       'factoryDate',
@@ -321,12 +337,14 @@ test('unit: serialized inventory rejects duplicate codes, warehouse cost writes,
   const service = new SerializedInventoryNestService(
     fixture.prisma,
     fixture.logs,
+    fixture.accounting,
   );
   await assert.rejects(
     () =>
       service.createMany(
         { id: 'warehouse-1', role: 'warehouse' },
         {
+          warehouseId: 'warehouse-main',
           productId: 'product-moutai',
           defaults: {
             moutaiName: '飞天茅台',
@@ -344,6 +362,7 @@ test('unit: serialized inventory rejects duplicate codes, warehouse cost writes,
       service.createMany(
         { id: 'admin-1', role: 'admin' },
         {
+          warehouseId: 'warehouse-main',
           productId: 'product-moutai',
           defaults: {
             moutaiName: '飞天茅台',
@@ -398,7 +417,85 @@ test('unit: serialized inventory rejects duplicate codes, warehouse cost writes,
   );
 });
 
-test('unit: order snapshot uses selected bottle names and exact per-code costs, rejecting mixed names and PENDING_COST', async () => {
+test('unit: sales order serialized fulfillment DTO is actor-projected and never leaks cost', () => {
+  const item = {
+    id: 'sales-item-1',
+    productId: 'product-moutai',
+    productName: 'Moutai',
+    unit: 'bottle',
+    quantity: 2,
+    unitPriceCents: 200000,
+    subtotalCents: 400000,
+    deliveryType: 'SHIPPING',
+    sortOrder: 1,
+    inventoryLineKey: 'inventory-line-secret',
+    inventoryReservations: [
+      {
+        status: 'PARTIAL',
+        requestedQty: 2,
+        assignedQty: 1,
+        outboundQty: 0,
+        assignments: [
+          {
+            status: 'RESERVED',
+            purchaseCostSnapshotCents: 123456,
+            serializedUnit: {
+              id: 'serialized-unit-1',
+              logisticsCode: '000000123',
+              productionBatch: '00007',
+              batchSerialNo: '00009',
+              purchaseCostCents: 123456,
+              orderCostSnapshotCents: 123456,
+              status: 'RESERVED',
+              warehouseId: 'warehouse-main',
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const salesDto =
+    serializedInventoryOrderTestHooks.toSalesOrderItemDto(item, {
+      role: 'sales',
+    });
+  const salesJson = JSON.stringify(salesDto);
+  for (const forbidden of [
+    'serializedFulfillment',
+    'inventoryLineKey',
+    'serialized-unit-1',
+    '000000123',
+    'warehouse-main',
+    'purchaseCost',
+    'orderCost',
+    'assignedQty',
+  ]) {
+    assert.equal(salesJson.includes(forbidden), false, forbidden);
+  }
+
+  const warehouseDto =
+    serializedInventoryOrderTestHooks.toSalesOrderItemDto(item, {
+      role: 'warehouse',
+    });
+  assert.equal(
+    warehouseDto.serializedFulfillment.units[0].logisticsCode,
+    '000000123',
+  );
+  const warehouseJson = JSON.stringify(warehouseDto);
+  for (const forbidden of [
+    'purchaseCostSnapshotCents',
+    'purchaseCostCents',
+    'orderCostSnapshotCents',
+    'warehouse-main',
+  ]) {
+    assert.equal(
+      warehouseJson.includes(forbidden),
+      false,
+      forbidden,
+    );
+  }
+});
+
+test('unit: sales bottle selection is rejected because serialized fulfillment is server-managed', async () => {
   const hooks = serializedInventoryOrderTestHooks;
   const product = {
     id: 'product-moutai',
@@ -426,6 +523,23 @@ test('unit: order snapshot uses selected bottle names and exact per-code costs, 
         units.filter((unit) => where.id.in.includes(unit.id)),
     },
   };
+  await assert.rejects(
+    () =>
+      Promise.resolve().then(() =>
+        hooks.buildSalesOrderItems([
+          {
+            productId: product.id,
+            quantity: 1,
+            subtotalCents: 250000,
+            deliveryType: 'shipping',
+            serializedUnitIds: ['unit-a'],
+          },
+        ]),
+      ),
+    (error) =>
+      error.code === 'SERIALIZED_SELECTION_SERVER_MANAGED',
+  );
+  return;
   const inputs = hooks.buildSalesOrderItems([
     {
       productId: product.id,
@@ -526,6 +640,40 @@ function createInventoryFixture() {
         logEntries.push(entry);
       },
     },
+    accounting: {
+      createUnits: async (_actor, input) => {
+        const created = input.units.map((row) => {
+          const unit = inventoryUnit({
+            ...row,
+            id: `unit-${units.length + 1}`,
+            warehouseId: input.warehouseId,
+            status:
+              row.purchaseCostCents === null
+                ? 'PENDING_COST'
+                : 'AVAILABLE',
+            purchaseCostCents: row.purchaseCostCents,
+            product,
+            salesOrder: null,
+          });
+          units.push(unit);
+          return unit;
+        });
+        logEntries.push({
+          action: 'inventory.serialized_inbound.posted',
+        });
+        return { unitIds: created.map((unit) => unit.id) };
+      },
+      completeUnitCost: async (_actor, id, purchaseCostCents) => {
+        const unit = units.find((candidate) => candidate.id === id);
+        unit.purchaseCostCents = purchaseCostCents;
+        unit.status = 'AVAILABLE';
+        unit.version = Number(unit.version || 0) + 1;
+        logEntries.push({
+          action: 'inventory.serialized_cost_complete.posted',
+        });
+        return { unitIds: [id] };
+      },
+    },
     logEntries,
   };
 }
@@ -534,6 +682,8 @@ function inventoryUnit(overrides = {}) {
   return {
     id: overrides.id || `unit-${Math.random()}`,
     productId: 'product-moutai',
+    warehouseId: 'warehouse-main',
+    inventoryBatchId: null,
     product: {
       id: 'product-moutai',
       name: '茅台',
@@ -552,6 +702,7 @@ function inventoryUnit(overrides = {}) {
     purchaseCostCents: 100000,
     orderCostSnapshotCents: null,
     status: 'AVAILABLE',
+    version: 0,
     correctionReason: null,
     correctedById: null,
     correctedAt: null,

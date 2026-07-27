@@ -255,6 +255,7 @@ void main() {
       'logisticsProviderCode': 'shunfeng',
       'packageCount': 2,
       'warehouseRemark': '库管备注',
+      'hasPackingMark': true,
       'logisticsNo': 'SF123456',
       'trackingState': 'in_transit',
       'trackingStateLabel': '运输中',
@@ -325,6 +326,7 @@ void main() {
     expect(order.logisticsProviderCode, 'shunfeng');
     expect(order.packageCount, 2);
     expect(order.warehouseRemark, '库管备注');
+    expect(order.hasPackingMark, isTrue);
     expect(order.logisticsNo, 'SF123456');
     expect(order.trackingState, 'in_transit');
     expect(order.trackingStateLabel, '运输中');
@@ -347,6 +349,21 @@ void main() {
     expect(order.items.single.notes, '礼盒装');
     expect(order.items.single.sortOrder, 1);
     expect(order.travelGroup?.groupNo, 'GZ-TEST-001');
+  });
+
+  test('parses sales order packing mark booleans with legacy fallback', () {
+    expect(
+      SalesOrderRecord.fromJson({'hasPackingMark': true}).hasPackingMark,
+      isTrue,
+    );
+    expect(
+      SalesOrderRecord.fromJson({'hasPackingMark': false}).hasPackingMark,
+      isFalse,
+    );
+    expect(
+      SalesOrderRecord.fromJson(const {}).hasPackingMark,
+      isFalse,
+    );
   });
 
   test('sales edit API uses the single atomic endpoint', () async {
@@ -2118,6 +2135,28 @@ void main() {
     expect(uri.queryParameters['agencyName'], 'test agency');
     expect(uri.queryParameters['guideName'], 'test guide');
     expect(uri.queryParameters['agencyDeductionConfirmed'], 'true');
+
+    await api.downloadSelectedTravelGroupFinanceSummariesExcel(
+      [' group-1 ', '', 'group-2', 'group-1', '  '],
+    );
+    expect(apiClient.lastMethod, 'POST_BYTES');
+    expect(
+      apiClient.lastPath,
+      '/api/travel-group-finance-summaries/export',
+    );
+    expect(apiClient.lastBody, {
+      'travelGroupIds': ['group-1', 'group-2'],
+    });
+    expect(
+      apiClient.lastDefaultFileName,
+      'points-table-selected.xlsx',
+    );
+    expect(
+      () => api.downloadSelectedTravelGroupFinanceSummariesExcel(
+        const ['', '  '],
+      ),
+      throwsArgumentError,
+    );
   });
 
   test('parses reconciliation JSON with positive refunds deduction', () {
@@ -2911,6 +2950,21 @@ class _RecordingApiClient extends ApiClient {
     lastMethod = 'BYTES';
     lastPath = path;
     lastToken = token;
+    lastDefaultFileName = defaultFileName;
+    return nextDownload;
+  }
+
+  @override
+  Future<ApiDownloadedFile> postBytes(
+    String path, {
+    required Map<String, dynamic> body,
+    required String defaultFileName,
+    String? token,
+  }) async {
+    lastMethod = 'POST_BYTES';
+    lastPath = path;
+    lastToken = token;
+    lastBody = Map<String, dynamic>.from(body);
     lastDefaultFileName = defaultFileName;
     return nextDownload;
   }

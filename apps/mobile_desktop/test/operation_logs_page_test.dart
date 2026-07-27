@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/app/destinations.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
+import 'package:jiangjiu_mobile_desktop/features/operation_logs/operation_log_presentation.dart';
 import 'package:jiangjiu_mobile_desktop/features/operation_logs/operation_logs_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -14,8 +15,7 @@ void main() {
     const menu = AuthMenu(id: 'operation_logs', title: '操作日志', phase: 1);
     for (final role in [UserRole.superAdmin, UserRole.admin]) {
       expect(
-        destinationsForBackendMenus(const [menu], role)
-            .map((item) => item.id),
+        destinationsForBackendMenus(const [menu], role).map((item) => item.id),
         contains('operation_logs'),
       );
     }
@@ -29,8 +29,7 @@ void main() {
       UserRole.taster,
     ]) {
       expect(
-        destinationsForBackendMenus(const [menu], role)
-            .map((item) => item.id),
+        destinationsForBackendMenus(const [menu], role).map((item) => item.id),
         isNot(contains('operation_logs')),
       );
     }
@@ -81,7 +80,12 @@ void main() {
 
     expect(find.byKey(const ValueKey('operation-log-desktop-table')),
         findsOneWidget);
-    expect(find.text('customers.update'), findsOneWidget);
+    expect(find.text('客户管理'), findsWidgets);
+    expect(find.text('修改'), findsOneWidget);
+    expect(find.textContaining('测试管理员将客户'), findsOneWidget);
+    expect(find.text('customers.update'), findsNothing);
+    expect(find.text('customers'), findsNothing);
+    expect(find.text('admin'), findsNothing);
     expect(
       find.byKey(const ValueKey('operation-log-success-badge')),
       findsOneWidget,
@@ -107,18 +111,205 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.queries.last.page, 2);
 
-    await tester.tap(find.text('customers.update'));
+    await tester.tap(
+      find.byKey(const ValueKey('operation-log-row-log-1')),
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('operation-log-detail-dialog')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('operation-log-before-data')),
-        findsOneWidget);
-    expect(find.byKey(const ValueKey('operation-log-after-data')),
-        findsOneWidget);
-    expect(find.textContaining('"status": "old"'), findsOneWidget);
-    expect(find.textContaining('"status": "new"'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('operation-log-comparison-table')),
+      findsOneWidget,
+    );
+    expect(find.text('状态'), findsOneWidget);
+    expect(find.text('原状态'), findsOneWidget);
+    expect(find.text('新状态'), findsOneWidget);
+    expect(find.text('已修改'), findsOneWidget);
+    expect(find.text('请求编号'), findsNothing);
+    expect(find.textContaining('/api/'), findsNothing);
+    expect(find.textContaining('{'), findsNothing);
+  });
+
+  test('central presentation handles required samples and sensitive fields',
+      () {
+    final todo = OperationLogPresentation.present(
+      OperationLogEntry(
+        id: 'todo-list',
+        action: 'todo_reminders.list',
+        operationType: 'READ',
+        entityType: 'todo_recipient',
+        result: 'SUCCESS',
+        actorNameSnapshot: '系统管理员',
+        module: 'todo_reminders',
+        requestSummary: const {
+          'filterKeys': ['page', 'pageSize', 'status'],
+          'filters': {
+            'page': 1,
+            'pageSize': 100,
+            'status': 'ACTIVE',
+          },
+          'returnedCount': 2,
+        },
+        createdAt: DateTime.utc(2026, 7, 25, 1),
+      ),
+    );
+    expect(todo.module, '待办提醒');
+    expect(todo.operation, '查看');
+    expect(todo.summary, '系统管理员查看了待办事项列表。');
+    expect(todo.sections.map((section) => section.title), [
+      '查看条件',
+      '查看结果',
+    ]);
+    expect(
+      todo.sections.first.rows.map((row) => '${row.label}：${row.value}'),
+      ['查看页码：第 1 页', '每页数量：100 条', '待办状态：处理中'],
+    );
+    expect(
+      todo.sections.last.rows.single.value,
+      '2 条记录',
+    );
+
+    final login = OperationLogPresentation.present(
+      OperationLogEntry(
+        id: 'login',
+        action: 'auth.login',
+        operationType: 'LOGIN',
+        entityType: 'user',
+        result: 'SUCCESS',
+        actorNameSnapshot: '系统管理员',
+        actorUsernameSnapshot: 'admin',
+        actorRoleSnapshot: 'super_admin',
+        module: 'auth',
+        afterData: const {
+          'username': 'admin',
+          'role': 'super_admin',
+          'password': 'must-never-render',
+          'accessToken': 'must-never-render',
+        },
+        createdAt: DateTime.utc(2026, 7, 25, 1),
+      ),
+    );
+    expect(
+      login.summary,
+      '系统管理员使用 admin 账号登录了管理后台，登录成功。',
+    );
+    expect(login.module, '用户管理');
+    expect(login.sections.single.title, '登录信息');
+    expect(
+      login.sections.single.rows.map((row) => '${row.label}：${row.value}'),
+      containsAll([
+        '登录账号：admin',
+        '管理员身份：超级管理员',
+        '登录结果：成功',
+      ]),
+    );
+    expect(
+      login.sections.single.rows
+          .any((row) => row.value.contains('must-never-render')),
+      isFalse,
+    );
+
+    final summary = OperationLogPresentation.present(
+      OperationLogEntry(
+        id: 'todo-summary',
+        action: 'todo_reminders.summary.list',
+        operationType: 'READ',
+        entityType: 'todo_recipient',
+        result: 'SUCCESS',
+        actorNameSnapshot: '系统管理员',
+        module: 'todo_reminders',
+        requestSummary: const {},
+        createdAt: DateTime.utc(2026, 7, 25, 1),
+      ),
+    );
+    expect(summary.summary, '系统管理员查看了待办事项汇总。');
+    expect(summary.sections, isEmpty);
+  });
+
+  test('central presentation maps compound actions, modules and changes', () {
+    for (final entry in const {
+      'user': '用户管理',
+      'users': '用户管理',
+      'auth': '用户管理',
+      'order': '订单管理',
+      'orders': '订单管理',
+      'product': '商品管理',
+      'products': '商品管理',
+      'goods': '商品管理',
+      'todo_reminders': '待办提醒',
+      'settings': '系统设置',
+      'analytics': '数据统计',
+      'travel_groups': '旅行团管理',
+      'commission_records': '提成记录',
+      'serialized_inventory': '序列化库存',
+    }.entries) {
+      expect(OperationLogPresentation.moduleLabel(entry.key), entry.value);
+    }
+    expect(
+      OperationLogPresentation.moduleLabel('unconfigured_module'),
+      isNot('unconfigured_module'),
+    );
+    expect(
+      OperationLogPresentation.operationLabel(null, 'products.update'),
+      '修改',
+    );
+    expect(
+      OperationLogPresentation.operationLabel(
+        null,
+        'todo_reminders.summary.list',
+      ),
+      '查看',
+    );
+    expect(
+      OperationLogPresentation.operationLabel(null, 'orders.reject'),
+      '审核不通过',
+    );
+
+    final product = OperationLogPresentation.present(
+      OperationLogEntry(
+        id: 'product-change',
+        action: 'products.update',
+        operationType: 'UPDATE',
+        entityType: 'product',
+        entityId: 'product-1',
+        result: 'SUCCESS',
+        actorNameSnapshot: '张三',
+        module: 'products',
+        beforeData: const {
+          'productName': '飞天茅台',
+          'price': 2699,
+          'stock': 100,
+          'phone': '13800138000',
+          'password': 'secret',
+        },
+        afterData: const {
+          'productName': '飞天茅台',
+          'price': 2799,
+          'stock': 80,
+          'phone': '13800138000',
+          'password': 'changed-secret',
+        },
+        createdAt: DateTime.utc(2026, 7, 25, 1),
+      ),
+    );
+    expect(product.object, '商品“飞天茅台”');
+    expect(product.summary, '张三修改了商品“飞天茅台”，共修改了 2 项内容。');
+    expect(product.isImportant, isTrue);
+    expect(product.comparisons, hasLength(4));
+    expect(
+      product.comparisons.firstWhere((row) => row.label == '销售价格').after,
+      '2,799 元',
+    );
+    expect(
+      product.comparisons.firstWhere((row) => row.label == '手机号码').after,
+      '138****8000',
+    );
+    expect(
+      product.comparisons.any((row) => row.label.contains('密码')),
+      isFalse,
+    );
   });
 
   testWidgets('shows loading, empty and error states with retry',
@@ -159,8 +350,7 @@ void main() {
     );
   });
 
-  testWidgets('uses cards on narrow screens without overflow',
-      (tester) async {
+  testWidgets('uses cards on narrow screens without overflow', (tester) async {
     final api = FakeOperationLogsApi(page: _page());
     await _pumpPage(tester, api, const Size(390, 780));
     await tester.pumpAndSettle();
@@ -248,8 +438,7 @@ class FakeOperationLogsApi implements OperationLogsApi {
   Object? exportError;
 
   @override
-  Future<OperationLogEntry> detail(String id,
-      {required bool archived}) async {
+  Future<OperationLogEntry> detail(String id, {required bool archived}) async {
     return _entries().firstWhere((entry) => entry.id == id);
   }
 

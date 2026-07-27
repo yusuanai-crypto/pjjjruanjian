@@ -188,7 +188,10 @@ export function isEffectiveAnalyticsSalesOrder(order: any) {
 
 function calculateGrossSalesAmount(orders: NormalizedSalesOrder[]) {
   return sumBy(orders, (order) =>
-    GROSS_SALES_STATUSES.has(order.status) ? order.totalAmountCents : 0,
+    GROSS_SALES_STATUSES.has(order.status) ||
+    order.afterSalesOrders.length > 0
+      ? order.totalAmountCents
+      : 0,
   );
 }
 
@@ -212,7 +215,10 @@ function isEffectiveSalesOrder(
   order: NormalizedSalesOrder,
   confirmedRefundBySalesOrderId: Map<string, number>,
 ) {
-  if (!EFFECTIVE_ORDER_STATUSES.has(order.status)) {
+  if (
+    !EFFECTIVE_ORDER_STATUSES.has(order.status) &&
+    order.afterSalesOrders.length === 0
+  ) {
     return false;
   }
   const confirmedRefundAmountCents =

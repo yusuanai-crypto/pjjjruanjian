@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -29,21 +31,14 @@ class TravelGroupOrderNotesPage extends StatefulWidget {
 }
 
 class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
-  final _tastingItemsKey = GlobalKey<TastingItemsEditorState>();
-
   late BusinessApi _businessApi;
   late final TextEditingController _searchController;
-  late final TextEditingController _departureTimeController;
-  late final TextEditingController _remarksController;
 
-  List<TastingItemDraft> _tastingItemDrafts = const <TastingItemDraft>[];
-  List<Map<String, dynamic>> _tastingItems = const <Map<String, dynamic>>[];
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
   String _filter = '待销售';
   String _query = '';
   String? _selectedGroupId;
   bool _loading = true;
-  bool _saving = false;
   String? _errorMessage;
   String? _successMessage;
 
@@ -53,8 +48,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
     _searchController = TextEditingController();
-    _departureTimeController = TextEditingController();
-    _remarksController = TextEditingController();
     _loadData();
   }
 
@@ -72,8 +65,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   @override
   void dispose() {
     _searchController.dispose();
-    _departureTimeController.dispose();
-    _remarksController.dispose();
     super.dispose();
   }
 
@@ -92,7 +83,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         _groups = groups;
         _loading = false;
         _selectedGroupId = _selectedGroupIdFor(groups);
-        _syncSelectedGroupFields();
       });
     } catch (error) {
       if (!mounted) {
@@ -114,15 +104,6 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
       return _selectedGroupId;
     }
     return groups.first.id;
-  }
-
-  TravelGroupRecord? get _selectedGroup {
-    for (final group in _groups) {
-      if (group.id == _selectedGroupId) {
-        return group;
-      }
-    }
-    return null;
   }
 
   List<TravelGroupRecord> get _visibleGroups {
@@ -150,131 +131,93 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     }).toList();
   }
 
-  void _selectGroup(TravelGroupRecord group) {
+  Future<void> _openNotesEditor(TravelGroupRecord group) async {
     setState(() {
       _selectedGroupId = group.id;
-      _syncSelectedGroupFields();
       _successMessage = null;
       _errorMessage = null;
     });
-  }
 
-  void _syncSelectedGroupFields() {
-    final group = _selectedGroup;
-    _departureTimeController.text = normalizeTimeText(group?.departureTime);
-    _remarksController.text = group?.remarks ?? '';
-    _tastingItemDrafts = _tastingDraftsFromGroup(group);
-    _tastingItems = _tastingPayloadFromGroup(group);
-  }
+    final TravelGroupRecord? updated;
+    if (isDesktopWidth(MediaQuery.sizeOf(context).width)) {
+      updated = await showDialog<TravelGroupRecord>(
+        context: context,
+        builder: (dialogContext) {
+          return Dialog(
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 800),
+              child: SizedBox(
+                width: 800,
+                height: MediaQuery.sizeOf(dialogContext).height * 0.9,
+                child: _NotesEditor(
+                  businessApi: _businessApi,
+                  group: group,
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } else {
+      updated = await showModalBottomSheet<TravelGroupRecord>(
+        context: context,
+        isScrollControlled: true,
+        isDismissible: true,
+        enableDrag: false,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) {
+          final mediaQuery = MediaQuery.of(sheetContext);
+          final availableHeight =
+              mediaQuery.size.height - mediaQuery.viewInsets.bottom;
+          return AnimatedPadding(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
+            child: SizedBox(
+              height: availableHeight * 0.94,
+              child: _NotesEditor(
+                businessApi: _businessApi,
+                group: group,
+              ),
+            ),
+          );
+        },
+      );
+    }
 
-  Future<void> _saveSupplement() async {
-    final group = _selectedGroup;
-    if (group == null) {
+    if (updated == null || !mounted) {
       return;
     }
-    final tastingValid = _tastingItemsKey.currentState?.validate() ?? true;
-    if (!tastingValid) {
-      setState(() {
-        _errorMessage = '请先补全品酒明细。';
-        _successMessage = null;
-      });
-      return;
-    }
-
+    final savedGroup = updated;
+    final message = '保存成功：${savedGroup.groupNo}';
     setState(() {
-      _saving = true;
+      _groups = [
+        for (final item in _groups)
+          item.id == savedGroup.id ? savedGroup : item,
+      ];
+      _selectedGroupId = savedGroup.id;
+      _successMessage = message;
       _errorMessage = null;
-      _successMessage = null;
     });
-
-    try {
-      final body = <String, dynamic>{
-        'departureTime': normalizeTimeText(_departureTimeController.text),
-        'remarks': _remarksController.text.trim(),
-      };
-      if (_tastingItems.isNotEmpty || group.tastingItems.isNotEmpty) {
-        body['tastingItems'] = _tastingItems;
-      }
-      final updated = await _businessApi.updateTravelGroup(group.id, body);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _groups = [
-          for (final item in _groups) item.id == updated.id ? updated : item,
-        ];
-        _tastingItemDrafts = _tastingDraftsFromGroup(updated);
-        _tastingItems = _tastingPayloadFromGroup(updated);
-        _saving = false;
-        _successMessage = _needsSupplement(updated)
-            ? '已暂存，未完成项目继续保留为待销售。'
-            : '离店时间与损耗确认均已完成。';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _saving = false;
-        _errorMessage = _messageForError(error);
-      });
-    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(milliseconds: 2500),
+        ),
+      );
   }
 
   bool _needsSupplement(TravelGroupRecord group) {
-    return (group.departureTime ?? '').isEmpty ||
-        group.lossStatus == 'PENDING';
-  }
-
-  Future<void> _confirmNoLoss() async {
-    final group = _selectedGroup;
-    if (group == null || _saving) {
-      return;
-    }
-    if (_tastingItems.isNotEmpty || group.tastingItems.isNotEmpty) {
-      setState(() {
-        _errorMessage = '已有损耗明细，请先清空并保存明细后再确认无损耗。';
-        _successMessage = null;
-      });
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _errorMessage = null;
-      _successMessage = null;
-    });
-    try {
-      final updated = await _businessApi.updateTravelGroup(group.id, {
-        'lossStatus': 'NO_LOSS',
-        'departureTime': normalizeTimeText(_departureTimeController.text),
-        'remarks': _remarksController.text.trim(),
-      });
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _groups = [
-          for (final item in _groups) item.id == updated.id ? updated : item,
-        ];
-        _saving = false;
-        _successMessage = _needsSupplement(updated)
-            ? '已确认无损耗，离店时间仍待补录。'
-            : '离店时间与无损耗确认均已完成。';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _saving = false;
-        _errorMessage = _messageForError(error);
-      });
-    }
+    return (group.departureTime ?? '').isEmpty || group.lossStatus == 'PENDING';
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedGroup = _selectedGroup;
     final visibleGroups = _visibleGroups;
 
     return ResponsivePage(
@@ -288,44 +231,15 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
           groupCount: _groups.length,
           pendingCount: _groups.where(_needsSupplement).length,
         ),
-        ResponsiveTwoColumn(
-          primaryFlex: 1,
-          secondaryFlex: 2,
-          primary: _GroupQueue(
-            loading: _loading,
-            searchController: _searchController,
-            filter: _filter,
-            groups: visibleGroups,
-            selectedGroupId: _selectedGroupId,
-            onQueryChanged: (value) => setState(() => _query = value),
-            onFilterChanged: (value) => setState(() => _filter = value),
-            onSelectGroup: _selectGroup,
-          ),
-          secondary: _NotesPanel(
-            businessApi: _businessApi,
-            group: selectedGroup,
-            tastingItemsKey: _tastingItemsKey,
-            initialTastingItems: _tastingItemDrafts,
-            departureTimeController: _departureTimeController,
-            remarksController: _remarksController,
-            saving: _saving,
-            onTastingItemsChanged: (items) => _tastingItems = items,
-            onSave: _saving ? null : _saveSupplement,
-            onConfirmNoLoss: _saving ? null : _confirmNoLoss,
-            onClear: selectedGroup == null
-                ? null
-                : () {
-                    _tastingItemsKey.currentState?.clear();
-                    setState(() {
-                      _departureTimeController.clear();
-                      _remarksController.clear();
-                      _tastingItems = const <Map<String, dynamic>>[];
-                      _tastingItemDrafts = const <TastingItemDraft>[];
-                      _successMessage = null;
-                      _errorMessage = null;
-                    });
-                  },
-          ),
+        _GroupQueue(
+          loading: _loading,
+          searchController: _searchController,
+          filter: _filter,
+          groups: visibleGroups,
+          selectedGroupId: _selectedGroupId,
+          onQueryChanged: (value) => setState(() => _query = value),
+          onFilterChanged: (value) => setState(() => _filter = value),
+          onSelectGroup: _openNotesEditor,
         ),
       ],
     );
@@ -420,15 +334,323 @@ class _GroupQueue extends StatelessWidget {
                   icon: selectedGroupId == group.id
                       ? Icons.radio_button_checked_rounded
                       : Icons.directions_bus_rounded,
-                  trailing: StatusTag(
-                    label: _groupStatusLabel(group.status),
-                    tone: _groupStatusTone(group.status),
+                  trailing: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      StatusTag(
+                        label: _groupStatusLabel(group.status),
+                        tone: _groupStatusTone(group.status),
+                      ),
+                      const SizedBox(height: 4),
+                      StatusTag(
+                        label: _lossStatusLabel(group.lossStatus),
+                        tone: _lossStatusTone(group.lossStatus),
+                      ),
+                    ],
                   ),
                   onTap: () => onSelectGroup(group),
                 ),
             ],
           ),
       ],
+    );
+  }
+}
+
+class _NotesEditor extends StatefulWidget {
+  const _NotesEditor({
+    required this.businessApi,
+    required this.group,
+  });
+
+  final BusinessApi businessApi;
+  final TravelGroupRecord group;
+
+  @override
+  State<_NotesEditor> createState() => _NotesEditorState();
+}
+
+class _NotesEditorState extends State<_NotesEditor> {
+  final _tastingItemsKey = GlobalKey<TastingItemsEditorState>();
+
+  late final TextEditingController _departureTimeController;
+  late final TextEditingController _remarksController;
+  late final List<TastingItemDraft> _initialTastingItemDrafts;
+  late final List<Map<String, dynamic>> _initialTastingItems;
+  late List<Map<String, dynamic>> _tastingItems;
+  late final String _initialDepartureTime;
+  late final String _initialRemarks;
+
+  bool _saving = false;
+  bool _allowPop = false;
+  bool _confirmingDiscard = false;
+  bool _dirty = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialDepartureTime = normalizeTimeText(widget.group.departureTime);
+    _initialRemarks = widget.group.remarks ?? '';
+    _initialTastingItemDrafts = _tastingDraftsFromGroup(widget.group);
+    _initialTastingItems = _tastingPayloadFromGroup(widget.group);
+    _tastingItems = [
+      for (final item in _initialTastingItems) Map<String, dynamic>.from(item),
+    ];
+    _departureTimeController =
+        TextEditingController(text: _initialDepartureTime)
+          ..addListener(_updateDirty);
+    _remarksController = TextEditingController(text: _initialRemarks)
+      ..addListener(_updateDirty);
+  }
+
+  @override
+  void dispose() {
+    _departureTimeController
+      ..removeListener(_updateDirty)
+      ..dispose();
+    _remarksController
+      ..removeListener(_updateDirty)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _updateDirty() {
+    final dirty = _departureTimeController.text != _initialDepartureTime ||
+        _remarksController.text != _initialRemarks ||
+        jsonEncode(_tastingItems) != jsonEncode(_initialTastingItems);
+    if (dirty == _dirty || !mounted) {
+      return;
+    }
+    setState(() => _dirty = dirty);
+  }
+
+  void _handleTastingItemsChanged(List<Map<String, dynamic>> items) {
+    _tastingItems = [
+      for (final item in items) Map<String, dynamic>.from(item),
+    ];
+    _updateDirty();
+  }
+
+  void _clear() {
+    _tastingItemsKey.currentState?.clear();
+    _departureTimeController.clear();
+    _remarksController.clear();
+    _tastingItems = const <Map<String, dynamic>>[];
+    _updateDirty();
+  }
+
+  Future<void> _saveSupplement() async {
+    if (_saving) {
+      return;
+    }
+    final tastingValid = _tastingItemsKey.currentState?.validate() ?? true;
+    if (!tastingValid) {
+      await _showEditorMessage(
+        title: '无法保存',
+        message: '请先补全品酒明细。',
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final body = <String, dynamic>{
+        'departureTime': normalizeTimeText(_departureTimeController.text),
+        'remarks': _remarksController.text.trim(),
+      };
+      if (_tastingItems.isNotEmpty || widget.group.tastingItems.isNotEmpty) {
+        body['tastingItems'] = _tastingItems;
+      }
+      final updated =
+          await widget.businessApi.updateTravelGroup(widget.group.id, body);
+      if (!mounted) {
+        return;
+      }
+      _closeWithResult(updated);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _saving = false);
+      await _showEditorMessage(
+        title: '保存失败',
+        message: _messageForSaveError(error),
+      );
+    }
+  }
+
+  Future<void> _confirmNoLoss() async {
+    if (_saving) {
+      return;
+    }
+    if (_tastingItems.isNotEmpty || widget.group.tastingItems.isNotEmpty) {
+      await _showEditorMessage(
+        title: '无法确认无损耗',
+        message: '已有损耗明细，请先清空并保存明细后再确认无损耗。',
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final updated =
+          await widget.businessApi.updateTravelGroup(widget.group.id, {
+        'lossStatus': 'NO_LOSS',
+        'departureTime': normalizeTimeText(_departureTimeController.text),
+        'remarks': _remarksController.text.trim(),
+      });
+      if (!mounted) {
+        return;
+      }
+      _closeWithResult(updated);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _saving = false);
+      await _showEditorMessage(
+        title: '保存失败',
+        message: _messageForSaveError(error),
+      );
+    }
+  }
+
+  Future<void> _showEditorMessage({
+    required String title,
+    required String message,
+  }) {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _requestClose() async {
+    if (_saving || _confirmingDiscard) {
+      return;
+    }
+    if (!_dirty) {
+      _closeWithResult();
+      return;
+    }
+
+    _confirmingDiscard = true;
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('放弃未保存修改？'),
+          content: const Text('当前修改尚未保存，关闭后将无法恢复。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('继续编辑'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('放弃修改'),
+            ),
+          ],
+        );
+      },
+    );
+    _confirmingDiscard = false;
+    if (discard == true && mounted) {
+      _closeWithResult();
+    }
+  }
+
+  void _closeWithResult([TravelGroupRecord? result]) {
+    if (_allowPop || !mounted) {
+      return;
+    }
+    setState(() {
+      _allowPop = true;
+      _saving = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Navigator.of(context).pop(result);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopScope<TravelGroupRecord>(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _requestClose();
+        }
+      },
+      child: Material(
+        key: const ValueKey('travel-group-notes-editor'),
+        color: scheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 8, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '损耗与离店备注',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('travel-group-notes-editor-close'),
+                    tooltip: '关闭',
+                    onPressed: _saving ? null : _requestClose,
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+                child: _NotesPanel(
+                  businessApi: widget.businessApi,
+                  group: widget.group,
+                  tastingItemsKey: _tastingItemsKey,
+                  initialTastingItems: _initialTastingItemDrafts,
+                  departureTimeController: _departureTimeController,
+                  remarksController: _remarksController,
+                  saving: _saving,
+                  onTastingItemsChanged: _handleTastingItemsChanged,
+                  onSave: _saving ? null : _saveSupplement,
+                  onConfirmNoLoss: _saving ? null : _confirmNoLoss,
+                  onClear: _saving ? null : _clear,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -449,7 +671,7 @@ class _NotesPanel extends StatelessWidget {
   });
 
   final BusinessApi businessApi;
-  final TravelGroupRecord? group;
+  final TravelGroupRecord group;
   final GlobalKey<TastingItemsEditorState> tastingItemsKey;
   final List<TastingItemDraft> initialTastingItems;
   final TextEditingController departureTimeController;
@@ -462,32 +684,27 @@ class _NotesPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selectedGroup = group;
-    if (selectedGroup == null) {
-      return const _EmptyCard(title: '请选择一个旅行团');
-    }
-
-    return FormSection(
-      title: '损耗与离店备注',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SelectedGroupHeader(group: selectedGroup),
+        _SelectedGroupHeader(group: group),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
             StatusTag(
-              label: _lossStatusLabel(selectedGroup.lossStatus),
-              tone: _lossStatusTone(selectedGroup.lossStatus),
+              label: _lossStatusLabel(group.lossStatus),
+              tone: _lossStatusTone(group.lossStatus),
             ),
-            if (selectedGroup.lossConfirmedByName != null)
+            if (group.lossConfirmedByName != null)
               StatusTag(
-                label: '确认人：${selectedGroup.lossConfirmedByName}',
+                label: '确认人：${group.lossConfirmedByName}',
                 tone: StatusTone.neutral,
               ),
-            if (selectedGroup.lossConfirmedAt != null)
+            if (group.lossConfirmedAt != null)
               StatusTag(
-                label: '确认时间：${selectedGroup.lossConfirmedAt}',
+                label: '确认时间：${group.lossConfirmedAt}',
                 tone: StatusTone.neutral,
               ),
           ],
@@ -654,6 +871,13 @@ String _messageForError(Object error) {
     return error.message;
   }
   return '操作失败，请稍后重试。';
+}
+
+String _messageForSaveError(Object error) {
+  if (error is ApiException) {
+    return error.message;
+  }
+  return '保存失败，请稍后重试';
 }
 
 String _groupStatusLabel(String status) {

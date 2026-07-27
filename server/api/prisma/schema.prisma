@@ -31,6 +31,8 @@ enum TodoSourceType {
   TRAVEL_GROUP      @map("travel_group")
   SALES_ORDER       @map("sales_order")
   AFTER_SALES_ORDER @map("after_sales_order")
+  INVENTORY_ALERT   @map("inventory_alert")
+  STOCKTAKE         @map("stocktake")
 
   @@map("todo_source_type")
 }
@@ -75,54 +77,95 @@ model User {
   createdAt          DateTime  @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
 
-  leader                           User?                       @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  members                          User[]                      @relation("UserLeader")
-  updatedSystemSettings            SystemSetting[]             @relation("SystemSettingUpdatedBy")
-  operationLogs                    OperationLog[]
-  tasterTravelGroups               TravelGroup[]               @relation("TravelGroupTaster")
-  liaisonTasterTravelGroups        TravelGroup[]               @relation("TravelGroupLiaisonTaster")
-  lossConfirmedTravelGroups        TravelGroup[]               @relation("TravelGroupLossConfirmedBy")
-  tasterGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupTaster")
-  tasterPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupTaster")
-  salesOrders                      SalesOrder[]                @relation("SalesOrderSalesUser")
-  markedTravelGroups               TravelGroup[]               @relation("TravelGroupMarkedBy")
-  markedGuideGroups                GuideCarriedGroup[]         @relation("GuideCarriedGroupMarkedBy")
-  markedPendingGroups              PendingTravelGroup[]        @relation("PendingTravelGroupMarkedBy")
-  markedSalesOrders                SalesOrder[]                @relation("SalesOrderMarkedBy")
-  markedCustomers                  Customer[]                  @relation("CustomerMarkedBy")
-  financeConfirmedAfterSalesOrders AfterSalesOrder[]           @relation("AfterSalesOrderFinanceConfirmedBy")
-  warehouseConfirmedAfterSalesOrders AfterSalesOrder[]           @relation("AfterSalesOrderWarehouseConfirmedBy")
-  handledAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderHandledBy")
-  createdAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderCreatedBy")
-  updatedAfterSalesOrders          AfterSalesOrder[]           @relation("AfterSalesOrderUpdatedBy")
-  outreachSalesOrders              SalesOrder[]                @relation("SalesOrderOutreachUser")
-  createdAgencyDeductionRules      AgencyDeductionRule[]       @relation("AgencyDeductionRuleCreatedBy")
-  updatedAgencyDeductionRules      AgencyDeductionRule[]       @relation("AgencyDeductionRuleUpdatedBy")
-  createdAgencyRebateRules         AgencyRebateRule[]          @relation("AgencyRebateRuleCreatedBy")
-  updatedAgencyRebateRules         AgencyRebateRule[]          @relation("AgencyRebateRuleUpdatedBy")
-  createdSalesDeductionRules       SalesDeductionRule[]        @relation("SalesDeductionRuleCreatedBy")
-  updatedSalesDeductionRules       SalesDeductionRule[]        @relation("SalesDeductionRuleUpdatedBy")
-  createdCommissionRules           CommissionRule[]            @relation("CommissionRuleCreatedBy")
-  updatedCommissionRules           CommissionRule[]            @relation("CommissionRuleUpdatedBy")
-  todoRecipients                   TodoRecipient[]
-  targetCommissionRecords          CommissionRecord[]          @relation("CommissionRecordTargetUser")
-  confirmedCommissionRecords       CommissionRecord[]          @relation("CommissionRecordConfirmedBy")
-  createdCommissionRecords         CommissionRecord[]          @relation("CommissionRecordCreatedBy")
-  updatedCommissionRecords         CommissionRecord[]          @relation("CommissionRecordUpdatedBy")
-  confirmedTravelGroupSummaries    TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
-  dailyRebatePaidTravelSummaries   TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryDailyRebatePaidBy")
-  monthlyRebatePaidTravelSummaries TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryMonthlyRebatePaidBy")
-  updatedTravelGroupSummaries      TravelGroupFinanceSummary[] @relation("TravelGroupFinanceSummaryUpdatedBy")
-  reviewedDailyReconciliations     DailyReconciliation[]       @relation("DailyReconciliationReviewedBy")
-  aiChatMessages                   AiChatMessage[]             @relation("AiChatMessageUser")
-  createdProducts                  Product[]                   @relation("ProductCreatedBy")
-  updatedProducts                  Product[]                   @relation("ProductUpdatedBy")
-  createdProductActualCosts        ProductActualCost[]         @relation("ProductActualCostCreatedBy")
-  updatedProductActualCosts        ProductActualCost[]         @relation("ProductActualCostUpdatedBy")
-  createdSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitCreatedBy")
-  updatedSerializedInventoryUnits  SerializedInventoryUnit[]   @relation("SerializedInventoryUnitUpdatedBy")
-  correctedSerializedInventoryUnits SerializedInventoryUnit[]  @relation("SerializedInventoryUnitCorrectedBy")
-  refreshSessions                  RefreshSession[]
+  leader                             User?                           @relation("UserLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members                            User[]                          @relation("UserLeader")
+  updatedSystemSettings              SystemSetting[]                 @relation("SystemSettingUpdatedBy")
+  operationLogs                      OperationLog[]
+  tasterTravelGroups                 TravelGroup[]                   @relation("TravelGroupTaster")
+  liaisonTasterTravelGroups          TravelGroup[]                   @relation("TravelGroupLiaisonTaster")
+  lossConfirmedTravelGroups          TravelGroup[]                   @relation("TravelGroupLossConfirmedBy")
+  tasterGuideGroups                  GuideCarriedGroup[]             @relation("GuideCarriedGroupTaster")
+  tasterPendingGroups                PendingTravelGroup[]            @relation("PendingTravelGroupTaster")
+  salesOrders                        SalesOrder[]                    @relation("SalesOrderSalesUser")
+  markedTravelGroups                 TravelGroup[]                   @relation("TravelGroupMarkedBy")
+  markedGuideGroups                  GuideCarriedGroup[]             @relation("GuideCarriedGroupMarkedBy")
+  markedPendingGroups                PendingTravelGroup[]            @relation("PendingTravelGroupMarkedBy")
+  markedSalesOrders                  SalesOrder[]                    @relation("SalesOrderMarkedBy")
+  markedCustomers                    Customer[]                      @relation("CustomerMarkedBy")
+  financeConfirmedAfterSalesOrders   AfterSalesOrder[]               @relation("AfterSalesOrderFinanceConfirmedBy")
+  warehouseConfirmedAfterSalesOrders AfterSalesOrder[]               @relation("AfterSalesOrderWarehouseConfirmedBy")
+  handledAfterSalesOrders            AfterSalesOrder[]               @relation("AfterSalesOrderHandledBy")
+  createdAfterSalesOrders            AfterSalesOrder[]               @relation("AfterSalesOrderCreatedBy")
+  updatedAfterSalesOrders            AfterSalesOrder[]               @relation("AfterSalesOrderUpdatedBy")
+  outreachSalesOrders                SalesOrder[]                    @relation("SalesOrderOutreachUser")
+  createdAgencyDeductionRules        AgencyDeductionRule[]           @relation("AgencyDeductionRuleCreatedBy")
+  updatedAgencyDeductionRules        AgencyDeductionRule[]           @relation("AgencyDeductionRuleUpdatedBy")
+  createdAgencyRebateRules           AgencyRebateRule[]              @relation("AgencyRebateRuleCreatedBy")
+  updatedAgencyRebateRules           AgencyRebateRule[]              @relation("AgencyRebateRuleUpdatedBy")
+  createdSalesDeductionRules         SalesDeductionRule[]            @relation("SalesDeductionRuleCreatedBy")
+  updatedSalesDeductionRules         SalesDeductionRule[]            @relation("SalesDeductionRuleUpdatedBy")
+  createdCommissionRules             CommissionRule[]                @relation("CommissionRuleCreatedBy")
+  updatedCommissionRules             CommissionRule[]                @relation("CommissionRuleUpdatedBy")
+  todoRecipients                     TodoRecipient[]
+  targetCommissionRecords            CommissionRecord[]              @relation("CommissionRecordTargetUser")
+  confirmedCommissionRecords         CommissionRecord[]              @relation("CommissionRecordConfirmedBy")
+  createdCommissionRecords           CommissionRecord[]              @relation("CommissionRecordCreatedBy")
+  updatedCommissionRecords           CommissionRecord[]              @relation("CommissionRecordUpdatedBy")
+  confirmedTravelGroupSummaries      TravelGroupFinanceSummary[]     @relation("TravelGroupFinanceSummaryAgencyDeductionConfirmedBy")
+  dailyRebatePaidTravelSummaries     TravelGroupFinanceSummary[]     @relation("TravelGroupFinanceSummaryDailyRebatePaidBy")
+  monthlyRebatePaidTravelSummaries   TravelGroupFinanceSummary[]     @relation("TravelGroupFinanceSummaryMonthlyRebatePaidBy")
+  updatedTravelGroupSummaries        TravelGroupFinanceSummary[]     @relation("TravelGroupFinanceSummaryUpdatedBy")
+  pointsDestinationChangedOrders     SalesOrder[]                    @relation("SalesOrderPointsDestinationChangedBy")
+  personalRatesUpdatedOrders         SalesOrder[]                    @relation("SalesOrderPersonalRatesUpdatedBy")
+  dailyPointsPaidGuideSummaries      GuidePointsSummary[]            @relation("GuidePointsSummaryDailyPointsPaidBy")
+  monthlyPointsPaidGuideSummaries    GuidePointsSummary[]            @relation("GuidePointsSummaryMonthlyPointsPaidBy")
+  updatedGuidePointsSummaries        GuidePointsSummary[]            @relation("GuidePointsSummaryUpdatedBy")
+  reviewedDailyReconciliations       DailyReconciliation[]           @relation("DailyReconciliationReviewedBy")
+  aiChatMessages                     AiChatMessage[]                 @relation("AiChatMessageUser")
+  createdProducts                    Product[]                       @relation("ProductCreatedBy")
+  updatedProducts                    Product[]                       @relation("ProductUpdatedBy")
+  createdProductActualCosts          ProductActualCost[]             @relation("ProductActualCostCreatedBy")
+  updatedProductActualCosts          ProductActualCost[]             @relation("ProductActualCostUpdatedBy")
+  createdSerializedInventoryUnits    SerializedInventoryUnit[]       @relation("SerializedInventoryUnitCreatedBy")
+  updatedSerializedInventoryUnits    SerializedInventoryUnit[]       @relation("SerializedInventoryUnitUpdatedBy")
+  correctedSerializedInventoryUnits  SerializedInventoryUnit[]       @relation("SerializedInventoryUnitCorrectedBy")
+  reservedSerializedAssignments      SerializedInventoryAssignment[] @relation("SerializedInventoryAssignmentReservedBy")
+  outboundSerializedAssignments      SerializedInventoryAssignment[] @relation("SerializedInventoryAssignmentOutboundBy")
+  releasedSerializedAssignments      SerializedInventoryAssignment[] @relation("SerializedInventoryAssignmentReleasedBy")
+  confirmedAfterSalesReceipts        AfterSalesReceipt[]             @relation("AfterSalesReceiptConfirmedBy")
+  reversedAfterSalesReceipts         AfterSalesReceipt[]             @relation("AfterSalesReceiptReversedBy")
+  createdAfterSalesReceipts          AfterSalesReceipt[]             @relation("AfterSalesReceiptCreatedBy")
+  updatedAfterSalesReceipts          AfterSalesReceipt[]             @relation("AfterSalesReceiptUpdatedBy")
+  managedWarehouses                  Warehouse[]                     @relation("WarehouseManager")
+  createdWarehouses                  Warehouse[]                     @relation("WarehouseCreatedBy")
+  updatedWarehouses                  Warehouse[]                     @relation("WarehouseUpdatedBy")
+  createdInventoryConfigurations     InventoryConfiguration[]        @relation("InventoryConfigurationCreatedBy")
+  updatedInventoryConfigurations     InventoryConfiguration[]        @relation("InventoryConfigurationUpdatedBy")
+  costCompletedInventoryBatches      InventoryBatch[]                @relation("InventoryBatchCostCompletedBy")
+  createdInventoryBatches            InventoryBatch[]                @relation("InventoryBatchCreatedBy")
+  updatedInventoryBatches            InventoryBatch[]                @relation("InventoryBatchUpdatedBy")
+  postedInventoryDocuments           InventoryDocument[]             @relation("InventoryDocumentPostedBy")
+  reversedInventoryDocuments         InventoryDocument[]             @relation("InventoryDocumentReversedBy")
+  createdInventoryDocuments          InventoryDocument[]             @relation("InventoryDocumentCreatedBy")
+  updatedInventoryDocuments          InventoryDocument[]             @relation("InventoryDocumentUpdatedBy")
+  submittedStocktakes                Stocktake[]                     @relation("StocktakeSubmittedBy")
+  approvedStocktakes                 Stocktake[]                     @relation("StocktakeApprovedBy")
+  rejectedStocktakes                 Stocktake[]                     @relation("StocktakeRejectedBy")
+  postedStocktakes                   Stocktake[]                     @relation("StocktakePostedBy")
+  reversedStocktakes                 Stocktake[]                     @relation("StocktakeReversedBy")
+  createdStocktakes                  Stocktake[]                     @relation("StocktakeCreatedBy")
+  updatedStocktakes                  Stocktake[]                     @relation("StocktakeUpdatedBy")
+  operatedInventoryMovements         InventoryMovement[]             @relation("InventoryMovementOperator")
+  inventoryCommandReceipts           InventoryCommandReceipt[]       @relation("InventoryCommandReceiptActor")
+  createdInventoryTransfers          InventoryTransfer[]             @relation("InventoryTransferCreatedBy")
+  updatedInventoryTransfers          InventoryTransfer[]             @relation("InventoryTransferUpdatedBy")
+  outboundInventoryTransfers         InventoryTransfer[]             @relation("InventoryTransferOutboundBy")
+  confirmedInventoryTransferReceipts InventoryTransferReceipt[]      @relation("InventoryTransferReceiptConfirmedBy")
+  createdStockAlertConfigs           StockAlertConfig[]              @relation("StockAlertConfigCreatedBy")
+  updatedStockAlertConfigs           StockAlertConfig[]              @relation("StockAlertConfigUpdatedBy")
+  requestedInventoryModeChanges      ProductInventoryModeChange[]    @relation("ProductInventoryModeChangeRequestedBy")
+  appliedInventoryModeChanges        ProductInventoryModeChange[]    @relation("ProductInventoryModeChangeAppliedBy")
+  refreshSessions                    RefreshSession[]
 
   @@index([role])
   @@index([leaderId])
@@ -156,6 +199,18 @@ model BusinessTodo {
   @@index([targetRole, status], map: "business_todos_target_role_status_idx")
   @@index([status, lastDetectedAt], map: "business_todos_status_detected_idx")
   @@map("business_todos")
+}
+
+model TodoReconcileCursor {
+  id        String    @id @default(uuid()) @db.Char(36)
+  scanType  String    @unique(map: "todo_reconcile_cursors_scan_type_key") @map("scan_type") @db.VarChar(80)
+  cursorId  String?   @map("cursor_id") @db.Char(36)
+  wrappedAt DateTime? @map("wrapped_at") @db.DateTime(0)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  @@index([updatedAt], map: "todo_reconcile_cursors_updated_at_idx")
+  @@map("todo_reconcile_cursors")
 }
 
 model TodoRecipient {
@@ -259,32 +314,32 @@ model SystemSetting {
 }
 
 model OperationLog {
-  id                    String           @id @default(uuid()) @db.Char(36)
-  userId                String?          @map("user_id") @db.Char(36)
-  actorNameSnapshot     String?          @map("actor_name_snapshot") @db.VarChar(100)
-  actorUsernameSnapshot String?          @map("actor_username_snapshot") @db.VarChar(100)
-  actorRoleSnapshot     String?          @map("actor_role_snapshot") @db.VarChar(32)
-  module                String?          @db.VarChar(100)
-  operationType         OperationLogType? @map("operation_type")
-  action                String           @db.VarChar(100)
-  entityType            String           @map("entity_type") @db.VarChar(100)
-  entityId              String?          @map("entity_id") @db.VarChar(100)
+  id                    String              @id @default(uuid()) @db.Char(36)
+  userId                String?             @map("user_id") @db.Char(36)
+  actorNameSnapshot     String?             @map("actor_name_snapshot") @db.VarChar(100)
+  actorUsernameSnapshot String?             @map("actor_username_snapshot") @db.VarChar(100)
+  actorRoleSnapshot     String?             @map("actor_role_snapshot") @db.VarChar(32)
+  module                String?             @db.VarChar(100)
+  operationType         OperationLogType?   @map("operation_type")
+  action                String              @db.VarChar(100)
+  entityType            String              @map("entity_type") @db.VarChar(100)
+  entityId              String?             @map("entity_id") @db.VarChar(100)
   result                OperationLogResult?
-  beforeData            Json?            @map("before_data")
-  afterData             Json?            @map("after_data")
-  requestSummary        Json?            @map("request_summary")
-  sanitizationSummary   Json?            @map("sanitization_summary")
-  httpMethod            String?          @map("http_method") @db.VarChar(10)
-  requestPath           String?          @map("request_path") @db.VarChar(255)
-  requestId             String?          @map("request_id") @db.VarChar(64)
-  statusCode            Int?             @map("status_code")
-  errorCode             String?          @map("error_code") @db.VarChar(100)
-  errorMessage          String?          @map("error_message") @db.VarChar(512)
-  userAgent             String?          @map("user_agent") @db.VarChar(512)
-  durationMs            Int?             @map("duration_ms")
-  ipAddress             String?          @map("ip_address") @db.VarChar(45)
-  archivedAt            DateTime?        @map("archived_at") @db.DateTime(3)
-  createdAt             DateTime         @default(now()) @map("created_at") @db.DateTime(0)
+  beforeData            Json?               @map("before_data")
+  afterData             Json?               @map("after_data")
+  requestSummary        Json?               @map("request_summary")
+  sanitizationSummary   Json?               @map("sanitization_summary")
+  httpMethod            String?             @map("http_method") @db.VarChar(10)
+  requestPath           String?             @map("request_path") @db.VarChar(255)
+  requestId             String?             @map("request_id") @db.VarChar(64)
+  statusCode            Int?                @map("status_code")
+  errorCode             String?             @map("error_code") @db.VarChar(100)
+  errorMessage          String?             @map("error_message") @db.VarChar(512)
+  userAgent             String?             @map("user_agent") @db.VarChar(512)
+  durationMs            Int?                @map("duration_ms")
+  ipAddress             String?             @map("ip_address") @db.VarChar(45)
+  archivedAt            DateTime?           @map("archived_at") @db.DateTime(3)
+  createdAt             DateTime            @default(now()) @map("created_at") @db.DateTime(0)
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -393,6 +448,7 @@ model AiChatMessage {
 
 enum InventoryTrackingMode {
   NONE       @map("none")
+  QUANTITY   @map("quantity")
   SERIALIZED @map("serialized")
 
   @@map("inventory_tracking_mode")
@@ -402,9 +458,177 @@ enum SerializedInventoryStatus {
   PENDING_COST @map("pending_cost")
   AVAILABLE    @map("available")
   ALLOCATED    @map("allocated")
+  RESERVED     @map("reserved")
+  OUTBOUND     @map("outbound")
+  UNAVAILABLE  @map("unavailable")
   VOID         @map("void")
 
   @@map("serialized_inventory_status")
+}
+
+enum SerializedInventoryAssignmentStatus {
+  RESERVED @map("reserved")
+  OUTBOUND @map("outbound")
+  RELEASED @map("released")
+
+  @@map("serialized_inventory_assignment_status")
+}
+
+enum InventoryDocumentType {
+  OPENING                @map("opening")
+  PURCHASE_RECEIPT       @map("purchase_receipt")
+  CUSTOMER_RETURN        @map("customer_return")
+  RESERVATION_ADJUSTMENT @map("reservation_adjustment")
+  STOCK_GAIN             @map("stock_gain")
+  OTHER_IN               @map("other_in")
+  SALES_OUTBOUND         @map("sales_outbound")
+  STOCK_LOSS             @map("stock_loss")
+  OTHER_OUT              @map("other_out")
+  TRANSFER_OUT           @map("transfer_out")
+  TRANSFER_IN            @map("transfer_in")
+  TRANSFER_DIFFERENCE    @map("transfer_difference")
+  UNAVAILABLE_ADJUSTMENT @map("unavailable_adjustment")
+  REVERSAL               @map("reversal")
+
+  @@map("inventory_document_type")
+}
+
+enum InventoryDocumentStatus {
+  DRAFT    @map("draft")
+  POSTED   @map("posted")
+  REVERSED @map("reversed")
+
+  @@map("inventory_document_status")
+}
+
+enum InventoryMovementType {
+  OPENING_IN          @map("opening_in")
+  PURCHASE_IN         @map("purchase_in")
+  CUSTOMER_RETURN     @map("customer_return")
+  RESERVE             @map("reserve")
+  RELEASE             @map("release")
+  SALES_OUT           @map("sales_out")
+  TRANSFER_OUT        @map("transfer_out")
+  TRANSFER_IN         @map("transfer_in")
+  TRANSFER_DIFFERENCE @map("transfer_difference")
+  STOCK_GAIN          @map("stock_gain")
+  STOCK_LOSS          @map("stock_loss")
+  OTHER_IN            @map("other_in")
+  OTHER_OUT           @map("other_out")
+  UNAVAILABLE_IN      @map("unavailable_in")
+  UNAVAILABLE_OUT     @map("unavailable_out")
+  REVERSAL            @map("reversal")
+
+  @@map("inventory_movement_type")
+}
+
+enum InventoryCondition {
+  SALEABLE    @map("saleable")
+  UNAVAILABLE @map("unavailable")
+
+  @@map("inventory_condition")
+}
+
+enum InventoryCostStatus {
+  PENDING  @map("pending")
+  COMPLETE @map("complete")
+
+  @@map("inventory_cost_status")
+}
+
+enum InventoryCommandStatus {
+  PROCESSING @map("processing")
+  SUCCEEDED  @map("succeeded")
+  FAILED     @map("failed")
+
+  @@map("inventory_command_status")
+}
+
+enum InventoryPostCommitTaskStatus {
+  PENDING    @map("pending")
+  PROCESSING @map("processing")
+  SUCCEEDED  @map("succeeded")
+  FAILED     @map("failed")
+
+  @@map("inventory_post_commit_task_status")
+}
+
+enum InventoryReservationStatus {
+  OPEN      @map("open")
+  PARTIAL   @map("partial")
+  RESERVED  @map("reserved")
+  CONSUMED  @map("consumed")
+  RELEASED  @map("released")
+  CANCELLED @map("cancelled")
+
+  @@map("inventory_reservation_status")
+}
+
+enum InventoryTransferStatus {
+  DRAFT              @map("draft")
+  OUTBOUND           @map("outbound")
+  PARTIALLY_RECEIVED @map("partially_received")
+  RECEIVED           @map("received")
+  CANCELLED          @map("cancelled")
+  REVERSED           @map("reversed")
+
+  @@map("inventory_transfer_status")
+}
+
+enum InventoryTransferReceiptStatus {
+  DRAFT    @map("draft")
+  POSTED   @map("posted")
+  REVERSED @map("reversed")
+
+  @@map("inventory_transfer_receipt_status")
+}
+
+enum InventoryAlertType {
+  LOW_STOCK          @map("low_stock")
+  NEGATIVE_AVAILABLE @map("negative_available")
+  PENDING_COST       @map("pending_cost")
+  ORDER_SHORTAGE     @map("order_shortage")
+  TRANSFER_OVERDUE   @map("transfer_overdue")
+  STOCKTAKE_APPROVAL @map("stocktake_approval")
+
+  @@map("inventory_alert_type")
+}
+
+enum InventoryAlertStatus {
+  ACTIVE    @map("active")
+  RESOLVED  @map("resolved")
+  CANCELLED @map("cancelled")
+
+  @@map("inventory_alert_status")
+}
+
+enum StocktakeStatus {
+  DRAFT     @map("draft")
+  SUBMITTED @map("submitted")
+  APPROVED  @map("approved")
+  REJECTED  @map("rejected")
+  POSTED    @map("posted")
+  REVERSED  @map("reversed")
+
+  @@map("stocktake_status")
+}
+
+enum StocktakeSerializedMatchStatus {
+  MATCHED  @map("matched")
+  MISSING  @map("missing")
+  UNKNOWN  @map("unknown")
+  CONFLICT @map("conflict")
+
+  @@map("stocktake_serialized_match_status")
+}
+
+enum ProductInventoryModeChangeStatus {
+  PENDING   @map("pending")
+  APPLIED   @map("applied")
+  REJECTED  @map("rejected")
+  CANCELLED @map("cancelled")
+
+  @@map("product_inventory_mode_change_status")
 }
 
 model Product {
@@ -420,14 +644,25 @@ model Product {
   createdAt             DateTime              @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt             DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
 
-  actualCosts          ProductActualCost[]
-  salesOrderItems      SalesOrderItem[]
+  actualCosts              ProductActualCost[]
+  salesOrderItems          SalesOrderItem[]
+  afterSalesOrderItems     AfterSalesOrderItem[]
   serializedInventoryUnits SerializedInventoryUnit[]
-  tastingItems         TravelGroupTastingItem[]
-  salesDeductionRules  SalesDeductionRule[]
-  agencyDeductionRules AgencyDeductionRule[]
-  createdBy            User?                    @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy            User?                    @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  tastingItems             TravelGroupTastingItem[]
+  salesDeductionRules      SalesDeductionRule[]
+  agencyDeductionRules     AgencyDeductionRule[]
+  warehouseStocks          WarehouseProductStock[]
+  inventoryBatches         InventoryBatch[]
+  inventoryDocumentLines   InventoryDocumentLine[]
+  inventoryMovements       InventoryMovement[]
+  inventoryReservations    InventoryReservation[]
+  inventoryTransferLines   InventoryTransferLine[]
+  stockAlertConfigs        StockAlertConfig[]
+  inventoryAlerts          InventoryAlert[]
+  stocktakes               Stocktake[]
+  inventoryModeChanges     ProductInventoryModeChange[]
+  createdBy                User?                        @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                User?                        @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([isActive])
   @@index([inventoryTrackingMode])
@@ -440,6 +675,8 @@ model Product {
 model SerializedInventoryUnit {
   id                      String                    @id @default(uuid()) @db.Char(36)
   productId               String                    @map("product_id") @db.Char(36)
+  warehouseId             String?                   @map("warehouse_id") @db.Char(36)
+  inventoryBatchId        String?                   @map("inventory_batch_id") @db.Char(36)
   salesOrderId            String?                   @map("sales_order_id") @db.Char(36)
   salesOrderItemId        String?                   @map("sales_order_item_id") @db.Char(36)
   moutaiName              String?                   @map("moutai_name") @db.VarChar(160)
@@ -452,6 +689,7 @@ model SerializedInventoryUnit {
   purchaseCostCents       Int?                      @map("purchase_cost_cents")
   orderCostSnapshotCents  Int?                      @map("order_cost_snapshot_cents")
   status                  SerializedInventoryStatus @default(PENDING_COST)
+  version                 Int                       @default(0)
   correctionReason        String?                   @map("correction_reason") @db.VarChar(500)
   correctedById           String?                   @map("corrected_by_id") @db.Char(36)
   correctedAt             DateTime?                 @map("corrected_at") @db.DateTime(0)
@@ -460,14 +698,22 @@ model SerializedInventoryUnit {
   createdAt               DateTime                  @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt               DateTime                  @updatedAt @map("updated_at") @db.DateTime(0)
 
-  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
-  salesOrder     SalesOrder?     @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
-  salesOrderItem SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id], onDelete: SetNull)
-  createdBy      User?           @relation("SerializedInventoryUnitCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy      User?           @relation("SerializedInventoryUnitUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  correctedBy    User?           @relation("SerializedInventoryUnitCorrectedBy", fields: [correctedById], references: [id], onDelete: SetNull)
+  product                Product                           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouse              Warehouse?                        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  inventoryBatch         InventoryBatch?                   @relation(fields: [inventoryBatchId], references: [id], onDelete: Restrict)
+  salesOrder             SalesOrder?                       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  salesOrderItem         SalesOrderItem?                   @relation(fields: [salesOrderItemId], references: [id], onDelete: SetNull)
+  createdBy              User?                             @relation("SerializedInventoryUnitCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy              User?                             @relation("SerializedInventoryUnitUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  correctedBy            User?                             @relation("SerializedInventoryUnitCorrectedBy", fields: [correctedById], references: [id], onDelete: SetNull)
+  inventoryMovements     InventoryMovement[]
+  assignments            SerializedInventoryAssignment[]
+  afterSalesReceiptUnits AfterSalesReceiptSerializedUnit[]
+  stocktakeScans         StocktakeSerializedScan[]
 
   @@index([productId, status])
+  @@index([warehouseId, productId, status], map: "serialized_inventory_units_warehouse_product_status_idx")
+  @@index([inventoryBatchId])
   @@index([moutaiName])
   @@index([normalizedMoutaiName])
   @@index([factoryDate])
@@ -481,6 +727,739 @@ model SerializedInventoryUnit {
   @@index([updatedById])
   @@index([correctedById])
   @@map("serialized_inventory_units")
+}
+
+model SerializedInventoryAssignment {
+  id                        String                              @id @default(uuid()) @db.Char(36)
+  reservationId             String                              @map("reservation_id") @db.Char(36)
+  serializedUnitId          String                              @map("serialized_unit_id") @db.Char(36)
+  status                    SerializedInventoryAssignmentStatus @default(RESERVED)
+  sourceKey                 String                              @unique(map: "serialized_inventory_assignments_source_key") @map("source_key") @db.VarChar(191)
+  activeUnitKey             String?                             @unique(map: "serialized_inventory_assignments_active_unit_key") @map("active_unit_key") @db.Char(36)
+  purchaseCostSnapshotCents Int?                                @map("purchase_cost_snapshot_cents")
+  reservedById              String?                             @map("reserved_by_id") @db.Char(36)
+  reservedByNameSnapshot    String?                             @map("reserved_by_name_snapshot") @db.VarChar(100)
+  reservedByRoleSnapshot    String?                             @map("reserved_by_role_snapshot") @db.VarChar(32)
+  reservedAt                DateTime                            @default(now()) @map("reserved_at") @db.DateTime(0)
+  outboundById              String?                             @map("outbound_by_id") @db.Char(36)
+  outboundByNameSnapshot    String?                             @map("outbound_by_name_snapshot") @db.VarChar(100)
+  outboundByRoleSnapshot    String?                             @map("outbound_by_role_snapshot") @db.VarChar(32)
+  outboundAt                DateTime?                           @map("outbound_at") @db.DateTime(0)
+  releasedById              String?                             @map("released_by_id") @db.Char(36)
+  releasedByNameSnapshot    String?                             @map("released_by_name_snapshot") @db.VarChar(100)
+  releasedByRoleSnapshot    String?                             @map("released_by_role_snapshot") @db.VarChar(32)
+  releasedAt                DateTime?                           @map("released_at") @db.DateTime(0)
+  releaseReason             String?                             @map("release_reason") @db.VarChar(500)
+  version                   Int                                 @default(0)
+  createdAt                 DateTime                            @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                 DateTime                            @updatedAt @map("updated_at") @db.DateTime(0)
+
+  reservation    InventoryReservation    @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  serializedUnit SerializedInventoryUnit @relation(fields: [serializedUnitId], references: [id], onDelete: Restrict)
+  reservedBy     User?                   @relation("SerializedInventoryAssignmentReservedBy", fields: [reservedById], references: [id], onDelete: SetNull)
+  outboundBy     User?                   @relation("SerializedInventoryAssignmentOutboundBy", fields: [outboundById], references: [id], onDelete: SetNull)
+  releasedBy     User?                   @relation("SerializedInventoryAssignmentReleasedBy", fields: [releasedById], references: [id], onDelete: SetNull)
+
+  @@index([reservationId, status, reservedAt], map: "serialized_inventory_assignments_reservation_status_idx")
+  @@index([serializedUnitId, status, reservedAt], map: "serialized_inventory_assignments_unit_status_idx")
+  @@index([reservedById])
+  @@index([outboundById])
+  @@index([releasedById])
+  @@map("serialized_inventory_assignments")
+}
+
+model Warehouse {
+  id               String   @id @default(uuid()) @db.Char(36)
+  code             String   @db.VarChar(80)
+  normalizedCode   String   @unique(map: "warehouses_normalized_code_key") @map("normalized_code") @db.VarChar(80)
+  name             String   @db.VarChar(160)
+  normalizedName   String   @unique(map: "warehouses_normalized_name_key") @map("normalized_name") @db.VarChar(160)
+  address          String?  @db.VarChar(255)
+  managerUserId    String?  @map("manager_user_id") @db.Char(36)
+  isActive         Boolean  @default(true) @map("is_active")
+  isDefault        Boolean  @default(false) @map("is_default")
+  activeDefaultKey String?  @unique(map: "warehouses_active_default_key_key") @map("active_default_key") @db.VarChar(64)
+  createdById      String?  @map("created_by_id") @db.Char(36)
+  updatedById      String?  @map("updated_by_id") @db.Char(36)
+  createdAt        DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  manager                        User?                             @relation("WarehouseManager", fields: [managerUserId], references: [id], onDelete: SetNull)
+  createdBy                      User?                             @relation("WarehouseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                      User?                             @relation("WarehouseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  stocks                         WarehouseProductStock[]
+  batches                        InventoryBatch[]
+  documents                      InventoryDocument[]               @relation("InventoryDocumentWarehouse")
+  outboundDocuments              InventoryDocument[]               @relation("InventoryDocumentFromWarehouse")
+  inboundDocuments               InventoryDocument[]               @relation("InventoryDocumentToWarehouse")
+  movements                      InventoryMovement[]
+  reservations                   InventoryReservation[]
+  outboundTransfers              InventoryTransfer[]               @relation("InventoryTransferFromWarehouse")
+  inboundTransfers               InventoryTransfer[]               @relation("InventoryTransferToWarehouse")
+  transferReceipts               InventoryTransferReceipt[]
+  afterSalesReceipts             AfterSalesReceipt[]
+  previousAfterSalesReceiptUnits AfterSalesReceiptSerializedUnit[] @relation("AfterSalesReceiptSerializedPreviousWarehouse")
+  stockAlertConfigs              StockAlertConfig[]
+  inventoryAlerts                InventoryAlert[]
+  stocktakes                     Stocktake[]
+  stocktakeExpectedScans         StocktakeSerializedScan[]         @relation("StocktakeSerializedExpectedWarehouse")
+  fulfillmentSalesOrders         SalesOrder[]                      @relation("SalesOrderFulfillmentWarehouse")
+  serializedUnits                SerializedInventoryUnit[]
+
+  @@index([isActive])
+  @@index([managerUserId])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("warehouses")
+}
+
+model InventoryConfiguration {
+  id                   String    @id @default(uuid()) @db.Char(36)
+  singletonKey         String    @unique(map: "inventory_configurations_singleton_key") @default("INVENTORY") @map("singleton_key") @db.VarChar(32)
+  goLiveAt             DateTime? @map("go_live_at") @db.DateTime(0)
+  policyVersion        Int       @default(1) @map("policy_version")
+  maintenanceMode      Boolean   @default(false) @map("maintenance_mode")
+  transferOverdueHours Int?      @map("transfer_overdue_hours")
+  createdById          String?   @map("created_by_id") @db.Char(36)
+  updatedById          String?   @map("updated_by_id") @db.Char(36)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  createdBy User? @relation("InventoryConfigurationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("InventoryConfigurationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([goLiveAt])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("inventory_configurations")
+}
+
+model WarehouseProductStock {
+  id             String    @id @default(uuid()) @db.Char(36)
+  warehouseId    String    @map("warehouse_id") @db.Char(36)
+  productId      String    @map("product_id") @db.Char(36)
+  onHandQty      Int       @default(0) @map("on_hand_qty")
+  reservedQty    Int       @default(0) @map("reserved_qty")
+  unavailableQty Int       @default(0) @map("unavailable_qty")
+  inTransitQty   Int       @default(0) @map("in_transit_qty")
+  version        Int       @default(0)
+  lastMovementId String?   @unique(map: "warehouse_product_stocks_last_movement_id_key") @map("last_movement_id") @db.Char(36)
+  rebuiltAt      DateTime? @map("rebuilt_at") @db.DateTime(0)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product      Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lastMovement InventoryMovement? @relation("WarehouseProductStockLastMovement", fields: [lastMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([warehouseId, productId], map: "warehouse_product_stocks_warehouse_product_key")
+  @@index([productId, warehouseId], map: "warehouse_product_stocks_product_warehouse_idx")
+  @@index([warehouseId, updatedAt], map: "warehouse_product_stocks_warehouse_updated_idx")
+  @@map("warehouse_product_stocks")
+}
+
+model InventoryBatch {
+  id                    String              @id @default(uuid()) @db.Char(36)
+  warehouseId           String              @map("warehouse_id") @db.Char(36)
+  productId             String              @map("product_id") @db.Char(36)
+  sourceDocumentLineId  String?             @map("source_document_line_id") @db.Char(36)
+  sourceLineKey         String              @unique(map: "inventory_batches_source_line_key") @map("source_line_key") @db.VarChar(191)
+  openingEntryKey       String?             @unique(map: "inventory_batches_opening_entry_key") @map("opening_entry_key") @db.VarChar(191)
+  supplierName          String?             @map("supplier_name") @db.VarChar(160)
+  purchaseOrderNo       String?             @map("purchase_order_no") @db.VarChar(80)
+  productionBatch       String?             @map("production_batch") @db.VarChar(80)
+  productionDate        DateTime?           @map("production_date") @db.Date
+  receivedQty           Int                 @default(0) @map("received_qty")
+  remainingQty          Int                 @default(0) @map("remaining_qty")
+  unavailableQty        Int                 @default(0) @map("unavailable_qty")
+  purchaseUnitCostCents Int?                @map("purchase_unit_cost_cents")
+  costStatus            InventoryCostStatus @default(PENDING) @map("cost_status")
+  costCompletedById     String?             @map("cost_completed_by_id") @db.Char(36)
+  costCompletedByName   String?             @map("cost_completed_by_name") @db.VarChar(100)
+  costCompletedByRole   String?             @map("cost_completed_by_role") @db.VarChar(32)
+  costCompletedAt       DateTime?           @map("cost_completed_at") @db.DateTime(0)
+  fifoAt                DateTime            @map("fifo_at") @db.DateTime(0)
+  version               Int                 @default(0)
+  createdById           String?             @map("created_by_id") @db.Char(36)
+  updatedById           String?             @map("updated_by_id") @db.Char(36)
+  createdAt             DateTime            @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse              Warehouse                 @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product                Product                   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sourceDocumentLine     InventoryDocumentLine?    @relation("InventoryBatchSourceLine", fields: [sourceDocumentLineId], references: [id], onDelete: Restrict)
+  costCompletedBy        User?                     @relation("InventoryBatchCostCompletedBy", fields: [costCompletedById], references: [id], onDelete: SetNull)
+  createdBy              User?                     @relation("InventoryBatchCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy              User?                     @relation("InventoryBatchUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  documentLines          InventoryDocumentLine[]   @relation("InventoryDocumentLineBatch")
+  movements              InventoryMovement[]
+  serializedUnits        SerializedInventoryUnit[]
+  afterSalesReceiptLines AfterSalesReceiptLine[]
+
+  @@index([warehouseId, productId, costStatus, fifoAt, id], map: "inventory_batches_fifo_idx")
+  @@index([sourceDocumentLineId])
+  @@index([purchaseOrderNo])
+  @@index([productionBatch])
+  @@index([productionDate])
+  @@index([costCompletedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("inventory_batches")
+}
+
+model InventoryDocument {
+  id                     String                  @id @default(uuid()) @db.Char(36)
+  documentNo             String                  @unique(map: "inventory_documents_document_no_key") @map("document_no") @db.VarChar(80)
+  type                   InventoryDocumentType
+  status                 InventoryDocumentStatus @default(DRAFT)
+  warehouseId            String?                 @map("warehouse_id") @db.Char(36)
+  fromWarehouseId        String?                 @map("from_warehouse_id") @db.Char(36)
+  toWarehouseId          String?                 @map("to_warehouse_id") @db.Char(36)
+  sourceType             String                  @map("source_type") @db.VarChar(80)
+  sourceId               String?                 @map("source_id") @db.VarChar(100)
+  sourceKey              String                  @unique(map: "inventory_documents_source_key") @map("source_key") @db.VarChar(191)
+  requestHash            String                  @map("request_hash") @db.Char(64)
+  businessAt             DateTime                @map("business_at") @db.DateTime(0)
+  postedById             String?                 @map("posted_by_id") @db.Char(36)
+  postedByNameSnapshot   String?                 @map("posted_by_name_snapshot") @db.VarChar(100)
+  postedByRoleSnapshot   String?                 @map("posted_by_role_snapshot") @db.VarChar(32)
+  postedAt               DateTime?               @map("posted_at") @db.DateTime(0)
+  reversedById           String?                 @map("reversed_by_id") @db.Char(36)
+  reversedByNameSnapshot String?                 @map("reversed_by_name_snapshot") @db.VarChar(100)
+  reversedByRoleSnapshot String?                 @map("reversed_by_role_snapshot") @db.VarChar(32)
+  reversedAt             DateTime?               @map("reversed_at") @db.DateTime(0)
+  reversalOfDocumentId   String?                 @unique(map: "inventory_documents_reversal_of_key") @map("reversal_of_document_id") @db.Char(36)
+  reason                 String?                 @db.VarChar(500)
+  attachmentMetadata     Json?                   @map("attachment_metadata")
+  createdById            String?                 @map("created_by_id") @db.Char(36)
+  updatedById            String?                 @map("updated_by_id") @db.Char(36)
+  createdAt              DateTime                @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse              Warehouse?                        @relation("InventoryDocumentWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  fromWarehouse          Warehouse?                        @relation("InventoryDocumentFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouse            Warehouse?                        @relation("InventoryDocumentToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  postedBy               User?                             @relation("InventoryDocumentPostedBy", fields: [postedById], references: [id], onDelete: SetNull)
+  reversedBy             User?                             @relation("InventoryDocumentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  createdBy              User?                             @relation("InventoryDocumentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy              User?                             @relation("InventoryDocumentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  reversalOf             InventoryDocument?                @relation("InventoryDocumentReversal", fields: [reversalOfDocumentId], references: [id], onDelete: Restrict)
+  reversedByDocument     InventoryDocument?                @relation("InventoryDocumentReversal")
+  lines                  InventoryDocumentLine[]
+  commandReceipts        InventoryCommandReceipt[]
+  quantityStocktake      Stocktake?                        @relation("StocktakeQuantityDocument")
+  unavailableStocktake   Stocktake?                        @relation("StocktakeUnavailableDocument")
+  outboundTransfer       InventoryTransfer?                @relation("InventoryTransferOutboundDocument")
+  transferReceipt        InventoryTransferReceipt?         @relation("InventoryTransferReceiptDocument")
+  afterSalesReceiptUnits AfterSalesReceiptSerializedUnit[]
+
+  @@index([warehouseId, status, businessAt], map: "inventory_documents_warehouse_status_business_idx")
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@index([type, status, businessAt], map: "inventory_documents_type_status_business_idx")
+  @@index([sourceType, sourceId])
+  @@index([postedById])
+  @@index([reversedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("inventory_documents")
+}
+
+model InventoryDocumentLine {
+  id                    String             @id @default(uuid()) @db.Char(36)
+  documentId            String             @map("document_id") @db.Char(36)
+  lineNo                Int                @map("line_no")
+  productId             String             @map("product_id") @db.Char(36)
+  batchId               String?            @map("batch_id") @db.Char(36)
+  quantity              Int
+  condition             InventoryCondition @default(SALEABLE)
+  productNameSnapshot   String             @map("product_name_snapshot") @db.VarChar(160)
+  unitSnapshot          String             @map("unit_snapshot") @db.VarChar(20)
+  purchaseUnitCostCents Int?               @map("purchase_unit_cost_cents")
+  notes                 String?            @db.Text
+  createdAt             DateTime           @default(now()) @map("created_at") @db.DateTime(0)
+
+  document      InventoryDocument   @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  product       Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch         InventoryBatch?     @relation("InventoryDocumentLineBatch", fields: [batchId], references: [id], onDelete: Restrict)
+  sourceBatches InventoryBatch[]    @relation("InventoryBatchSourceLine")
+  movements     InventoryMovement[]
+
+  @@unique([documentId, lineNo], map: "inventory_document_lines_document_line_key")
+  @@index([productId])
+  @@index([batchId])
+  @@map("inventory_document_lines")
+}
+
+model InventoryMovement {
+  id                    String                @id @default(uuid()) @db.Char(36)
+  sourceKey             String                @unique(map: "inventory_movements_source_key") @map("source_key") @db.VarChar(191)
+  documentLineId        String                @map("document_line_id") @db.Char(36)
+  warehouseId           String                @map("warehouse_id") @db.Char(36)
+  productId             String                @map("product_id") @db.Char(36)
+  batchId               String?               @map("batch_id") @db.Char(36)
+  serializedUnitId      String?               @map("serialized_unit_id") @db.Char(36)
+  reservationId         String?               @map("reservation_id") @db.Char(36)
+  movementType          InventoryMovementType @map("movement_type")
+  onHandDelta           Int                   @default(0) @map("on_hand_delta")
+  reservedDelta         Int                   @default(0) @map("reserved_delta")
+  unavailableDelta      Int                   @default(0) @map("unavailable_delta")
+  inTransitDelta        Int                   @default(0) @map("in_transit_delta")
+  businessAt            DateTime              @map("business_at") @db.DateTime(0)
+  operatorUserId        String?               @map("operator_user_id") @db.Char(36)
+  operatorNameSnapshot  String?               @map("operator_name_snapshot") @db.VarChar(100)
+  operatorRoleSnapshot  String?               @map("operator_role_snapshot") @db.VarChar(32)
+  productNameSnapshot   String                @map("product_name_snapshot") @db.VarChar(160)
+  unitSnapshot          String                @map("unit_snapshot") @db.VarChar(20)
+  purchaseUnitCostCents Int?                  @map("purchase_unit_cost_cents")
+  reason                String?               @db.VarChar(500)
+  reversalOfMovementId  String?               @unique(map: "inventory_movements_reversal_of_key") @map("reversal_of_movement_id") @db.Char(36)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+
+  documentLine                    InventoryDocumentLine            @relation(fields: [documentLineId], references: [id], onDelete: Restrict)
+  warehouse                       Warehouse                        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product                         Product                          @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch                           InventoryBatch?                  @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  serializedUnit                  SerializedInventoryUnit?         @relation(fields: [serializedUnitId], references: [id], onDelete: Restrict)
+  reservation                     InventoryReservation?            @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  operator                        User?                            @relation("InventoryMovementOperator", fields: [operatorUserId], references: [id], onDelete: SetNull)
+  reversalOf                      InventoryMovement?               @relation("InventoryMovementReversal", fields: [reversalOfMovementId], references: [id], onDelete: Restrict)
+  reversedByMovement              InventoryMovement?               @relation("InventoryMovementReversal")
+  latestStockSnapshot             WarehouseProductStock?           @relation("WarehouseProductStockLastMovement")
+  afterSalesReceiptSerializedUnit AfterSalesReceiptSerializedUnit?
+  stocktakeSnapshotLines          StocktakeLine[]                  @relation("StocktakeSnapshotLastMovement")
+  stocktakeScans                  StocktakeSerializedScan[]        @relation("StocktakeSerializedActionMovement")
+
+  @@index([warehouseId, productId, businessAt, id], map: "inventory_movements_warehouse_product_business_idx")
+  @@index([productId, businessAt], map: "inventory_movements_product_business_idx")
+  @@index([documentLineId])
+  @@index([batchId])
+  @@index([serializedUnitId, businessAt], map: "inventory_movements_unit_business_idx")
+  @@index([reservationId, businessAt], map: "inventory_movements_reservation_business_idx")
+  @@index([operatorUserId])
+  @@map("inventory_movements")
+}
+
+model InventoryCommandReceipt {
+  id                String                 @id @default(uuid()) @db.Char(36)
+  sourceKey         String                 @unique(map: "inventory_command_receipts_source_key") @map("source_key") @db.VarChar(191)
+  idempotencyKey    String                 @unique(map: "inventory_command_receipts_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  commandType       String                 @map("command_type") @db.VarChar(80)
+  requestHash       String                 @map("request_hash") @db.Char(64)
+  status            InventoryCommandStatus @default(PROCESSING)
+  resultDocumentId  String?                @map("result_document_id") @db.Char(36)
+  actorUserId       String?                @map("actor_user_id") @db.Char(36)
+  actorNameSnapshot String?                @map("actor_name_snapshot") @db.VarChar(100)
+  actorRoleSnapshot String?                @map("actor_role_snapshot") @db.VarChar(32)
+  requestId         String?                @map("request_id") @db.VarChar(64)
+  resultSnapshot    Json?                  @map("result_snapshot")
+  errorCode         String?                @map("error_code") @db.VarChar(100)
+  completedAt       DateTime?              @map("completed_at") @db.DateTime(0)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt         DateTime               @updatedAt @map("updated_at") @db.DateTime(0)
+
+  resultDocument  InventoryDocument?        @relation(fields: [resultDocumentId], references: [id], onDelete: Restrict)
+  actor           User?                     @relation("InventoryCommandReceiptActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  postCommitTasks InventoryPostCommitTask[]
+
+  @@index([commandType, status, createdAt], map: "inventory_command_receipts_command_status_idx")
+  @@index([resultDocumentId])
+  @@index([actorUserId])
+  @@index([requestId])
+  @@map("inventory_command_receipts")
+}
+
+model InventoryPostCommitTask {
+  id               String                        @id @default(uuid()) @db.Char(36)
+  sourceKey        String                        @unique(map: "inventory_post_commit_tasks_source_key") @map("source_key") @db.VarChar(191)
+  commandReceiptId String                        @map("command_receipt_id") @db.Char(36)
+  taskType         String                        @map("task_type") @db.VarChar(80)
+  payload          Json
+  status           InventoryPostCommitTaskStatus @default(PENDING)
+  attempts         Int                           @default(0)
+  nextAttemptAt    DateTime                      @default(now()) @map("next_attempt_at") @db.DateTime(0)
+  lockedAt         DateTime?                     @map("locked_at") @db.DateTime(0)
+  lastErrorCode    String?                       @map("last_error_code") @db.VarChar(100)
+  completedAt      DateTime?                     @map("completed_at") @db.DateTime(0)
+  createdAt        DateTime                      @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime                      @updatedAt @map("updated_at") @db.DateTime(0)
+
+  commandReceipt InventoryCommandReceipt @relation(fields: [commandReceiptId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt, createdAt], map: "inventory_post_commit_tasks_due_idx")
+  @@index([commandReceiptId, status], map: "inventory_post_commit_tasks_receipt_status_idx")
+  @@map("inventory_post_commit_tasks")
+}
+
+model InventoryReservation {
+  id               String                     @id @default(uuid()) @db.Char(36)
+  sourceKey        String                     @unique(map: "inventory_reservations_source_key") @map("source_key") @db.VarChar(191)
+  salesOrderId     String                     @map("sales_order_id") @db.Char(36)
+  salesOrderItemId String?                    @map("sales_order_item_id") @db.Char(36)
+  inventoryLineKey String                     @map("inventory_line_key") @db.VarChar(191)
+  warehouseId      String                     @map("warehouse_id") @db.Char(36)
+  productId        String                     @map("product_id") @db.Char(36)
+  requestedQty     Int                        @default(0) @map("requested_qty")
+  reservedQty      Int                        @default(0) @map("reserved_qty")
+  assignedQty      Int                        @default(0) @map("assigned_qty")
+  outboundQty      Int                        @default(0) @map("outbound_qty")
+  status           InventoryReservationStatus @default(OPEN)
+  version          Int                        @default(0)
+  releasedAt       DateTime?                  @map("released_at") @db.DateTime(0)
+  consumedAt       DateTime?                  @map("consumed_at") @db.DateTime(0)
+  createdAt        DateTime                   @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime                   @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrder     SalesOrder                      @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  salesOrderItem SalesOrderItem?                 @relation(fields: [salesOrderItemId], references: [id], onDelete: SetNull)
+  warehouse      Warehouse                       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product        Product                         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  movements      InventoryMovement[]
+  assignments    SerializedInventoryAssignment[]
+
+  @@unique([salesOrderId, inventoryLineKey], map: "inventory_reservations_order_line_key")
+  @@index([warehouseId, productId, status], map: "inventory_reservations_warehouse_product_status_idx")
+  @@index([salesOrderId, status], map: "inventory_reservations_order_status_idx")
+  @@index([salesOrderItemId])
+  @@index([productId])
+  @@map("inventory_reservations")
+}
+
+model InventoryTransfer {
+  id                     String                  @id @default(uuid()) @db.Char(36)
+  transferNo             String                  @unique(map: "inventory_transfers_transfer_no_key") @map("transfer_no") @db.VarChar(80)
+  sourceKey              String                  @unique(map: "inventory_transfers_source_key") @map("source_key") @db.VarChar(191)
+  fromWarehouseId        String                  @map("from_warehouse_id") @db.Char(36)
+  toWarehouseId          String                  @map("to_warehouse_id") @db.Char(36)
+  status                 InventoryTransferStatus @default(DRAFT)
+  outboundDocumentId     String?                 @unique(map: "inventory_transfers_outbound_document_key") @map("outbound_document_id") @db.Char(36)
+  outboundSourceKey      String?                 @unique(map: "inventory_transfers_outbound_source_key") @map("outbound_source_key") @db.VarChar(191)
+  outboundIdempotencyKey String?                 @unique(map: "inventory_transfers_outbound_idempotency_key") @map("outbound_idempotency_key") @db.VarChar(191)
+  outboundRequestHash    String?                 @map("outbound_request_hash") @db.Char(64)
+  outboundById           String?                 @map("outbound_by_id") @db.Char(36)
+  outboundByName         String?                 @map("outbound_by_name") @db.VarChar(100)
+  outboundByRole         String?                 @map("outbound_by_role") @db.VarChar(32)
+  outboundAt             DateTime?               @map("outbound_at") @db.DateTime(0)
+  notes                  String?                 @db.Text
+  version                Int                     @default(0)
+  createdById            String?                 @map("created_by_id") @db.Char(36)
+  updatedById            String?                 @map("updated_by_id") @db.Char(36)
+  createdAt              DateTime                @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
+
+  fromWarehouse    Warehouse                  @relation("InventoryTransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouse      Warehouse                  @relation("InventoryTransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  outboundDocument InventoryDocument?         @relation("InventoryTransferOutboundDocument", fields: [outboundDocumentId], references: [id], onDelete: Restrict)
+  outboundBy       User?                      @relation("InventoryTransferOutboundBy", fields: [outboundById], references: [id], onDelete: SetNull)
+  createdBy        User?                      @relation("InventoryTransferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?                      @relation("InventoryTransferUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  lines            InventoryTransferLine[]
+  receipts         InventoryTransferReceipt[]
+
+  @@index([fromWarehouseId, status, createdAt], map: "inventory_transfers_from_status_created_idx")
+  @@index([toWarehouseId, status, createdAt], map: "inventory_transfers_to_status_created_idx")
+  @@index([outboundById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("inventory_transfers")
+}
+
+model InventoryTransferLine {
+  id                   String                 @id @default(uuid()) @db.Char(36)
+  transferId           String                 @map("transfer_id") @db.Char(36)
+  lineNo               Int                    @map("line_no")
+  sourceLineKey        String?                @unique(map: "inventory_transfer_lines_source_line_key") @map("source_line_key") @db.VarChar(191)
+  productId            String                 @map("product_id") @db.Char(36)
+  trackingModeSnapshot InventoryTrackingMode? @map("tracking_mode_snapshot")
+  plannedQty           Int                    @default(0) @map("planned_qty")
+  outboundQty          Int                    @default(0) @map("outbound_qty")
+  receivedQty          Int                    @default(0) @map("received_qty")
+  unavailableQty       Int                    @default(0) @map("unavailable_qty")
+  differenceQty        Int                    @default(0) @map("difference_qty")
+  serializedUnitIds    Json?                  @map("serialized_unit_ids")
+  notes                String?                @db.Text
+  version              Int                    @default(0)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.DateTime(0)
+
+  transfer     InventoryTransfer              @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  product      Product                        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  receiptLines InventoryTransferReceiptLine[]
+
+  @@unique([transferId, lineNo], map: "inventory_transfer_lines_transfer_line_key")
+  @@index([productId])
+  @@map("inventory_transfer_lines")
+}
+
+model InventoryTransferReceipt {
+  id                      String                         @id @default(uuid()) @db.Char(36)
+  receiptNo               String                         @unique(map: "inventory_transfer_receipts_receipt_no_key") @map("receipt_no") @db.VarChar(80)
+  transferId              String                         @map("transfer_id") @db.Char(36)
+  warehouseId             String                         @map("warehouse_id") @db.Char(36)
+  sourceKey               String                         @unique(map: "inventory_transfer_receipts_source_key") @map("source_key") @db.VarChar(191)
+  idempotencyKey          String                         @unique(map: "inventory_transfer_receipts_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash             String                         @map("request_hash") @db.Char(64)
+  status                  InventoryTransferReceiptStatus @default(DRAFT)
+  resultDocumentId        String?                        @unique(map: "inventory_transfer_receipts_document_key") @map("result_document_id") @db.Char(36)
+  confirmedById           String?                        @map("confirmed_by_id") @db.Char(36)
+  confirmedByNameSnapshot String?                        @map("confirmed_by_name_snapshot") @db.VarChar(100)
+  confirmedByRoleSnapshot String?                        @map("confirmed_by_role_snapshot") @db.VarChar(32)
+  confirmedAt             DateTime?                      @map("confirmed_at") @db.DateTime(0)
+  reversalOfReceiptId     String?                        @unique(map: "inventory_transfer_receipts_reversal_of_key") @map("reversal_of_receipt_id") @db.Char(36)
+  notes                   String?                        @db.Text
+  version                 Int                            @default(0)
+  createdAt               DateTime                       @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt               DateTime                       @updatedAt @map("updated_at") @db.DateTime(0)
+
+  transfer          InventoryTransfer              @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  warehouse         Warehouse                      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  resultDocument    InventoryDocument?             @relation("InventoryTransferReceiptDocument", fields: [resultDocumentId], references: [id], onDelete: Restrict)
+  confirmedBy       User?                          @relation("InventoryTransferReceiptConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  reversalOf        InventoryTransferReceipt?      @relation("InventoryTransferReceiptReversal", fields: [reversalOfReceiptId], references: [id], onDelete: Restrict)
+  reversedByReceipt InventoryTransferReceipt?      @relation("InventoryTransferReceiptReversal")
+  lines             InventoryTransferReceiptLine[]
+
+  @@index([transferId, status, createdAt], map: "inventory_transfer_receipts_transfer_status_idx")
+  @@index([warehouseId, status, createdAt], map: "inventory_transfer_receipts_warehouse_status_idx")
+  @@index([confirmedById])
+  @@map("inventory_transfer_receipts")
+}
+
+model InventoryTransferReceiptLine {
+  id                String   @id @default(uuid()) @db.Char(36)
+  receiptId         String   @map("receipt_id") @db.Char(36)
+  transferLineId    String   @map("transfer_line_id") @db.Char(36)
+  lineNo            Int      @map("line_no")
+  receivedQty       Int      @default(0) @map("received_qty")
+  unavailableQty    Int      @default(0) @map("unavailable_qty")
+  differenceQty     Int      @default(0) @map("difference_qty")
+  serializedUnitIds Json?    @map("serialized_unit_ids")
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  receipt      InventoryTransferReceipt @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  transferLine InventoryTransferLine    @relation(fields: [transferLineId], references: [id], onDelete: Restrict)
+
+  @@unique([receiptId, lineNo], map: "inventory_transfer_receipt_lines_receipt_line_key")
+  @@unique([receiptId, transferLineId], map: "inventory_transfer_receipt_lines_receipt_transfer_key")
+  @@index([transferLineId])
+  @@map("inventory_transfer_receipt_lines")
+}
+
+model StockAlertConfig {
+  id                  String   @id @default(uuid()) @db.Char(36)
+  warehouseId         String   @map("warehouse_id") @db.Char(36)
+  productId           String   @map("product_id") @db.Char(36)
+  minimumAvailableQty Int      @default(0) @map("minimum_available_qty")
+  enabled             Boolean  @default(true)
+  createdById         String?  @map("created_by_id") @db.Char(36)
+  updatedById         String?  @map("updated_by_id") @db.Char(36)
+  createdAt           DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy User?     @relation("StockAlertConfigCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?     @relation("StockAlertConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([warehouseId, productId], map: "stock_alert_configs_warehouse_product_key")
+  @@index([productId])
+  @@index([enabled])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("stock_alert_configs")
+}
+
+model InventoryAlert {
+  id               String               @id @default(uuid()) @db.Char(36)
+  alertKey         String               @unique(map: "inventory_alerts_alert_key") @map("alert_key") @db.VarChar(191)
+  activeKey        String?              @unique(map: "inventory_alerts_active_key_key") @map("active_key") @db.VarChar(191)
+  type             InventoryAlertType
+  status           InventoryAlertStatus @default(ACTIVE)
+  warehouseId      String               @map("warehouse_id") @db.Char(36)
+  productId        String               @map("product_id") @db.Char(36)
+  salesOrderId     String?              @map("sales_order_id") @db.Char(36)
+  inventoryLineKey String?              @map("inventory_line_key") @db.VarChar(191)
+  firstDetectedAt  DateTime             @default(now()) @map("first_detected_at") @db.DateTime(0)
+  lastDetectedAt   DateTime             @default(now()) @map("last_detected_at") @db.DateTime(0)
+  resolvedAt       DateTime?            @map("resolved_at") @db.DateTime(0)
+  createdAt        DateTime             @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse  Warehouse   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+  salesOrder SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  @@index([warehouseId, productId, status], map: "inventory_alerts_warehouse_product_status_idx")
+  @@index([salesOrderId, status], map: "inventory_alerts_order_status_idx")
+  @@index([type, status, lastDetectedAt], map: "inventory_alerts_type_status_detected_idx")
+  @@map("inventory_alerts")
+}
+
+model Stocktake {
+  id                      String                @id @default(uuid()) @db.Char(36)
+  stocktakeNo             String                @unique(map: "stocktakes_stocktake_no_key") @map("stocktake_no") @db.VarChar(80)
+  warehouseId             String                @map("warehouse_id") @db.Char(36)
+  productId               String                @map("product_id") @db.Char(36)
+  trackingModeSnapshot    InventoryTrackingMode @map("tracking_mode_snapshot")
+  status                  StocktakeStatus       @default(DRAFT)
+  activeKey               String?               @unique(map: "stocktakes_active_key_key") @map("active_key") @db.VarChar(80)
+  sourceKey               String                @unique(map: "stocktakes_source_key_key") @map("source_key") @db.VarChar(191)
+  idempotencyKey          String                @unique(map: "stocktakes_idempotency_key_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash             String                @map("request_hash") @db.Char(64)
+  submitSourceKey         String?               @unique(map: "stocktakes_submit_source_key_key") @map("submit_source_key") @db.VarChar(191)
+  submitIdempotencyKey    String?               @unique(map: "stocktakes_submit_idempotency_key_key") @map("submit_idempotency_key") @db.VarChar(191)
+  submitRequestHash       String?               @map("submit_request_hash") @db.Char(64)
+  approveSourceKey        String?               @unique(map: "stocktakes_approve_source_key_key") @map("approve_source_key") @db.VarChar(191)
+  approveIdempotencyKey   String?               @unique(map: "stocktakes_approve_idempotency_key_key") @map("approve_idempotency_key") @db.VarChar(191)
+  approveRequestHash      String?               @map("approve_request_hash") @db.Char(64)
+  rejectSourceKey         String?               @unique(map: "stocktakes_reject_source_key_key") @map("reject_source_key") @db.VarChar(191)
+  rejectIdempotencyKey    String?               @unique(map: "stocktakes_reject_idempotency_key_key") @map("reject_idempotency_key") @db.VarChar(191)
+  rejectRequestHash       String?               @map("reject_request_hash") @db.Char(64)
+  reverseSourceKey        String?               @unique(map: "stocktakes_reverse_source_key_key") @map("reverse_source_key") @db.VarChar(191)
+  reverseIdempotencyKey   String?               @unique(map: "stocktakes_reverse_idempotency_key_key") @map("reverse_idempotency_key") @db.VarChar(191)
+  reverseRequestHash      String?               @map("reverse_request_hash") @db.Char(64)
+  reason                  String?               @db.VarChar(500)
+  rejectionReason         String?               @map("rejection_reason") @db.VarChar(500)
+  reversalReason          String?               @map("reversal_reason") @db.VarChar(500)
+  quantityDocumentId      String?               @unique(map: "stocktakes_quantity_document_key") @map("quantity_document_id") @db.Char(36)
+  unavailableDocumentId   String?               @unique(map: "stocktakes_unavailable_document_key") @map("unavailable_document_id") @db.Char(36)
+  submittedById           String?               @map("submitted_by_id") @db.Char(36)
+  submittedByNameSnapshot String?               @map("submitted_by_name_snapshot") @db.VarChar(100)
+  submittedByRoleSnapshot String?               @map("submitted_by_role_snapshot") @db.VarChar(32)
+  submittedAt             DateTime?             @map("submitted_at") @db.DateTime(0)
+  approvedById            String?               @map("approved_by_id") @db.Char(36)
+  approvedByNameSnapshot  String?               @map("approved_by_name_snapshot") @db.VarChar(100)
+  approvedByRoleSnapshot  String?               @map("approved_by_role_snapshot") @db.VarChar(32)
+  approvedAt              DateTime?             @map("approved_at") @db.DateTime(0)
+  rejectedById            String?               @map("rejected_by_id") @db.Char(36)
+  rejectedByNameSnapshot  String?               @map("rejected_by_name_snapshot") @db.VarChar(100)
+  rejectedByRoleSnapshot  String?               @map("rejected_by_role_snapshot") @db.VarChar(32)
+  rejectedAt              DateTime?             @map("rejected_at") @db.DateTime(0)
+  postedById              String?               @map("posted_by_id") @db.Char(36)
+  postedByNameSnapshot    String?               @map("posted_by_name_snapshot") @db.VarChar(100)
+  postedByRoleSnapshot    String?               @map("posted_by_role_snapshot") @db.VarChar(32)
+  postedAt                DateTime?             @map("posted_at") @db.DateTime(0)
+  reversedById            String?               @map("reversed_by_id") @db.Char(36)
+  reversedByNameSnapshot  String?               @map("reversed_by_name_snapshot") @db.VarChar(100)
+  reversedByRoleSnapshot  String?               @map("reversed_by_role_snapshot") @db.VarChar(32)
+  reversedAt              DateTime?             @map("reversed_at") @db.DateTime(0)
+  createdById             String?               @map("created_by_id") @db.Char(36)
+  updatedById             String?               @map("updated_by_id") @db.Char(36)
+  version                 Int                   @default(0)
+  createdAt               DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt               DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
+
+  warehouse           Warehouse                 @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product             Product                   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  quantityDocument    InventoryDocument?        @relation("StocktakeQuantityDocument", fields: [quantityDocumentId], references: [id], onDelete: Restrict)
+  unavailableDocument InventoryDocument?        @relation("StocktakeUnavailableDocument", fields: [unavailableDocumentId], references: [id], onDelete: Restrict)
+  submittedBy         User?                     @relation("StocktakeSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  approvedBy          User?                     @relation("StocktakeApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedBy          User?                     @relation("StocktakeRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  postedBy            User?                     @relation("StocktakePostedBy", fields: [postedById], references: [id], onDelete: SetNull)
+  reversedBy          User?                     @relation("StocktakeReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  createdBy           User?                     @relation("StocktakeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy           User?                     @relation("StocktakeUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  line                StocktakeLine?
+  serializedScans     StocktakeSerializedScan[]
+
+  @@index([warehouseId, status, createdAt], map: "stocktakes_warehouse_status_created_idx")
+  @@index([productId, status, createdAt], map: "stocktakes_product_status_created_idx")
+  @@index([status, submittedAt], map: "stocktakes_status_submitted_idx")
+  @@index([submittedById])
+  @@index([approvedById])
+  @@index([rejectedById])
+  @@index([postedById])
+  @@index([reversedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("stocktakes")
+}
+
+model StocktakeLine {
+  id                            String   @id @default(uuid()) @db.Char(36)
+  stocktakeId                   String   @unique(map: "stocktake_lines_stocktake_key") @map("stocktake_id") @db.Char(36)
+  lineNo                        Int      @default(1) @map("line_no")
+  snapshotStockVersion          Int?     @map("snapshot_stock_version")
+  snapshotLastMovementId        String?  @map("snapshot_last_movement_id") @db.Char(36)
+  snapshotOnHandQty             Int?     @map("snapshot_on_hand_qty")
+  snapshotUnavailableQty        Int?     @map("snapshot_unavailable_qty")
+  snapshotSerializedFingerprint String?  @map("snapshot_serialized_fingerprint") @db.Char(64)
+  countedOnHandQty              Int?     @map("counted_on_hand_qty")
+  countedUnavailableQty         Int?     @map("counted_unavailable_qty")
+  onHandDifferenceQty           Int?     @map("on_hand_difference_qty")
+  unavailableDifferenceQty      Int?     @map("unavailable_difference_qty")
+  createdAt                     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                     DateTime @updatedAt @map("updated_at") @db.DateTime(0)
+
+  stocktake            Stocktake          @relation(fields: [stocktakeId], references: [id], onDelete: Restrict)
+  snapshotLastMovement InventoryMovement? @relation("StocktakeSnapshotLastMovement", fields: [snapshotLastMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([stocktakeId, lineNo], map: "stocktake_lines_stocktake_line_key")
+  @@index([snapshotLastMovementId])
+  @@map("stocktake_lines")
+}
+
+model StocktakeSerializedScan {
+  id                              String                         @id @default(uuid()) @db.Char(36)
+  stocktakeId                     String                         @map("stocktake_id") @db.Char(36)
+  lineNo                          Int                            @map("line_no")
+  sourceKey                       String                         @unique(map: "stocktake_serialized_scans_source_key") @map("source_key") @db.VarChar(191)
+  serializedUnitId                String?                        @map("serialized_unit_id") @db.Char(36)
+  scannedLogisticsCodeSnapshot    String                         @map("scanned_logistics_code_snapshot") @db.VarChar(160)
+  normalizedLogisticsCodeSnapshot String                         @map("normalized_logistics_code_snapshot") @db.VarChar(160)
+  matchStatus                     StocktakeSerializedMatchStatus @map("match_status")
+  expectedWarehouseId             String?                        @map("expected_warehouse_id") @db.Char(36)
+  expectedUnitStatus              SerializedInventoryStatus?     @map("expected_unit_status")
+  expectedUnitVersion             Int?                           @map("expected_unit_version")
+  countedCondition                InventoryCondition?            @map("counted_condition")
+  actionMovementId                String?                        @unique(map: "stocktake_serialized_scans_action_movement_key") @map("action_movement_id") @db.Char(36)
+  createdAt                       DateTime                       @default(now()) @map("created_at") @db.DateTime(0)
+
+  stocktake         Stocktake                @relation(fields: [stocktakeId], references: [id], onDelete: Restrict)
+  serializedUnit    SerializedInventoryUnit? @relation(fields: [serializedUnitId], references: [id], onDelete: Restrict)
+  expectedWarehouse Warehouse?               @relation("StocktakeSerializedExpectedWarehouse", fields: [expectedWarehouseId], references: [id], onDelete: Restrict)
+  actionMovement    InventoryMovement?       @relation("StocktakeSerializedActionMovement", fields: [actionMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([stocktakeId, lineNo], map: "stocktake_serialized_scans_stocktake_line_key")
+  @@unique([stocktakeId, normalizedLogisticsCodeSnapshot], map: "stocktake_serialized_scans_stocktake_code_key")
+  @@index([serializedUnitId, matchStatus], map: "stocktake_serialized_scans_unit_match_idx")
+  @@index([matchStatus])
+  @@index([expectedWarehouseId])
+  @@map("stocktake_serialized_scans")
+}
+
+model ProductInventoryModeChange {
+  id                      String                           @id @default(uuid()) @db.Char(36)
+  productId               String                           @map("product_id") @db.Char(36)
+  expectedCurrentMode     InventoryTrackingMode            @map("expected_current_mode")
+  targetMode              InventoryTrackingMode            @map("target_mode")
+  effectiveAt             DateTime                         @map("effective_at") @db.DateTime(0)
+  sourceKey               String                           @unique(map: "product_inventory_mode_changes_source_key") @map("source_key") @db.VarChar(191)
+  idempotencyKey          String                           @unique(map: "product_inventory_mode_changes_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash             String                           @map("request_hash") @db.Char(64)
+  status                  ProductInventoryModeChangeStatus @default(PENDING)
+  requestedById           String?                          @map("requested_by_id") @db.Char(36)
+  requestedByNameSnapshot String?                          @map("requested_by_name_snapshot") @db.VarChar(100)
+  requestedByRoleSnapshot String?                          @map("requested_by_role_snapshot") @db.VarChar(32)
+  requestedAt             DateTime                         @default(now()) @map("requested_at") @db.DateTime(0)
+  appliedById             String?                          @map("applied_by_id") @db.Char(36)
+  appliedByNameSnapshot   String?                          @map("applied_by_name_snapshot") @db.VarChar(100)
+  appliedByRoleSnapshot   String?                          @map("applied_by_role_snapshot") @db.VarChar(32)
+  appliedAt               DateTime?                        @map("applied_at") @db.DateTime(0)
+  reason                  String?                          @db.VarChar(500)
+  createdAt               DateTime                         @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt               DateTime                         @updatedAt @map("updated_at") @db.DateTime(0)
+
+  product     Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  requestedBy User?   @relation("ProductInventoryModeChangeRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  appliedBy   User?   @relation("ProductInventoryModeChangeAppliedBy", fields: [appliedById], references: [id], onDelete: SetNull)
+
+  @@index([productId, status, effectiveAt], map: "product_inventory_mode_changes_product_status_idx")
+  @@index([requestedById])
+  @@index([appliedById])
+  @@map("product_inventory_mode_changes")
 }
 
 model ProductActualCost {
@@ -533,7 +1512,9 @@ model Guide {
   createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(0)
 
-  travelGroups TravelGroup[]
+  travelGroups         TravelGroup[]
+  personalPointsOrders SalesOrder[]         @relation("SalesOrderPersonalPointsGuide")
+  pointsSummaries      GuidePointsSummary[]
 
   @@index([name])
   @@index([isActive])
@@ -591,6 +1572,21 @@ enum SalesOrderPackingStatus {
   @@map("sales_order_packing_status")
 }
 
+enum SalesOrderShippingDateSource {
+  SYSTEM_DEFAULT @map("system_default")
+  USER_SPECIFIED @map("user_specified")
+  MIGRATION      @map("migration")
+
+  @@map("sales_order_shipping_date_source")
+}
+
+enum SalesOrderPointsDestination {
+  TRAVEL_AGENCY  @map("travel_agency")
+  GUIDE_PERSONAL @map("guide_personal")
+
+  @@map("sales_order_points_destination")
+}
+
 enum AfterSalesIssueType {
   QUALITY_ISSUE    @map("quality_issue")
   LOGISTICS_DAMAGE @map("logistics_damage")
@@ -624,6 +1620,39 @@ enum AfterSalesStatus {
   @@map("after_sales_status")
 }
 
+enum AfterSalesFinancialEffectStatus {
+  PENDING_CONFIRMATION @map("pending_confirmation")
+  CONFIRMED            @map("confirmed")
+  PENDING_RECOVERY     @map("pending_recovery")
+  NO_FINANCIAL_EFFECT  @map("no_financial_effect")
+
+  @@map("after_sales_financial_effect_status")
+}
+
+enum AfterSalesReceiptStatus {
+  DRAFT    @map("draft")
+  POSTED   @map("posted")
+  REVERSED @map("reversed")
+
+  @@map("after_sales_receipt_status")
+}
+
+enum AfterSalesReceiptCondition {
+  SALEABLE    @map("saleable")
+  UNAVAILABLE @map("unavailable")
+  EXCEPTION   @map("exception")
+
+  @@map("after_sales_receipt_condition")
+}
+
+enum AfterSalesReceiptSerializedMatchStatus {
+  MATCHED  @map("matched")
+  UNKNOWN  @map("unknown")
+  CONFLICT @map("conflict")
+
+  @@map("after_sales_receipt_serialized_match_status")
+}
+
 enum ReconciliationReviewStatus {
   PENDING_REVIEW @map("pending_review")
   REVIEWED       @map("reviewed")
@@ -651,76 +1680,77 @@ enum CommissionTargetType {
 }
 
 model TravelGroup {
-  id                       String            @id @default(uuid()) @db.Char(36)
-  groupNo                  String            @unique @map("group_no") @db.VarChar(80)
-  visitDate                DateTime          @map("visit_date") @db.Date
-  travelAgency             String?           @map("travel_agency") @db.VarChar(120)
-  licensePlate             String?           @map("license_plate") @db.VarChar(40)
-  guideName                String?           @map("guide_name") @db.VarChar(80)
-  guidePhone               String?           @map("guide_phone") @db.VarChar(30)
-  adultCount               Int               @default(0) @map("adult_count")
-  childCount               Int               @default(0) @map("child_count")
-  guestCount               Int               @default(0) @map("guest_count")
-  tastingRoomNo            String?           @map("tasting_room_no") @db.VarChar(40)
-  tasterName               String?           @map("taster_name") @db.VarChar(80)
-  sourceRegion             String?           @map("source_region") @db.VarChar(120)
-  ageInfo                  String?           @map("age_info") @db.VarChar(120)
-  mentionedFeitian         Boolean?          @map("mentioned_feitian")
-  previousStopOrderStatus  String?           @map("previous_stop_order_status") @db.VarChar(255)
-  keyCustomerInfo          String?           @map("key_customer_info") @db.Text
+  id                       String                @id @default(uuid()) @db.Char(36)
+  groupNo                  String                @unique @map("group_no") @db.VarChar(80)
+  visitDate                DateTime              @map("visit_date") @db.Date
+  travelAgency             String?               @map("travel_agency") @db.VarChar(120)
+  licensePlate             String?               @map("license_plate") @db.VarChar(40)
+  guideName                String?               @map("guide_name") @db.VarChar(80)
+  guidePhone               String?               @map("guide_phone") @db.VarChar(30)
+  adultCount               Int                   @default(0) @map("adult_count")
+  childCount               Int                   @default(0) @map("child_count")
+  guestCount               Int                   @default(0) @map("guest_count")
+  tastingRoomNo            String?               @map("tasting_room_no") @db.VarChar(40)
+  tasterName               String?               @map("taster_name") @db.VarChar(80)
+  sourceRegion             String?               @map("source_region") @db.VarChar(120)
+  ageInfo                  String?               @map("age_info") @db.VarChar(120)
+  mentionedFeitian         Boolean?              @map("mentioned_feitian")
+  previousStopOrderStatus  String?               @map("previous_stop_order_status") @db.VarChar(255)
+  keyCustomerInfo          String?               @map("key_customer_info") @db.Text
   /// Attachment metadata array only; file binaries are stored outside the database.
-  keyCustomerPhotos        Json?             @map("key_customer_photos")
+  keyCustomerPhotos        Json?                 @map("key_customer_photos")
   /// Attachment metadata array only; file binaries are stored outside the database.
-  guestInfoAttachments     Json?             @map("guest_info_attachments")
-  liaisonTasterId          String?           @map("liaison_taster_id") @db.Char(36)
-  liaisonTasterName        String?           @map("liaison_taster_name") @db.VarChar(80)
-  expectedArrivalTime      String?           @map("expected_arrival_time") @db.VarChar(30)
-  arrivalTime              String?           @map("arrival_time") @db.VarChar(30)
-  groupType                String?           @map("group_type") @db.VarChar(60)
-  wineDetails              String?           @map("wine_details") @db.Text
-  departureTime            String?           @map("departure_time") @db.VarChar(30)
-  remarks                  String?           @db.Text
-  status                   TravelGroupStatus @default(UNMARKED)
-  parkingFeeCents          Int               @default(500) @map("parking_fee_cents")
-  cigaretteFeeCents        Int?              @map("cigarette_fee_cents")
+  guestInfoAttachments     Json?                 @map("guest_info_attachments")
+  liaisonTasterId          String?               @map("liaison_taster_id") @db.Char(36)
+  liaisonTasterName        String?               @map("liaison_taster_name") @db.VarChar(80)
+  expectedArrivalTime      String?               @map("expected_arrival_time") @db.VarChar(30)
+  arrivalTime              String?               @map("arrival_time") @db.VarChar(30)
+  groupType                String?               @map("group_type") @db.VarChar(60)
+  wineDetails              String?               @map("wine_details") @db.Text
+  departureTime            String?               @map("departure_time") @db.VarChar(30)
+  remarks                  String?               @db.Text
+  status                   TravelGroupStatus     @default(UNMARKED)
+  parkingFeeCents          Int                   @default(500) @map("parking_fee_cents")
+  cigaretteFeeCents        Int?                  @map("cigarette_fee_cents")
   lossStatus               TravelGroupLossStatus @default(PENDING) @map("loss_status")
-  lossConfirmedAt          DateTime?         @map("loss_confirmed_at") @db.DateTime(0)
-  lossConfirmedById        String?           @map("loss_confirmed_by_id") @db.Char(36)
-  salesAmountCents         Int               @default(0) @map("sales_amount_cents")
-  paidDepositCents         Int               @default(0) @map("paid_deposit_cents")
-  cashOnDeliveryCents      Int               @default(0) @map("cash_on_delivery_cents")
-  liquorCostDeductionCents Int               @default(0) @map("liquor_cost_deduction_cents")
-  orderAmountCents         Int               @default(0) @map("order_amount_cents")
-  points                   Int               @default(0)
-  returnedPoints           Int               @default(0) @map("returned_points")
-  unreturnedPoints         Int               @default(0) @map("unreturned_points")
-  guideInfoSent            Boolean           @default(false) @map("guide_info_sent")
-  travelAgencyInfoSent     Boolean           @default(false) @map("travel_agency_info_sent")
-  financeMark              Boolean           @default(false) @map("finance_mark")
-  markedById               String?           @map("marked_by") @db.Char(36)
-  markedAt                 DateTime?         @map("marked_at") @db.DateTime(0)
-  guideId                  String?           @map("guide_id") @db.Char(36)
-  tasterId                 String?           @map("taster_id") @db.Char(36)
-  tasterSummary            String?           @map("taster_summary") @db.Text
-  tasterSummaryAt          DateTime?         @map("taster_summary_at") @db.DateTime(0)
-  tasterEditCount          Int               @default(0) @map("taster_edit_count")
-  tasterLastEditedAt       DateTime?         @map("taster_last_edited_at") @db.DateTime(0)
-  postMarkEditedAt         DateTime?         @map("post_mark_edited_at") @db.DateTime(0)
-  postMarkEditedById       String?           @map("post_mark_edited_by_id") @db.Char(36)
-  createdById              String?           @map("created_by_id") @db.Char(36)
-  updatedById              String?           @map("updated_by_id") @db.Char(36)
-  createdAt                DateTime          @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt                DateTime          @updatedAt @map("updated_at") @db.DateTime(0)
+  lossConfirmedAt          DateTime?             @map("loss_confirmed_at") @db.DateTime(0)
+  lossConfirmedById        String?               @map("loss_confirmed_by_id") @db.Char(36)
+  salesAmountCents         Int                   @default(0) @map("sales_amount_cents")
+  paidDepositCents         Int                   @default(0) @map("paid_deposit_cents")
+  cashOnDeliveryCents      Int                   @default(0) @map("cash_on_delivery_cents")
+  liquorCostDeductionCents Int                   @default(0) @map("liquor_cost_deduction_cents")
+  orderAmountCents         Int                   @default(0) @map("order_amount_cents")
+  points                   Int                   @default(0)
+  returnedPoints           Int                   @default(0) @map("returned_points")
+  unreturnedPoints         Int                   @default(0) @map("unreturned_points")
+  guideInfoSent            Boolean               @default(false) @map("guide_info_sent")
+  travelAgencyInfoSent     Boolean               @default(false) @map("travel_agency_info_sent")
+  financeMark              Boolean               @default(false) @map("finance_mark")
+  markedById               String?               @map("marked_by") @db.Char(36)
+  markedAt                 DateTime?             @map("marked_at") @db.DateTime(0)
+  guideId                  String?               @map("guide_id") @db.Char(36)
+  tasterId                 String?               @map("taster_id") @db.Char(36)
+  tasterSummary            String?               @map("taster_summary") @db.Text
+  tasterSummaryAt          DateTime?             @map("taster_summary_at") @db.DateTime(0)
+  tasterEditCount          Int                   @default(0) @map("taster_edit_count")
+  tasterLastEditedAt       DateTime?             @map("taster_last_edited_at") @db.DateTime(0)
+  postMarkEditedAt         DateTime?             @map("post_mark_edited_at") @db.DateTime(0)
+  postMarkEditedById       String?               @map("post_mark_edited_by_id") @db.Char(36)
+  createdById              String?               @map("created_by_id") @db.Char(36)
+  updatedById              String?               @map("updated_by_id") @db.Char(36)
+  createdAt                DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrders       SalesOrder[]
-  tastingItems      TravelGroupTastingItem[]
-  commissionRecords CommissionRecord[]
-  financeSummary    TravelGroupFinanceSummary?
-  guide             Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
-  taster            User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
-  liaisonTaster     User?                      @relation("TravelGroupLiaisonTaster", fields: [liaisonTasterId], references: [id], onDelete: SetNull)
-  lossConfirmedBy   User?                      @relation("TravelGroupLossConfirmedBy", fields: [lossConfirmedById], references: [id], onDelete: SetNull)
-  markedBy          User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  salesOrders          SalesOrder[]
+  tastingItems         TravelGroupTastingItem[]
+  commissionRecords    CommissionRecord[]
+  financeSummary       TravelGroupFinanceSummary?
+  guidePointsSummaries GuidePointsSummary[]
+  guide                Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
+  taster               User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
+  liaisonTaster        User?                      @relation("TravelGroupLiaisonTaster", fields: [liaisonTasterId], references: [id], onDelete: SetNull)
+  lossConfirmedBy      User?                      @relation("TravelGroupLossConfirmedBy", fields: [lossConfirmedById], references: [id], onDelete: SetNull)
+  markedBy             User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@index([visitDate])
   @@index([travelAgency])
@@ -894,66 +1924,94 @@ model Customer {
 }
 
 model SalesOrder {
-  id                        String                  @id @default(uuid()) @db.Char(36)
-  orderNo                   String                  @unique @map("order_no") @db.VarChar(80)
-  orderType                 SalesOrderType          @default(TRAVEL_GROUP) @map("order_type")
-  travelGroupId             String?                 @map("travel_group_id") @db.Char(36)
-  customerId                String?                 @map("customer_id") @db.Char(36)
-  customerName              String                  @map("customer_name") @db.VarChar(100)
-  customerPhone             String?                 @map("customer_phone") @db.VarChar(30)
-  province                  String?                 @db.VarChar(60)
-  city                      String?                 @db.VarChar(60)
-  district                  String?                 @db.VarChar(60)
-  address                   String?                 @db.VarChar(255)
-  orderDate                 DateTime                @map("order_date") @db.Date
-  salesFormNo               String?                 @map("sales_form_no") @db.VarChar(80)
-  qrCodeTokenHash           String?                 @unique @map("qr_code_token_hash") @db.Char(64)
-  qrCodeGeneratedAt         DateTime?               @map("qr_code_generated_at") @db.DateTime(0)
-  qrCodeExpiresAt           DateTime?               @map("qr_code_expires_at") @db.DateTime(0)
-  qrCodeRevokedAt           DateTime?               @map("qr_code_revoked_at") @db.DateTime(0)
-  totalAmountCents          Int                     @default(0) @map("total_amount_cents")
-  cashOnDeliveryAmountCents Int                     @default(0) @map("cash_on_delivery_amount_cents")
-  logisticsMethod           String?                 @map("logistics_method") @db.VarChar(80)
-  logisticsProviderCode     String?                 @map("logistics_provider_code") @db.VarChar(40)
-  packingStatus             SalesOrderPackingStatus @default(PACKED) @map("packing_status")
-  packageCount              Int                     @default(0) @map("package_count")
-  warehouseRemark           String?                 @map("warehouse_remark") @db.Text
-  logisticsNo               String?                 @map("logistics_no") @db.VarChar(120)
-  trackingState             String?                 @map("tracking_state") @db.VarChar(40)
-  trackingStateLabel        String?                 @map("tracking_state_label") @db.VarChar(80)
-  trackingLatestLocation    String?                 @map("tracking_latest_location") @db.VarChar(255)
-  trackingLatestDescription String?                 @map("tracking_latest_description") @db.Text
-  trackingEventAt           DateTime?               @map("tracking_event_at") @db.DateTime(0)
-  trackingCheckedAt         DateTime?               @map("tracking_checked_at") @db.DateTime(0)
-  logisticsFeeCents         Int                     @default(0) @map("logistics_fee_cents")
-  invoiceRequired           Boolean                 @default(false) @map("invoice_required")
-  invoiceIssued             Boolean                 @default(false) @map("invoice_issued")
-  financeRemark             String?                 @map("finance_remark") @db.Text
-  remark                    String?                 @db.Text
-  status                    SalesOrderStatus        @default(VALID)
-  financeMark               Boolean                 @default(false) @map("finance_mark")
-  markedById                String?                 @map("marked_by") @db.Char(36)
-  markedAt                  DateTime?               @map("marked_at") @db.DateTime(0)
-  salesUserId               String?                 @map("sales_user_id") @db.Char(36)
-  salesEditCount            Int                     @default(0) @map("sales_edit_count")
-  salesEditedAt             DateTime?               @map("sales_edited_at") @db.DateTime(0)
-  outreachUserId            String?                 @map("outreach_user_id") @db.Char(36)
-  createdById               String?                 @map("created_by_id") @db.Char(36)
-  updatedById               String?                 @map("updated_by_id") @db.Char(36)
-  createdAt                 DateTime                @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt                 DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
+  id                           String                        @id @default(uuid()) @db.Char(36)
+  orderNo                      String                        @unique @map("order_no") @db.VarChar(80)
+  orderType                    SalesOrderType                @default(TRAVEL_GROUP) @map("order_type")
+  sourceSalesOrderId           String?                       @map("source_sales_order_id") @db.Char(36)
+  travelGroupId                String?                       @map("travel_group_id") @db.Char(36)
+  customerId                   String?                       @map("customer_id") @db.Char(36)
+  customerName                 String                        @map("customer_name") @db.VarChar(100)
+  customerPhone                String?                       @map("customer_phone") @db.VarChar(30)
+  province                     String?                       @db.VarChar(60)
+  city                         String?                       @db.VarChar(60)
+  district                     String?                       @db.VarChar(60)
+  address                      String?                       @db.VarChar(255)
+  orderDate                    DateTime                      @map("order_date") @db.Date
+  shippingDate                 DateTime?                     @map("shipping_date") @db.Date
+  shippingDateSource           SalesOrderShippingDateSource? @map("shipping_date_source")
+  shippingDateBackfillBatchId  String?                       @map("shipping_date_backfill_batch_id") @db.VarChar(64)
+  salesFormNo                  String?                       @map("sales_form_no") @db.VarChar(80)
+  qrCodeTokenHash              String?                       @unique @map("qr_code_token_hash") @db.Char(64)
+  qrCodeGeneratedAt            DateTime?                     @map("qr_code_generated_at") @db.DateTime(0)
+  qrCodeExpiresAt              DateTime?                     @map("qr_code_expires_at") @db.DateTime(0)
+  qrCodeRevokedAt              DateTime?                     @map("qr_code_revoked_at") @db.DateTime(0)
+  totalAmountCents             Int                           @default(0) @map("total_amount_cents")
+  cashOnDeliveryAmountCents    Int                           @default(0) @map("cash_on_delivery_amount_cents")
+  logisticsMethod              String?                       @map("logistics_method") @db.VarChar(80)
+  logisticsProviderCode        String?                       @map("logistics_provider_code") @db.VarChar(40)
+  packingStatus                SalesOrderPackingStatus       @default(PACKED) @map("packing_status")
+  packageCount                 Int                           @default(0) @map("package_count")
+  warehouseRemark              String?                       @map("warehouse_remark") @db.Text
+  hasPackingMark               Boolean                       @default(false) @map("has_packing_mark")
+  logisticsNo                  String?                       @map("logistics_no") @db.VarChar(120)
+  trackingState                String?                       @map("tracking_state") @db.VarChar(40)
+  trackingStateLabel           String?                       @map("tracking_state_label") @db.VarChar(80)
+  trackingLatestLocation       String?                       @map("tracking_latest_location") @db.VarChar(255)
+  trackingLatestDescription    String?                       @map("tracking_latest_description") @db.Text
+  trackingEventAt              DateTime?                     @map("tracking_event_at") @db.DateTime(0)
+  trackingCheckedAt            DateTime?                     @map("tracking_checked_at") @db.DateTime(0)
+  logisticsFeeCents            Int                           @default(0) @map("logistics_fee_cents")
+  invoiceRequired              Boolean                       @default(false) @map("invoice_required")
+  invoiceIssued                Boolean                       @default(false) @map("invoice_issued")
+  financeRemark                String?                       @map("finance_remark") @db.Text
+  remark                       String?                       @db.Text
+  status                       SalesOrderStatus              @default(VALID)
+  financeMark                  Boolean                       @default(false) @map("finance_mark")
+  markedById                   String?                       @map("marked_by") @db.Char(36)
+  markedAt                     DateTime?                     @map("marked_at") @db.DateTime(0)
+  salesUserId                  String?                       @map("sales_user_id") @db.Char(36)
+  salesEditCount               Int                           @default(0) @map("sales_edit_count")
+  salesEditedAt                DateTime?                     @map("sales_edited_at") @db.DateTime(0)
+  outreachUserId               String?                       @map("outreach_user_id") @db.Char(36)
+  pointsDestination            SalesOrderPointsDestination   @default(TRAVEL_AGENCY) @map("points_destination")
+  personalPointsGuideId        String?                       @map("personal_points_guide_id") @db.Char(36)
+  personalGuideNameSnapshot    String?                       @map("personal_guide_name_snapshot") @db.VarChar(80)
+  personalDailyRebateRate      Decimal?                      @map("personal_daily_rebate_rate") @db.Decimal(5, 4)
+  personalMonthlyRebateRate    Decimal?                      @map("personal_monthly_rebate_rate") @db.Decimal(5, 4)
+  pointsDestinationChangedById String?                       @map("points_destination_changed_by_id") @db.Char(36)
+  pointsDestinationChangedAt   DateTime?                     @map("points_destination_changed_at") @db.DateTime(0)
+  personalRatesUpdatedById     String?                       @map("personal_rates_updated_by_id") @db.Char(36)
+  personalRatesUpdatedAt       DateTime?                     @map("personal_rates_updated_at") @db.DateTime(0)
+  fulfillmentWarehouseId       String?                       @map("fulfillment_warehouse_id") @db.Char(36)
+  inventoryAppliedAt           DateTime?                     @map("inventory_applied_at") @db.DateTime(0)
+  inventoryPolicyVersion       Int?                          @map("inventory_policy_version")
+  inventoryVersion             Int                           @default(0) @map("inventory_version")
+  createdById                  String?                       @map("created_by_id") @db.Char(36)
+  updatedById                  String?                       @map("updated_by_id") @db.Char(36)
+  createdAt                    DateTime                      @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                    DateTime                      @updatedAt @map("updated_at") @db.DateTime(0)
 
-  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  travelGroup       TravelGroup?       @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
-  salesUser         User?              @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
-  outreachUser      User?              @relation("SalesOrderOutreachUser", fields: [outreachUserId], references: [id], onDelete: SetNull)
-  markedBy          User?              @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
-  items             SalesOrderItem[]
-  afterSalesOrders  AfterSalesOrder[]
-  commissionRecords CommissionRecord[]
-  serializedInventoryUnits SerializedInventoryUnit[]
+  customer                   Customer?                 @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  sourceSalesOrder           SalesOrder?               @relation("SalesOrderAfterSalesSource", fields: [sourceSalesOrderId], references: [id], onDelete: Restrict)
+  afterSalesSalesOrders      SalesOrder[]              @relation("SalesOrderAfterSalesSource")
+  travelGroup                TravelGroup?              @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
+  salesUser                  User?                     @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
+  outreachUser               User?                     @relation("SalesOrderOutreachUser", fields: [outreachUserId], references: [id], onDelete: SetNull)
+  personalPointsGuide        Guide?                    @relation("SalesOrderPersonalPointsGuide", fields: [personalPointsGuideId], references: [id], onDelete: Restrict)
+  pointsDestinationChangedBy User?                     @relation("SalesOrderPointsDestinationChangedBy", fields: [pointsDestinationChangedById], references: [id], onDelete: SetNull)
+  personalRatesUpdatedBy     User?                     @relation("SalesOrderPersonalRatesUpdatedBy", fields: [personalRatesUpdatedById], references: [id], onDelete: SetNull)
+  markedBy                   User?                     @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  fulfillmentWarehouse       Warehouse?                @relation("SalesOrderFulfillmentWarehouse", fields: [fulfillmentWarehouseId], references: [id], onDelete: Restrict)
+  items                      SalesOrderItem[]
+  afterSalesOrders           AfterSalesOrder[]         @relation("AfterSalesSourceOrder")
+  generatedAfterSalesOrder   AfterSalesOrder?          @relation("AfterSalesGeneratedOrder")
+  commissionRecords          CommissionRecord[]
+  serializedInventoryUnits   SerializedInventoryUnit[]
+  inventoryReservations      InventoryReservation[]
+  inventoryAlerts            InventoryAlert[]
 
   @@index([customerId])
+  @@index([sourceSalesOrderId])
   @@index([travelGroupId])
   @@index([salesUserId])
   @@index([salesUserId, createdAt])
@@ -962,6 +2020,7 @@ model SalesOrder {
   @@index([markedById])
   @@index([orderType])
   @@index([orderDate])
+  @@index([shippingDate])
   @@index([customerPhone])
   @@index([status])
   @@index([salesFormNo])
@@ -971,12 +2030,21 @@ model SalesOrder {
   @@index([logisticsNo])
   @@index([orderDate, status])
   @@index([travelGroupId, status])
+  @@index([pointsDestination])
+  @@index([pointsDestination, travelGroupId])
+  @@index([personalPointsGuideId])
+  @@index([travelGroupId, personalPointsGuideId])
+  @@index([pointsDestinationChangedById])
+  @@index([personalRatesUpdatedById])
+  @@index([fulfillmentWarehouseId, status], map: "sales_orders_fulfillment_warehouse_status_idx")
+  @@index([inventoryAppliedAt])
   @@map("sales_orders")
 }
 
 model SalesOrderItem {
   id                      String                 @id @default(uuid()) @db.Char(36)
   salesOrderId            String                 @map("sales_order_id") @db.Char(36)
+  inventoryLineKey        String?                @unique(map: "sales_order_items_inventory_line_key") @map("inventory_line_key") @db.VarChar(191)
   productId               String?                @map("product_id") @db.Char(36)
   productName             String                 @map("product_name") @db.VarChar(160)
   unit                    String?                @db.VarChar(20)
@@ -991,53 +2059,71 @@ model SalesOrderItem {
   sortOrder               Int                    @default(0) @map("sort_order")
   createdAt               DateTime               @default(now()) @map("created_at") @db.DateTime(0)
 
-  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  product    Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  salesOrder               SalesOrder                @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product                  Product?                  @relation(fields: [productId], references: [id], onDelete: SetNull)
   serializedInventoryUnits SerializedInventoryUnit[]
+  afterSalesOrderItems     AfterSalesOrderItem[]
+  inventoryReservations    InventoryReservation[]
 
   @@index([salesOrderId])
   @@index([productId])
+  @@index([salesOrderId, inventoryLineKey], map: "sales_order_items_order_inventory_line_idx")
   @@index([salesOrderId, sortOrder])
   @@map("sales_order_items")
 }
 
 model AfterSalesOrder {
-  id                   String               @id @default(uuid()) @db.Char(36)
-  afterSalesNo         String               @unique @map("after_sales_no") @db.VarChar(80)
-  salesOrderId         String               @map("sales_order_id") @db.Char(36)
-  customerId           String?              @map("customer_id") @db.Char(36)
-  issueType            AfterSalesIssueType  @map("issue_type")
-  actionType           AfterSalesActionType @map("action_type")
-  description          String               @db.Text
-  resolution           String?              @db.Text
-  refundAmountCents    Int                  @default(0) @map("refund_amount_cents")
-  status               AfterSalesStatus     @default(NEGOTIATING)
-  financeConfirmed     Boolean              @default(false) @map("finance_confirmed")
-  financeConfirmedById String?              @map("finance_confirmed_by_id") @db.Char(36)
-  financeConfirmedAt   DateTime?            @map("finance_confirmed_at") @db.DateTime(0)
-  warehouseConfirmedById String?            @map("warehouse_confirmed_by_id") @db.Char(36)
-  warehouseConfirmedAt DateTime?            @map("warehouse_confirmed_at") @db.DateTime(0)
-  warehouseConfirmNote String?              @map("warehouse_confirm_note") @db.Text
-  refundProofAttachments Json?              @map("refund_proof_attachments")
-  handledById          String?              @map("handled_by_id") @db.Char(36)
-  handledAt            DateTime?            @map("handled_at") @db.DateTime(0)
-  completedAt          DateTime?            @map("completed_at") @db.DateTime(0)
-  notes                String?              @db.Text
-  createdById          String?              @map("created_by_id") @db.Char(36)
-  updatedById          String?              @map("updated_by_id") @db.Char(36)
-  createdAt            DateTime             @default(now()) @map("created_at") @db.DateTime(0)
-  updatedAt            DateTime             @updatedAt @map("updated_at") @db.DateTime(0)
+  id                             String                          @id @default(uuid()) @db.Char(36)
+  afterSalesNo                   String                          @unique @map("after_sales_no") @db.VarChar(80)
+  salesOrderId                   String                          @map("sales_order_id") @db.Char(36)
+  afterSalesSalesOrderId         String                          @unique @map("after_sales_sales_order_id") @db.Char(36)
+  customerId                     String?                         @map("customer_id") @db.Char(36)
+  issueType                      AfterSalesIssueType             @map("issue_type")
+  actionType                     AfterSalesActionType            @map("action_type")
+  description                    String                          @db.Text
+  resolution                     String?                         @db.Text
+  refundAmountCents              Int                             @default(0) @map("refund_amount_cents")
+  deductionCalculationMode       String                          @default("manual_product_reference") @map("deduction_calculation_mode") @db.VarChar(40)
+  sourceAgencyDeductionCents     Int                             @default(0) @map("source_agency_deduction_cents")
+  agencyDeductionRate            Decimal?                        @map("agency_deduction_rate") @db.Decimal(10, 4)
+  dailyRebateRate                Decimal                         @default(0) @map("daily_rebate_rate") @db.Decimal(10, 4)
+  monthlyRebateRate              Decimal                         @default(0) @map("monthly_rebate_rate") @db.Decimal(10, 4)
+  agencyDeductionRuleId          String?                         @map("agency_deduction_rule_id") @db.Char(36)
+  agencyRebateRuleId             String?                         @map("agency_rebate_rule_id") @db.Char(36)
+  calculationDate                DateTime                        @map("calculation_date") @db.Date
+  agencyDeductionAdjustmentCents Int?                            @map("agency_deduction_adjustment_cents")
+  financialEffectStatus          AfterSalesFinancialEffectStatus @default(PENDING_CONFIRMATION) @map("financial_effect_status")
+  status                         AfterSalesStatus                @default(NEGOTIATING)
+  financeConfirmed               Boolean                         @default(false) @map("finance_confirmed")
+  financeConfirmedById           String?                         @map("finance_confirmed_by_id") @db.Char(36)
+  financeConfirmedAt             DateTime?                       @map("finance_confirmed_at") @db.DateTime(0)
+  warehouseConfirmedById         String?                         @map("warehouse_confirmed_by_id") @db.Char(36)
+  warehouseConfirmedAt           DateTime?                       @map("warehouse_confirmed_at") @db.DateTime(0)
+  warehouseConfirmNote           String?                         @map("warehouse_confirm_note") @db.Text
+  refundProofAttachments         Json?                           @map("refund_proof_attachments")
+  handledById                    String?                         @map("handled_by_id") @db.Char(36)
+  handledAt                      DateTime?                       @map("handled_at") @db.DateTime(0)
+  completedAt                    DateTime?                       @map("completed_at") @db.DateTime(0)
+  notes                          String?                         @db.Text
+  createdById                    String?                         @map("created_by_id") @db.Char(36)
+  updatedById                    String?                         @map("updated_by_id") @db.Char(36)
+  createdAt                      DateTime                        @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                      DateTime                        @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrder         SalesOrder         @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
-  customer           Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  financeConfirmedBy User?              @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
-  warehouseConfirmedBy User?            @relation("AfterSalesOrderWarehouseConfirmedBy", fields: [warehouseConfirmedById], references: [id], onDelete: SetNull)
-  handledBy          User?              @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
-  createdBy          User?              @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy          User?              @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  commissionRecords  CommissionRecord[]
+  salesOrder           SalesOrder            @relation("AfterSalesSourceOrder", fields: [salesOrderId], references: [id], onDelete: Restrict)
+  afterSalesSalesOrder SalesOrder            @relation("AfterSalesGeneratedOrder", fields: [afterSalesSalesOrderId], references: [id], onDelete: Restrict)
+  customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  financeConfirmedBy   User?                 @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
+  warehouseConfirmedBy User?                 @relation("AfterSalesOrderWarehouseConfirmedBy", fields: [warehouseConfirmedById], references: [id], onDelete: SetNull)
+  handledBy            User?                 @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
+  createdBy            User?                 @relation("AfterSalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy            User?                 @relation("AfterSalesOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  commissionRecords    CommissionRecord[]
+  items                AfterSalesOrderItem[]
+  receipts             AfterSalesReceipt[]
 
   @@index([salesOrderId])
+  @@index([afterSalesSalesOrderId])
   @@index([customerId])
   @@index([status])
   @@index([issueType])
@@ -1055,6 +2141,136 @@ model AfterSalesOrder {
   @@index([updatedById])
   @@index([salesOrderId, financeConfirmed])
   @@map("after_sales_orders")
+}
+
+model AfterSalesOrderItem {
+  id                      String   @id @default(uuid()) @db.Char(36)
+  afterSalesOrderId       String   @map("after_sales_order_id") @db.Char(36)
+  sourceSalesOrderItemId  String?  @map("source_sales_order_item_id") @db.Char(36)
+  productId               String?  @map("product_id") @db.Char(36)
+  productName             String   @map("product_name") @db.VarChar(160)
+  unit                    String?  @db.VarChar(20)
+  quantity                Int
+  originalUnitPriceCents  Int      @map("original_unit_price_cents")
+  subtotalCents           Int      @map("subtotal_cents")
+  returnRequired          Boolean  @default(false) @map("return_required")
+  expectedReturnQty       Int      @default(0) @map("expected_return_qty")
+  postedReceivedQty       Int      @default(0) @map("posted_received_qty")
+  returnVersion           Int      @default(0) @map("return_version")
+  isHistoricalPlaceholder Boolean  @default(false) @map("is_historical_placeholder")
+  notes                   String?  @db.Text
+  sortOrder               Int      @default(0) @map("sort_order")
+  createdAt               DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  afterSalesOrder      AfterSalesOrder         @relation(fields: [afterSalesOrderId], references: [id], onDelete: Cascade)
+  sourceSalesOrderItem SalesOrderItem?         @relation(fields: [sourceSalesOrderItemId], references: [id], onDelete: SetNull)
+  product              Product?                @relation(fields: [productId], references: [id], onDelete: SetNull)
+  receiptLines         AfterSalesReceiptLine[]
+
+  @@index([afterSalesOrderId])
+  @@index([sourceSalesOrderItemId])
+  @@index([productId])
+  @@map("after_sales_order_items")
+}
+
+model AfterSalesReceipt {
+  id                      String                  @id @default(uuid()) @db.Char(36)
+  afterSalesOrderId       String                  @map("after_sales_order_id") @db.Char(36)
+  warehouseId             String                  @map("warehouse_id") @db.Char(36)
+  status                  AfterSalesReceiptStatus @default(DRAFT)
+  sourceKey               String                  @unique(map: "after_sales_receipts_source_key") @map("source_key") @db.VarChar(191)
+  idempotencyKey          String                  @unique(map: "after_sales_receipts_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash             String                  @map("request_hash") @db.Char(64)
+  postSourceKey           String?                 @unique(map: "after_sales_receipts_post_source_key") @map("post_source_key") @db.VarChar(191)
+  postIdempotencyKey      String?                 @unique(map: "after_sales_receipts_post_idempotency_key") @map("post_idempotency_key") @db.VarChar(191)
+  postRequestHash         String?                 @map("post_request_hash") @db.Char(64)
+  reverseSourceKey        String?                 @unique(map: "after_sales_receipts_reverse_source_key") @map("reverse_source_key") @db.VarChar(191)
+  reverseIdempotencyKey   String?                 @unique(map: "after_sales_receipts_reverse_idempotency_key") @map("reverse_idempotency_key") @db.VarChar(191)
+  reverseRequestHash      String?                 @map("reverse_request_hash") @db.Char(64)
+  notes                   String?                 @db.Text
+  reversalReason          String?                 @map("reversal_reason") @db.VarChar(500)
+  confirmedById           String?                 @map("confirmed_by_id") @db.Char(36)
+  confirmedByNameSnapshot String?                 @map("confirmed_by_name_snapshot") @db.VarChar(100)
+  confirmedByRoleSnapshot String?                 @map("confirmed_by_role_snapshot") @db.VarChar(32)
+  confirmedAt             DateTime?               @map("confirmed_at") @db.DateTime(0)
+  reversedById            String?                 @map("reversed_by_id") @db.Char(36)
+  reversedByNameSnapshot  String?                 @map("reversed_by_name_snapshot") @db.VarChar(100)
+  reversedByRoleSnapshot  String?                 @map("reversed_by_role_snapshot") @db.VarChar(32)
+  reversedAt              DateTime?               @map("reversed_at") @db.DateTime(0)
+  version                 Int                     @default(0)
+  createdById             String?                 @map("created_by_id") @db.Char(36)
+  updatedById             String?                 @map("updated_by_id") @db.Char(36)
+  createdAt               DateTime                @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt               DateTime                @updatedAt @map("updated_at") @db.DateTime(0)
+
+  afterSalesOrder AfterSalesOrder         @relation(fields: [afterSalesOrderId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse               @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  confirmedBy     User?                   @relation("AfterSalesReceiptConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  reversedBy      User?                   @relation("AfterSalesReceiptReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  createdBy       User?                   @relation("AfterSalesReceiptCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?                   @relation("AfterSalesReceiptUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  lines           AfterSalesReceiptLine[]
+
+  @@index([afterSalesOrderId, status, createdAt], map: "after_sales_receipts_order_status_idx")
+  @@index([warehouseId, status, createdAt], map: "after_sales_receipts_warehouse_status_idx")
+  @@index([confirmedById])
+  @@index([reversedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("after_sales_receipts")
+}
+
+model AfterSalesReceiptLine {
+  id                    String                     @id @default(uuid()) @db.Char(36)
+  receiptId             String                     @map("receipt_id") @db.Char(36)
+  afterSalesOrderItemId String                     @map("after_sales_order_item_id") @db.Char(36)
+  lineNo                Int                        @map("line_no")
+  receivedQty           Int                        @map("received_qty")
+  condition             AfterSalesReceiptCondition
+  inventoryBatchId      String?                    @map("inventory_batch_id") @db.Char(36)
+  exceptionReason       String?                    @map("exception_reason") @db.VarChar(500)
+  notes                 String?                    @db.Text
+  version               Int                        @default(0)
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.DateTime(0)
+
+  receipt             AfterSalesReceipt                 @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  afterSalesOrderItem AfterSalesOrderItem               @relation(fields: [afterSalesOrderItemId], references: [id], onDelete: Restrict)
+  inventoryBatch      InventoryBatch?                   @relation(fields: [inventoryBatchId], references: [id], onDelete: Restrict)
+  serializedUnits     AfterSalesReceiptSerializedUnit[]
+
+  @@unique([receiptId, lineNo], map: "after_sales_receipt_lines_receipt_line_key")
+  @@index([afterSalesOrderItemId])
+  @@index([inventoryBatchId])
+  @@map("after_sales_receipt_lines")
+}
+
+model AfterSalesReceiptSerializedUnit {
+  id                             String                                 @id @default(uuid()) @db.Char(36)
+  receiptLineId                  String                                 @map("receipt_line_id") @db.Char(36)
+  originalSerializedUnitId       String?                                @map("original_serialized_unit_id") @db.Char(36)
+  scannedLogisticsCodeSnapshot   String                                 @map("scanned_logistics_code_snapshot") @db.VarChar(160)
+  normalizedScannedLogisticsCode String                                 @map("normalized_scanned_logistics_code") @db.VarChar(160)
+  matchStatus                    AfterSalesReceiptSerializedMatchStatus
+  activeOriginalUnitKey          String?                                @unique(map: "after_sales_receipt_serialized_active_unit_key") @map("active_original_unit_key") @db.Char(36)
+  previousWarehouseId            String?                                @map("previous_warehouse_id") @db.Char(36)
+  previousStatus                 SerializedInventoryStatus?             @map("previous_status")
+  inventoryMovementId            String?                                @unique(map: "after_sales_receipt_serialized_movement_key") @map("inventory_movement_id") @db.Char(36)
+  createdAt                      DateTime                               @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                      DateTime                               @updatedAt @map("updated_at") @db.DateTime(0)
+
+  receiptLine         AfterSalesReceiptLine    @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  originalUnit        SerializedInventoryUnit? @relation(fields: [originalSerializedUnitId], references: [id], onDelete: Restrict)
+  previousWarehouse   Warehouse?               @relation("AfterSalesReceiptSerializedPreviousWarehouse", fields: [previousWarehouseId], references: [id], onDelete: Restrict)
+  inventoryMovement   InventoryMovement?       @relation(fields: [inventoryMovementId], references: [id], onDelete: Restrict)
+  inventoryDocument   InventoryDocument?       @relation(fields: [inventoryDocumentId], references: [id])
+  inventoryDocumentId String?                  @db.Char(36)
+
+  @@index([receiptLineId, matchStatus], map: "after_sales_receipt_serialized_line_status_idx")
+  @@index([originalSerializedUnitId, matchStatus], map: "after_sales_receipt_serialized_unit_status_idx")
+  @@index([normalizedScannedLogisticsCode], map: "after_sales_receipt_serialized_scanned_code_idx")
+  @@index([previousWarehouseId])
+  @@map("after_sales_receipt_serialized_units")
 }
 
 model AgencyDeductionRule {
@@ -1256,8 +2472,8 @@ model TravelGroupFinanceSummary {
   id                           String    @id @default(uuid()) @db.Char(36)
   travelGroupId                String    @unique @map("travel_group_id") @db.Char(36)
   totalSalesAmountCents        Int       @default(0) @map("total_sales_amount_cents")
-  totalCashOnDeliveryCents      Int       @default(0) @map("total_cash_on_delivery_cents")
-  totalPaidDepositCents         Int       @default(0) @map("total_paid_deposit_cents")
+  totalCashOnDeliveryCents     Int       @default(0) @map("total_cash_on_delivery_cents")
+  totalPaidDepositCents        Int       @default(0) @map("total_paid_deposit_cents")
   confirmedRefundAmountCents   Int       @default(0) @map("confirmed_refund_amount_cents")
   effectiveSalesAmountCents    Int       @default(0) @map("effective_sales_amount_cents")
   totalAgencyDeductionCents    Int       @default(0) @map("total_agency_deduction_cents")
@@ -1299,6 +2515,55 @@ model TravelGroupFinanceSummary {
   @@index([updatedById])
   @@index([updatedAt])
   @@map("travel_group_finance_summaries")
+}
+
+model GuidePointsSummary {
+  id                            String    @id @default(uuid()) @db.Char(36)
+  travelGroupId                 String    @map("travel_group_id") @db.Char(36)
+  guideId                       String    @map("guide_id") @db.Char(36)
+  guideNameSnapshot             String    @map("guide_name_snapshot") @db.VarChar(80)
+  orderCount                    Int       @default(0) @map("order_count")
+  totalSalesAmountCents         Int       @default(0) @map("total_sales_amount_cents")
+  totalCashOnDeliveryCents      Int       @default(0) @map("total_cash_on_delivery_cents")
+  totalPaidDepositCents         Int       @default(0) @map("total_paid_deposit_cents")
+  confirmedRefundAmountCents    Int       @default(0) @map("confirmed_refund_amount_cents")
+  effectiveSalesAmountCents     Int       @default(0) @map("effective_sales_amount_cents")
+  totalLiquorCostDeductionCents Int       @default(0) @map("total_liquor_cost_deduction_cents")
+  totalNetAmountCents           Int       @default(0) @map("total_net_amount_cents")
+  totalDailyPointsCents         Int       @default(0) @map("total_daily_points_cents")
+  totalMonthlyPointsCents       Int       @default(0) @map("total_monthly_points_cents")
+  paidPointsCents               Int       @default(0) @map("paid_points_cents")
+  unpaidPointsCents             Int       @default(0) @map("unpaid_points_cents")
+  dailyPointsPaid               Boolean   @default(false) @map("daily_points_paid")
+  dailyPointsPaidById           String?   @map("daily_points_paid_by_id") @db.Char(36)
+  dailyPointsPaidAt             DateTime? @map("daily_points_paid_at") @db.DateTime(0)
+  monthlyPointsPaid             Boolean   @default(false) @map("monthly_points_paid")
+  monthlyPointsPaidById         String?   @map("monthly_points_paid_by_id") @db.Char(36)
+  monthlyPointsPaidAt           DateTime? @map("monthly_points_paid_at") @db.DateTime(0)
+  notes                         String?   @db.Text
+  calculationVersion            String    @default("guide_points_v1") @map("calculation_version") @db.VarChar(40)
+  sourceSnapshot                Json?     @map("source_snapshot")
+  updatedById                   String?   @map("updated_by_id") @db.Char(36)
+  createdAt                     DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                     DateTime  @updatedAt @map("updated_at") @db.DateTime(0)
+
+  travelGroup         TravelGroup @relation(fields: [travelGroupId], references: [id], onDelete: Cascade)
+  guide               Guide       @relation(fields: [guideId], references: [id], onDelete: Restrict)
+  dailyPointsPaidBy   User?       @relation("GuidePointsSummaryDailyPointsPaidBy", fields: [dailyPointsPaidById], references: [id], onDelete: SetNull)
+  monthlyPointsPaidBy User?       @relation("GuidePointsSummaryMonthlyPointsPaidBy", fields: [monthlyPointsPaidById], references: [id], onDelete: SetNull)
+  updatedBy           User?       @relation("GuidePointsSummaryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([travelGroupId, guideId], map: "guide_points_summaries_group_guide_key")
+  @@index([travelGroupId])
+  @@index([guideId])
+  @@index([orderCount])
+  @@index([dailyPointsPaid])
+  @@index([monthlyPointsPaid])
+  @@index([dailyPointsPaidById])
+  @@index([monthlyPointsPaidById])
+  @@index([updatedById])
+  @@index([updatedAt])
+  @@map("guide_points_summaries")
 }
 
 model DailyReconciliation {

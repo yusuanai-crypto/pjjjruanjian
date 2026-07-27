@@ -17,6 +17,7 @@ const LOGISTICS_METHOD_ALIASES: Record<string, string> = Object.freeze({
   韵达快递: 'yunda',
   自带: 'self_carry',
   自提: 'self_carry',
+  客户自提: 'self_carry',
 });
 
 export const SUPPORTED_LOGISTICS_PROVIDER_CODES = Object.freeze(

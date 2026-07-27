@@ -63,12 +63,12 @@ test('PATCH logistics company or tracking number clears old tracking cache', asy
   );
 });
 
-test('shipping order may wait for a number but entering packed state requires provider and number', async () => {
+test('shipping order enters packed with a provider before finance adds the tracking number', async () => {
   await withPhase1Server(
-    async (baseUrl) => {
+    async (baseUrl, { prisma }) => {
       const admin = await login(baseUrl);
 
-      const waiting = await requestJson(
+      const packed = await requestJson(
         baseUrl,
         '/api/sales-orders/order-logistics-waiting/packing',
         {
@@ -77,29 +77,42 @@ test('shipping order may wait for a number but entering packed state requires pr
           body: {
             logisticsProviderCode: 'shunfeng',
             logisticsMethod: '顺丰速运',
-            packingStatus: 'packing',
-          },
-        },
-      );
-      assert.equal(waiting.response.status, 200);
-      assert.equal(waiting.body.data.salesOrder.logisticsNo, null);
-
-      const prematurelyPacked = await requestJson(
-        baseUrl,
-        '/api/sales-orders/order-logistics-waiting/packing',
-        {
-          method: 'PATCH',
-          token: admin.token,
-          body: {
             packingStatus: 'packed',
           },
         },
       );
-      assertErrorContract(
-        prematurelyPacked,
-        400,
-        'SHIPPED_LOGISTICS_REQUIRED',
+      assert.equal(packed.response.status, 200);
+      assert.equal(packed.body.data.salesOrder.packingStatus, 'packed');
+      assert.equal(packed.body.data.salesOrder.logisticsNo, null);
+
+      const workbench = await requestJson(
+        baseUrl,
+        '/api/finance/workbench?dateFrom=2026-07-23&dateTo=2026-07-23&limit=20',
+        {
+          token: admin.token,
+        },
       );
+      assert.equal(workbench.response.status, 200);
+      const pendingLogistics =
+        workbench.body.data.workbench.pendingLogistics.find(
+          (entry) => entry.order.id === 'order-logistics-waiting',
+        );
+      assert.ok(pendingLogistics);
+      assert.ok(
+        pendingLogistics.reasons.includes('missing_logistics_no'),
+      );
+
+      await prisma.salesOrder.update({
+        where: { id: 'order-logistics-waiting' },
+        data: {
+          trackingState: 'in_transit',
+          trackingStateLabel: '运输中',
+          trackingLatestLocation: '遵义市',
+          trackingLatestDescription: '旧缓存',
+          trackingEventAt: new Date('2026-07-23T01:00:00.000Z'),
+          trackingCheckedAt: new Date('2026-07-23T01:05:00.000Z'),
+        },
+      });
 
       const numberAdded = await requestJson(
         baseUrl,
@@ -113,20 +126,11 @@ test('shipping order may wait for a number but entering packed state requires pr
         },
       );
       assert.equal(numberAdded.response.status, 200);
-
-      const packed = await requestJson(
-        baseUrl,
-        '/api/sales-orders/order-logistics-waiting/packing',
-        {
-          method: 'PATCH',
-          token: admin.token,
-          body: {
-            packingStatus: 'packed',
-          },
-        },
+      assert.equal(
+        numberAdded.body.data.salesOrder.logisticsNo,
+        'SF-WAITING-001',
       );
-      assert.equal(packed.response.status, 200);
-      assert.equal(packed.body.data.salesOrder.packingStatus, 'packed');
+      assertTrackingCacheCleared(numberAdded.body.data.salesOrder);
     },
     {
       prisma: {
@@ -143,6 +147,163 @@ test('shipping order may wait for a number but entering packed state requires pr
             trackingLatestDescription: null,
             trackingEventAt: null,
             trackingCheckedAt: null,
+          }),
+        ],
+      },
+    },
+  );
+});
+
+test('shipping order cannot enter packed without a logistics provider', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const result = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order-provider-required/packing',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            packingStatus: 'packed',
+          },
+        },
+      );
+
+      assertErrorContract(
+        result,
+        400,
+        'SHIPPED_LOGISTICS_PROVIDER_REQUIRED',
+      );
+      assert.equal(
+        result.body.error.message,
+        '邮寄订单进入已打包状态前必须选择物流公司。',
+      );
+    },
+    {
+      prisma: {
+        salesOrders: [
+          buildOrder({
+            id: 'order-provider-required',
+            orderNo: 'SO-PROVIDER-REQUIRED',
+            logisticsProviderCode: null,
+            logisticsMethod: null,
+            logisticsNo: null,
+          }),
+        ],
+      },
+    },
+  );
+});
+
+test('legacy 客户自提 alias enters packed without a tracking number', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const result = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order-customer-self-carry/packing',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            packingStatus: 'packed',
+          },
+        },
+      );
+
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.data.salesOrder.packingStatus, 'packed');
+      assert.equal(
+        result.body.data.salesOrder.logisticsProviderCode,
+        'self_carry',
+      );
+      assert.equal(result.body.data.salesOrder.logisticsNo, null);
+    },
+    {
+      prisma: {
+        salesOrders: [
+          buildOrder({
+            id: 'order-customer-self-carry',
+            orderNo: 'SO-CUSTOMER-SELF-CARRY',
+            logisticsProviderCode: null,
+            logisticsMethod: '客户自提',
+            logisticsNo: null,
+          }),
+        ],
+      },
+    },
+  );
+});
+
+test('finance may keep an originally empty packed tracking number empty', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const result = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order-packed-without-number/finance',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            logisticsNo: '',
+          },
+        },
+      );
+
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.data.salesOrder.packingStatus, 'packed');
+      assert.equal(result.body.data.salesOrder.logisticsNo, null);
+    },
+    {
+      prisma: {
+        salesOrders: [
+          buildOrder({
+            id: 'order-packed-without-number',
+            orderNo: 'SO-PACKED-WITHOUT-NUMBER',
+            packingStatus: 'PACKED',
+            logisticsNo: null,
+          }),
+        ],
+      },
+    },
+  );
+});
+
+test('finance still cannot explicitly clear an existing packed tracking number', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const result = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order-packed-with-number/finance',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            logisticsNo: '',
+          },
+        },
+      );
+
+      assertErrorContract(
+        result,
+        400,
+        'PACKED_LOGISTICS_NO_CANNOT_BE_CLEARED',
+      );
+      assert.equal(
+        result.body.error.message,
+        '已打包订单已有物流单号，不能清空。',
+      );
+    },
+    {
+      prisma: {
+        salesOrders: [
+          buildOrder({
+            id: 'order-packed-with-number',
+            orderNo: 'SO-PACKED-WITH-NUMBER',
+            packingStatus: 'PACKED',
           }),
         ],
       },

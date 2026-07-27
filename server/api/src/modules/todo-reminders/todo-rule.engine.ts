@@ -6,10 +6,15 @@ import {
 export type TodoSourceType =
   | 'TRAVEL_GROUP'
   | 'SALES_ORDER'
-  | 'AFTER_SALES_ORDER';
+  | 'AFTER_SALES_ORDER'
+  | 'INVENTORY_ALERT'
+  | 'STOCKTAKE';
 export type TodoPriority = 'NORMAL' | 'IMPORTANT' | 'URGENT';
 export type TodoStatus = 'ACTIVE' | 'RESOLVED' | 'CANCELLED';
 export type TodoTargetRole =
+  | 'SUPER_ADMIN'
+  | 'ADMIN'
+  | 'BOSS'
   | 'FRONT_DESK'
   | 'TASTER'
   | 'FINANCE'
@@ -47,6 +52,10 @@ export class TodoRuleEngine {
         return this.evaluateSalesOrder(source);
       case 'AFTER_SALES_ORDER':
         return this.evaluateAfterSalesOrder(source);
+      case 'INVENTORY_ALERT':
+        return this.evaluateInventoryAlert(source);
+      case 'STOCKTAKE':
+        return this.evaluateStocktake(source);
       default:
         return [];
     }
@@ -59,6 +68,12 @@ export class TodoRuleEngine {
     if (
       sourceType === 'SALES_ORDER' &&
       ['CANCELLED', 'REFUNDED'].includes(String(source.status || '').toUpperCase())
+    ) {
+      return 'CANCELLED';
+    }
+    if (
+      sourceType === 'INVENTORY_ALERT' &&
+      String(source.status || '').toUpperCase() === 'CANCELLED'
     ) {
       return 'CANCELLED';
     }
@@ -156,18 +171,56 @@ export class TodoRuleEngine {
 
   private evaluateSalesOrder(order: any): TodoRuleMatch[] {
     const status = String(order.status || '').toUpperCase();
-    if (!EFFECTIVE_SALES_ORDER_STATUSES.has(status)) {
-      return [];
-    }
     const sourceNumber = safeSourceNumber(order.orderNo, order.id);
+    const matches: TodoRuleMatch[] = [];
+    const hasOrderShortage = (
+      Array.isArray(order.inventoryAlerts)
+        ? order.inventoryAlerts
+        : []
+    ).some(
+      (alert: any) =>
+        String(alert?.type || '').toUpperCase() ===
+          'ORDER_SHORTAGE' &&
+        String(alert?.status || '').toUpperCase() === 'ACTIVE',
+    );
+    if (hasOrderShortage) {
+      for (const target of [
+        {
+          ruleCode: 'INVENTORY_ORDER_SHORTAGE_WAREHOUSE',
+          targetRole: 'WAREHOUSE',
+        },
+        {
+          ruleCode: 'INVENTORY_ORDER_SHORTAGE_ADMIN',
+          targetRole: 'ADMIN',
+        },
+        {
+          ruleCode: 'INVENTORY_ORDER_SHORTAGE_SUPER_ADMIN',
+          targetRole: 'SUPER_ADMIN',
+        },
+      ] as const) {
+        matches.push(
+          match({
+            ruleCode: target.ruleCode,
+            sourceType: 'SALES_ORDER',
+            source: order,
+            sourceNumber,
+            targetRole: target.targetRole,
+            title: '订单库存待处理',
+            content: `销售订单 ${sourceNumber} 存在库存待处理事项，请在库存模块处理。`,
+            priority: 'IMPORTANT',
+          }),
+        );
+      }
+    }
+    if (!EFFECTIVE_SALES_ORDER_STATUSES.has(status)) {
+      return matches;
+    }
     const items = Array.isArray(order.items) ? order.items : [];
     const hasShippingItem = items.some(
       (item: any) =>
         String(item?.deliveryType || '').toUpperCase() === 'SHIPPING',
     );
     const packingStatus = String(order.packingStatus || '').toUpperCase();
-    const matches: TodoRuleMatch[] = [];
-
     if (
       hasShippingItem &&
       ['PENDING', 'PACKING', 'ABNORMAL'].includes(packingStatus)
@@ -294,6 +347,102 @@ export class TodoRuleEngine {
     }
     return matches;
   }
+
+  private evaluateInventoryAlert(alert: any): TodoRuleMatch[] {
+    if (String(alert.status || '').toUpperCase() !== 'ACTIVE') {
+      return [];
+    }
+    const type = String(alert.type || '').toUpperCase();
+    const sourceNumber = safeSourceNumber(
+      alert.sourceNumber,
+      alert.id,
+    );
+    const definitions: Record<
+      string,
+      {
+        title: string;
+        content: string;
+        priority: TodoPriority;
+        roles: TodoTargetRole[];
+      }
+    > = {
+      LOW_STOCK: {
+        title: '库存低于最低库存',
+        content: `仓库商品 ${sourceNumber} 需要补货处理。`,
+        priority: 'IMPORTANT',
+        roles: inventoryGlobalRoles('WAREHOUSE'),
+      },
+      NEGATIVE_AVAILABLE: {
+        title: '库存缺货待处理',
+        content: `仓库商品 ${sourceNumber} 存在缺货，请在库存模块处理。`,
+        priority: 'URGENT',
+        roles: inventoryGlobalRoles('WAREHOUSE'),
+      },
+      PENDING_COST: {
+        title: '库存采购成本待补录',
+        content: `仓库商品 ${sourceNumber} 存在待补成本库存，请在库存模块处理。`,
+        priority: 'IMPORTANT',
+        roles: inventoryGlobalRoles('FINANCE'),
+      },
+      ORDER_SHORTAGE: {
+        title: '订单库存待配',
+        content: `仓库商品 ${sourceNumber} 存在订单履约待配事项，请在库存模块处理。`,
+        priority: 'IMPORTANT',
+        roles: inventoryGlobalRoles('WAREHOUSE'),
+      },
+      TRANSFER_OVERDUE: {
+        title: '调拨逾期待收货',
+        content: `仓库商品 ${sourceNumber} 存在逾期待收货调拨，请在库存模块处理。`,
+        priority: 'URGENT',
+        roles: inventoryGlobalRoles('WAREHOUSE'),
+      },
+    };
+    const definition = definitions[type];
+    if (!definition) {
+      return [];
+    }
+    return definition.roles.map((targetRole) =>
+      match({
+        ruleCode: `INVENTORY_${type}_${targetRole}`,
+        sourceType: 'INVENTORY_ALERT',
+        source: alert,
+        sourceNumber,
+        targetRole,
+        title: definition.title,
+        content: definition.content,
+        priority: definition.priority,
+      }),
+    );
+  }
+
+  private evaluateStocktake(stocktake: any): TodoRuleMatch[] {
+    if (String(stocktake.status || '').toUpperCase() !== 'SUBMITTED') {
+      return [];
+    }
+    const sourceNumber = safeSourceNumber(
+      stocktake.stocktakeNo,
+      stocktake.id,
+    );
+    return (['BOSS', 'ADMIN', 'SUPER_ADMIN'] as TodoTargetRole[]).map(
+      (targetRole) =>
+        match({
+          ruleCode: `INVENTORY_STOCKTAKE_APPROVAL_${targetRole}`,
+          sourceType: 'STOCKTAKE',
+          source: stocktake,
+          sourceNumber,
+          targetRole,
+          title: '库存盘点待审批',
+          content: `盘点单 ${sourceNumber} 等待审批，请在库存模块处理。`,
+          priority: 'IMPORTANT',
+        }),
+    );
+  }
+}
+
+function inventoryGlobalRoles(
+  specialist: 'WAREHOUSE' | 'FINANCE',
+): TodoTargetRole[] {
+  return [specialist, 'BOSS', 'ADMIN', 'SUPER_ADMIN'];
 }
 
 function match(input: {

@@ -371,17 +371,17 @@ test('contract: finance overview uses confirmed after-sales refunds and global m
       assertNoShippedFields(markedOverview.body.data.overview);
       const markedMetrics = markedOverview.body.data.overview.metrics;
       assert.equal(markedMetrics.travelGroupCount, 1);
-      assert.equal(markedMetrics.orderCount, 4);
-      assert.equal(markedMetrics.grossSalesAmountCents, 18000);
+      assert.equal(markedMetrics.orderCount, 5);
+      assert.equal(markedMetrics.grossSalesAmountCents, 27000);
       assert.equal(markedMetrics.refundAmountCents, 1500);
-      assert.equal(markedMetrics.pendingAfterSalesRefundAmountCents, 700);
+      assert.equal(markedMetrics.pendingAfterSalesRefundAmountCents, 1300);
       assert.equal(markedMetrics.legacyRefundOrderAmountCents, 14000);
-      assert.equal(markedMetrics.netSalesAmountCents, 16500);
-      assert.equal(markedMetrics.logisticsFeeCents, 1100);
-      assert.equal(markedMetrics.pendingInvoiceCount, 2);
+      assert.equal(markedMetrics.netSalesAmountCents, 25500);
+      assert.equal(markedMetrics.logisticsFeeCents, 1190);
+      assert.equal(markedMetrics.pendingInvoiceCount, 3);
       assert.equal(markedMetrics.pendingCustomerMarkCount, 0);
       assert.equal(markedMetrics.pendingTravelGroupMarkCount, 0);
-      assert.equal(markedMetrics.pendingAfterSalesConfirmCount, 1);
+      assert.equal(markedMetrics.pendingAfterSalesConfirmCount, 2);
     },
     {
       prisma: createFinanceOverviewPrismaOptions(),
@@ -578,21 +578,27 @@ test('contract: finance workbench enforces roles and returns scoped pending buck
       const markedData = marked.body.data.workbench;
       assertNoShippedFields(markedData);
       assert.deepEqual(
-        markedData.pendingAfterSales.map((order) => order.id),
-        ['as_fin_pending_marked'],
+        markedData.pendingAfterSales.map((order) => order.id).sort(),
+        ['as_fin_pending_marked', 'as_fin_pending_unmarked_group'],
       );
       assert.deepEqual(markedData.pendingMarks, []);
       assert.deepEqual(
-        markedData.pendingLogistics.map((entry) => entry.order.id),
-        ['so_fin_valid_marked'],
+        markedData.pendingLogistics
+          .map((entry) => entry.order.id)
+          .sort(),
+        ['so_fin_unmarked_group', 'so_fin_valid_marked'],
       );
       assert.equal(
         markedData.recentOrders.some(
-          (order) =>
-            order.id === 'so_fin_unmarked_customer' ||
-            order.id === 'so_fin_unmarked_group',
+          (order) => order.id === 'so_fin_unmarked_customer',
         ),
         false,
+      );
+      assert.equal(
+        markedData.recentOrders.some(
+          (order) => order.id === 'so_fin_unmarked_group',
+        ),
+        true,
       );
     },
     {
@@ -685,6 +691,7 @@ test('contract: warehouse order wrapper lists shipping orders and saves packing 
             packingStatus: 'packed',
             packageCount: 3,
             warehouseRemark: 'warehouse wrapper smoke packed',
+            hasPackingMark: true,
           },
         },
       );
@@ -696,6 +703,8 @@ test('contract: warehouse order wrapper lists shipping orders and saves packing 
         patched.body.data.warehouseOrder.warehouseRemark,
         'warehouse wrapper smoke packed',
       );
+      assert.equal(patched.body.data.warehouseOrder.hasPackingMark, true);
+      assert.equal(patched.body.data.warehouseOrder.financeMark, true);
       assertNoShippedFields(patched.body.data.warehouseOrder);
 
       const packingLogs = await requestJson(
@@ -719,6 +728,72 @@ test('contract: warehouse order wrapper lists shipping orders and saves packing 
       assert.equal(packingLog.beforeData.packingStatus, 'pending');
       assert.equal(packingLog.afterData.packingStatus, 'packed');
       assert.equal(packingLog.afterData.packageCount, 3);
+      assert.equal(packingLog.beforeData.hasPackingMark, false);
+      assert.equal(packingLog.afterData.hasPackingMark, true);
+      assert.equal(packingLog.beforeData.financeMark, true);
+      assert.equal(packingLog.afterData.financeMark, true);
+
+      const unmarked = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_marked/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            hasPackingMark: false,
+          },
+        },
+      );
+      assert.equal(unmarked.response.status, 200);
+      assert.equal(unmarked.body.data.warehouseOrder.hasPackingMark, false);
+      assert.equal(unmarked.body.data.warehouseOrder.financeMark, true);
+
+      const invalidPackingMark = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders/so_wh_shipping_marked/packing',
+        {
+          method: 'PATCH',
+          token: warehouse.token,
+          body: {
+            hasPackingMark: 'true',
+          },
+        },
+      );
+      assertErrorContract(invalidPackingMark, 400, 'VALIDATION_FAILED');
+
+      const persisted = await requestJson(
+        baseUrl,
+        '/api/warehouse/orders?dateFrom=2026-07-04&dateTo=2026-07-04&limit=20',
+        {
+          token: warehouse.token,
+        },
+      );
+      assert.equal(persisted.response.status, 200);
+      const persistedOrder = persisted.body.data.warehouseOrders.find(
+        (order) => order.id === 'so_wh_shipping_marked',
+      );
+      assert.ok(persistedOrder);
+      assert.equal(persistedOrder.hasPackingMark, false);
+      assert.equal(persistedOrder.financeMark, true);
+
+      const updatedPackingLogs = await requestJson(
+        baseUrl,
+        '/api/operation-logs?action=sales_orders.packing.update',
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(updatedPackingLogs.response.status, 200);
+      assert.ok(
+        updatedPackingLogs.body.data.logs.some(
+          (log) =>
+            log.entityId === 'so_wh_shipping_marked' &&
+            log.beforeData.hasPackingMark === true &&
+            log.afterData.hasPackingMark === false &&
+            log.beforeData.financeMark === true &&
+            log.afterData.financeMark === true,
+        ),
+      );
 
       const bossPatch = await requestJson(
         baseUrl,
@@ -779,7 +854,11 @@ test('contract: warehouse order wrapper lists shipping orders and saves packing 
       assert.equal(markedList.response.status, 200);
       assert.deepEqual(
         markedList.body.data.warehouseOrders.map((order) => order.id).sort(),
-        ['so_wh_shipping_marked', 'so_wh_shipping_packed'],
+        [
+          'so_wh_shipping_marked',
+          'so_wh_shipping_packed',
+          'so_wh_shipping_unmarked_group',
+        ],
       );
 
       const hiddenPatch = await requestJson(
@@ -902,6 +981,7 @@ function createWarehouseOrdersPrismaOptions() {
         customerId: 'cust_wh_unmarked',
         customerName: 'Warehouse Wrapper Smoke Unmarked Customer',
         packingStatus: 'PACKING',
+        financeMark: false,
       }),
       createWarehouseOrderSeed({
         id: 'so_wh_shipping_unmarked_group',
@@ -924,6 +1004,7 @@ function createWarehouseOrderSeed(overrides = {}) {
     totalAmountCents: 1000,
     packingStatus: 'PENDING',
     financeMark: true,
+    hasPackingMark: false,
     warehouseRemark: 'warehouse wrapper smoke seed',
     createdAt: '2026-07-04T08:00:00.000Z',
     updatedAt: '2026-07-04T08:00:00.000Z',
@@ -1066,6 +1147,7 @@ function createFinanceOverviewPrismaOptions() {
         cashOnDeliveryAmountCents: 700,
         logisticsFeeCents: 70,
         invoiceRequired: true,
+        financeMark: false,
       }),
       createFinanceOverviewOrderSeed({
         id: 'so_fin_unmarked_group',
@@ -2957,6 +3039,7 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     });
     assert.equal(order.packingStatus, 'pending');
     assert.equal(order.packageCount, 0);
+    assert.equal(order.hasPackingMark, false);
     assert.equal(order.totalAmountCents, 15000);
     assert.equal(order.status, 'valid');
 
@@ -2971,6 +3054,7 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
           packingStatus: 'packing',
           packageCount: 3,
           warehouseRemark: 'warehouse packing test',
+          hasPackingMark: true,
         },
       },
     );
@@ -2987,6 +3071,7 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     );
     assert.equal(warehousePatchedOrder.totalAmountCents, 15000);
     assert.equal(warehousePatchedOrder.status, 'valid');
+    assert.equal(warehousePatchedOrder.hasPackingMark, true);
     assert.equal(warehousePatchedOrder.financeMark, false);
     assert.equal(warehousePatchedOrder.logisticsNo, null);
     assert.equal(warehousePatchedOrder.logisticsFeeCents, 0);
@@ -3015,6 +3100,7 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
           packingStatus: 'packed',
           packageCount: 0,
           warehouseRemark: null,
+          hasPackingMark: false,
         },
       },
     );
@@ -3025,6 +3111,8 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     assert.equal(adminPatchedOrder.packingStatus, 'packed');
     assert.equal(adminPatchedOrder.packageCount, 0);
     assert.equal(adminPatchedOrder.warehouseRemark, null);
+    assert.equal(adminPatchedOrder.hasPackingMark, false);
+    assert.equal(adminPatchedOrder.financeMark, false);
 
     const financePatch = await requestJson(
       baseUrl,
@@ -3122,6 +3210,34 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
     );
     assertErrorContract(negativePackageCount, 400, 'VALIDATION_FAILED');
 
+    const invalidPackingMark = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}/packing`,
+      {
+        method: 'PATCH',
+        token: warehouse.token,
+        body: {
+          hasPackingMark: 1,
+        },
+      },
+    );
+    assertErrorContract(invalidPackingMark, 400, 'VALIDATION_FAILED');
+
+    const persistedOrder = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${order.id}`,
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(persistedOrder.response.status, 200);
+    assert.equal(
+      persistedOrder.body.data.salesOrder.hasPackingMark,
+      financePatchedOrder.hasPackingMark,
+    );
+    assert.equal(persistedOrder.body.data.salesOrder.hasPackingMark, false);
+    assert.equal(persistedOrder.body.data.salesOrder.financeMark, false);
+
     const logs = await requestJson(
       baseUrl,
       '/api/operation-logs?action=sales_orders.packing.update&result=SUCCESS',
@@ -3136,7 +3252,9 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
         (log) =>
           log.beforeData.packingStatus === 'pending' &&
           log.afterData.packingStatus === 'packing' &&
-          log.afterData.packageCount === 3,
+          log.afterData.packageCount === 3 &&
+          log.beforeData.hasPackingMark === false &&
+          log.afterData.hasPackingMark === true,
       ),
     );
     assert.ok(
@@ -3144,7 +3262,9 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
         (log) =>
           log.beforeData.packingStatus === 'packing' &&
           log.afterData.packingStatus === 'packed' &&
-          log.afterData.packageCount === 0,
+          log.afterData.packageCount === 0 &&
+          log.beforeData.hasPackingMark === true &&
+          log.afterData.hasPackingMark === false,
       ),
     );
     assert.ok(
@@ -3156,7 +3276,10 @@ test('contract: sales order packing patch updates warehouse fields and rejects u
       ),
     );
     for (const log of logs.body.data.logs) {
+      assertSalesOrderDtoPhase4(log.beforeData);
       assertSalesOrderDtoPhase4(log.afterData);
+      assert.equal(log.beforeData.financeMark, false);
+      assert.equal(log.afterData.financeMark, false);
     }
   });
 });
@@ -4605,7 +4728,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
         },
       },
     );
-    assertErrorContract(tasterWrongGroup, 403, 'PERMISSION_DENIED');
+    assertErrorContract(tasterWrongGroup, 404, 'TRAVEL_GROUP_NOT_FOUND');
 
     const financePatch = await requestJson(
       baseUrl,
@@ -4778,14 +4901,18 @@ test('contract: associated tasters can edit today groups without a shared limit'
     assert.equal(unassignedResult.response.status, 201);
     const unassignedGroup = unassignedResult.body.data.travelGroup;
 
-    for (const session of [primary, liaison, unrelated]) {
+    for (const [session, expectedGroups] of [
+      [primary, [associatedGroup]],
+      [liaison, [associatedGroup]],
+      [unrelated, [otherGroup]],
+    ]) {
       const list = await requestJson(baseUrl, '/api/travel-groups', {
         token: session.token,
       });
       assert.equal(list.response.status, 200);
       assert.deepEqual(
         groupNos(list.body.data.travelGroups),
-        groupNos([associatedGroup, otherGroup, unassignedGroup]),
+        groupNos(expectedGroups),
       );
     }
 
@@ -4796,7 +4923,11 @@ test('contract: associated tasters can edit today groups without a shared limit'
         token: unrelated.token,
       },
     );
-    assert.equal(unrelatedDetail.response.status, 200);
+    assertErrorContract(
+      unrelatedDetail,
+      404,
+      'TRAVEL_GROUP_NOT_FOUND',
+    );
 
     const primaryPatch = await requestJson(
       baseUrl,
@@ -4975,7 +5106,11 @@ test('contract: associated tasters can edit today groups without a shared limit'
         },
       },
     );
-    assertErrorContract(unrelatedDenied, 403, 'PERMISSION_DENIED');
+    assertErrorContract(
+      unrelatedDenied,
+      404,
+      'TRAVEL_GROUP_NOT_FOUND',
+    );
 
     const forgedAssociationDenied = await requestJson(
       baseUrl,
@@ -4992,7 +5127,11 @@ test('contract: associated tasters can edit today groups without a shared limit'
         },
       },
     );
-    assertErrorContract(forgedAssociationDenied, 403, 'PERMISSION_DENIED');
+    assertErrorContract(
+      forgedAssociationDenied,
+      404,
+      'TRAVEL_GROUP_NOT_FOUND',
+    );
   });
 });
 
@@ -5305,7 +5444,7 @@ test('contract: travel group taster summary endpoint scopes taster writes and pr
         },
       },
     );
-    assertErrorContract(tasterDenied, 403, 'PERMISSION_DENIED');
+    assertErrorContract(tasterDenied, 404, 'TRAVEL_GROUP_NOT_FOUND');
 
     const adminSubmit = await requestJson(
       baseUrl,
@@ -5579,7 +5718,9 @@ test('contract: pending travel groups are computed from travel group rules and p
         groupNos(tasterPending.body.data.pendingTravelGroups),
         groupNos(
           adminPending.body.data.pendingTravelGroups.filter(
-            (group) => group.groupNo !== 'PEND-FINANCE-OLD',
+            (group) =>
+              group.tasterId === taster.user.id ||
+              group.liaisonTasterId === taster.user.id,
           ),
         ),
       );
@@ -5593,7 +5734,7 @@ test('contract: pending travel groups are computed from travel group rules and p
         tasterPending.body.data.pendingTravelGroups.some(
           (group) => group.groupNo === otherTasterGroup.groupNo,
         ),
-        true,
+        false,
       );
 
       const salesPending = await requestJson(
@@ -6048,6 +6189,14 @@ test('contract: business data role scopes expose travel groups and keep sales or
       visitDate: SHANGHAI_TODAY,
       tasterId: tasterAlphaUser.id,
       tasterName: tasterAlphaUser.name,
+      tastingItems: [
+        {
+          productName: '罐装酒',
+          quantity: 2,
+          unit: '瓶',
+          note: '接待品鉴',
+        },
+      ],
     });
     const groupBeta = await createScopedTravelGroup(baseUrl, admin.token, {
       groupNo: 'GZ-SCOPE-B',
@@ -6091,6 +6240,17 @@ test('contract: business data role scopes expose travel groups and keep sales or
       groupNos(alphaTasterGroups.body.data.travelGroups),
       groupNos([groupAlpha, groupBeta]),
     );
+    assert.deepEqual(
+      alphaTasterGroups.body.data.travelGroups
+        .find((group) => group.id === groupAlpha.id)
+        .tastingItems.map((item) => [
+          item.productName,
+          item.quantity,
+          item.unit,
+          item.note,
+        ]),
+      [['罐装酒', 2, '瓶', '接待品鉴']],
+    );
 
     const alphaReceptionGroups = await requestJson(
       baseUrl,
@@ -6120,22 +6280,75 @@ test('contract: business data role scopes expose travel groups and keep sales or
       token: tasterBeta.token,
     });
     assert.equal(betaTasterGroups.response.status, 200);
-    assert.deepEqual(
-      groupNos(betaTasterGroups.body.data.travelGroups),
-      groupNos([groupAlpha, groupBeta]),
-    );
+    assert.deepEqual(groupNos(betaTasterGroups.body.data.travelGroups), [
+      groupBeta.groupNo,
+    ]);
 
-    const otherTasterDetail = await requestJson(
+    const liaisonTasterDetail = await requestJson(
       baseUrl,
       `/api/travel-groups/${groupBeta.id}`,
       {
         token: tasterAlpha.token,
       },
     );
-    assert.equal(otherTasterDetail.response.status, 200);
+    assert.equal(liaisonTasterDetail.response.status, 200);
     assert.equal(
-      otherTasterDetail.body.data.travelGroup.groupNo,
+      liaisonTasterDetail.body.data.travelGroup.groupNo,
       groupBeta.groupNo,
+    );
+
+    const unrelatedTasterDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupAlpha.id}`,
+      {
+        token: tasterBeta.token,
+      },
+    );
+    assertErrorContract(
+      unrelatedTasterDetail,
+      404,
+      'TRAVEL_GROUP_NOT_FOUND',
+    );
+
+    const deniedTastingItemsPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupAlpha.id}`,
+      {
+        method: 'PATCH',
+        token: tasterAlpha.token,
+        body: { tastingItems: [] },
+      },
+    );
+    assertErrorContract(
+      deniedTastingItemsPatch,
+      403,
+      'FIELD_PERMISSION_DENIED',
+    );
+
+    const salesTastingItemsPatch = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${groupAlpha.id}`,
+      {
+        method: 'PATCH',
+        token: salesAlpha.token,
+        body: {
+          tastingItems: [
+            {
+              productName: '罐装酒',
+              quantity: 3,
+              unit: '瓶',
+              note: '销售维护',
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(salesTastingItemsPatch.response.status, 200);
+    assert.deepEqual(
+      salesTastingItemsPatch.body.data.travelGroup.tastingItems.map(
+        (item) => [item.productName, item.quantity, item.unit, item.note],
+      ),
+      [['罐装酒', 3, '瓶', '销售维护']],
     );
 
     const alphaSalesGroups = await requestJson(baseUrl, '/api/travel-groups', {
@@ -6555,10 +6768,14 @@ test('contract: global mark query filters business lists and details until admin
     const markedOrder = await createScopedSalesOrder(baseUrl, admin.token, {
       orderNo: 'SO-MARK-YES',
       travelGroupId: markedGroup.id,
+      customerName: 'Unmarked Customer Visible Order',
+      customerPhone: '13900009001',
     });
     const unmarkedOrder = await createScopedSalesOrder(baseUrl, admin.token, {
       orderNo: 'SO-MARK-ORDER-NO',
       travelGroupId: markedGroup.id,
+      customerName: 'Marked Customer Hidden Order',
+      customerPhone: '13900009002',
     });
     const markedOrderWithUnmarkedGroup = await createScopedSalesOrder(
       baseUrl,
@@ -6566,6 +6783,8 @@ test('contract: global mark query filters business lists and details until admin
       {
         orderNo: 'SO-MARK-GROUP-NO',
         travelGroupId: unmarkedGroup.id,
+        customerName: 'Unmarked Customer And Group Visible Order',
+        customerPhone: '13900009003',
       },
     );
 
@@ -6573,28 +6792,32 @@ test('contract: global mark query filters business lists and details until admin
     await setCustomerFinanceMark(
       baseUrl,
       admin.token,
-      markedOrder.customerId,
-      true,
-    );
-    await setCustomerFinanceMark(
-      baseUrl,
-      admin.token,
-      markedOrderWithUnmarkedGroup.customerId,
+      unmarkedOrder.customerId,
       true,
     );
     await setSalesOrderFinanceMark(baseUrl, admin.token, markedOrder.id, true);
     await setSalesOrderFinanceMark(
       baseUrl,
       admin.token,
-      unmarkedOrder.id,
-      true,
-    );
-    await setSalesOrderFinanceMark(
-      baseUrl,
-      admin.token,
       markedOrderWithUnmarkedGroup.id,
       true,
     );
+
+    const unchangedCustomer = await requestJson(
+      baseUrl,
+      `/api/customers/${markedOrder.customerId}`,
+      { token: admin.token },
+    );
+    assert.equal(unchangedCustomer.response.status, 200);
+    assert.equal(unchangedCustomer.body.data.customer.financeMark, false);
+
+    const unchangedGroup = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${unmarkedGroup.id}`,
+      { token: admin.token },
+    );
+    assert.equal(unchangedGroup.response.status, 200);
+    assert.equal(unchangedGroup.body.data.travelGroup.financeMark, false);
 
     const beforeEnableGroups = await requestJson(
       baseUrl,
@@ -6653,7 +6876,39 @@ test('contract: global mark query filters business lists and details until admin
     assert.equal(markedOrdersOnly.response.status, 200);
     assert.deepEqual(orderNos(markedOrdersOnly.body.data.salesOrders), [
       markedOrder.orderNo,
-    ]);
+      markedOrderWithUnmarkedGroup.orderNo,
+    ].sort());
+
+    for (const query of [
+      markedOrder.orderNo,
+      'Unmarked Customer Visible Order',
+      '13900009001',
+    ]) {
+      const search = await requestJson(
+        baseUrl,
+        `/api/sales-orders?query=${encodeURIComponent(query)}`,
+        { token: admin.token },
+      );
+      assert.equal(search.response.status, 200);
+      assert.deepEqual(
+        orderNos(search.body.data.salesOrders),
+        [markedOrder.orderNo],
+      );
+    }
+
+    for (const query of [
+      unmarkedOrder.orderNo,
+      'Marked Customer Hidden Order',
+      '13900009002',
+    ]) {
+      const search = await requestJson(
+        baseUrl,
+        `/api/sales-orders?query=${encodeURIComponent(query)}`,
+        { token: admin.token },
+      );
+      assert.equal(search.response.status, 200);
+      assert.deepEqual(search.body.data.salesOrders, []);
+    }
 
     const hiddenUnmarkedOrderDetail = await requestJson(
       baseUrl,
@@ -6668,17 +6923,27 @@ test('contract: global mark query filters business lists and details until admin
       'SALES_ORDER_NOT_FOUND',
     );
 
-    const hiddenUnmarkedGroupOrderDetail = await requestJson(
+    const visibleUnmarkedGroupOrderDetail = await requestJson(
       baseUrl,
       `/api/sales-orders/${markedOrderWithUnmarkedGroup.id}`,
       {
         token: admin.token,
       },
     );
-    assertErrorContract(
-      hiddenUnmarkedGroupOrderDetail,
-      404,
-      'SALES_ORDER_NOT_FOUND',
+    assert.equal(
+      visibleUnmarkedGroupOrderDetail.response.status,
+      200,
+    );
+
+    const markedGroupDetail = await requestJson(
+      baseUrl,
+      `/api/travel-groups/${markedGroup.id}`,
+      { token: admin.token },
+    );
+    assert.equal(markedGroupDetail.response.status, 200);
+    assert.deepEqual(
+      orderNos(markedGroupDetail.body.data.travelGroup.salesOrders),
+      [markedOrder.orderNo],
     );
 
     const markedOverview = await requestJson(
@@ -6690,10 +6955,10 @@ test('contract: global mark query filters business lists and details until admin
     );
     assert.equal(markedOverview.response.status, 200);
     assert.equal(markedOverview.body.data.overview.metrics.travelGroupCount, 1);
-    assert.equal(markedOverview.body.data.overview.metrics.orderCount, 1);
+    assert.equal(markedOverview.body.data.overview.metrics.orderCount, 2);
     assert.equal(
       markedOverview.body.data.overview.metrics.salesAmountCents,
-      10000,
+      20000,
     );
 
     const restored = await requestJson(
@@ -6856,8 +7121,8 @@ async function createScopedSalesOrder(baseUrl, token, overrides) {
     orderType: 'travel_group',
     travelGroupId: overrides.travelGroupId,
     customer: {
-      name: 'Scope Customer',
-      phone: '13900009999',
+      name: overrides.customerName || 'Scope Customer',
+      phone: overrides.customerPhone || '13900009999',
     },
     orderDate: '2026-06-24',
     items: [
@@ -6978,6 +7243,20 @@ function assertNoShippedFields(value) {
 }
 
 function assertSalesOrderDtoPhase4(order) {
+  for (const internalField of [
+    'fulfillmentWarehouseId',
+    'inventoryAppliedAt',
+    'inventoryPolicyVersion',
+    'inventoryVersion',
+    'warehouseProductStock',
+    'inventoryCost',
+  ]) {
+    assert.equal(
+      Object.hasOwn(order, internalField),
+      false,
+      `ordinary sales order DTO must not expose ${internalField}`,
+    );
+  }
   for (const key of [
     'id',
     'orderNo',
@@ -7006,6 +7285,7 @@ function assertSalesOrderDtoPhase4(order) {
     'packingStatus',
     'packageCount',
     'warehouseRemark',
+    'hasPackingMark',
     'logisticsNo',
     'logisticsFeeCents',
     'invoiceRequired',
@@ -7031,6 +7311,20 @@ function assertSalesOrderDtoPhase4(order) {
     }
   }
   for (const item of order.items) {
+    for (const internalField of [
+      'inventoryLineKey',
+      'onHandQty',
+      'availableQty',
+      'shortageQty',
+      'purchaseUnitCostCents',
+      'inventoryAmountCents',
+    ]) {
+      assert.equal(
+        Object.hasOwn(item, internalField),
+        false,
+        `ordinary sales order item DTO must not expose ${internalField}`,
+      );
+    }
     for (const key of [
       'id',
       'productName',
@@ -7076,6 +7370,7 @@ function assertSalesOrderDtoStableEqual(actual, expected) {
     'packingStatus',
     'packageCount',
     'warehouseRemark',
+    'hasPackingMark',
     'logisticsNo',
     'logisticsFeeCents',
     'invoiceRequired',

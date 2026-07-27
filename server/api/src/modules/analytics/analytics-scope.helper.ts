@@ -48,6 +48,11 @@ export function buildAnalyticsSalesOrderWhere(
 ) {
   return andWhere(
     options.baseWhere,
+    {
+      orderType: {
+        not: 'AFTER_SALES',
+      },
+    },
     buildDateFieldWhere('orderDate', options.dateRange, false),
     buildGlobalSalesOrderMarkScope(options.onlyShowMarkedRecords),
   );
@@ -86,22 +91,7 @@ export function buildGlobalTravelGroupMarkScope(
 export function buildGlobalSalesOrderMarkScope(
   onlyShowMarkedRecords?: boolean,
 ) {
-  if (!onlyShowMarkedRecords) {
-    return null;
-  }
-  return {
-    customer: {
-      is: buildGlobalCustomerMarkScope(true),
-    },
-    OR: [
-      { travelGroupId: null },
-      {
-        travelGroup: {
-          is: buildGlobalTravelGroupMarkScope(true),
-        },
-      },
-    ],
-  };
+  return onlyShowMarkedRecords ? { financeMark: true } : null;
 }
 
 export function buildGlobalAfterSalesOrderMarkScope(

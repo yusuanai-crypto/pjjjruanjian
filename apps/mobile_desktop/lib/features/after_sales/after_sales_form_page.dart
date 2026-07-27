@@ -5,6 +5,7 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
+import '../../core/business/inventory_api.dart';
 import '../../shared/widgets/app_record_list.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
@@ -35,6 +36,7 @@ class AfterSalesFormPage extends StatefulWidget {
 
 class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   late BusinessApi _businessApi;
+  late InventoryApi _inventoryApi;
   final TextEditingController _queryController = TextEditingController();
   final GlobalKey<FormState> _afterSalesFormKey = GlobalKey<FormState>();
   final TextEditingController _descriptionController = TextEditingController();
@@ -42,6 +44,8 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   final TextEditingController _refundAmountController =
       TextEditingController(text: '0');
   final TextEditingController _notesController = TextEditingController();
+  final List<_AfterSalesDraftItem> _draftItems = <_AfterSalesDraftItem>[];
+  String? _draftProductId;
 
   bool _loading = false;
   bool _searched = false;
@@ -89,6 +93,11 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     super.initState();
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _inventoryApi = InventoryApi(
+      apiClient: widget.apiClient,
+      token: widget.token,
+      role: widget.role,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialWorkflow());
   }
 
@@ -99,6 +108,11 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         oldWidget.token != widget.token) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+      _inventoryApi = InventoryApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+        role: widget.role,
+      );
     }
     if (oldWidget.role != widget.role ||
         oldWidget.apiClient != widget.apiClient ||
@@ -128,6 +142,9 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     _resolutionController.dispose();
     _refundAmountController.dispose();
     _notesController.dispose();
+    for (final item in _draftItems) {
+      item.dispose();
+    }
     super.dispose();
   }
 
@@ -205,11 +222,80 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     _resolutionController.clear();
     _refundAmountController.text = '0';
     _notesController.clear();
+    for (final item in _draftItems) {
+      item.dispose();
+    }
+    _draftItems.clear();
+    _draftProductId = null;
     setState(() {
       _issueType = _issueTypeOptions.first.value;
       _actionType = _actionTypeOptions.first.value;
       _status = _afterSalesStatusOptions.first.value;
     });
+  }
+
+  int _afterSalesQuantityFor(String sourceSalesOrderItemId) {
+    var quantity = 0;
+    for (final order in _afterSalesHistory) {
+      for (final item in order.items) {
+        if (item.sourceSalesOrderItemId == sourceSalesOrderItemId) {
+          quantity += item.quantity;
+        }
+      }
+    }
+    return quantity;
+  }
+
+  int _remainingQuantityFor(SalesOrderItemRecord sourceItem) {
+    return sourceItem.quantity - _afterSalesQuantityFor(sourceItem.id ?? '');
+  }
+
+  void _addDraftItem(String? sourceSalesOrderItemId) {
+    final order = _selectedOrder;
+    if (order == null || sourceSalesOrderItemId == null) {
+      return;
+    }
+    SalesOrderItemRecord? sourceItem;
+    for (final item in order.items) {
+      if (item.id == sourceSalesOrderItemId) {
+        sourceItem = item;
+        break;
+      }
+    }
+    if (sourceItem == null ||
+        _draftItems.any(
+          (item) => item.sourceItem.id == sourceSalesOrderItemId,
+        )) {
+      return;
+    }
+    final selectedSourceItem = sourceItem;
+    final remaining = _remainingQuantityFor(selectedSourceItem);
+    if (remaining <= 0) {
+      setState(() => _formErrorMessage = '该商品已无可售后数量。');
+      return;
+    }
+    setState(() {
+      _draftItems.add(_AfterSalesDraftItem(selectedSourceItem));
+      _draftProductId = null;
+      _formErrorMessage = null;
+      _syncRefundAmount();
+    });
+  }
+
+  void _removeDraftItem(_AfterSalesDraftItem item) {
+    setState(() {
+      _draftItems.remove(item);
+      item.dispose();
+      _syncRefundAmount();
+    });
+  }
+
+  void _syncRefundAmount() {
+    final total = _draftItems.fold<int>(
+      0,
+      (sum, item) => sum + (item.totalPriceCents ?? 0),
+    );
+    _refundAmountController.text = (total / 100).toStringAsFixed(2);
   }
 
   Future<void> _loadAfterSalesHistory({
@@ -270,6 +356,36 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     if (!(_afterSalesFormKey.currentState?.validate() ?? false)) {
       return;
     }
+    if (_actionType != 'record_only' && _draftItems.isEmpty) {
+      setState(() => _formErrorMessage = '当前售后类型必须至少添加一项原订单商品。');
+      return;
+    }
+    final submittedItems = <Map<String, dynamic>>[];
+    for (final item in _draftItems) {
+      final quantity = item.quantity;
+      final totalPriceCents = item.totalPriceCents;
+      final remaining = _remainingQuantityFor(item.sourceItem);
+      if (quantity == null || quantity <= 0 || quantity > remaining) {
+        setState(
+          () => _formErrorMessage =
+              '${item.sourceItem.productName} 的本次数量必须为 1 至 $remaining。',
+        );
+        return;
+      }
+      if (totalPriceCents == null || totalPriceCents < 0) {
+        setState(
+          () =>
+              _formErrorMessage = '${item.sourceItem.productName} 的本次总价格格式不正确。',
+        );
+        return;
+      }
+      submittedItems.add({
+        'sourceSalesOrderItemId': item.sourceItem.id,
+        'quantity': quantity,
+        'totalPriceCents': totalPriceCents,
+      });
+    }
+    _syncRefundAmount();
     final refundAmountCents =
         _refundYuanToCents(_refundAmountController.text.trim());
     if (refundAmountCents == null) {
@@ -284,7 +400,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     });
     try {
       final created = await _businessApi.createAfterSalesOrder({
-        'salesOrderId': order.id,
+        'sourceSalesOrderId': order.id,
         'issueType': _issueType,
         'actionType': _actionType,
         'description': _descriptionController.text.trim(),
@@ -292,6 +408,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         'refundAmountCents': refundAmountCents,
         'status': _status,
         'notes': _notesController.text.trim(),
+        'items': submittedItems,
       });
       if (!mounted) {
         return;
@@ -765,6 +882,24 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                     ],
                   ),
                 ],
+                if (_selectedAfterSales != null &&
+                    _canManageAfterSales &&
+                    _isWarehouseWorkflow == false) ...[
+                  const SizedBox(height: 16),
+                  _AfterSalesReceiptSection(
+                    key: ValueKey(
+                      'after-sales-receipt-section-${_selectedAfterSales!.id}',
+                    ),
+                    afterSalesOrder: _selectedAfterSales!,
+                    inventoryApi: _inventoryApi,
+                    businessApi: _businessApi,
+                    onSubmitted: () {
+                      _loadAfterSalesHistory(
+                        preserveSelectedId: _selectedAfterSales?.id,
+                      );
+                    },
+                  ),
+                ],
               ],
             ],
           ),
@@ -922,6 +1057,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 '${order.customerName} · ${_fieldValue(order.customerPhone)}',
             meta: [
               '订单金额 ${formatMoneyCents(order.totalAmountCents)}',
+              '发货日期 ${_fieldValue(order.shippingDate)}',
               _deliverySummaryLabel(order.deliverySummary),
               if (canViewFinanceMark(widget.role)) _customerMarkLabel(order),
               if (order.travelGroup?.groupNo != null)
@@ -948,6 +1084,10 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _InfoLine(label: '关联订单', value: order.orderNo),
+        _InfoLine(
+          label: '发货日期',
+          value: _fieldValue(order.shippingDate),
+        ),
         _InfoLine(label: '客户', value: order.customerName),
         _InfoLine(label: '电话', value: _fieldValue(order.customerPhone)),
         _InfoLine(label: '地址', value: _orderAddress(order)),
@@ -983,8 +1123,17 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
           for (final item in order.items)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                '${item.productName} x${item.quantity} · ${formatMoneyCents(item.subtotalCents)} · ${_deliveryTypeLabel(item.deliveryType)}',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item.productName} x${item.quantity} · ${formatMoneyCents(item.subtotalCents)} · ${_deliveryTypeLabel(item.deliveryType)}',
+                  ),
+                  Text(
+                    '应退: ${item.quantity} 瓶',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
             ),
       ],
@@ -1068,17 +1217,16 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
               TextFormField(
                 key: const ValueKey('after-sales-refund-amount-field'),
                 controller: _refundAmountController,
-                enabled: !_savingAfterSales,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                readOnly: true,
                 decoration: const InputDecoration(
-                  labelText: '退款金额（元）',
+                  labelText: '退款总额（由明细自动合计）',
                   suffixText: '元',
                 ),
-                validator: _refundAmountValidator,
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          _buildAfterSalesItemEditor(),
           const SizedBox(height: 12),
           TextFormField(
             key: const ValueKey('after-sales-description-field'),
@@ -1122,6 +1270,146 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
             onSecondaryPressed: _historyLoading ? null : _loadAfterSalesHistory,
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAfterSalesItemEditor() {
+    final order = _selectedOrder;
+    final availableItems = (order?.items ?? const <SalesOrderItemRecord>[])
+        .where(
+          (item) =>
+              item.id != null &&
+              _remainingQuantityFor(item) > 0 &&
+              !_draftItems.any(
+                (draft) => draft.sourceItem.id == item.id,
+              ),
+        )
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '售后酒品明细',
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          key: ValueKey(
+            'after-sales-source-item-picker-${_draftItems.length}',
+          ),
+          initialValue: _draftProductId,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: '从原订单添加商品',
+            helperText: '仅显示原订单中仍有可售后数量的酒品',
+          ),
+          items: [
+            for (final item in availableItems)
+              DropdownMenuItem(
+                value: item.id,
+                child: Text(
+                  '${item.productName}（可售后 ${_remainingQuantityFor(item)}）',
+                ),
+              ),
+          ],
+          onChanged: _savingAfterSales || availableItems.isEmpty
+              ? null
+              : (value) {
+                  setState(() => _draftProductId = value);
+                  _addDraftItem(value);
+                },
+        ),
+        const SizedBox(height: 10),
+        if (_draftItems.isEmpty)
+          Text(
+            _actionType == 'record_only' ? '仅记录类型可以不添加商品。' : '请添加本次售后的原订单商品。',
+            style: Theme.of(context).textTheme.bodySmall,
+          )
+        else
+          for (final item in _draftItems) _buildAfterSalesDraftItemCard(item),
+      ],
+    );
+  }
+
+  Widget _buildAfterSalesDraftItemCard(_AfterSalesDraftItem item) {
+    final source = item.sourceItem;
+    final usedQuantity = _afterSalesQuantityFor(source.id ?? '');
+    final remaining = _remainingQuantityFor(source);
+    return Card(
+      key: ValueKey('after-sales-draft-item-${source.id}'),
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    source.productName,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '删除',
+                  onPressed:
+                      _savingAfterSales ? null : () => _removeDraftItem(item),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
+            Wrap(
+              spacing: 16,
+              runSpacing: 6,
+              children: [
+                Text('应退: ${source.quantity} 瓶'),
+                Text('原订单数量：${source.quantity}'),
+                Text('已售后数量：$usedQuantity'),
+                Text('本次可售后数量：$remaining'),
+                Text(
+                  '原成交单价参考：${formatMoneyCents(source.unitPriceCents)}',
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    key: ValueKey('after-sales-item-quantity-${source.id}'),
+                    controller: item.quantityController,
+                    enabled: !_savingAfterSales,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: '本次数量'),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    key: ValueKey('after-sales-item-total-${source.id}'),
+                    controller: item.totalPriceController,
+                    enabled: !_savingAfterSales,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: '本次总价格',
+                      suffixText: '元',
+                    ),
+                    onChanged: (_) {
+                      setState(_syncRefundAmount);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1244,30 +1532,6 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     }
     return null;
   }
-
-  String? _refundAmountValidator(String? value) {
-    final text = (value ?? '').trim();
-    if (text.isEmpty) {
-      return '请输入退款金额（元）';
-    }
-    if (text.startsWith('-')) {
-      return '退款金额不能为负数';
-    }
-    if (text == '.' || text.endsWith('.')) {
-      return '退款金额格式不完整，请补充小数位';
-    }
-    if (!RegExp(r'^\d+(?:\.\d+)?$').hasMatch(text)) {
-      return '请输入有效的退款金额，格式如 0、12 或 12.34';
-    }
-    final decimalPoint = text.indexOf('.');
-    if (decimalPoint >= 0 && text.length - decimalPoint - 1 > 2) {
-      return '退款金额最多保留两位小数';
-    }
-    if (_refundYuanToCents(text) == null) {
-      return '退款金额过大，请重新输入';
-    }
-    return null;
-  }
 }
 
 class _InfoLine extends StatelessWidget {
@@ -1340,11 +1604,329 @@ class _AfterSalesStatusButton extends StatelessWidget {
   }
 }
 
+class _AfterSalesDraftItem {
+  _AfterSalesDraftItem(this.sourceItem)
+      : quantityController = TextEditingController(text: '1'),
+        totalPriceController = TextEditingController(
+          text: (sourceItem.unitPriceCents / 100).toStringAsFixed(2),
+        );
+
+  final SalesOrderItemRecord sourceItem;
+  final TextEditingController quantityController;
+  final TextEditingController totalPriceController;
+
+  int? get quantity => int.tryParse(quantityController.text.trim());
+
+  int? get totalPriceCents =>
+      _refundYuanToCents(totalPriceController.text.trim());
+
+  void dispose() {
+    quantityController.dispose();
+    totalPriceController.dispose();
+  }
+}
+
+class _AfterSalesReceiptSection extends StatefulWidget {
+  const _AfterSalesReceiptSection({
+    super.key,
+    required this.afterSalesOrder,
+    required this.inventoryApi,
+    required this.businessApi,
+    required this.onSubmitted,
+  });
+
+  final AfterSalesOrderRecord afterSalesOrder;
+  final InventoryApi inventoryApi;
+  final BusinessApi businessApi;
+  final VoidCallback onSubmitted;
+
+  @override
+  State<_AfterSalesReceiptSection> createState() =>
+      _AfterSalesReceiptSectionState();
+}
+
+class _AfterSalesReceiptSectionState extends State<_AfterSalesReceiptSection> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _quantityController =
+      TextEditingController(text: '0');
+  final TextEditingController _noteController = TextEditingController();
+
+  List<WarehouseRecord> _warehouses = const <WarehouseRecord>[];
+  String? _warehouseId;
+  String _condition = _receiptConditionOptions.first.value;
+  bool _loading = false;
+  bool _submitting = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadWarehouses());
+  }
+
+  @override
+  void dispose() {
+    _quantityController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadWarehouses() async {
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+    try {
+      final warehouses =
+          await widget.inventoryApi.listWarehouses(isActive: true);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _warehouses = warehouses;
+        _warehouseId = _warehouseId ??
+            warehouses
+                .firstWhere(
+                  (warehouse) => warehouse.isDefault,
+                  orElse: () => warehouses.isEmpty
+                      ? const WarehouseRecord(
+                          id: '',
+                          code: '',
+                          name: '',
+                          address: '',
+                          managerName: null,
+                          isActive: true,
+                          isDefault: false,
+                        )
+                      : warehouses.first,
+                )
+                .id;
+        if (_warehouseId?.isEmpty ?? true) {
+          _warehouseId = warehouses.isEmpty ? null : warehouses.first.id;
+        }
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _warehouses = const <WarehouseRecord>[];
+        _loading = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _submitReceipt() async {
+    if (_submitting) {
+      return;
+    }
+    final warehouseId = _warehouseId;
+    if (warehouseId == null || warehouseId.isEmpty) {
+      setState(() => _errorMessage = '请选择收货仓库。');
+      return;
+    }
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    final quantity = int.tryParse(_quantityController.text.trim());
+    if (quantity == null || quantity <= 0) {
+      setState(() => _errorMessage = '实际收到数量必须是正整数。');
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.businessApi.createAfterSalesReceipt(
+        widget.afterSalesOrder.id,
+        {
+          'warehouseId': warehouseId,
+          'quantity': quantity,
+          'condition': _condition,
+          if (_noteController.text.trim().isNotEmpty)
+            'note': _noteController.text.trim(),
+        },
+      );
+      if (!mounted) {
+        return;
+      }
+      _quantityController.text = '0';
+      _noteController.clear();
+      setState(() {
+        _submitting = false;
+        _errorMessage = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('售后收货已提交。')),
+      );
+      widget.onSubmitted();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _submitting = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const FormSection(
+        title: '实际收货',
+        children: [LoadingState(title: '正在加载收货仓库')],
+      );
+    }
+    return FormSection(
+      title: '实际收货',
+      trailing: StatusTag(
+        label: '${widget.afterSalesOrder.receipts.length} 笔记录',
+        tone: StatusTone.info,
+      ),
+      children: [
+        if (widget.afterSalesOrder.receipts.isNotEmpty) ...[
+          for (final receipt in widget.afterSalesOrder.receipts)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '${receipt.warehouseName ?? '未分配仓库'} · '
+                '${receipt.productName} · '
+                '数量 ${receipt.quantity} · '
+                '状态 ${_receiptConditionLabel(receipt.condition)}'
+                '${receipt.note != null && receipt.note!.isNotEmpty ? ' · ${receipt.note}' : ''}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+        ],
+        Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<String>(
+                key: const ValueKey('after-sales-receipt-warehouse'),
+                initialValue: _warehouseId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '收货仓库'),
+                items: [
+                  for (final warehouse in _warehouses)
+                    DropdownMenuItem(
+                      value: warehouse.id,
+                      child: Text(warehouse.name),
+                    ),
+                ],
+                onChanged: _submitting
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _warehouseId = value);
+                        }
+                      },
+                validator: (value) =>
+                    (value == null || value.isEmpty) ? '请选择收货仓库' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('after-sales-received-qty'),
+                controller: _quantityController,
+                enabled: !_submitting,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '实际收到数量',
+                  suffixText: '瓶',
+                ),
+                validator: (value) {
+                  final parsed = int.tryParse((value ?? '').trim());
+                  if (parsed == null || parsed <= 0) {
+                    return '请输入正整数';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('after-sales-receipt-condition'),
+                initialValue: _condition,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '商品状态'),
+                items: [
+                  for (final option in _receiptConditionOptions)
+                    DropdownMenuItem(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                ],
+                onChanged: _submitting
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _condition = value);
+                        }
+                      },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('after-sales-receipt-note'),
+                controller: _noteController,
+                enabled: !_submitting,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: '收货备注'),
+              ),
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _errorMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  key: const ValueKey('after-sales-receipt-submit'),
+                  onPressed: _submitting ? null : _submitReceipt,
+                  icon: _submitting
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.inbox_rounded),
+                  label: Text(_submitting ? '提交中...' : '提交收货'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _Option {
   const _Option(this.value, this.label);
 
   final String value;
   final String label;
+}
+
+const _receiptConditionOptions = [
+  _Option('SALEABLE', '可售'),
+  _Option('UNAVAILABLE', '不可售'),
+  _Option('ABNORMAL', '异常'),
+];
+
+String _receiptConditionLabel(String value) {
+  return _labelFor(_receiptConditionOptions, value);
 }
 
 const _issueTypeOptions = [
@@ -1413,12 +1995,15 @@ AfterSalesOrderRecord? _selectedAfterSalesFrom(
 }
 
 int? _refundYuanToCents(String value) {
+  if (value.isEmpty || value.endsWith('.')) {
+    return null;
+  }
   final parts = value.split('.');
   if (parts.isEmpty || parts.length > 2 || parts.first.isEmpty) {
     return null;
   }
   final yuan = int.tryParse(parts.first);
-  if (yuan == null) {
+  if (yuan == null || yuan < 0) {
     return null;
   }
   final fraction = parts.length == 1 ? '' : parts[1];

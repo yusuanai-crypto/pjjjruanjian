@@ -191,7 +191,7 @@ test('contract: analytics overview obeys global mark filtering', async () => {
       },
     );
     assert.equal(markedOnly.response.status, 200);
-    assert.equal(markedOnly.body.data.metrics.grossSalesAmountCents, 10000);
+    assert.equal(markedOnly.body.data.metrics.grossSalesAmountCents, 40000);
     assert.equal(markedOnly.body.data.metrics.totalGroupCount, 1);
     assert.equal(
       markedOnly.body.data.metrics.groupScopedNetSalesAmountCents,
@@ -368,6 +368,7 @@ function buildAnalyticsOverviewMarkPrisma() {
         travelGroupId: 'group-marked',
         customerId: 'customer-unmarked',
         totalAmountCents: 20000,
+        financeMark: false,
       }),
       salesOrder('order-unmarked-group', {
         orderDate: '2026-07-02',
@@ -447,6 +448,7 @@ function salesOrder(id, overrides = {}) {
     travelGroupId: null,
     totalAmountCents: 0,
     status: 'VALID',
+    financeMark: true,
     ...overrides,
   };
 }

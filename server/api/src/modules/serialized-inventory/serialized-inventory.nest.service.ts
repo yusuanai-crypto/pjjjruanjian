@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import * as crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SerializedInventoryAccountingAdapter } from '../inventory/serialized-inventory-accounting.adapter';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import {
   buildMoutaiLogisticsDocx,
@@ -12,14 +12,23 @@ import {
   MOUTAI_LOGISTICS_TEMPLATE_VERSION,
 } from './moutai-logistics-docx.helper';
 
-const INVENTORY_MANAGEMENT_ROLES = ['admin', 'finance', 'warehouse'];
-const INVENTORY_READ_ROLES = [
+const INVENTORY_MANAGEMENT_ROLES = [
+  'super_admin',
   'admin',
   'finance',
   'warehouse',
-  'sales',
 ];
-const INVENTORY_EXPORT_ROLES = ['admin', 'finance', 'warehouse'];
+const INVENTORY_READ_ROLES = [
+  'super_admin',
+  'admin',
+  'warehouse',
+];
+const INVENTORY_EXPORT_ROLES = [
+  'super_admin',
+  'admin',
+  'finance',
+  'warehouse',
+];
 const COST_ROLES = new Set(['super_admin', 'admin', 'finance']);
 const EXPORT_MAX_UNITS = 100;
 const TEMPLATE_FILE_NAME = 'moutai-logistics-sheet.docx';
@@ -37,6 +46,7 @@ export class SerializedInventoryNestService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
+    private readonly serializedAccounting: SerializedInventoryAccountingAdapter,
   ) {}
 
   async list(actor: any, filters: any = {}) {
@@ -72,10 +82,16 @@ export class SerializedInventoryNestService {
   async listAvailable(actor: any, filters: any = {}) {
     requireAnyRole(actor, INVENTORY_READ_ROLES);
     const productId = requiredString(filters.productId, 'productId', 36);
+    const warehouseId = requiredString(
+      filters.warehouseId,
+      'warehouseId',
+      36,
+    );
     const product = await this.findSerializedProduct(productId);
     const units = await this.prisma.serializedInventoryUnit.findMany({
       where: {
         productId,
+        warehouseId,
         status: 'AVAILABLE',
         moutaiName: { not: null },
         factoryDate: { not: null },
@@ -121,6 +137,7 @@ export class SerializedInventoryNestService {
         unit: product.unit,
         inventoryTrackingMode: 'serialized',
       },
+      warehouseId,
       units: units.map((unit: any) => toSelectableInventoryUnitDto(unit)),
     };
   }
@@ -133,7 +150,20 @@ export class SerializedInventoryNestService {
   async createMany(actor: any, payload: any, metadata: any = {}) {
     requireAnyRole(actor, INVENTORY_MANAGEMENT_ROLES);
     assertObject(payload);
-    assertAllowedFields(payload, ['productId', 'defaults', 'units']);
+    assertAllowedFields(payload, [
+      'warehouseId',
+      'productId',
+      'defaults',
+      'units',
+      'sourceKey',
+      'idempotencyKey',
+      'requestHash',
+    ]);
+    const warehouseId = requiredString(
+      payload.warehouseId,
+      'warehouseId',
+      36,
+    );
     const productId = requiredString(payload.productId, 'productId', 36);
     await this.findSerializedProduct(productId);
     const defaults = payload.defaults ?? {};
@@ -163,62 +193,29 @@ export class SerializedInventoryNestService {
       }
       requestCodes.add(row.normalizedLogisticsCode);
     }
-    const existing = await this.prisma.serializedInventoryUnit.findFirst({
-      where: {
-        normalizedLogisticsCode: { in: Array.from(requestCodes) },
-      },
-    });
-    if (existing) {
-      throw createHttpError(
-        409,
-        'LOGISTICS_CODE_DUPLICATE',
-        '物流码已存在，请检查后重试。',
-      );
-    }
-
-    const created = await this.prisma.$transaction(async (tx: any) => {
-      const now = new Date();
-      const saved: any[] = [];
-      for (const row of normalizedRows) {
-        try {
-          saved.push(
-            await tx.serializedInventoryUnit.create({
-              data: {
-                id: crypto.randomUUID(),
-                productId,
-                ...row,
-                status:
-                  row.purchaseCostCents === null
-                    ? 'PENDING_COST'
-                    : 'AVAILABLE',
-                createdById: actor.id,
-                updatedById: actor.id,
-                createdAt: now,
-                updatedAt: now,
-              },
-              include: inventoryInclude(),
-            }),
-          );
-        } catch (error) {
-          throw mapUniqueCodeError(error);
-        }
-      }
-      await this.operationLogsService.appendLog(
+    let accountingResult: any;
+    try {
+      accountingResult = await this.serializedAccounting.createUnits(
+        actor,
         {
-          userId: actor.id,
-          action: 'serialized_inventory.create',
-          entityType: 'serialized_inventory_batch',
-          entityId: saved[0]?.id || null,
-          afterData: {
-            count: saved.length,
-            units: saved.map((unit) => toInventoryUnitDto(unit, actor)),
-          },
-          ipAddress: metadata.ipAddress || null,
+          warehouseId,
+          productId,
+          units: normalizedRows,
+          sourceKey: payload.sourceKey,
+          idempotencyKey: payload.idempotencyKey,
+          requestHash: payload.requestHash,
         },
-        tx,
+        metadata,
       );
-      return saved;
-    });
+    } catch (error) {
+      throw mapUniqueCodeError(error);
+    }
+    const created =
+      await this.prisma.serializedInventoryUnit.findMany({
+        where: { id: { in: accountingResult.unitIds || [] } },
+        include: inventoryInclude(),
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
     return {
       units: created.map((unit: any) => toInventoryUnitDto(unit, actor)),
       createdCount: created.length,
@@ -343,7 +340,10 @@ export class SerializedInventoryNestService {
     );
     assertCostFieldAllowed(actor, payload);
     const current = await this.findUnit(id);
-    if (current.salesOrderId && !correction) {
+    if (
+      ['ALLOCATED', 'RESERVED', 'OUTBOUND'].includes(current.status) &&
+      !correction
+    ) {
       throw createHttpError(
         409,
         'SERIALIZED_INVENTORY_ASSIGNED',
@@ -361,6 +361,44 @@ export class SerializedInventoryNestService {
     if (Object.keys(editablePayload).length === 0) {
       throw validationError('请至少修改一个库存字段。');
     }
+    if (hasOwn(editablePayload, 'purchaseCostCents')) {
+      if (Object.keys(editablePayload).length !== 1) {
+        throw createHttpError(
+          409,
+          'SERIALIZED_COST_COMMAND_EXCLUSIVE',
+          'Purchase cost maintenance must be submitted separately from identity corrections.',
+        );
+      }
+      if (
+        editablePayload.purchaseCostCents === null ||
+        editablePayload.purchaseCostCents === ''
+      ) {
+        throw createHttpError(
+          409,
+          'SERIALIZED_COST_CLEAR_FORBIDDEN',
+          'A serialized unit purchase cost cannot be cleared through the ordinary endpoint.',
+        );
+      }
+      const purchaseCostCents = cents(
+        editablePayload.purchaseCostCents,
+        'purchaseCostCents',
+      );
+      await this.serializedAccounting.completeUnitCost(
+        actor,
+        id,
+        purchaseCostCents,
+        reason || 'Serialized inventory purchase cost maintained.',
+        metadata,
+      );
+      return toInventoryUnitDto(await this.findUnit(id), actor);
+    }
+    if (current.status === 'OUTBOUND' && !correction) {
+      throw createHttpError(
+        409,
+        'SERIALIZED_INVENTORY_OUTBOUND_IMMUTABLE',
+        'Outbound serialized inventory requires a reasoned correction workflow.',
+      );
+    }
     const merged = {
       moutaiName: current.moutaiName,
       factoryDate: toDateString(current.factoryDate),
@@ -377,14 +415,8 @@ export class SerializedInventoryNestService {
     );
     const data: any = {
       ...normalized,
-      status:
-        current.status === 'VOID'
-          ? 'VOID'
-          : normalized.purchaseCostCents === null
-            ? 'PENDING_COST'
-            : current.salesOrderId
-              ? 'ALLOCATED'
-              : 'AVAILABLE',
+      status: current.status,
+      version: { increment: 1 },
       updatedById: actor.id,
       updatedAt: new Date(),
       ...(correction
@@ -395,12 +427,23 @@ export class SerializedInventoryNestService {
           }
         : {}),
     };
+    delete data.purchaseCostCents;
     const updated = await this.prisma.$transaction(async (tx: any) => {
       let saved: any;
       try {
-        saved = await tx.serializedInventoryUnit.update({
-          where: { id },
+        const changed = await tx.serializedInventoryUnit.updateMany({
+          where: { id, version: current.version },
           data,
+        });
+        if (Number(changed?.count || 0) !== 1) {
+          throw createHttpError(
+            409,
+            'INVENTORY_CONCURRENT_UPDATE',
+            'Serialized inventory changed concurrently. Refresh and retry.',
+          );
+        }
+        saved = await tx.serializedInventoryUnit.findUnique({
+          where: { id },
           include: inventoryInclude(),
         });
       } catch (error) {
@@ -471,6 +514,10 @@ function buildInventoryWhere(filters: any) {
   const batchSerialNo = optionalString(filters.batchSerialNo);
   const status = optionalString(filters.status);
   const orderNo = optionalString(filters.orderNo);
+  const warehouseId = optionalString(filters.warehouseId);
+  if (warehouseId) {
+    where.warehouseId = warehouseId;
+  }
   if (name) {
     where.normalizedMoutaiName = { contains: normalizeName(name) };
   }
@@ -545,6 +592,8 @@ function toInventoryUnitDto(unit: any, actor: any) {
   const dto: any = {
     id: unit.id,
     productId: unit.productId,
+    warehouseId: unit.warehouseId || null,
+    inventoryBatchId: unit.inventoryBatchId || null,
     productName: unit.product?.name || null,
     moutaiName: unit.moutaiName || null,
     normalizedMoutaiName: unit.normalizedMoutaiName || null,
@@ -553,6 +602,7 @@ function toInventoryUnitDto(unit: any, actor: any) {
     batchSerialNo: unit.batchSerialNo || null,
     logisticsCode: unit.logisticsCode || null,
     status: String(unit.status || '').toLowerCase(),
+    version: Number(unit.version || 0),
     dataComplete: isUnitComplete(unit),
     salesOrder: unit.salesOrder
       ? { id: unit.salesOrder.id, orderNo: unit.salesOrder.orderNo }
@@ -697,7 +747,15 @@ function normalizeDate(value: unknown, fieldName: string) {
 function normalizeStatus(value: unknown) {
   const normalized = String(value ?? '').trim().toUpperCase();
   if (
-    !['PENDING_COST', 'AVAILABLE', 'ALLOCATED', 'VOID'].includes(normalized)
+    ![
+      'PENDING_COST',
+      'AVAILABLE',
+      'ALLOCATED',
+      'RESERVED',
+      'OUTBOUND',
+      'UNAVAILABLE',
+      'VOID',
+    ].includes(normalized)
   ) {
     throw validationError('status 无效。');
   }
@@ -765,6 +823,10 @@ function assertObject(value: any) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw validationError('请求体必须是对象。');
   }
+}
+
+function hasOwn(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function assertAllowedFields(payload: any, allowedFields: string[]) {

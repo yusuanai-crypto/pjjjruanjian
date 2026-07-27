@@ -523,9 +523,9 @@ test('contract: manual agency deduction validates, recalculates, resets confirma
     const summary = updated.body.data.travelGroupFinanceSummary;
     assert.equal(summary.totalAgencyDeductionCents, 20000);
     assert.equal(summary.totalAgencyNetAmountCents, 60000);
-    assert.equal(summary.totalDailyRebateCents, 1800);
-    assert.equal(summary.totalMonthlyRebateCents, 1200);
-    assert.equal(summary.unpaidRebateCents, 3000);
+    assert.equal(summary.totalDailyRebateCents, 2400);
+    assert.equal(summary.totalMonthlyRebateCents, 1600);
+    assert.equal(summary.unpaidRebateCents, 4000);
     assert.equal(summary.agencyDeductionConfirmed, false);
     assert.equal(summary.agencyDeductionConfirmedById, null);
     assert.equal(summary.agencyDeductionConfirmedAt, null);
@@ -578,10 +578,10 @@ test('contract: stage7 travel group finance summary refresh creates calculated s
     assert.equal(summary.totalSalesAmountCents, 100000);
     assert.equal(summary.totalCashOnDeliveryCents, 0);
     assert.equal(summary.totalPaidDepositCents, 100000);
-    assert.equal(summary.confirmedRefundAmountCents, 20000);
-    assert.equal(summary.effectiveSalesAmountCents, 80000);
+    assert.equal(summary.confirmedRefundAmountCents, 0);
+    assert.equal(summary.effectiveSalesAmountCents, 100000);
     assert.equal(summary.totalAgencyDeductionCents, 10000);
-    assert.equal(summary.totalAgencyNetAmountCents, 70000);
+    assert.equal(summary.totalAgencyNetAmountCents, 90000);
     assert.equal(summary.totalDailyRebateCents, 2100);
     assert.equal(summary.totalMonthlyRebateCents, 1400);
     assert.equal(summary.unpaidRebateCents, 3500);

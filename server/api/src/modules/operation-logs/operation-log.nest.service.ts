@@ -15,6 +15,7 @@ import {
   parseOperationLogFilters,
   parseOperationLogId,
 } from './operation-log-policy';
+import { presentOperationLog } from './operation-log-presentation';
 
 const DEFAULT_EXPORT_LIMIT = 5000;
 const MAX_EXPORT_LIMIT = 20_000;
@@ -233,34 +234,30 @@ export class OperationLogsNestService {
     worksheet.columns = exportColumns();
     for (const raw of rows) {
       const log = toAppLog(raw, filters.archived);
+      const display = presentOperationLog(log);
       worksheet.addRow({
-        createdAt: log.createdAt,
-        actorName: log.actorNameSnapshot || '',
-        actorUsername: log.actorUsernameSnapshot || '',
-        actorRole: log.actorRoleSnapshot || '',
-        module: log.module || '',
-        operationType: log.operationType || '',
-        action: log.action,
-        entityType: log.entityType,
-        entityId: log.entityId || '',
-        result: log.result || '',
-        ipAddress: log.ipAddress || '',
-        httpMethod: log.httpMethod || '',
-        requestPath: log.requestPath || '',
-        requestId: log.requestId || '',
-        statusCode: log.statusCode ?? '',
-        errorCode: log.errorCode || '',
-        durationMs: log.durationMs ?? '',
-        beforeData: formatJson(log.beforeData),
-        afterData: formatJson(log.afterData),
-        requestSummary: formatJson(log.requestSummary),
+        createdAt: log.createdAt ? new Date(log.createdAt) : '',
+        actor: display.actor,
+        module: display.module,
+        operation: display.operation,
+        object: display.object,
+        content: display.summary,
+        result: display.result,
+        details: display.details,
       });
     }
     worksheet.getRow(1).font = { bold: true };
     worksheet.autoFilter = {
       from: 'A1',
-      to: 'T1',
+      to: 'H1',
     };
+    worksheet.getColumn('A').numFmt = 'yyyy"年"m"月"d"日" hh:mm:ss';
+    worksheet.eachRow((row, rowNumber) => {
+      row.alignment = {
+        vertical: 'top',
+        wrapText: rowNumber > 1,
+      };
+    });
     const buffer = await workbook.xlsx.writeBuffer();
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     return {
@@ -420,6 +417,9 @@ function buildWhere(filters: any) {
     });
   }
   if (filters.keyword) {
+    const businessKeywordFilters = businessKeywordJsonFilters(
+      filters.keyword,
+    );
     and.push({
       OR: [
         { action: { contains: filters.keyword } },
@@ -427,12 +427,40 @@ function buildWhere(filters: any) {
         { entityId: { contains: filters.keyword } },
         { actorNameSnapshot: { contains: filters.keyword } },
         { actorUsernameSnapshot: { contains: filters.keyword } },
-        { requestId: { contains: filters.keyword } },
-        { errorCode: { contains: filters.keyword } },
+        ...businessKeywordFilters,
       ],
     });
   }
   return and.length === 0 ? {} : { AND: and };
+}
+
+function businessKeywordJsonFilters(keyword: string): any[] {
+  const paths = [
+    '$.name',
+    '$.productName',
+    '$.orderNo',
+    '$.salesOrderNo',
+    '$.afterSalesNo',
+    '$.groupNo',
+    '$.travelGroupNo',
+    '$.customerName',
+    '$.username',
+    '$.title',
+  ];
+  return paths.flatMap((path) => [
+    {
+      beforeData: {
+        path,
+        string_contains: keyword,
+      },
+    },
+    {
+      afterData: {
+        path,
+        string_contains: keyword,
+      },
+    },
+  ]);
 }
 
 function toAppLog(log: any, archived: boolean) {
@@ -603,43 +631,24 @@ function exportLimit(): number {
 function exportColumns(): Partial<ExcelJS.Column>[] {
   return [
     { header: '操作时间', key: 'createdAt', width: 24 },
-    { header: '操作人', key: 'actorName', width: 16 },
-    { header: '账号', key: 'actorUsername', width: 20 },
-    { header: '角色', key: 'actorRole', width: 16 },
-    { header: '模块', key: 'module', width: 18 },
-    { header: '操作类型', key: 'operationType', width: 16 },
-    { header: '动作', key: 'action', width: 32 },
-    { header: '业务对象', key: 'entityType', width: 20 },
-    { header: '对象 ID', key: 'entityId', width: 38 },
-    { header: '结果', key: 'result', width: 12 },
-    { header: 'IP 地址', key: 'ipAddress', width: 20 },
-    { header: 'HTTP 方法', key: 'httpMethod', width: 12 },
-    { header: '请求路径', key: 'requestPath', width: 38 },
-    { header: '请求编号', key: 'requestId', width: 38 },
-    { header: '状态码', key: 'statusCode', width: 12 },
-    { header: '错误码', key: 'errorCode', width: 24 },
-    { header: '耗时（毫秒）', key: 'durationMs', width: 16 },
-    { header: '修改前', key: 'beforeData', width: 48 },
-    { header: '修改后', key: 'afterData', width: 48 },
-    { header: '请求摘要', key: 'requestSummary', width: 48 },
+    { header: '操作人', key: 'actor', width: 16 },
+    { header: '所属模块', key: 'module', width: 18 },
+    { header: '操作类型', key: 'operation', width: 14 },
+    { header: '操作对象', key: 'object', width: 30 },
+    { header: '操作内容', key: 'content', width: 56 },
+    { header: '结果', key: 'result', width: 10 },
+    { header: '业务明细', key: 'details', width: 64 },
   ];
-}
-
-function formatJson(value: unknown): string {
-  if (value === undefined || value === null) {
-    return '';
-  }
-  return JSON.stringify(sanitizeAuditData(value));
 }
 
 function operationTypeLabel(value: string): string {
   const labels: Record<string, string> = {
     CREATE: '新增',
-    READ: '查询',
+    READ: '查看',
     UPDATE: '修改',
     DELETE: '删除',
     LOGIN: '登录',
-    LOGOUT: '退出',
+    LOGOUT: '退出登录',
     IMPORT: '导入',
     EXPORT: '导出',
     UPLOAD: '上传',

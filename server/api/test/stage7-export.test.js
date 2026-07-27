@@ -63,6 +63,36 @@ const SUMMARY_HEADERS = [
   '旅行社信息是否发送',
 ];
 
+const SELECTED_SUMMARY_HEADERS = [
+  '团号',
+  '日期',
+  '旅行社',
+  '导游',
+  '车牌',
+  '人数',
+  '品鉴师',
+  '销售额',
+  '已确认退款',
+  '有效销售额',
+  '货到付款',
+  '已付定金',
+  '扣酒成本',
+  '上单金额',
+  '积分/日返积分',
+  '已返积分',
+  '未返积分',
+  '日返状态',
+  '月返积分',
+  '已返月返积分',
+  '未返月返积分',
+  '月返状态',
+  '售后影响',
+  '导游信息是否发送',
+  '旅行社信息是否发送',
+  '状态',
+  '备注',
+];
+
 test('GET /api/commission-records/export exports filtered stage7 commission details and logs safely', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
@@ -261,6 +291,151 @@ test('GET /api/travel-group-finance-summaries/export includes no-order travel gr
   });
 });
 
+test('POST /api/travel-group-finance-summaries/export exports only normalized selected IDs with points-table money and safe logs', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const download = await requestBinary(
+      baseUrl,
+      '/api/travel-group-finance-summaries/export',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          travelGroupIds: [
+            ' tg-stage7-summary-marked ',
+            'tg-stage7-summary-marked',
+            'tg-stage7-summary-zero',
+          ],
+        },
+      },
+    );
+
+    assert.equal(download.response.status, 200);
+    assert.match(
+      download.response.headers.get('content-type'),
+      new RegExp(XLSX_CONTENT_TYPE.replace(/\./g, '\\.')),
+    );
+    assert.match(
+      download.response.headers.get('content-disposition'),
+      /^attachment; filename="points-table-selected-\d{8}-\d{6}\.xlsx"$/,
+    );
+    assert.equal(
+      Number(download.response.headers.get('content-length')),
+      download.buffer.length,
+    );
+
+    const worksheet = await loadWorksheet(
+      download.buffer,
+      '积分表所选信息',
+    );
+    assert.deepEqual(readHeaders(worksheet), SELECTED_SUMMARY_HEADERS);
+    assert.equal(worksheet.actualRowCount, 3);
+    const rows = readDataRows(worksheet);
+    assert.deepEqual(
+      rows.map((row) => row['团号']),
+      ['TG-STAGE7-SUMMARY-ZERO', 'TG-STAGE7-SUMMARY-MARKED'],
+    );
+
+    const row = rows.find(
+      (item) => item['团号'] === 'TG-STAGE7-SUMMARY-MARKED',
+    );
+    assert.ok(row);
+    assert.equal(row['销售额'], 10);
+    assert.equal(row['已确认退款'], 1);
+    assert.equal(row['有效销售额'], 9);
+    assert.equal(row['货到付款'], 2);
+    assert.equal(row['已付定金'], 8);
+    assert.equal(row['扣酒成本'], 1.2);
+    assert.equal(row['上单金额'], 8.8);
+    assert.equal(row['积分/日返积分'], 0.3);
+    assert.equal(row['已返积分'], 0.3);
+    assert.equal(row['未返积分'], 0);
+    assert.equal(row['日返状态'], '是');
+    assert.equal(row['月返积分'], 0.2);
+    assert.equal(row['已返月返积分'], 0);
+    assert.equal(row['未返月返积分'], 0.2);
+    assert.equal(row['月返状态'], '否');
+    assert.equal(row['售后影响'], '退款待确认 ¥0.25');
+    assert.equal(row['状态'], '退款待确认');
+    assert.equal(typeof row['销售额'], 'number');
+
+    const salesColumn = SELECTED_SUMMARY_HEADERS.indexOf('销售额') + 1;
+    assert.equal(worksheet.getCell(2, salesColumn).numFmt, '0.00');
+    assert.equal(worksheet.views[0].state, 'frozen');
+    assert.equal(worksheet.views[0].ySplit, 1);
+    assert.ok(worksheet.autoFilter);
+    assert.equal(worksheet.getCell(1, 1).font.bold, true);
+    assert.equal(worksheet.getCell(2, 1).alignment.wrapText, true);
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=travel_group_finance_summaries.export_selected',
+      {
+        token: admin.token,
+      },
+    );
+    assert.equal(logs.response.status, 200);
+    const log = logs.body.data.logs.find(
+      (item) =>
+        item.action ===
+        'travel_group_finance_summaries.export_selected',
+    );
+    assert.ok(log);
+    assertStage7ExportLog(log, {
+      action: 'travel_group_finance_summaries.export_selected',
+      entityType: 'travel_group_finance_summary',
+      entityId: 'travel_group_finance_summaries.export_selected',
+      userId: admin.user.id,
+    });
+    assert.deepEqual(log.afterData, {
+      mode: 'selected',
+      selectionCount: 2,
+      rowCount: 2,
+    });
+    const serialized = JSON.stringify(log.afterData);
+    assert.equal(serialized.includes('tg-stage7-summary-marked'), false);
+    assert.equal(
+      /Password123|secret-token|phone|address|sourceSnapshot/i.test(
+        serialized,
+      ),
+      false,
+    );
+  }, {
+    prisma: buildStage7ExportPrisma(),
+  });
+});
+
+test('POST selected summary export rejects invalid ID collections', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const invalidBodies = [
+      { travelGroupIds: [] },
+      { travelGroupIds: [' ', ''] },
+      { travelGroupIds: 'tg-stage7-summary-marked' },
+      {
+        travelGroupIds: Array.from(
+          { length: 201 },
+          (_, index) => `group-${index + 1}`,
+        ),
+      },
+    ];
+    for (const body of invalidBodies) {
+      const result = await requestJson(
+        baseUrl,
+        '/api/travel-group-finance-summaries/export',
+        {
+          method: 'POST',
+          token: admin.token,
+          body,
+        },
+      );
+      assertErrorContract(result, 400, 'VALIDATION_FAILED');
+    }
+  }, {
+    prisma: buildStage7ExportPrisma(),
+  });
+});
+
 test('stage7 export endpoints enforce read roles', async () => {
   await withPhase1Server(async (baseUrl) => {
     const finance = await login(baseUrl, 'stage7-export-finance', 'Password123');
@@ -301,6 +476,19 @@ test('stage7 export endpoints enforce read roles', async () => {
     );
     assert.equal(bossDownload.response.status, 200);
 
+    const bossSelectedDownload = await requestBinary(
+      baseUrl,
+      '/api/travel-group-finance-summaries/export',
+      {
+        method: 'POST',
+        token: boss.token,
+        body: {
+          travelGroupIds: ['tg-stage7-summary-marked'],
+        },
+      },
+    );
+    assert.equal(bossSelectedDownload.response.status, 200);
+
     for (const session of [sales, warehouse, afterSales, frontDesk, taster]) {
       const commissionDenied = await requestJson(
         baseUrl,
@@ -319,6 +507,23 @@ test('stage7 export endpoints enforce read roles', async () => {
         },
       );
       assertErrorContract(summaryDenied, 403, 'PERMISSION_DENIED');
+
+      const selectedSummaryDenied = await requestJson(
+        baseUrl,
+        '/api/travel-group-finance-summaries/export',
+        {
+          method: 'POST',
+          token: session.token,
+          body: {
+            travelGroupIds: ['tg-stage7-summary-marked'],
+          },
+        },
+      );
+      assertErrorContract(
+        selectedSummaryDenied,
+        403,
+        'PERMISSION_DENIED',
+      );
     }
   }, {
     prisma: buildStage7ExportPrisma(),
@@ -397,7 +602,12 @@ test('stage7 export endpoints obey global mark filtering', async () => {
     );
     assert.deepEqual(
       commissionRows.map((row) => row['订单号']).sort(),
-      ['', 'SO-STAGE7-EXPORT-MARKED', 'SO-STAGE7-EXPORT-MARKED'],
+      [
+        '',
+        'SO-STAGE7-EXPORT-HIDDEN-GROUP',
+        'SO-STAGE7-EXPORT-MARKED',
+        'SO-STAGE7-EXPORT-MARKED',
+      ],
     );
 
     const summaryDownload = await requestBinary(
@@ -419,6 +629,33 @@ test('stage7 export endpoints obey global mark filtering', async () => {
         'TG-STAGE7-SUMMARY-ZERO',
       ],
     );
+
+    const selectedSummaryDownload = await requestBinary(
+      baseUrl,
+      '/api/travel-group-finance-summaries/export',
+      {
+        method: 'POST',
+        token: boss.token,
+        body: {
+          travelGroupIds: [
+            'tg-stage7-summary-marked',
+            'tg-stage7-summary-unmarked',
+            'forged-travel-group-id',
+          ],
+        },
+      },
+    );
+    assert.equal(selectedSummaryDownload.response.status, 200);
+    const selectedSummaryRows = readDataRows(
+      await loadWorksheet(
+        selectedSummaryDownload.buffer,
+        '积分表所选信息',
+      ),
+    );
+    assert.deepEqual(
+      selectedSummaryRows.map((row) => row['团号']),
+      ['TG-STAGE7-SUMMARY-MARKED'],
+    );
   }, {
     prisma: buildStage7ExportPrisma(),
   });
@@ -428,9 +665,11 @@ async function requestBinary(baseUrl, pathName, options = {}) {
   const response = await fetch(`${baseUrl}${pathName}`, {
     method: options.method || 'GET',
     headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       ...(options.headers || {}),
     },
+    body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const buffer = Buffer.from(await response.arrayBuffer());
   return {
@@ -588,10 +827,10 @@ function buildStage7ExportPrisma() {
       salesOrder({
         id: 'so-stage7-export-hidden-customer',
         orderNo: 'SO-STAGE7-EXPORT-HIDDEN-CUSTOMER',
-        customerId: 'cust-stage7-export-unmarked',
+        customerId: 'cust-stage7-export-marked',
         customerName: 'Stage7 Export Unmarked Customer',
         travelGroupId: 'tg-stage7-export-marked',
-        financeMark: true,
+        financeMark: false,
       }),
       salesOrder({
         id: 'so-stage7-export-hidden-group',
@@ -653,6 +892,14 @@ function buildStage7ExportPrisma() {
       summaryRecord({
         id: 'summary-stage7-export-marked',
         travelGroupId: 'tg-stage7-summary-marked',
+        sourceSnapshot: {
+          afterSalesImpact: {
+            afterSalesImpactStatus: 'refund_pending_confirmation',
+            pendingAfterSalesRefundAmountCents: 2500,
+          },
+          token: 'secret-token',
+          password: 'Password123',
+        },
       }),
       summaryRecord({
         id: 'summary-stage7-export-unmarked',

@@ -14,6 +14,7 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
           ${renderRows([
             ['系统单号', salesSheet?.order?.orderNo],
             ['订单日期', salesSheet?.order?.orderDate],
+            ['发货日期', salesSheet?.order?.shippingDate],
             ['订单状态', salesSheet?.status?.label],
           ])}
         </section>

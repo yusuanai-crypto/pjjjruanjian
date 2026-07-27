@@ -314,7 +314,9 @@ function buildProfitWarnings(input: any) {
 
 function isEffectiveOrder(order: any, effectiveSalesAmountCents: number) {
   return (
-    EFFECTIVE_ORDER_STATUSES.has(normalizeTargetType(order?.status)) &&
+    (EFFECTIVE_ORDER_STATUSES.has(normalizeTargetType(order?.status)) ||
+      (Array.isArray(order?.afterSalesOrders) &&
+        order.afterSalesOrders.length > 0)) &&
     effectiveSalesAmountCents > 0
   );
 }

@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
@@ -34,10 +35,10 @@ typedef FinanceTableImageRenderer = Future<Uint8List> Function(
 enum FinanceImageType {
   guide(
     'guide',
-    '导游图片',
-    '批量导出导游表格图',
-    '导游积分表',
-    '导游积分表',
+    '旅行社积分导游联络图',
+    '批量导出旅行社积分导游联络图',
+    '旅行社积分导游联络表',
+    '旅行社积分导游联络表',
   ),
   travelAgency(
     'travelAgency',
@@ -286,6 +287,7 @@ class TravelGroupFinanceSupplementPage extends StatefulWidget {
     this.imageSaver = saveFinanceImage,
     this.folderOpener = openFinanceImageFolder,
     this.tableImageRenderer,
+    this.documentsDirectoryProvider,
   });
 
   final ApiClient apiClient;
@@ -293,6 +295,7 @@ class TravelGroupFinanceSupplementPage extends StatefulWidget {
   final FinanceImageSaver imageSaver;
   final FinanceFolderOpener folderOpener;
   final FinanceTableImageRenderer? tableImageRenderer;
+  final Future<Directory> Function()? documentsDirectoryProvider;
 
   @override
   State<TravelGroupFinanceSupplementPage> createState() =>
@@ -327,6 +330,7 @@ class _TravelGroupFinanceSupplementPageState
   bool _loading = true;
   bool _recalculating = false;
   bool _batchExporting = false;
+  bool _exportingExcel = false;
   String? _errorMessage;
   String? _successMessage;
   String? _lastWindowsSaveDirectory;
@@ -380,7 +384,7 @@ class _TravelGroupFinanceSupplementPageState
     });
 
     try {
-      final summaries = await _businessApi.listTravelGroupFinanceSummaries(
+      final summaries = await _businessApi.listFinanceRows(
         limit: 200,
       );
       if (!mounted) {
@@ -389,7 +393,7 @@ class _TravelGroupFinanceSupplementPageState
       setState(() {
         _summaries = summaries;
         _selectedTravelGroupIds.removeWhere(
-          (id) => summaries.every((summary) => summary.travelGroupId != id),
+          (id) => summaries.every((summary) => summary.financeRowId != id),
         );
         _loading = false;
       });
@@ -412,7 +416,9 @@ class _TravelGroupFinanceSupplementPageState
     return _summaries.where((summary) {
       final group = summary.travelGroup;
       if (_dateRange != null) {
-        final date = _dateFromText(group?.visitDate ?? '');
+        final date = _dateFromText(
+          summary.financeDate ?? group?.visitDate ?? '',
+        );
         if (date == null ||
             date.isBefore(_dateRange!.start) ||
             date.isAfter(_dateRange!.end)) {
@@ -456,14 +462,19 @@ class _TravelGroupFinanceSupplementPageState
   int get _visibleOrderAmountCents {
     return _visibleSummaries.fold<int>(
       0,
-      (sum, summary) => sum + summary.totalAgencyNetAmountCents,
+      (sum, summary) =>
+          sum +
+          (summary.includedInFormalTotals
+              ? summary.totalAgencyNetAmountCents
+              : 0),
     );
   }
 
   int get _visibleReturnedAmountCents {
     return _visibleSummaries.fold<int>(
       0,
-      (sum, summary) => sum + summary.paidRebateCents,
+      (sum, summary) =>
+          sum + (summary.includedInFormalTotals ? summary.paidRebateCents : 0),
     );
   }
 
@@ -479,7 +490,11 @@ class _TravelGroupFinanceSupplementPageState
 
   DateTime get _datePickerInitialDate {
     final dates = _summaries
-        .map((summary) => _dateFromText(summary.travelGroup?.visitDate ?? ''))
+        .map(
+          (summary) => _dateFromText(
+            summary.financeDate ?? summary.travelGroup?.visitDate ?? '',
+          ),
+        )
         .whereType<DateTime>()
         .toList();
     if (dates.isEmpty) {
@@ -517,7 +532,7 @@ class _TravelGroupFinanceSupplementPageState
 
   void _toggleVisibleSelection(bool selected) {
     setState(() {
-      final ids = _visibleSummaries.map((summary) => summary.travelGroupId);
+      final ids = _visibleSummaries.map((summary) => summary.financeRowId);
       if (selected) {
         _selectedTravelGroupIds.addAll(ids);
       } else {
@@ -530,7 +545,7 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool isPaid,
   ) {
-    if (!summary.summaryExists) {
+    if (!summary.summaryExists || summary.isAfterSales) {
       return Future<void>.value();
     }
     return _runSummaryAction(
@@ -551,27 +566,35 @@ class _TravelGroupFinanceSupplementPageState
     if (!summary.summaryExists) {
       return;
     }
-    final travelGroupId = summary.travelGroupId;
-    if (_agencyDeductionUpdatingIds.contains(travelGroupId)) {
+    final rowId = summary.financeRowId;
+    if (_agencyDeductionUpdatingIds.contains(rowId)) {
       return;
     }
     setState(() {
-      _agencyDeductionUpdatingIds.add(travelGroupId);
+      _agencyDeductionUpdatingIds.add(rowId);
       _errorMessage = null;
       _successMessage = null;
     });
 
     try {
-      final updated = await _businessApi.updateAgencyDeduction(
-        travelGroupId,
-        totalAgencyDeductionCents,
-      );
+      if (summary.isAfterSales) {
+        await _businessApi.updateAfterSalesAgencyDeduction(
+          summary.id!,
+          totalAgencyDeductionCents,
+        );
+        await _loadData();
+      } else {
+        final updated = await _businessApi.updateAgencyDeduction(
+          summary.travelGroupId,
+          totalAgencyDeductionCents,
+        );
+        _replaceSummary(updated);
+      }
       if (!mounted) {
         return;
       }
       setState(() {
-        _agencyDeductionUpdatingIds.remove(travelGroupId);
-        _replaceSummary(updated);
+        _agencyDeductionUpdatingIds.remove(rowId);
         _successMessage = '扣酒成本已保存。';
       });
     } catch (error) {
@@ -579,7 +602,7 @@ class _TravelGroupFinanceSupplementPageState
         return;
       }
       setState(() {
-        _agencyDeductionUpdatingIds.remove(travelGroupId);
+        _agencyDeductionUpdatingIds.remove(rowId);
         _errorMessage = '扣酒成本保存失败：${_messageForError(error)}';
       });
     }
@@ -589,7 +612,7 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool isPaid,
   ) {
-    if (!summary.summaryExists) {
+    if (!summary.summaryExists || summary.isAfterSales) {
       return Future<void>.value();
     }
     return _runSummaryAction(
@@ -607,7 +630,7 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool value,
   ) {
-    if (!summary.summaryExists) {
+    if (!summary.summaryExists || summary.isAfterSales) {
       return Future<void>.value();
     }
     if (value && !_guideImageReadyIds.contains(summary.travelGroupId)) {
@@ -628,7 +651,7 @@ class _TravelGroupFinanceSupplementPageState
     TravelGroupFinanceSummaryRecord summary,
     bool value,
   ) {
-    if (!summary.summaryExists) {
+    if (!summary.summaryExists || summary.isAfterSales) {
       return Future<void>.value();
     }
     if (value && !_travelAgencyImageReadyIds.contains(summary.travelGroupId)) {
@@ -684,12 +707,27 @@ class _TravelGroupFinanceSupplementPageState
   void _replaceSummary(TravelGroupFinanceSummaryRecord updated) {
     _summaries = [
       for (final summary in _summaries)
-        summary.travelGroupId == updated.travelGroupId ? updated : summary,
+        !summary.isAfterSales && summary.travelGroupId == updated.travelGroupId
+            ? updated
+            : summary,
     ];
   }
 
   Future<void> _recalculateSelected() async {
     if (_recalculating || _selectedTravelGroupIds.isEmpty) {
+      return;
+    }
+    final travelGroupIds = _visibleSummaries
+        .where(
+          (summary) =>
+              !summary.isAfterSales &&
+              _selectedTravelGroupIds.contains(summary.financeRowId),
+        )
+        .map((summary) => summary.travelGroupId)
+        .toSet()
+        .toList();
+    if (travelGroupIds.isEmpty) {
+      setState(() => _successMessage = '售后调整行无需重新计算原旅行团汇总。');
       return;
     }
     setState(() {
@@ -699,17 +737,19 @@ class _TravelGroupFinanceSupplementPageState
     });
     try {
       final result = await _businessApi.recalculateTravelGroups(
-        _selectedTravelGroupIds.toList(),
+        travelGroupIds,
       );
+      if (!mounted) {
+        return;
+      }
+      final message = result.displayMessage;
+      await _loadData();
       if (!mounted) {
         return;
       }
       setState(() {
         _recalculating = false;
-        for (final summary in result.travelGroupFinanceSummaries) {
-          _replaceSummary(summary);
-        }
-        _successMessage = result.displayMessage;
+        _successMessage = message;
       });
     } catch (error) {
       if (!mounted) {
@@ -722,13 +762,80 @@ class _TravelGroupFinanceSupplementPageState
     }
   }
 
+  Future<void> _exportSelectedExcel() async {
+    if (_exportingExcel) {
+      return;
+    }
+    final selected = _visibleSummaries
+        .where(
+          (summary) => _selectedTravelGroupIds.contains(summary.financeRowId),
+        )
+        .toList();
+    if (selected.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _exportingExcel = true;
+      _errorMessage = null;
+      _successMessage = null;
+    });
+    try {
+      final downloadedFile =
+          await _businessApi.downloadSelectedFinanceRowsExcel(
+        selected.map((summary) => summary.financeRowId).toList(),
+      );
+      final targetFile = await _writeSelectedExcelFile(downloadedFile);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _lastWindowsSaveDirectory =
+            Platform.isWindows ? targetFile.parent.absolute.path : null;
+        _successMessage =
+            '已导出 ${selected.length} 行积分信息：${targetFile.absolute.path}';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorMessage = _messageForError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exportingExcel = false;
+        });
+      }
+    }
+  }
+
+  Future<File> _writeSelectedExcelFile(DownloadedFile downloadedFile) async {
+    final documentsDirectory =
+        await (widget.documentsDirectoryProvider?.call() ??
+            getApplicationDocumentsDirectory());
+    final exportDirectory = Directory(
+      _joinPath([documentsDirectory.path, 'exports']),
+    );
+    await exportDirectory.create(recursive: true);
+    final targetFile = await _nextExcelExportFile(
+      exportDirectory,
+      _safeExcelExportFileName(downloadedFile.fileName),
+    );
+    await targetFile.writeAsBytes(downloadedFile.bytes, flush: true);
+    return targetFile;
+  }
+
   Future<void> _exportSelectedImages(FinanceImageType type) async {
     if (_batchExporting) {
       return;
     }
     final selected = _visibleSummaries
         .where(
-          (summary) => _selectedTravelGroupIds.contains(summary.travelGroupId),
+          (summary) =>
+              !summary.isAfterSales &&
+              _selectedTravelGroupIds.contains(summary.financeRowId),
         )
         .toList();
     if (selected.isEmpty) {
@@ -809,7 +916,10 @@ class _TravelGroupFinanceSupplementPageState
     FinanceImageType type, {
     bool showSnackBar = true,
   }) async {
-    final busyKey = '${summary.travelGroupId}:${type.name}';
+    if (summary.isAfterSales) {
+      return false;
+    }
+    final busyKey = '${summary.financeRowId}:${type.name}';
     if (_imageExportingKeys.contains(busyKey)) {
       return false;
     }
@@ -956,7 +1066,8 @@ class _TravelGroupFinanceSupplementPageState
     final safeDate = date.isEmpty ? '未知日期' : date;
     final agency = _text(group?.travelAgency, fallback: '未知旅行社');
     final guide = _text(group?.guideName, fallback: '未知导游');
-    return _safeExportFileName('$safeDate-$agency-$guide-${type.label}.png');
+    final suffix = type == FinanceImageType.guide ? '旅行社积分导游联络表' : '积分表';
+    return _safeExportFileName('$safeDate-$agency-$guide-$suffix.png');
   }
 
   @override
@@ -964,7 +1075,7 @@ class _TravelGroupFinanceSupplementPageState
     final visibleSummaries = _visibleSummaries;
     final selectedVisibleCount = visibleSummaries
         .where(
-          (summary) => _selectedTravelGroupIds.contains(summary.travelGroupId),
+          (summary) => _selectedTravelGroupIds.contains(summary.financeRowId),
         )
         .length;
 
@@ -1049,6 +1160,9 @@ class _TravelGroupFinanceSupplementPageState
                     MapEntry(_statusAfterSalesProcessing, '售后处理中'),
                     MapEntry(_statusRefundPending, '退款待确认'),
                     MapEntry(_statusFinanceRequired, '需财务处理'),
+                    MapEntry(_statusAfterSalesConfirmed, '售后已确认'),
+                    MapEntry(_statusAfterSalesRecovery, '待追回/下期抵扣'),
+                    MapEntry(_statusNoFinancialEffect, '无财务影响'),
                   ],
                   onChanged: (value) => setState(() => _statusFilter = value),
                 ),
@@ -1128,6 +1242,16 @@ class _TravelGroupFinanceSupplementPageState
                       )
                     : const Icon(Icons.calculate_rounded),
                 label: Text(_recalculating ? '计算中' : '重新计算'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey(
+                  'finance-export-selected-excel-button',
+                ),
+                onPressed: selectedVisibleCount == 0 || _exportingExcel
+                    ? null
+                    : _exportSelectedExcel,
+                icon: const Icon(Icons.table_view_rounded),
+                label: Text(_exportingExcel ? 'Excel 导出中' : '导出所选 Excel'),
               ),
               OutlinedButton.icon(
                 key: const ValueKey('finance-export-guide-images-button'),
@@ -1402,7 +1526,8 @@ class _FinancePointTable extends StatelessWidget {
   Widget build(BuildContext context) {
     final selectedCount = summaries
         .where(
-            (summary) => selectedTravelGroupIds.contains(summary.travelGroupId))
+          (summary) => selectedTravelGroupIds.contains(summary.financeRowId),
+        )
         .length;
     final allSelected =
         selectedCount == summaries.length && summaries.isNotEmpty;
@@ -1422,6 +1547,10 @@ class _FinancePointTable extends StatelessWidget {
               onChanged: (value) => onSelectAllChanged(value ?? false),
             ),
           ),
+          const DataColumn(label: Text('行类型')),
+          const DataColumn(label: Text('售后单号')),
+          const DataColumn(label: Text('原订单号')),
+          const DataColumn(label: Text('售后状态')),
           const DataColumn(label: Text('日期')),
           const DataColumn(label: Text('旅行社')),
           const DataColumn(label: Text('导游')),
@@ -1442,7 +1571,7 @@ class _FinancePointTable extends StatelessWidget {
           const DataColumn(label: Text('已返月返积分')),
           const DataColumn(label: Text('未返月返积分')),
           const DataColumn(label: Text('售后影响')),
-          const DataColumn(label: Text('导游图片')),
+          const DataColumn(label: Text('旅行社积分导游联络图')),
           const DataColumn(label: Text('旅行社图片')),
           const DataColumn(label: Text('导游信息发送')),
           const DataColumn(label: Text('旅行社信息发送')),
@@ -1459,14 +1588,18 @@ class _FinancePointTable extends StatelessWidget {
     BuildContext context,
     TravelGroupFinanceSummaryRecord summary,
   ) {
-    final rowKey = summary.travelGroupId;
+    final rowKey = summary.financeRowId;
+    final travelGroupKey = summary.travelGroupId;
     final group = summary.travelGroup;
     final selected = selectedTravelGroupIds.contains(rowKey);
-    final guideReady = guideImageReadyIds.contains(rowKey);
-    final agencyReady = travelAgencyImageReadyIds.contains(rowKey);
-    final guideSentBusy = sentUpdatingKeys.contains('$rowKey:guideInfoSent');
+    final guideReady =
+        !summary.isAfterSales && guideImageReadyIds.contains(travelGroupKey);
+    final agencyReady = !summary.isAfterSales &&
+        travelAgencyImageReadyIds.contains(travelGroupKey);
+    final guideSentBusy =
+        sentUpdatingKeys.contains('$travelGroupKey:guideInfoSent');
     final agencySentBusy =
-        sentUpdatingKeys.contains('$rowKey:travelAgencyInfoSent');
+        sentUpdatingKeys.contains('$travelGroupKey:travelAgencyInfoSent');
     return DataRow(
       key: ValueKey('finance-row-$rowKey'),
       selected: selected,
@@ -1478,8 +1611,24 @@ class _FinancePointTable extends StatelessWidget {
           onChanged: (value) => onSelectionChanged(rowKey, value ?? false),
         )),
         DataCell(_TextCell(
+          value: summary.isAfterSales ? '售后调整' : '原销售',
+          width: 84,
+        )),
+        DataCell(_TextCell(value: _text(summary.afterSalesNo), width: 128)),
+        DataCell(
+          _TextCell(value: _text(summary.sourceSalesOrderNo), width: 128),
+        ),
+        DataCell(_TextCell(
+          value: summary.isAfterSales
+              ? _afterSalesStatusLabel(summary.afterSalesStatus)
+              : '',
+          width: 96,
+        )),
+        DataCell(_TextCell(
           key: ValueKey('$rowKey:rowTapTarget'),
-          value: _dateOnlyText(group?.visitDate ?? ''),
+          value: _dateOnlyText(
+            summary.financeDate ?? group?.visitDate ?? '',
+          ),
         )),
         DataCell(_TextCell(value: _text(group?.travelAgency), width: 132)),
         DataCell(_TextCell(value: _text(group?.guideName), width: 96)),
@@ -1503,8 +1652,8 @@ class _FinancePointTable extends StatelessWidget {
           key: ValueKey('$rowKey:dailyRebatePaid'),
           amountCents: summary.paidDailyRebateCents,
           paid: summary.dailyRebatePaid,
-          busy: rebateUpdatingKeys.contains('$rowKey:dailyRebatePaid'),
-          onPressed: summary.summaryExists
+          busy: rebateUpdatingKeys.contains('$travelGroupKey:dailyRebatePaid'),
+          onPressed: summary.summaryExists && !summary.isAfterSales
               ? () => onDailyRebatePaidChanged(
                     summary,
                     !summary.dailyRebatePaid,
@@ -1517,8 +1666,9 @@ class _FinancePointTable extends StatelessWidget {
           key: ValueKey('$rowKey:monthlyRebatePaid'),
           amountCents: summary.paidMonthlyRebateCents,
           paid: summary.monthlyRebatePaid,
-          busy: rebateUpdatingKeys.contains('$rowKey:monthlyRebatePaid'),
-          onPressed: summary.summaryExists
+          busy:
+              rebateUpdatingKeys.contains('$travelGroupKey:monthlyRebatePaid'),
+          onPressed: summary.summaryExists && !summary.isAfterSales
               ? () => onMonthlyRebatePaidChanged(
                     summary,
                     !summary.monthlyRebatePaid,
@@ -1529,23 +1679,27 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(_AfterSalesImpactCell(summary: summary)),
         DataCell(_ImageExportButton(
           key: ValueKey('$rowKey:guideImage'),
-          label: '导游图片',
+          label: '旅行社积分导游联络图',
           busy: imageExportingKeys.contains('$rowKey:guide'),
           ready: guideReady,
-          onPressed: () => onExportImage(summary, FinanceImageType.guide),
+          onPressed: summary.isAfterSales
+              ? null
+              : () => onExportImage(summary, FinanceImageType.guide),
         )),
         DataCell(_ImageExportButton(
           key: ValueKey('$rowKey:travelAgencyImage'),
           label: '旅行社图片',
           busy: imageExportingKeys.contains('$rowKey:travelAgency'),
           ready: agencyReady,
-          onPressed: () =>
-              onExportImage(summary, FinanceImageType.travelAgency),
+          onPressed: summary.isAfterSales
+              ? null
+              : () => onExportImage(summary, FinanceImageType.travelAgency),
         )),
         DataCell(Switch(
           key: ValueKey('$rowKey:guideInfoSent'),
           value: summary.guideInfoSent,
-          onChanged: !summary.summaryExists ||
+          onChanged: summary.isAfterSales ||
+                  !summary.summaryExists ||
                   guideSentBusy ||
                   (!guideReady && !summary.guideInfoSent)
               ? null
@@ -1554,7 +1708,8 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(Switch(
           key: ValueKey('$rowKey:travelAgencyInfoSent'),
           value: summary.travelAgencyInfoSent,
-          onChanged: !summary.summaryExists ||
+          onChanged: summary.isAfterSales ||
+                  !summary.summaryExists ||
                   agencySentBusy ||
                   (!agencyReady && !summary.travelAgencyInfoSent)
               ? null
@@ -1599,9 +1754,16 @@ class _MoneyCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final color = cents < 0 ? const Color(0xFFC62828) : null;
     return SizedBox(
       width: 112,
-      child: Text(formatPointsTableMoneyCents(cents)),
+      child: Text(
+        formatPointsTableMoneyCents(cents),
+        style: TextStyle(
+          color: color,
+          fontWeight: cents < 0 ? FontWeight.w700 : FontWeight.normal,
+        ),
+      ),
     );
   }
 }
@@ -1614,7 +1776,7 @@ class _AfterSalesImpactCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      key: ValueKey('${summary.travelGroupId}:afterSalesImpact'),
+      key: ValueKey('${summary.financeRowId}:afterSalesImpact'),
       width: 190,
       child: StatusTag(
         label: _afterSalesImpactLabel(summary),
@@ -1648,26 +1810,34 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
   void initState() {
     super.initState();
     _controller = TextEditingController(
-      text: _yuanInput(
-        scalePointsTableAmountCents(
-          widget.summary.totalAgencyDeductionCents,
-        ),
-      ),
+      text: _inputText(widget.summary),
     );
   }
 
   @override
   void didUpdateWidget(covariant _AgencyDeductionEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.summary.totalAgencyDeductionCents !=
-        widget.summary.totalAgencyDeductionCents) {
-      _controller.text = _yuanInput(
-        scalePointsTableAmountCents(
-          widget.summary.totalAgencyDeductionCents,
-        ),
-      );
+    if (_inputCents(oldWidget.summary) != _inputCents(widget.summary) ||
+        oldWidget.summary.deductionCalculationMode !=
+            widget.summary.deductionCalculationMode) {
+      _controller.text = _inputText(widget.summary);
       _validationError = null;
     }
+  }
+
+  int? _inputCents(TravelGroupFinanceSummaryRecord summary) {
+    if (summary.isAfterSales) {
+      return summary.agencyDeductionAdjustmentCents;
+    }
+    return summary.totalAgencyDeductionCents;
+  }
+
+  String _inputText(TravelGroupFinanceSummaryRecord summary) {
+    final cents = _inputCents(summary);
+    if (cents == null) {
+      return '';
+    }
+    return _yuanInput(scalePointsTableAmountCents(cents.abs()));
   }
 
   @override
@@ -1677,12 +1847,12 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
   }
 
   Future<void> _save() async {
-    if (!widget.summary.summaryExists || widget.saving) {
+    if (!_editable || widget.saving) {
       return;
     }
     final result = _parseAgencyDeduction(
       _controller.text,
-      widget.summary.totalSalesAmountCents,
+      widget.summary.totalSalesAmountCents.abs(),
     );
     if (result.error != null) {
       setState(() => _validationError = result.error);
@@ -1694,6 +1864,25 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.summary.isAfterSales &&
+        widget.summary.deductionCalculationMode != 'manual_product_reference') {
+      return SizedBox(
+        width: 220,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _MoneyCell(cents: widget.summary.totalAgencyDeductionCents),
+            const Text(
+              '按原单有效销售占比自动计算',
+              style: TextStyle(fontSize: 11, color: Color(0xFF667085)),
+            ),
+          ],
+        ),
+      );
+    }
+    final pendingManualCost = widget.summary.isAfterSales &&
+        widget.summary.agencyDeductionAdjustmentCents == null;
     return SizedBox(
       width: 220,
       child: Row(
@@ -1702,10 +1891,10 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
           Expanded(
             child: TextField(
               key: ValueKey(
-                '${widget.summary.travelGroupId}:agencyDeductionInput',
+                '${widget.summary.financeRowId}:agencyDeductionInput',
               ),
               controller: _controller,
-              enabled: widget.summary.summaryExists && !widget.saving,
+              enabled: _editable && !widget.saving,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -1719,6 +1908,7 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
               decoration: InputDecoration(
                 isDense: true,
                 prefixText: '¥ ',
+                hintText: pendingManualCost ? '待填写扣酒成本' : null,
                 errorText: _validationError,
                 errorMaxLines: 2,
               ),
@@ -1729,10 +1919,9 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
             width: 68,
             child: FilledButton(
               key: ValueKey(
-                '${widget.summary.travelGroupId}:agencyDeductionSave',
+                '${widget.summary.financeRowId}:agencyDeductionSave',
               ),
-              onPressed:
-                  !widget.summary.summaryExists || widget.saving ? null : _save,
+              onPressed: !_editable || widget.saving ? null : _save,
               child: widget.saving
                   ? const SizedBox.square(
                       dimension: 14,
@@ -1745,6 +1934,12 @@ class _AgencyDeductionEditorState extends State<_AgencyDeductionEditor> {
       ),
     );
   }
+
+  bool get _editable =>
+      widget.summary.summaryExists &&
+      (!widget.summary.isAfterSales ||
+          widget.summary.deductionCalculationMode ==
+              'manual_product_reference');
 }
 
 class _AgencyDeductionParseResult {
@@ -1848,7 +2043,7 @@ class _ImageExportButton extends StatelessWidget {
   final String label;
   final bool busy;
   final bool ready;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1894,7 +2089,6 @@ class _FinanceExportImageCard extends StatelessWidget {
                 summary.totalAgencyNetAmountCents,
               ),
             ),
-            MapEntry('售后影响', _afterSalesImpactLabel(summary)),
           ]
         : <MapEntry<String, String>>[
             MapEntry('日期', _dateOnlyText(group?.visitDate ?? '')),
@@ -1908,51 +2102,15 @@ class _FinanceExportImageCard extends StatelessWidget {
               formatPointsTableMoneyCents(summary.totalSalesAmountCents),
             ),
             MapEntry(
-              '已付定金',
-              formatPointsTableMoneyCents(summary.totalPaidDepositCents),
-            ),
-            MapEntry(
-              '货到付款',
-              formatPointsTableMoneyCents(
-                summary.totalCashOnDeliveryCents,
-              ),
-            ),
-            MapEntry(
-              '已确认退款',
-              formatPointsTableMoneyCents(
-                summary.confirmedRefundAmountCents,
-              ),
-            ),
-            MapEntry(
-              '有效销售额',
-              formatPointsTableMoneyCents(
-                summary.effectiveSalesAmountCents,
-              ),
-            ),
-            MapEntry(
-              '扣酒成本',
-              formatPointsTableMoneyCents(
-                summary.totalAgencyDeductionCents,
-              ),
-            ),
-            MapEntry(
               '上单金额',
               formatPointsTableMoneyCents(
                 summary.totalAgencyNetAmountCents,
               ),
             ),
-            MapEntry(
-              '日返积分',
-              formatPointsTableMoneyCents(summary.totalDailyRebateCents),
-            ),
-            MapEntry(
-              '月返积分',
-              formatPointsTableMoneyCents(summary.totalMonthlyRebateCents),
-            ),
-            MapEntry('售后影响', _afterSalesImpactLabel(summary)),
           ];
 
     return SizedBox(
+      key: ValueKey('finance-export-single-image-${type.name}'),
       width: 760,
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -1972,14 +2130,6 @@ class _FinanceExportImageCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  type.label,
-                  style: const TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 18),
                 for (final field in fields)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -2026,7 +2176,6 @@ const _guideExportHeaders = <String>[
   '人数',
   '品鉴师',
   '上单金额',
-  '售后影响',
 ];
 
 const _guideExportColumnWidths = <double>[
@@ -2037,7 +2186,6 @@ const _guideExportColumnWidths = <double>[
   80,
   150,
   160,
-  260,
 ];
 
 const _agencyExportHeaders = <String>[
@@ -2045,15 +2193,7 @@ const _agencyExportHeaders = <String>[
   '旅行社',
   '导游',
   '销售额',
-  '货到付款',
-  '已付定金',
-  '已确认退款',
-  '有效销售额',
-  '扣酒成本',
   '上单金额',
-  '日返积分',
-  '月返积分',
-  '售后影响',
 ];
 
 const _agencyExportColumnWidths = <double>[
@@ -2062,14 +2202,6 @@ const _agencyExportColumnWidths = <double>[
   150,
   150,
   150,
-  150,
-  150,
-  150,
-  150,
-  150,
-  140,
-  140,
-  260,
 ];
 
 List<FinanceExportTablePage> _buildFinanceExportTablePages(
@@ -2145,28 +2277,11 @@ FinanceExportTableRow _buildFinanceExportTableRow(
           '${group?.guestCount ?? 0}',
           _text(group?.tasterName),
           formatPointsTableMoneyCents(summary.totalAgencyNetAmountCents),
-          _afterSalesImpactLabel(summary),
         ]
       : <String>[
           ...common,
           formatPointsTableMoneyCents(summary.totalSalesAmountCents),
-          formatPointsTableMoneyCents(
-            summary.totalCashOnDeliveryCents,
-          ),
-          formatPointsTableMoneyCents(summary.totalPaidDepositCents),
-          formatPointsTableMoneyCents(
-            summary.confirmedRefundAmountCents,
-          ),
-          formatPointsTableMoneyCents(
-            summary.effectiveSalesAmountCents,
-          ),
-          formatPointsTableMoneyCents(
-            summary.totalAgencyDeductionCents,
-          ),
           formatPointsTableMoneyCents(summary.totalAgencyNetAmountCents),
-          formatPointsTableMoneyCents(summary.totalDailyRebateCents),
-          formatPointsTableMoneyCents(summary.totalMonthlyRebateCents),
-          _afterSalesImpactLabel(summary),
         ];
   return FinanceExportTableRow(
     travelGroupId: summary.travelGroupId,
@@ -2556,6 +2671,9 @@ const _statusComplete = '已完成';
 const _statusAfterSalesProcessing = '售后处理中';
 const _statusRefundPending = '退款待确认';
 const _statusFinanceRequired = '需财务处理';
+const _statusAfterSalesConfirmed = '售后已确认';
+const _statusAfterSalesRecovery = '待追回/下期抵扣';
+const _statusNoFinancialEffect = '无财务影响';
 
 const _sentFilterItems = <MapEntry<String, String>>[
   MapEntry(_allFilter, '全部'),
@@ -2572,6 +2690,14 @@ bool _matchesSentFilter(bool sent, String filter) {
 }
 
 String _summaryStatus(TravelGroupFinanceSummaryRecord summary) {
+  if (summary.isAfterSales) {
+    return switch (summary.financialEffectStatus) {
+      'confirmed' => _statusAfterSalesConfirmed,
+      'pending_recovery' => _statusAfterSalesRecovery,
+      'no_financial_effect' => _statusNoFinancialEffect,
+      _ => _statusRefundPending,
+    };
+  }
   if (!summary.summaryExists) {
     return _statusMissing;
   }
@@ -2590,12 +2716,23 @@ StatusTone _summaryStatusTone(TravelGroupFinanceSummaryRecord summary) {
   return switch (_summaryStatus(summary)) {
     _statusMissing => StatusTone.neutral,
     _statusComplete => StatusTone.success,
+    _statusAfterSalesConfirmed => StatusTone.success,
+    _statusNoFinancialEffect => StatusTone.neutral,
+    _statusAfterSalesRecovery => StatusTone.danger,
     _statusFinanceRequired => StatusTone.danger,
     _ => StatusTone.warning,
   };
 }
 
 String _afterSalesImpactLabel(TravelGroupFinanceSummaryRecord summary) {
+  if (summary.isAfterSales) {
+    return switch (summary.financialEffectStatus) {
+      'confirmed' => '已确认独立负向调整',
+      'pending_recovery' => '待追回/下期抵扣',
+      'no_financial_effect' => '0 金额记录',
+      _ => summary.financialAmountsReady ? '待财务确认' : '待填写扣酒成本',
+    };
+  }
   return switch (summary.afterSalesImpactStatus) {
     'after_sales_processing' => '售后处理中',
     'refund_pending_confirmation' =>
@@ -2607,12 +2744,33 @@ String _afterSalesImpactLabel(TravelGroupFinanceSummaryRecord summary) {
 }
 
 StatusTone _afterSalesImpactTone(TravelGroupFinanceSummaryRecord summary) {
+  if (summary.isAfterSales) {
+    return switch (summary.financialEffectStatus) {
+      'confirmed' => StatusTone.success,
+      'pending_recovery' => StatusTone.danger,
+      'no_financial_effect' => StatusTone.neutral,
+      _ => StatusTone.warning,
+    };
+  }
   return switch (summary.afterSalesImpactStatus) {
     'after_rebate_paid_requires_finance' => StatusTone.danger,
     'refund_pending_confirmation' => StatusTone.warning,
     'after_sales_processing' => StatusTone.warning,
     'refund_adjusted' => StatusTone.info,
     _ => StatusTone.neutral,
+  };
+}
+
+String _afterSalesStatusLabel(String? status) {
+  return switch (status) {
+    'negotiating' => '协商中',
+    'pending_warehouse' => '待仓库确认',
+    'pending_finance' => '待财务确认',
+    'processing' => '处理中',
+    'completed' => '已完成',
+    'cancelled' => '已取消',
+    null || '' => '',
+    _ => status,
   };
 }
 
@@ -2670,6 +2828,46 @@ String _safeExportFileName(String fileName) {
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
   return sanitized.isEmpty ? '积分表图片.png' : sanitized;
+}
+
+String _safeExcelExportFileName(String? fileName) {
+  var sanitized = (fileName ?? '')
+      .trim()
+      .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+      .replaceAll(RegExp(r'[. ]+$'), '');
+  if (sanitized.isEmpty) {
+    sanitized = 'points-table-selected.xlsx';
+  }
+  return sanitized.toLowerCase().endsWith('.xlsx')
+      ? sanitized
+      : '$sanitized.xlsx';
+}
+
+Future<File> _nextExcelExportFile(
+  Directory directory,
+  String fileName,
+) async {
+  final first = File(_joinPath([directory.path, fileName]));
+  if (!await first.exists()) {
+    return first;
+  }
+  final dotIndex = fileName.lastIndexOf('.');
+  final stem = dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
+  final extension = dotIndex <= 0 ? '' : fileName.substring(dotIndex);
+  for (var index = 1; index < 1000; index += 1) {
+    final candidate = File(
+      _joinPath([directory.path, '$stem ($index)$extension']),
+    );
+    if (!await candidate.exists()) {
+      return candidate;
+    }
+  }
+  return File(
+    _joinPath([
+      directory.path,
+      '$stem (${DateTime.now().microsecondsSinceEpoch})$extension',
+    ]),
+  );
 }
 
 class _NonNegativeIntegerFormatter extends TextInputFormatter {

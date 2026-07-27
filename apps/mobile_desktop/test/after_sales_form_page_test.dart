@@ -172,6 +172,7 @@ void main() {
     await tester.tap(find.text('待退款').last);
     await tester.pumpAndSettle();
 
+    await _addFirstDraftItem(tester);
     await tester.enterText(
       find.byKey(const ValueKey('after-sales-description-field')),
       'smoke 售后退款测试',
@@ -181,11 +182,11 @@ void main() {
       'smoke 先登记后退款',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('after-sales-refund-amount-field')),
+      find.byKey(const ValueKey('after-sales-item-total-item-1')),
       '12',
     );
-    expect(find.text('退款金额（元）'), findsOneWidget);
-    expect(find.text('元'), findsOneWidget);
+    expect(find.text('退款总额（由明细自动合计）'), findsOneWidget);
+    expect(find.text('元'), findsNWidgets(2));
     expect(find.text('退款金额（分）'), findsNothing);
     await tester.ensureVisible(saveButton);
     await tester.tap(saveButton);
@@ -193,13 +194,20 @@ void main() {
 
     expect(
         apiClient.afterSalesCreatePaths, contains('/api/after-sales-orders'));
-    expect(apiClient.lastAfterSalesBody?['salesOrderId'], 'order-1');
+    expect(apiClient.lastAfterSalesBody?['sourceSalesOrderId'], 'order-1');
     expect(apiClient.lastAfterSalesBody?['issueType'], 'logistics_damage');
     expect(apiClient.lastAfterSalesBody?['actionType'], 'refund');
     expect(apiClient.lastAfterSalesBody?['status'], 'waiting_refund');
     expect(apiClient.lastAfterSalesBody?['description'], 'smoke 售后退款测试');
     expect(apiClient.lastAfterSalesBody?['resolution'], 'smoke 先登记后退款');
     expect(apiClient.lastAfterSalesBody?['refundAmountCents'], 1200);
+    expect(apiClient.lastAfterSalesBody?['items'], [
+      {
+        'sourceSalesOrderItemId': 'item-1',
+        'quantity': 1,
+        'totalPriceCents': 1200,
+      },
+    ]);
     expect(find.text('AS20260702001'), findsWidgets);
     expect(
       tester
@@ -221,8 +229,9 @@ void main() {
       find.byKey(const ValueKey('after-sales-description-field')),
       '小数退款测试',
     );
+    await _addFirstDraftItem(tester);
     await tester.enterText(
-      find.byKey(const ValueKey('after-sales-refund-amount-field')),
+      find.byKey(const ValueKey('after-sales-item-total-item-1')),
       '12.34',
     );
     final saveButton = find.widgetWithText(FilledButton, '创建售后单');
@@ -243,8 +252,9 @@ void main() {
       find.byKey(const ValueKey('after-sales-description-field')),
       '超精度退款测试',
     );
+    await _addFirstDraftItem(tester);
     await tester.enterText(
-      find.byKey(const ValueKey('after-sales-refund-amount-field')),
+      find.byKey(const ValueKey('after-sales-item-total-item-1')),
       '12.345',
     );
     final saveButton = find.widgetWithText(FilledButton, '创建售后单');
@@ -252,11 +262,11 @@ void main() {
     await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
-    expect(find.text('退款金额最多保留两位小数'), findsOneWidget);
+    expect(find.text('酱香珍藏 的本次总价格格式不正确。'), findsOneWidget);
     expect(apiClient.afterSalesCreatePaths, isEmpty);
   });
 
-  testWidgets('shows Chinese validation for invalid or incomplete yuan input',
+  testWidgets('shows Chinese validation for invalid item total input',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpAfterSalesForm(tester, apiClient);
@@ -266,23 +276,18 @@ void main() {
       find.byKey(const ValueKey('after-sales-description-field')),
       '退款金额格式测试',
     );
+    await _addFirstDraftItem(tester);
     final refundField =
-        find.byKey(const ValueKey('after-sales-refund-amount-field'));
+        find.byKey(const ValueKey('after-sales-item-total-item-1'));
     final saveButton = find.widgetWithText(FilledButton, '创建售后单');
-    final cases = <String, String>{
-      '': '请输入退款金额（元）',
-      '12.': '退款金额格式不完整，请补充小数位',
-      '-1': '退款金额不能为负数',
-      '12..3': '请输入有效的退款金额，格式如 0、12 或 12.34',
-      'abc': '请输入有效的退款金额，格式如 0、12 或 12.34',
-    };
+    const invalidValues = ['', '12.', '-1', '12..3', 'abc'];
 
-    for (final entry in cases.entries) {
-      await tester.enterText(refundField, entry.key);
+    for (final value in invalidValues) {
+      await tester.enterText(refundField, value);
       await tester.ensureVisible(saveButton);
       await tester.tap(saveButton);
       await tester.pumpAndSettle();
-      expect(find.text(entry.value), findsOneWidget);
+      expect(find.text('酱香珍藏 的本次总价格格式不正确。'), findsOneWidget);
     }
     expect(apiClient.afterSalesCreatePaths, isEmpty);
   });
@@ -479,6 +484,15 @@ Future<void> _selectOrderFromSearch(WidgetTester tester) async {
   );
   await tester.pumpAndSettle();
   await tester.tap(find.text('SO20260630001').first);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _addFirstDraftItem(WidgetTester tester) async {
+  final picker = find.byKey(const ValueKey('after-sales-source-item-picker-0'));
+  await tester.ensureVisible(picker);
+  await tester.tap(picker);
+  await tester.pumpAndSettle();
+  await tester.tap(find.textContaining('酱香珍藏（可售后').last);
   await tester.pumpAndSettle();
 }
 

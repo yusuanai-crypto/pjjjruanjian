@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -14,7 +15,6 @@ import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
-import '../../shared/widgets/serialized_inventory_picker_dialog.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -44,6 +44,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   late DateTime _start;
   late DateTime _end;
   bool _dateRangeAll = false;
+  late DateTime _shippingDateStart;
+  late DateTime _shippingDateEnd;
+  bool _shippingDateRangeAll = true;
+  String? _shippingDateSort;
 
   String? _statusFilter;
   String? _deliveryFilter;
@@ -82,6 +86,11 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance;
 
+  bool get _canChangePointsDestination =>
+      canChangeOrderPointsDestination(widget.role);
+  bool get _canEditPersonalPointsSettings =>
+      canMaintainGuidePointsTable(widget.role);
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +100,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     final now = DateTime.now();
     _start = DateTime(now.year, now.month, 1);
     _end = DateTime(now.year, now.month, now.day);
+    _shippingDateStart = DateTime(now.year, now.month, now.day);
+    _shippingDateEnd = _shippingDateStart.add(const Duration(days: 7));
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadOrders());
   }
 
@@ -127,6 +138,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         status: _statusFilter,
         deliveryType: _deliveryFilter,
         packingStatus: _packingFilter,
+        shippingDateStart:
+            _shippingDateRangeAll ? null : _shippingDateStart,
+        shippingDateEnd: _shippingDateRangeAll ? null : _shippingDateEnd,
+        shippingDateSort: _shippingDateSort,
       );
       if (!mounted) {
         return;
@@ -231,6 +246,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                     canEditBasics: _canEditBasics &&
                         (widget.role != UserRole.sales ||
                             selected.canEditByCurrentUser),
+                    canChangePointsDestination: _canChangePointsDestination,
                     orderBusy: _busyOrderIds.contains(selected.id),
                     customerBusy: _busyCustomerIds.contains(
                       selected.customerId ?? selected.customer?.id ?? '',
@@ -241,8 +257,24 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                         runAction(() => _toggleCustomerMark(selected)),
                     onEditBasics: () =>
                         runAction(() => _openBasicEditDialog(selected)),
+                    onEditShippingDate: selected.canEditShippingDate
+                        ? () => runAction(
+                              () => _openShippingDateDialog(selected),
+                            )
+                        : null,
                     onOpenQrSalesSheet: () =>
                         runAction(() => _openQrSalesSheetDialog(selected)),
+                    onChangePointsDestination: () => runAction(
+                      () => _changePointsDestination(selected),
+                    ),
+                    onEditPersonalPoints: _canEditPersonalPointsSettings
+                        ? () => runAction(
+                              () => _changePointsDestination(
+                                selected,
+                                editPersonalSettings: true,
+                              ),
+                            )
+                        : null,
                   ),
                 ),
               ),
@@ -412,6 +444,140 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     }
   }
 
+  Future<void> _openShippingDateDialog(SalesOrderRecord order) async {
+    final submittedAt = DateTime.tryParse(order.createdAt ?? '');
+    final shanghaiSubmittedAt = submittedAt
+        ?.toUtc()
+        .add(const Duration(hours: 8));
+    final minimumDate = shanghaiSubmittedAt == null
+        ? _shanghaiToday()
+        : DateTime(
+            shanghaiSubmittedAt.year,
+            shanghaiSubmittedAt.month,
+            shanghaiSubmittedAt.day,
+          );
+    var selectedDate =
+        DateTime.tryParse(order.shippingDate ?? '') ?? minimumDate;
+    if (selectedDate.isBefore(minimumDate)) {
+      selectedDate = minimumDate;
+    }
+    final reasonController = TextEditingController();
+    final result = await showDialog<_ShippingDateEditResult>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('修改 ${order.orderNo} 发货日期'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                OutlinedButton.icon(
+                  key: const ValueKey('order-shipping-date-edit-picker'),
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      firstDate: minimumDate,
+                      lastDate: DateTime(9999, 12, 31),
+                      initialDate: selectedDate,
+                      locale: const Locale('zh', 'CN'),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => selectedDate = picked);
+                    }
+                  },
+                  icon: const Icon(Icons.local_shipping_rounded),
+                  label: Text('发货日期 ${formatDate(selectedDate)}'),
+                ),
+                if (formatDate(selectedDate) ==
+                    formatDate(minimumDate)) ...[
+                  const SizedBox(height: 10),
+                  const StatusTag(
+                    label: '该订单计划当天发货，请确认仓库可及时处理。',
+                    tone: StatusTone.warning,
+                  ),
+                ],
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('order-shipping-date-reason-field'),
+                  controller: reasonController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: '修改原因（选填）',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const ValueKey('order-shipping-date-save-button'),
+              onPressed: () => Navigator.of(context).pop(
+                _ShippingDateEditResult(
+                  shippingDate: formatDate(selectedDate),
+                  reason: reasonController.text.trim(),
+                ),
+              ),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    reasonController.dispose();
+    if (result == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _busyOrderIds.add(order.id);
+      _detailErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.updateSalesOrderShippingDate(
+        order.id,
+        shippingDate: result.shippingDate,
+        reason: result.reason,
+      );
+      if (!mounted) return;
+      _replaceOrder(updated);
+      setState(() => _busyOrderIds.remove(order.id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.orderNo} 发货日期已更新。')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busyOrderIds.remove(order.id);
+        _detailErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _pickShippingDateRange() async {
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(9999, 12, 31),
+      initialDateRange: DateTimeRange(
+        start: _shippingDateStart,
+        end: _shippingDateEnd,
+      ),
+      locale: const Locale('zh', 'CN'),
+    );
+    if (range == null) return;
+    setState(() {
+      _shippingDateRangeAll = false;
+      _shippingDateStart = range.start;
+      _shippingDateEnd = range.end;
+    });
+    await _loadOrders();
+  }
+
   Future<void> _openQrSalesSheetDialog(SalesOrderRecord order) async {
     final generated = await showDialog<bool>(
       context: context,
@@ -423,6 +589,103 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     );
     if (generated == true && mounted) {
       await _loadOrderDetail(order);
+    }
+  }
+
+  Future<void> _changePointsDestination(
+    SalesOrderRecord order, {
+    bool editPersonalSettings = false,
+  }) async {
+    if (!_canChangePointsDestination || _busyOrderIds.contains(order.id)) {
+      return;
+    }
+    if (editPersonalSettings &&
+        (!_canEditPersonalPointsSettings || !order.isGuidePersonal)) {
+      return;
+    }
+    _PersonalPointsSelection? selection;
+    if (order.isGuidePersonal && !editPersonalSettings) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('确认转回旅行社积分'),
+          content: Text(
+            '订单 ${order.orderNo} 将退出导游积分表，并重新按旅行社规则'
+            '进入普通积分表。若相关汇总已返款，系统会拒绝操作。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const ValueKey(
+                'order-points-destination-agency-confirm',
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('确认转回旅行社'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) {
+        return;
+      }
+    } else {
+      selection = await showDialog<_PersonalPointsSelection>(
+        context: context,
+        builder: (context) => _PersonalPointsDialog(
+          businessApi: _businessApi,
+          order: order,
+          editing: editPersonalSettings,
+        ),
+      );
+      if (selection == null) {
+        return;
+      }
+    }
+
+    setState(() {
+      _busyOrderIds.add(order.id);
+      _detailErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.updateSalesOrderPointsDestination(
+        order.id,
+        pointsDestination: order.isGuidePersonal && !editPersonalSettings
+            ? 'TRAVEL_AGENCY'
+            : 'GUIDE_PERSONAL',
+        guideId: selection?.guideId,
+        dailyRebateRate: selection?.dailyRate,
+        monthlyRebateRate: selection?.monthlyRate,
+      );
+      if (!mounted) {
+        return;
+      }
+      _replaceOrder(updated);
+      setState(() {
+        _selectedOrder = updated;
+        _busyOrderIds.remove(order.id);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            editPersonalSettings
+                ? '订单个人积分设置已更新。'
+                : updated.isGuidePersonal
+                    ? '订单已走个人，并进入导游积分表。'
+                    : '订单已转回旅行社积分表。',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _busyOrderIds.remove(order.id);
+        _detailErrorMessage = _messageForError(error);
+      });
     }
   }
 
@@ -444,6 +707,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         status: _statusFilter,
         deliveryType: _deliveryFilter,
         packingStatus: _packingFilter,
+        shippingDateStart:
+            _shippingDateRangeAll ? null : _shippingDateStart,
+        shippingDateEnd: _shippingDateRangeAll ? null : _shippingDateEnd,
+        shippingDateSort: _shippingDateSort,
       );
       final directory = await (widget.documentsDirectoryProvider?.call() ??
           getApplicationDocumentsDirectory());
@@ -578,6 +845,40 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                   ],
                   onChanged: (value) {
                     setState(() => _statusFilter = value);
+                    _loadOrders();
+                  },
+                ),
+                OutlinedButton.icon(
+                  key: const ValueKey('order-shipping-date-filter'),
+                  onPressed: _pickShippingDateRange,
+                  icon: const Icon(Icons.date_range_rounded),
+                  label: Text(
+                    _shippingDateRangeAll
+                        ? '发货日期：全部'
+                        : '发货日期：${formatDate(_shippingDateStart)} 至 '
+                            '${formatDate(_shippingDateEnd)}',
+                  ),
+                ),
+                if (!_shippingDateRangeAll)
+                  TextButton.icon(
+                    key: const ValueKey('order-shipping-date-filter-clear'),
+                    onPressed: () {
+                      setState(() => _shippingDateRangeAll = true);
+                      _loadOrders();
+                    },
+                    icon: const Icon(Icons.clear_rounded),
+                    label: const Text('清除发货日期筛选'),
+                  ),
+                _NullableDropdown(
+                  key: const ValueKey('order-shipping-date-sort'),
+                  label: '发货日期排序',
+                  value: _shippingDateSort,
+                  items: const [
+                    MapEntry('shipping_date_asc', '由近到远'),
+                    MapEntry('shipping_date_desc', '由远到近'),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _shippingDateSort = value);
                     _loadOrders();
                   },
                 ),
@@ -770,6 +1071,7 @@ class _OrderList extends StatelessWidget {
                 Text(
                     '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
                 Text(_travelGroupLabel(order)),
+                Text('发货 ${_display(order.shippingDate)}'),
                 if (showFinanceMarks) ...[
                   StatusTag(
                     label: _customerMarked(order) ? '客户已标记' : '客户未标记',
@@ -810,12 +1112,16 @@ class _OrderDetailPanel extends StatelessWidget {
     required this.errorMessage,
     required this.canMark,
     required this.canEditBasics,
+    required this.canChangePointsDestination,
     required this.orderBusy,
     required this.customerBusy,
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
+    required this.onEditShippingDate,
     required this.onOpenQrSalesSheet,
+    required this.onChangePointsDestination,
+    required this.onEditPersonalPoints,
   });
 
   final SalesOrderRecord? order;
@@ -824,12 +1130,16 @@ class _OrderDetailPanel extends StatelessWidget {
   final String? errorMessage;
   final bool canMark;
   final bool canEditBasics;
+  final bool canChangePointsDestination;
   final bool orderBusy;
   final bool customerBusy;
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
+  final VoidCallback? onEditShippingDate;
   final VoidCallback? onOpenQrSalesSheet;
+  final VoidCallback? onChangePointsDestination;
+  final VoidCallback? onEditPersonalPoints;
 
   @override
   Widget build(BuildContext context) {
@@ -856,17 +1166,53 @@ class _OrderDetailPanel extends StatelessWidget {
             ],
             _OrderOverviewBlock(order: order, role: role),
             const SizedBox(height: 14),
+            if (onEditShippingDate != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('order-edit-shipping-date-button'),
+                  onPressed: orderBusy ? null : onEditShippingDate,
+                  icon: const Icon(Icons.edit_calendar_rounded),
+                  label: const Text('修改发货日期'),
+                ),
+              )
+            else if (order.packingStatus == PackingStatus.packed.value)
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: StatusTag(
+                  label: '订单已出库，发货日期只读',
+                  tone: StatusTone.neutral,
+                ),
+              ),
+            if (order.shippingRiskWarnings.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final warning in order.shippingRiskWarnings)
+                    StatusTag(
+                      label: warning.message,
+                      tone: StatusTone.warning,
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 14),
             _ActionStrip(
               order: order,
               role: role,
               canMark: canMark,
               canEditBasics: canEditBasics,
+              canChangePointsDestination: canChangePointsDestination,
               orderBusy: orderBusy,
               customerBusy: customerBusy,
               onToggleOrderMark: onToggleOrderMark,
               onToggleCustomerMark: onToggleCustomerMark,
               onEditBasics: onEditBasics,
               onOpenQrSalesSheet: onOpenQrSalesSheet,
+              onChangePointsDestination: onChangePointsDestination,
+              onEditPersonalPoints: onEditPersonalPoints,
             ),
           ],
         ),
@@ -885,8 +1231,28 @@ class _OrderDetailPanel extends StatelessWidget {
             const _SectionTitle('基础信息'),
             _InfoRow(label: '系统单号', value: order.orderNo),
             _InfoRow(label: '订单日期', value: order.orderDate),
+            _InfoRow(
+              label: '发货日期',
+              value: _display(order.shippingDate),
+            ),
             _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
             _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
+            _InfoRow(
+              label: '积分归属',
+              value: order.isGuidePersonal
+                  ? '走个人 · ${order.personalGuideNameSnapshot ?? order.personalPointsGuide?.name ?? '未指定导游'}'
+                  : '走旅行社',
+            ),
+            if (order.isGuidePersonal) ...[
+              _InfoRow(
+                label: '个人日返比例',
+                value: _pointsRatePercent(order.personalDailyRebateRate),
+              ),
+              _InfoRow(
+                label: '个人月返比例',
+                value: _pointsRatePercent(order.personalMonthlyRebateRate),
+              ),
+            ],
             _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
             const Divider(height: 24),
             const _SectionTitle('客户快照'),
@@ -993,6 +1359,12 @@ class _OrderOverviewBlock extends StatelessWidget {
                   label: _packingStatusLabel(order.packingStatus),
                   tone: StatusTone.neutral,
                 ),
+                if (order.isGuidePersonal)
+                  const StatusTag(
+                    key: ValueKey('order-guide-personal-status'),
+                    label: '走个人',
+                    tone: StatusTone.warning,
+                  ),
               ],
             ),
             const SizedBox(height: 10),
@@ -1116,24 +1488,30 @@ class _ActionStrip extends StatelessWidget {
     required this.role,
     required this.canMark,
     required this.canEditBasics,
+    required this.canChangePointsDestination,
     required this.orderBusy,
     required this.customerBusy,
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
     required this.onOpenQrSalesSheet,
+    required this.onChangePointsDestination,
+    required this.onEditPersonalPoints,
   });
 
   final SalesOrderRecord order;
   final UserRole role;
   final bool canMark;
   final bool canEditBasics;
+  final bool canChangePointsDestination;
   final bool orderBusy;
   final bool customerBusy;
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
   final VoidCallback? onOpenQrSalesSheet;
+  final VoidCallback? onChangePointsDestination;
+  final VoidCallback? onEditPersonalPoints;
 
   @override
   Widget build(BuildContext context) {
@@ -1176,6 +1554,30 @@ class _ActionStrip extends StatelessWidget {
             icon: const Icon(Icons.edit_rounded),
             label: const Text('编辑订单信息'),
           ),
+        if (canChangePointsDestination)
+          FilledButton.icon(
+            key: ValueKey(
+              order.isGuidePersonal
+                  ? 'order-points-destination-agency-button'
+                  : 'order-points-destination-personal-button',
+            ),
+            onPressed: orderBusy ? null : onChangePointsDestination,
+            icon: Icon(
+              order.isGuidePersonal
+                  ? Icons.apartment_rounded
+                  : Icons.person_rounded,
+            ),
+            label: Text(
+              order.isGuidePersonal ? '转回旅行社' : '走个人',
+            ),
+          ),
+        if (order.isGuidePersonal && onEditPersonalPoints != null)
+          OutlinedButton.icon(
+            key: const ValueKey('order-personal-points-edit-button'),
+            onPressed: orderBusy ? null : onEditPersonalPoints,
+            icon: const Icon(Icons.manage_accounts_rounded),
+            label: const Text('修改个人设置'),
+          ),
         if (_canViewQrSalesSheet(role))
           OutlinedButton.icon(
             key: const ValueKey('order-qr-sales-sheet-button'),
@@ -1190,6 +1592,364 @@ class _ActionStrip extends StatelessWidget {
       ],
     );
   }
+}
+
+class _PersonalPointsDialog extends StatefulWidget {
+  const _PersonalPointsDialog({
+    required this.businessApi,
+    required this.order,
+    this.editing = false,
+  });
+
+  final BusinessApi businessApi;
+  final SalesOrderRecord order;
+  final bool editing;
+
+  @override
+  State<_PersonalPointsDialog> createState() => _PersonalPointsDialogState();
+}
+
+class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
+  late final TextEditingController _dailyController;
+  late final TextEditingController _monthlyController;
+  List<GuideRecord> _guides = const [];
+  String? _guideId;
+  bool _loading = true;
+  bool _submitting = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _dailyController = TextEditingController(
+      text: widget.editing
+          ? _orderRateToPercentInput(
+              widget.order.personalDailyRebateRate,
+              fallback: '50',
+            )
+          : '50',
+    );
+    _monthlyController = TextEditingController(
+      text: widget.editing
+          ? _orderRateToPercentInput(
+              widget.order.personalMonthlyRebateRate,
+              fallback: '0',
+            )
+          : '0',
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadGuides());
+  }
+
+  @override
+  void dispose() {
+    _dailyController.dispose();
+    _monthlyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadGuides() async {
+    try {
+      final guides =
+          await widget.businessApi.listGuides(isActive: true, limit: 200);
+      if (!mounted) {
+        return;
+      }
+      final groupGuideId = widget.order.travelGroup?.guideId;
+      String? selected = widget.editing &&
+              guides.any(
+                (guide) => guide.id == widget.order.personalPointsGuideId,
+              )
+          ? widget.order.personalPointsGuideId
+          : null;
+      if (groupGuideId != null &&
+          selected == null &&
+          guides.any((guide) => guide.id == groupGuideId)) {
+        selected = groupGuideId;
+      } else if (selected == null) {
+        final groupGuideName = widget.order.travelGroup?.guideName?.trim();
+        for (final guide in guides) {
+          if (groupGuideName != null &&
+              groupGuideName.isNotEmpty &&
+              guide.name.trim() == groupGuideName) {
+            selected = guide.id;
+            break;
+          }
+        }
+      }
+      if (selected == null && guides.length == 1) {
+        selected = guides.first.id;
+      }
+      setState(() {
+        _guides = guides;
+        _guideId = selected;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  void _submit() {
+    if (_submitting) {
+      return;
+    }
+    final guideId = _guideId;
+    final dailyRate = _percentToOrderRate(_dailyController.text);
+    final monthlyRate = _percentToOrderRate(_monthlyController.text);
+    if (guideId == null || guideId.isEmpty) {
+      setState(() => _errorMessage = '请选择个人积分收款导游。');
+      return;
+    }
+    if (dailyRate == null || monthlyRate == null) {
+      setState(() {
+        _errorMessage = '日返和月返比例必须在 0% 至 100% 之间，最多两位小数。';
+      });
+      return;
+    }
+    setState(() => _submitting = true);
+    Navigator.of(context).pop(
+      _PersonalPointsSelection(
+        guideId: guideId,
+        dailyRate: dailyRate,
+        monthlyRate: monthlyRate,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final group = widget.order.travelGroup;
+    return AlertDialog(
+      title: Text(widget.editing ? '修改个人积分设置' : '确认订单走个人'),
+      content: SizedBox(
+        width: 540,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _DialogInfoRow(label: '订单号', value: widget.order.orderNo),
+              _DialogInfoRow(
+                label: '旅行团',
+                value: group?.groupNo ?? widget.order.travelGroupId ?? '未关联',
+              ),
+              _DialogInfoRow(
+                label: '当前旅行社',
+                value: group?.travelAgency ?? '未填写',
+              ),
+              _DialogInfoRow(
+                label: '当前导游',
+                value: group?.guideName ?? '未填写',
+              ),
+              _DialogInfoRow(
+                label: '订单金额',
+                value: formatMoneyCents(widget.order.totalAmountCents),
+              ),
+              const Divider(height: 24),
+              if (_loading)
+                const Center(child: CircularProgressIndicator())
+              else
+                DropdownButtonFormField<String>(
+                  key: const ValueKey('personal-points-guide-picker'),
+                  initialValue: _guideId,
+                  decoration: const InputDecoration(
+                    labelText: '个人积分收款导游',
+                  ),
+                  items: [
+                    for (final guide in _guides)
+                      DropdownMenuItem(
+                        value: guide.id,
+                        child: Text('${guide.name} · ${guide.phone}'),
+                      ),
+                  ],
+                  onChanged: _submitting
+                      ? null
+                      : (value) => setState(() => _guideId = value),
+                ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('personal-points-daily-percent'),
+                controller: _dailyController,
+                enabled: !_submitting,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_OrderPercentInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: '日返积分比例',
+                  suffixText: '%',
+                  helperText: '默认 50%，数据库保存为 0.5000',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('personal-points-monthly-percent'),
+                controller: _monthlyController,
+                enabled: !_submitting,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_OrderPercentInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: '月返积分比例',
+                  suffixText: '%',
+                  helperText: '默认 0%，数据库保存为 0.0000',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                widget.editing
+                    ? '保存后将按订单级快照重算受影响的普通积分和导游积分；'
+                        '订单金额、状态、提成、库存、对账和利润口径不变。'
+                        '如相关汇总已返款，系统会拒绝修改。'
+                    : '确认后，本订单将从普通积分表的订单金额计算中排除，'
+                        '并按收款导游进入导游积分表；订单金额、状态、提成、'
+                        '库存、对账和利润口径不变。',
+              ),
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _errorMessage!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('personal-points-confirm-button'),
+          onPressed: _loading || _submitting ? null : _submit,
+          child: Text(widget.editing ? '确认修改' : '确认走个人'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogInfoRow extends StatelessWidget {
+  const _DialogInfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PersonalPointsSelection {
+  const _PersonalPointsSelection({
+    required this.guideId,
+    required this.dailyRate,
+    required this.monthlyRate,
+  });
+
+  final String guideId;
+  final String dailyRate;
+  final String monthlyRate;
+}
+
+class _OrderPercentInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty ||
+        RegExp(r'^\d{0,3}(\.\d{0,2})?$').hasMatch(newValue.text)) {
+      return newValue;
+    }
+    return oldValue;
+  }
+}
+
+String? _percentToOrderRate(String value) {
+  final text = value.trim();
+  final match = RegExp(r'^(\d{1,3})(?:\.(\d{1,2}))?$').firstMatch(text);
+  if (match == null) {
+    return null;
+  }
+  final whole = int.parse(match.group(1)!);
+  final fraction = (match.group(2) ?? '').padRight(2, '0');
+  final basisPoints = whole * 100 + int.parse(fraction);
+  if (basisPoints > 10000) {
+    return null;
+  }
+  final integer = basisPoints ~/ 10000;
+  final decimal = (basisPoints % 10000).toString().padLeft(4, '0');
+  return '$integer.$decimal';
+}
+
+String _orderRateToPercentInput(
+  String? value, {
+  required String fallback,
+}) {
+  final match = RegExp(r'^(\d+)(?:\.(\d+))?$').firstMatch(value?.trim() ?? '');
+  if (match == null) {
+    return fallback;
+  }
+  final integer = int.tryParse(match.group(1)!) ?? 0;
+  final fraction = (match.group(2) ?? '').padRight(4, '0').substring(0, 4);
+  final basisPoints = integer * 10000 + (int.tryParse(fraction) ?? 0);
+  if (basisPoints < 0 || basisPoints > 10000) {
+    return fallback;
+  }
+  final wholePercent = basisPoints ~/ 100;
+  final decimalPercent = basisPoints % 100;
+  return decimalPercent == 0
+      ? '$wholePercent'
+      : '$wholePercent.${decimalPercent.toString().padLeft(2, '0')}';
+}
+
+String _pointsRatePercent(String? rate) {
+  final text = rate?.trim() ?? '';
+  final match = RegExp(r'^(\d+)(?:\.(\d+))?$').firstMatch(text);
+  if (match == null) {
+    return '0%';
+  }
+  final integer = int.tryParse(match.group(1)!) ?? 0;
+  final fraction = (match.group(2) ?? '').padRight(4, '0').substring(0, 4);
+  final scaled = integer * 10000 + (int.tryParse(fraction) ?? 0);
+  final percentWhole = scaled ~/ 100;
+  final percentFraction = (scaled % 100).toString().padLeft(2, '0');
+  if (percentFraction == '00') {
+    return '$percentWhole%';
+  }
+  return '$percentWhole.'
+      '${percentFraction.replaceFirst(RegExp(r'0+$'), '')}%';
 }
 
 class _QrSalesSheetDialog extends StatefulWidget {
@@ -1398,6 +2158,7 @@ class _SalesSheetDialogDetails extends StatelessWidget {
         const SizedBox(height: 10),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
+        _InfoRow(label: '发货日期', value: _display(sheet.order.shippingDate)),
         _InfoRow(
           label: '客户姓名',
           value: _display(sheet.customer.name),
@@ -1671,6 +2432,16 @@ class _OrderEditResult {
   final Map<String, dynamic> packingPayload;
 }
 
+class _ShippingDateEditResult {
+  const _ShippingDateEditResult({
+    required this.shippingDate,
+    required this.reason,
+  });
+
+  final String shippingDate;
+  final String reason;
+}
+
 class _OrderEditDialog extends StatefulWidget {
   const _OrderEditDialog({
     required this.businessApi,
@@ -1891,22 +2662,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     setState(() => _items[index].selectProduct(product));
   }
 
-  Future<void> _selectSerializedUnits(int index) async {
-    final item = _items[index];
-    final productId = item.productId;
-    if (productId == null || !item.usesSerializedInventory) return;
-    final selected = await showDialog<List<SerializedUnitSelection>>(
-      context: context,
-      builder: (context) => SerializedInventoryPickerDialog(
-        businessApi: widget.businessApi,
-        productId: productId,
-        initialUnits: item.serializedUnits,
-      ),
-    );
-    if (selected == null || !mounted) return;
-    setState(() => item.selectSerializedUnits(selected));
-  }
-
   void _submit() {
     final codCents = _moneyCentsOrNull(_codController.text);
     if (codCents == null) {
@@ -1960,9 +2715,8 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     final logisticsNo = _logisticsNoController.text.trim();
     if (shippingOrder &&
         _packingStatus == PackingStatus.packed.value &&
-        (_logisticsProviderCode.isEmpty ||
-            (_logisticsProviderCode != 'self_carry' && logisticsNo.isEmpty))) {
-      setState(() => _errorMessage = '订单进入已寄出状态前，必须填写快递方式和快递单号。');
+        _logisticsProviderCode.isEmpty) {
+      setState(() => _errorMessage = '邮寄订单进入已打包状态前必须选择物流公司。');
       return;
     }
 
@@ -2027,10 +2781,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         setState(() => _errorMessage = '第 ${index + 1} 条明细数量必须大于 0。');
         return null;
       }
-      if (item.usesSerializedInventory && item.serializedUnits.isEmpty) {
-        setState(() => _errorMessage = '第 ${index + 1} 条明细请选择物流码。');
-        return null;
-      }
       final subtotalCents = item.subtotalCentsOrNull;
       if (subtotalCents == null) {
         setState(() => _errorMessage = '第 ${index + 1} 条明细总价格式不正确。');
@@ -2044,10 +2794,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         'deliveryType': item.deliveryType.value,
         'notes': item.notes,
         'sortOrder': index + 1,
-        if (item.usesSerializedInventory)
-          'serializedUnitIds': [
-            for (final unit in item.serializedUnits) unit.id,
-          ],
       });
     }
     if (payloads.isEmpty) {
@@ -2308,7 +3054,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                   onChanged: () => setState(() {}),
                   onDeliveryTypeChanged: _updateItemDeliveryType,
                   onProductChanged: _updateItemProduct,
-                  onSelectSerializedUnits: _selectSerializedUnits,
                 ),
                 const Divider(height: 26),
                 const _SectionTitle('财务与物流'),
@@ -2377,7 +3122,9 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                         decoration: InputDecoration(
                           labelText: '快递单号',
                           helperText: _logisticsNoController.text.trim().isEmpty
-                              ? '待寄出 / 运单号待录入'
+                              ? _packingStatus == PackingStatus.packed.value
+                                  ? '已打包，物流单号待财务补录'
+                                  : '待寄出 / 运单号待录入'
                               : null,
                         ),
                       ),
@@ -2475,7 +3222,6 @@ class _OrderItemsEditSection extends StatelessWidget {
     required this.onChanged,
     required this.onDeliveryTypeChanged,
     required this.onProductChanged,
-    required this.onSelectSerializedUnits,
   });
 
   final List<_EditableOrderItemDraft> items;
@@ -2490,7 +3236,6 @@ class _OrderItemsEditSection extends StatelessWidget {
   final void Function(int index, DeliveryType deliveryType)
       onDeliveryTypeChanged;
   final void Function(int index, ProductOptionRecord product) onProductChanged;
-  final ValueChanged<int> onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -2524,7 +3269,6 @@ class _OrderItemsEditSection extends StatelessWidget {
             productOptionsError: productOptionsError,
             onRetryProductOptions: onRetryProductOptions,
             onProductChanged: (product) => onProductChanged(index, product),
-            onSelectSerializedUnits: () => onSelectSerializedUnits(index),
           ),
           if (index != items.length - 1) const Divider(height: 20),
         ],
@@ -2545,7 +3289,6 @@ class _OrderItemEditRow extends StatelessWidget {
     required this.productOptionsError,
     required this.onRetryProductOptions,
     required this.onProductChanged,
-    required this.onSelectSerializedUnits,
   });
 
   final int index;
@@ -2558,7 +3301,6 @@ class _OrderItemEditRow extends StatelessWidget {
   final String? productOptionsError;
   final VoidCallback onRetryProductOptions;
   final ValueChanged<ProductOptionRecord> onProductChanged;
-  final VoidCallback onSelectSerializedUnits;
 
   @override
   Widget build(BuildContext context) {
@@ -2613,26 +3355,12 @@ class _OrderItemEditRow extends StatelessWidget {
                 TextField(
                   key: ValueKey('order-edit-item-quantity-$index'),
                   controller: item.quantityController,
-                  readOnly: item.usesSerializedInventory,
                   onChanged: (_) => onChanged(),
                   keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
+                  decoration: const InputDecoration(
                     labelText: '数量',
-                    helperText:
-                        item.usesSerializedInventory ? '由所选物流码数量自动生成' : null,
                   ),
                 ),
-                if (item.usesSerializedInventory)
-                  OutlinedButton.icon(
-                    key: ValueKey('order-edit-select-serialized-$index'),
-                    onPressed: onSelectSerializedUnits,
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
-                    label: Text(
-                      item.serializedUnits.isEmpty
-                          ? '选择物流码'
-                          : '已选 ${item.serializedUnits.length} 瓶',
-                    ),
-                  ),
                 TextField(
                   key: ValueKey('order-edit-item-subtotal-$index'),
                   controller: item.subtotalController,
@@ -2683,7 +3411,6 @@ class _EditableOrderItemDraft {
     required int subtotalCents,
     required this.deliveryType,
     this.inventoryTrackingMode = 'none',
-    this.serializedUnits = const [],
     String? notes,
   })  : quantityController = TextEditingController(
           text: quantity > 0 ? '$quantity' : '',
@@ -2703,8 +3430,6 @@ class _EditableOrderItemDraft {
       deliveryType: _deliveryTypeFromValue(item.deliveryType),
       inventoryTrackingMode:
           item.serializedUnits.isEmpty ? 'none' : 'serialized',
-      serializedUnits:
-          item.serializedUnits.map(SerializedUnitSelection.fromOrder).toList(),
       notes: item.notes,
     );
   }
@@ -2728,14 +3453,10 @@ class _EditableOrderItemDraft {
   final TextEditingController notesController;
   DeliveryType deliveryType;
   String inventoryTrackingMode;
-  List<SerializedUnitSelection> serializedUnits;
-
-  bool get usesSerializedInventory => inventoryTrackingMode == 'serialized';
 
   void selectProduct(ProductOptionRecord product) {
     if (productId != product.id) {
-      serializedUnits = const [];
-      quantityController.text = product.usesSerializedInventory ? '0' : '1';
+      quantityController.text = '1';
     }
     productId = product.id;
     snapshotName = product.name;
@@ -2747,12 +3468,6 @@ class _EditableOrderItemDraft {
     if (product.id == productId) {
       inventoryTrackingMode = product.inventoryTrackingMode;
     }
-  }
-
-  void selectSerializedUnits(List<SerializedUnitSelection> units) {
-    serializedUnits = List.unmodifiable(units);
-    quantityController.text = '${units.length}';
-    if (units.isNotEmpty) snapshotName = units.first.moutaiName;
   }
 
   int get quantity => int.tryParse(quantityController.text.trim()) ?? 0;
@@ -3023,6 +3738,12 @@ SalesOrderRecord? _selectedFrom(List<SalesOrderRecord> orders, String? id) {
 
 List<SalesOrderItemRecord> _sortedItems(List<SalesOrderItemRecord> items) {
   return [...items]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+}
+
+DateTime _shanghaiToday() {
+  final shanghaiNow =
+      DateTime.now().toUtc().add(const Duration(hours: 8));
+  return DateTime(shanghaiNow.year, shanghaiNow.month, shanghaiNow.day);
 }
 
 List<SalesSheetItemRecord> _sortedSalesSheetItems(

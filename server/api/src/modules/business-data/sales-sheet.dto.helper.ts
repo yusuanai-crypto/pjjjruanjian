@@ -109,6 +109,7 @@ export function buildSalesSheetDto(
       orderTypeLabel: labelFor(ORDER_TYPE_LABELS, orderType),
       salesFormNo: order?.salesFormNo || null,
       orderDate: formatDate(order?.orderDate),
+      shippingDate: formatDate(order?.shippingDate),
       remark: order?.remark || null,
     },
     customer: {
@@ -212,6 +213,7 @@ export function buildPublicSalesSheetDto(source: any) {
     order: {
       orderNo: salesSheet.order.orderNo,
       orderDate: salesSheet.order.orderDate,
+      shippingDate: salesSheet.order.shippingDate,
     },
     customer: {
       name: salesSheet.customer.name,

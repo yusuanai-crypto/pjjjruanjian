@@ -15,7 +15,11 @@ function redactSensitive(value) {
 
 function redactValue(value, seen, depth, key, sensitiveValues) {
   const keyKind = classifyKey(key);
-  if (keyKind === 'secret' || keyKind === 'address') {
+  if (
+    keyKind === 'secret' ||
+    keyKind === 'address' ||
+    keyKind === 'inventory_sensitive'
+  ) {
     return REDACTED;
   }
   if (keyKind === 'phone') {
@@ -104,7 +108,8 @@ function collectSensitiveValues(value, seen, depth, key, output) {
   if (
     (keyKind === 'secret' ||
       keyKind === 'phone' ||
-      keyKind === 'address') &&
+      keyKind === 'address' ||
+      keyKind === 'inventory_sensitive') &&
     (typeof value === 'string' || typeof value === 'number')
   ) {
     addSensitiveValue(output, String(value));
@@ -163,7 +168,7 @@ function collectInlineSensitiveValues(value, output) {
     addSensitiveValue(output, match[1]);
   }
   for (const match of value.matchAll(
-    /(?:password|passwd|authorization|cookie|secret|token|api[_-]?key|access[_-]?key|verification[_-]?code|sms[_-]?code|otp|address|full[_-]?address|street[_-]?address)\s*["']?\s*[:=]\s*["']?([^"',;\s}\]]+)/gi,
+    /(?:password|passwd|authorization|cookie|secret|token|api[_-]?key|access[_-]?key|verification[_-]?code|sms[_-]?code|otp|address|full[_-]?address|street[_-]?address|purchase[_-]?(?:unit[_-]?)?cost(?:[_-]?cents)?|inventory[_-]?amount(?:[_-]?cents)?|on[_-]?hand[_-]?qty|reserved[_-]?qty|unavailable[_-]?qty|in[_-]?transit[_-]?qty|available[_-]?qty|shortage[_-]?qty|logistics[_-]?code|batch[_-]?serial[_-]?no)\s*["']?\s*[:=]\s*["']?([^"',;\s}\]]+)/gi,
   )) {
     addSensitiveValue(output, match[1]);
   }
@@ -217,6 +222,26 @@ function classifyKey(value) {
   if (normalized.includes('address')) {
     return 'address';
   }
+  if (
+    normalized.includes('purchaseunitcost') ||
+    normalized.includes('purchasecost') ||
+    normalized.includes('inventoryamount') ||
+    normalized.includes('costcoverage') ||
+    normalized.includes('coveragestatus') ||
+    normalized === 'coststatus' ||
+    normalized.includes('coveredqty') ||
+    normalized.includes('uncoveredqty') ||
+    normalized.includes('onhandqty') ||
+    normalized.includes('reservedqty') ||
+    normalized.includes('unavailableqty') ||
+    normalized.includes('intransitqty') ||
+    normalized.includes('availableqty') ||
+    normalized.includes('shortageqty') ||
+    normalized.includes('logisticscode') ||
+    normalized.includes('batchserialno')
+  ) {
+    return 'inventory_sensitive';
+  }
   return 'normal';
 }
 
@@ -227,7 +252,7 @@ function redactString(value, sensitiveValues = new Set()) {
   }
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]');
   result = result.replace(
-    /((?:password|passwd|authorization|cookie|secret|token|api[_-]?key|access[_-]?key|verification[_-]?code|sms[_-]?code|otp|address|full[_-]?address|street[_-]?address)\s*["']?\s*[:=]\s*["']?)([^"',;\s}\]]+)/gi,
+    /((?:password|passwd|authorization|cookie|secret|token|api[_-]?key|access[_-]?key|verification[_-]?code|sms[_-]?code|otp|address|full[_-]?address|street[_-]?address|purchase[_-]?(?:unit[_-]?)?cost(?:[_-]?cents)?|inventory[_-]?amount(?:[_-]?cents)?|on[_-]?hand[_-]?qty|reserved[_-]?qty|unavailable[_-]?qty|in[_-]?transit[_-]?qty|available[_-]?qty|shortage[_-]?qty|logistics[_-]?code|batch[_-]?serial[_-]?no)\s*["']?\s*[:=]\s*["']?)([^"',;\s}\]]+)/gi,
     '$1[REDACTED]',
   );
   result = result.replace(/\b1[3-9]\d{9}\b/g, REDACTED_PHONE);

@@ -19,7 +19,7 @@
 2. 扩展 `sales_orders` 的销售单号、物流、打包、开票、财务备注等字段。
 3. 扩展 `sales_order_items` 的小计、备注、排序字段。
 
-当前全局“只查询已标记信息”开启后，订单过滤仍使用 `sales_orders.finance_mark = true` 临时代替客户标记，并同时要求关联旅行团 `travel_groups.finance_mark = true`。第 4 阶段客户表落地后，目标口径应改为：订单必须关联已标记客户；如果有关联旅行团，还必须关联已标记旅行团。`sales_orders.finance_mark` 应保留为订单标记或历史兼容字段，但不能继续代表客户标记主路径。
+全局“只查询已标记信息”开启后，各类业务数据独立判断自身标记：客户查询使用 `customers.finance_mark`，订单查询使用 `sales_orders.finance_mark`，旅行团查询使用 `travel_groups.finance_mark`。订单标记表示该订单及订单中保存的客户快照已经确认，关联客户或旅行团的标记不决定订单可见性。
 
 第 3 阶段云服务器验收文档显示云端写入型 smoke 尚未闭环，且远端库名缺少明确测试标识。因此涉及云端 `migrate deploy`、seed 或写入 smoke 前，必须先确认远端连接的是测试库。本清单仅用于本地方案设计。
 
@@ -58,9 +58,9 @@
 | `cashOnDeliveryAmountCents` | `cash_on_delivery_amount_cents` | `Int`，默认 `0` | 已满足 |
 | `remark` | `remark` | `Text`，可空 | 已满足 |
 | `status` | `status` | `SalesOrderStatus`，默认 `VALID` | 枚举值已覆盖第 4 阶段口径 |
-| `financeMark` | `finance_mark` | `Boolean`，默认 `false` | 已有；保留为订单标记或历史兼容，不再代表客户标记 |
-| `markedById` | `marked_by` | `Char(36)`，可空，关联 `users.id` | 已满足订单标记兼容 |
-| `markedAt` | `marked_at` | `DateTime(0)`，可空 | 已满足订单标记兼容 |
+| `financeMark` | `finance_mark` | `Boolean`，默认 `false` | 已有；表示订单及订单中保存的客户快照已经确认，并决定订单在全局过滤下是否可见 |
+| `markedById` | `marked_by` | `Char(36)`，可空，关联 `users.id` | 已满足订单标记审计 |
+| `markedAt` | `marked_at` | `DateTime(0)`，可空 | 已满足订单标记审计 |
 | `salesUserId` | `sales_user_id` | `Char(36)`，可空，关联 `users.id` | 已有；新建销售订单时销售角色应默认当前用户 |
 | `createdById` | `created_by_id` | `Char(36)`，可空 | 已有 |
 | `updatedById` | `updated_by_id` | `Char(36)`，可空 | 已有 |
@@ -296,16 +296,11 @@ SalesOrderPackingStatus
 
 ### 10.3 financeMark 回填建议
 
-当前 `sales_orders.finance_mark` 是旧系统订单标记，并被全局订单过滤临时当作客户确认标记使用。它不能无审计地等同于客户标记。
+`sales_orders.finance_mark` 与 `customers.finance_mark` 是两个独立业务标记，迁移时不得互相级联或推导：
 
-建议回填策略：
-
-1. 不覆盖 `sales_orders.finance_mark`。
-2. 为每个客户聚合组统计历史订单标记情况：总订单数、已标记订单数、未标记订单数。
-3. 如果同一客户聚合组全部历史订单都已标记，可初始化 `customers.finance_mark = true`。
-4. 如果全部未标记，可初始化 `customers.finance_mark = false`。
-5. 如果同一客户聚合组存在已标记和未标记混合订单，建议先初始化为 `false` 并输出审计清单，由财务或管理员确认客户标记，避免把同一客户所有历史订单突然扩大为可见。
-6. 若业务要求迁移后尽量维持旧全局过滤可见范围，可在切换全局过滤前增加一次审计或临时兼容条件，但最终目标仍是客户标记主路径。
+1. 不覆盖 `sales_orders.finance_mark`，保留每张订单原有确认状态。
+2. `customers.finance_mark` 按客户主档独立初始化和复核，不从该客户历史订单标记聚合推导。
+3. 标记订单时不得级联修改关联客户或旅行团；标记客户或旅行团时也不得修改历史订单标记。
 
 ### 10.4 幂等要求
 
@@ -319,41 +314,20 @@ SalesOrderPackingStatus
 
 ## 11. 全局标记过滤差距
 
-当前后端实现：
+当前后端统一口径：
 
-- `listSalesOrders` 会调用 `buildScopedSalesOrderWhere`。
-- `buildScopedSalesOrderWhere` 会叠加 `buildGlobalSalesOrderMarkScope`。
-- 当前 `buildGlobalSalesOrderMarkScope` 在 `only_show_marked_records = true` 时返回：
-  - `sales_orders.finance_mark = true`
-  - 且 `travel_group_id` 为空，或 `travel_group_id` 属于已标记旅行团。
-- `getSalesOrder` 的详情检查也要求：
-  - `order.financeMark === true`
-  - 且无旅行团，或 `order.travelGroup.financeMark === true`
+- `buildGlobalCustomerMarkScope(true)` 返回 `Customer.financeMark = true`。
+- `buildGlobalSalesOrderMarkScope(true)` 返回 `SalesOrder.financeMark = true`，不生成客户或旅行团关联条件。
+- `buildGlobalTravelGroupMarkScope(true)` 返回 `TravelGroup.financeMark = true`。
+- 售后单通过关联销售订单继承订单自身标记规则。
+- 订单列表、关键词搜索、详情、旅行团详情中的订单、导出、统计、提成、排名和 AI 查询必须复用相同订单作用域。
+- 关闭开关后不附加标记条件，仍按原有角色和数据范围查询。
 
-因此结论很明确：当前全局订单过滤仍用 `sales_orders.financeMark` 代表客户/订单确认标记，没有客户标记主路径。
+兼容要求：
 
-第 4 阶段目标口径：
-
-- 客户查询：只返回 `customers.finance_mark = true` 的客户。
-- 订单查询：只返回关联客户 `customers.finance_mark = true` 的订单。
-- 关联旅行团订单：还必须满足 `travel_groups.finance_mark = true`。
-- 旅行团详情中的订单概要：也应过滤掉未通过客户标记或旅行团标记规则的订单。
-- `sales_orders.finance_mark` 只作为订单标记、历史兼容字段和旧接口兼容，不再替代客户标记。
-
-建议切换步骤：
-
-1. 新增客户表和 `customer_id`。
-2. 回填旧订单 `customer_id`。
-3. 增加客户标记接口和测试。
-4. 订单查询 include `customer`。
-5. 全局过滤从订单 `financeMark` 主路径切到客户 `financeMark` 主路径。
-6. 保留 `/api/sales-orders/:id/finance-mark`，但页面文案明确为“订单标记”。
-7. 新增 `/api/customers/:id/finance-mark`，页面文案明确为“客户标记”。
-
-过渡期兼容：
-
-- 在所有旧订单都回填 `customer_id` 前，不建议直接移除 `sales_orders.finance_mark` 过滤，否则未回填订单无法按客户标记判断。
-- 可在过渡期对 `customer_id IS NULL` 的旧订单继续使用 `sales_orders.finance_mark` fallback，但需要明确这是临时兼容，不是最终口径。
+- 旧订单即使没有 `customer_id`，仍可按订单自身 `financeMark` 判断。
+- 保留 `/api/sales-orders/:id/finance-mark`，页面文案明确为“订单标记”。
+- `/api/customers/:id/finance-mark` 和旅行团标记接口只修改对应实体，不级联修改订单。
 
 ## 12. 旧测试数据、seed 和旅行团订单概要影响
 
@@ -392,8 +366,8 @@ SalesOrderPackingStatus
 - 增加 customer model/schema smoke 断言。
 - 增加客户 CRUD、客户标记和客户筛选测试。
 - 新建订单测试覆盖：使用已有客户、新建客户、缺客户失败。
-- 全局标记测试改为客户标记 + 旅行团标记组合。
-- 订单标记接口测试保留，但断言它不影响客户标记主路径。
+- 全局标记测试覆盖订单自身标记矩阵，并分别覆盖客户、旅行团自身标记查询。
+- 订单标记接口测试保留，并断言它不级联修改客户或旅行团标记。
 - 明细测试增加 `subtotalCents`、`notes`、`sortOrder`。
 - 库管和财务字段接口测试增加物流、打包、开票字段。
 
@@ -417,7 +391,7 @@ SalesOrderPackingStatus
 当前 `orderSummary` 汇总所有 include 出来的订单数量、总金额和货到付款金额。第 4 阶段影响：
 
 1. 订单概要应增加 `customerId` 和嵌套客户标记状态，至少让前端区分客户标记与订单标记。
-2. 全局标记开启后，旅行团详情中的 `salesOrders` 概要也必须过滤未通过客户标记的订单。
+2. 全局标记开启后，旅行团详情中的 `salesOrders` 概要只保留订单自身 `financeMark=true` 的订单。
 3. 有效订单判断应继续只计算 `valid`、`partial_refund`，不应把 `refunded`、`cancelled` 算作出单。
 4. 如果后续订单状态修改接口落地，旅行团 `orderSummary`、品鉴师待总结规则和旅行团汇总金额需要跟随状态变化重新计算或动态计算。
 5. 当前创建订单时会直接累加旅行团 `salesAmountCents`、`orderAmountCents`、`cashOnDeliveryCents`。如果后续允许订单状态、金额、明细修改，需要设计反向调整或改为动态汇总，否则旧累计字段会产生漂移。
@@ -434,10 +408,9 @@ SalesOrderPackingStatus
 
 ### 13.2 全局过滤风险
 
-- 直接从订单 `financeMark` 切到客户 `financeMark` 可能改变可见范围。
-- 同一个客户聚合组存在“部分订单已标记、部分订单未标记”时，把客户标记设为 true 会让该客户所有订单在全局过滤下可见。
-- 把混合组客户标记设为 false 又会让历史上已标记的订单暂时不可见。
-- 因此切换前必须输出标记混合客户审计清单，并确认业务接受的迁移口径。
+- 不得把客户或旅行团标记误用为订单可见条件，否则会让已确认订单消失，或让未确认订单越权可见。
+- 列表、详情、导出、统计、售后和 AI 若未复用同一作用域，会形成后端权限边界不一致。
+- 多实例部署时，全局开关的实时事件还需要 Redis Pub/Sub 等跨实例广播，普通 GET 始终作为最终状态来源。
 
 ### 13.3 订单金额风险
 
@@ -457,7 +430,7 @@ SalesOrderPackingStatus
 2. 第一版 `sales_orders.customer_id` 允许为空；新建订单由后端强制必须有客户，旧订单通过回填逐步补齐。
 3. 保留订单客户快照字段，所有 DTO 继续返回 `customerName`、`customerPhone`、地址字段。
 4. 保留 `sales_orders.finance_mark` 和 `/api/sales-orders/:id/finance-mark`。
-5. 新增客户标记字段和 `/api/customers/:id/finance-mark`，逐步把全局过滤主路径切到客户标记。
+5. 新增客户标记字段和 `/api/customers/:id/finance-mark`；客户、订单、旅行团按各自标记独立过滤。
 6. 明细新增字段使用默认值并回填，不删除现有明细字段。
 7. 物流、打包、开票字段新增时给安全默认值：金额和件数默认 `0`，布尔默认 `false`，文本可空。
 8. 新增枚举 `SalesOrderPackingStatus` 时确认 MySQL enum 值和 Prisma enum 映射，避免和旧数据冲突。
@@ -474,5 +447,5 @@ SalesOrderPackingStatus
 6. 编写本地 dry-run 回填脚本：从旧订单快照生成客户并回填 `customer_id`。
 7. 更新 seed 先创建客户，再创建订单并连接客户。
 8. 更新后端订单 DTO 和查询 include，确保新旧字段同时返回。
-9. 更新全局标记过滤测试，再把过滤主路径从订单标记切到客户标记。
+9. 更新全局标记过滤测试，确认客户、订单、旅行团分别只判断自身 `financeMark`。
 10. 所有本地测试通过且确认云端为测试库后，才能考虑云端 migrate、seed 和 smoke。

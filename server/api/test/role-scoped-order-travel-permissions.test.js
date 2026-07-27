@@ -15,7 +15,7 @@ const TASTER_RECEPTION_ID = 'usr_scope_taster_reception';
 const TASTER_LIAISON_ID = 'usr_scope_taster_liaison';
 const TASTER_OTHER_ID = 'usr_scope_taster_other';
 
-test('contract: sales reads include today and overdue pending-sales groups while taster date scope remains', async () => {
+test('contract: sales and taster retain their own data scopes under global mark filtering', async () => {
   const dates = shanghaiFixtureDates();
   await withPhase1Server(
     async (baseUrl) => {
@@ -42,8 +42,8 @@ test('contract: sales reads include today and overdue pending-sales groups while
       });
       assert.equal(salesList.response.status, 200);
       assert.deepEqual(
-        salesList.body.data.salesOrders.map((order) => order.id),
-        ['order-own-today'],
+        new Set(salesList.body.data.salesOrders.map((order) => order.id)),
+        new Set(['order-own-today', 'order-own-unmarked-group']),
       );
       assert.equal(
         salesList.body.data.salesOrders[0].canEditByCurrentUser,
@@ -52,6 +52,7 @@ test('contract: sales reads include today and overdue pending-sales groups while
 
       for (const id of [
         'order-own-yesterday',
+        'order-own-unmarked',
         'order-created-by-only',
         'order-other-today',
       ]) {
@@ -127,8 +128,8 @@ test('contract: sales reads include today and overdue pending-sales groups while
       assert.deepEqual(
         new Set(tasterGroups.body.data.travelGroups.map((group) => group.id)),
         new Set([
+          'group-yesterday',
           'group-today-reception',
-          'group-today-liaison',
           'group-future-reception',
         ]),
       );
@@ -137,7 +138,7 @@ test('contract: sales reads include today and overdue pending-sales groups while
         '/api/travel-groups/group-yesterday',
         { token: taster.token },
       );
-      assertErrorContract(tasterPastGroup, 404, 'TRAVEL_GROUP_NOT_FOUND');
+      assert.equal(tasterPastGroup.response.status, 200);
 
       const tasterOrders = await requestJson(baseUrl, '/api/sales-orders', {
         token: taster.token,
@@ -147,9 +148,30 @@ test('contract: sales reads include today and overdue pending-sales groups while
         new Set(tasterOrders.body.data.salesOrders.map((order) => order.id)),
         new Set([
           'order-own-today',
+          'order-own-unmarked-group',
           'order-created-by-only',
           'order-future-reception',
         ]),
+      );
+      const tasterUnmarkedOrder = await requestJson(
+        baseUrl,
+        '/api/sales-orders/order-own-unmarked',
+        { token: taster.token },
+      );
+      assertErrorContract(
+        tasterUnmarkedOrder,
+        404,
+        'SALES_ORDER_NOT_FOUND',
+      );
+      const tasterUnmarkedGroup = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-global-unmarked',
+        { token: taster.token },
+      );
+      assertErrorContract(
+        tasterUnmarkedGroup,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
       );
       const liaisonOrders = await requestJson(baseUrl, '/api/sales-orders', {
         token: liaison.token,
@@ -375,7 +397,11 @@ test('contract: sales keeps one edit while assigned tasters can edit without a l
           body: { remarks: 'unrelated denied' },
         },
       );
-      assertErrorContract(unrelatedEdit, 403, 'PERMISSION_DENIED');
+      assertErrorContract(
+        unrelatedEdit,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+      );
       const forbiddenField = await requestJson(
         baseUrl,
         '/api/travel-groups/group-taster-forbidden',
@@ -812,6 +838,14 @@ function buildScopeFixture(dates) {
         TASTER_LIAISON_ID,
       ),
       group('group-future-reception', dates.tomorrow, TASTER_RECEPTION_ID),
+      {
+        ...group(
+          'group-global-unmarked',
+          dates.today,
+          TASTER_RECEPTION_ID,
+        ),
+        financeMark: false,
+      },
     ],
     salesOrders: [
       order(
@@ -847,6 +881,21 @@ function buildScopeFixture(dates) {
         'group-future-reception',
         SALES_TWO_ID,
         SALES_TWO_ID,
+        dates.todayCreatedAt,
+      ),
+      order(
+        'order-own-unmarked',
+        'group-today-reception',
+        SALES_ONE_ID,
+        SALES_ONE_ID,
+        dates.todayCreatedAt,
+        false,
+      ),
+      order(
+        'order-own-unmarked-group',
+        'group-global-unmarked',
+        SALES_ONE_ID,
+        SALES_ONE_ID,
         dates.todayCreatedAt,
       ),
     ],
@@ -943,7 +992,7 @@ function group(id, visitDate, tasterId, liaisonTasterId = null) {
     tastingRoomNo: 'A01',
     arrivalTime: '09:00',
     groupType: '其他',
-    financeMark: false,
+    financeMark: true,
     parkingFeeCents: 500,
     cigaretteFeeCents: 100,
   };
@@ -955,6 +1004,7 @@ function order(
   salesUserId,
   createdById,
   createdAt,
+  financeMark = true,
 ) {
   return {
     id,
@@ -965,7 +1015,7 @@ function order(
     salesUserId,
     createdById,
     createdAt,
-    financeMark: false,
+    financeMark,
     customerName: id,
     packingStatus: 'PACKED',
     items: [],

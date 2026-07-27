@@ -38,7 +38,7 @@
 | 物流 | `logisticsMethod`、`logisticsNo`、`logisticsFeeCents` | 物流方式由库管维护，物流单号和运费由财务维护 |
 | 打包 | `packingStatus`、`packageCount`、`warehouseRemark` | 可支撑待打包、打包中、已打包、异常 |
 | 开票 | `invoiceRequired`、`invoiceIssued` | 可支撑待开票查询 |
-| 标记 | `financeMark`、`markedById`、`markedAt` | 订单标记兼容字段，不替代客户标记 |
+| 标记 | `financeMark`、`markedById`、`markedAt` | 订单自身确认标记，决定订单在全局过滤下是否可见 |
 | 审计 | `createdById`、`updatedById`、`createdAt`、`updatedAt` | 可支撑基础审计 |
 | 二维码 | `qrCodeToken`、`qrCodeGeneratedAt`、`qrCodeExpiresAt` | 第 5 阶段字段，非第 6 阶段新增 |
 
@@ -61,7 +61,7 @@
 
 当前 `Customer` 已有 `financeMark`、`markedById`、`markedAt`，并已建立与 `SalesOrder` 的关系。客户查询在全局标记开关开启时可直接复用 `customers.finance_mark = true`。
 
-当前 `TravelGroup` 已有 `financeMark`、`markedById`、`markedAt`，并已建立与 `SalesOrder` 的关系。旅行团查询和订单查询可复用旅行团标记过滤。
+当前 `TravelGroup` 已有 `financeMark`、`markedById`、`markedAt`，并已建立与 `SalesOrder` 的关系。旅行团查询判断旅行团自身标记；订单查询只判断订单自身标记。
 
 ### 2.4 `SystemSetting` 和 `OperationLog`
 
@@ -247,7 +247,7 @@
 - `buildGlobalSalesOrderMarkScope()`
 - `assertPassesGlobalSalesOrderMarkScope(order)`
 
-当前规则是：全局开关开启时，订单必须满足关联客户 `financeMark=true`；如有关联旅行团，还必须满足旅行团 `financeMark=true`。
+当前规则是：全局开关开启时，订单只判断自身 `SalesOrder.financeMark=true`；关联客户和旅行团的标记不参与订单可见性判断。
 
 第 6 阶段建议复用方式：
 
@@ -296,7 +296,7 @@
 3. 订单状态联动只在售后单创建/更新后发生，不批量改历史订单。
 4. 财务 overview 第一版可同时返回旧口径字段和新口径字段，例如 `legacyRefundOrderAmountCents` 与 `refundAmountCents`，待前端和验收稳定后再收敛。
 5. 现有 `/api/sales-orders/:id/status` 保留，供管理员/财务/售后做兼容状态修正；第 6 阶段主路径逐步迁移到售后单状态流转。
-6. 订单 `financeMark` 保留作为订单标记兼容字段；客户标记仍以 `Customer.financeMark` 为主。
+6. 订单 `financeMark` 表示订单及订单中保存的客户快照已经确认，是订单查询的唯一全局标记条件；客户查询仍以 `Customer.financeMark` 为准。
 7. 库管继续使用现有 `packingStatus`、`logisticsMethod`、`packageCount`、`warehouseRemark`，不引入库存批次、出库单或快递轨迹表。
 
 ## 13. 是否需要 `shippedAt` 的建议

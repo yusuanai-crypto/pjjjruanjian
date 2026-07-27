@@ -1246,6 +1246,14 @@ test('unit: AI customer order lookup supports order number and returns compact o
         customerName: '王五',
         customerPhone: '13700007000',
         address: 'should-not-leak',
+        fulfillmentWarehouseId: 'warehouse-internal-secret',
+        inventoryAppliedAt: '2026-07-04T00:00:00.000Z',
+        inventoryVersion: 99,
+        warehouseProductStock: {
+          onHandQty: 999,
+          availableQty: 998,
+          inventoryAmountCents: 999999,
+        },
         items: [
           {
             id: 'item-1',
@@ -1254,6 +1262,8 @@ test('unit: AI customer order lookup supports order number and returns compact o
             subtotalCents: 20000,
             deliveryType: 'shipping',
             notes: 'should-not-leak',
+            inventoryLineKey: 'inventory-line-secret',
+            purchaseUnitCostCents: 999999,
           },
         ],
       }),
@@ -1310,6 +1320,17 @@ test('unit: AI customer order lookup supports order number and returns compact o
   assert.equal(Object.hasOwn(result.data.orders[0], 'address'), false);
   assert.equal(Object.hasOwn(result.data.orders[0].customer, 'phone'), false);
   assert.equal(Object.hasOwn(result.data.orders[0].products.items[0], 'notes'), false);
+  const serialized = JSON.stringify(result);
+  for (const forbidden of [
+    'warehouse-internal-secret',
+    'inventory-line-secret',
+    'inventoryAmountCents',
+    'purchaseUnitCostCents',
+    'onHandQty',
+    'availableQty',
+  ]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
 });
 
 test('unit: AI after-sales lookup supports phone query and after-sales role', async () => {

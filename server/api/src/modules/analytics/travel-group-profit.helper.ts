@@ -44,8 +44,10 @@ export function calculateTravelGroupProfit(
   const effectiveOrders = salesOrders.filter((order: any) =>
     effectiveOrderIds.has(optionalString(order?.id) || ''),
   );
-  const relevantRefundOrders = salesOrders.filter((order: any) =>
-    EFFECTIVE_ORDER_STATUSES.has(normalizeEnum(order?.status)),
+  const relevantRefundOrders = salesOrders.filter(
+    (order: any) =>
+      EFFECTIVE_ORDER_STATUSES.has(normalizeEnum(order?.status)) ||
+      readAfterSalesOrders(order).length > 0,
   );
   const confirmedRefundAmountCents = sumBy(
     relevantRefundOrders.flatMap(readAfterSalesOrders),
@@ -92,10 +94,18 @@ export function calculateTravelGroupProfit(
     leaderCommissionCents;
   const financeSummary = input.financeSummary || null;
   const dailyAgencyRebateCents = financeSummary
-    ? nonNegativeInteger(financeSummary.totalDailyRebateCents)
+    ? nonNegativeInteger(financeSummary.totalDailyRebateCents) +
+      sumAfterSalesCommissionPoints(
+        commissionRecords,
+        AGENCY_DAILY_REBATE,
+      )
     : sumCommissionPoints(commissionRecords, AGENCY_DAILY_REBATE);
   const monthlyAgencyRebateCents = financeSummary
-    ? nonNegativeInteger(financeSummary.totalMonthlyRebateCents)
+    ? nonNegativeInteger(financeSummary.totalMonthlyRebateCents) +
+      sumAfterSalesCommissionPoints(
+        commissionRecords,
+        AGENCY_MONTHLY_REBATE,
+      )
     : sumCommissionPoints(commissionRecords, AGENCY_MONTHLY_REBATE);
   const effectiveSalesAmountCents = nonNegativeInteger(
     productProfit.effectiveSalesAmountCents,
@@ -227,6 +237,13 @@ function filterRelevantCommissionRecords(
   travelGroupId: string | null,
 ) {
   return (Array.isArray(records) ? records : []).filter((record: any) => {
+    if (optionalString(record?.afterSalesOrderId)) {
+      return (
+        Boolean(record?.isConfirmed) &&
+        Boolean(travelGroupId) &&
+        optionalString(record?.travelGroupId) === travelGroupId
+      );
+    }
     const salesOrderId = optionalString(record?.salesOrderId);
     if (salesOrderId) {
       return effectiveOrderIds.has(salesOrderId);
@@ -243,7 +260,10 @@ function sumCommissionAmount(records: any[], targetType: string) {
     records.filter(
       (record: any) => normalizeEnum(record?.targetType) === targetType,
     ),
-    (record: any) => nonNegativeInteger(record?.amountCents),
+    (record: any) =>
+      optionalString(record?.afterSalesOrderId)
+        ? signedInteger(record?.amountCents)
+        : nonNegativeInteger(record?.amountCents),
   );
 }
 
@@ -252,7 +272,25 @@ function sumCommissionPoints(records: any[], targetType: string) {
     records.filter(
       (record: any) => normalizeEnum(record?.targetType) === targetType,
     ),
-    (record: any) => nonNegativeInteger(record?.pointsCents),
+    (record: any) =>
+      optionalString(record?.afterSalesOrderId)
+        ? signedInteger(record?.pointsCents)
+        : nonNegativeInteger(record?.pointsCents),
+  );
+}
+
+function sumAfterSalesCommissionPoints(
+  records: any[],
+  targetType: string,
+) {
+  return sumBy(
+    records.filter(
+      (record: any) =>
+        optionalString(record?.afterSalesOrderId) &&
+        Boolean(record?.isConfirmed) &&
+        normalizeEnum(record?.targetType) === targetType,
+    ),
+    (record: any) => signedInteger(record?.pointsCents),
   );
 }
 
@@ -313,6 +351,11 @@ function nonNegativeInteger(value: unknown) {
   return Number.isFinite(numberValue)
     ? Math.max(0, Math.trunc(numberValue))
     : 0;
+}
+
+function signedInteger(value: unknown) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : 0;
 }
 
 function sumBy<T>(items: T[], mapper: (item: T) => number) {

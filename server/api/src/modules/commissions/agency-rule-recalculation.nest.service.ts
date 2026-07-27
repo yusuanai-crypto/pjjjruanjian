@@ -54,6 +54,20 @@ export class AgencyRuleRecalculationNestService {
 
   async recalculateExplicit(actor: any, payload: any, metadata: any = {}) {
     requireAnyRole(actor, WRITE_ROLES);
+    const allowLatestAgencyRebateRuleFallback =
+      payload?.allowLatestAgencyRebateRuleFallback === true;
+    if (
+      allowLatestAgencyRebateRuleFallback &&
+      (payload?.agencyOnly !== true ||
+        (!normalizeOptionalString(payload?.travelGroupId) &&
+          uniqueStrings(payload?.travelGroupIds || []).length === 0))
+    ) {
+      throw createHttpError(
+        400,
+        'AGENCY_REBATE_RULE_FALLBACK_SCOPE_INVALID',
+        'Agency rebate rule fallback is only available for explicit travel-group agency recalculation.',
+      );
+    }
     const scope = await this.buildExplicitScope(payload);
     return this.recalculateScope(
       actor,
@@ -63,6 +77,7 @@ export class AgencyRuleRecalculationNestService {
         agencyOnly: payload?.agencyOnly === true,
         ruleIds: [],
         ruleKind: null,
+        allowLatestAgencyRebateRuleFallback,
       },
       metadata,
     );
@@ -173,6 +188,8 @@ export class AgencyRuleRecalculationNestService {
                 targetTypes: requestedTargetTypes,
                 skipTargetTypes: Array.from(skipTargetTypes),
                 trigger: scope.source,
+                allowLatestAgencyRebateRuleFallback:
+                  scope.allowLatestAgencyRebateRuleFallback === true,
               },
             );
           generatedRecords.push(...result.generatedRecords);
@@ -403,12 +420,24 @@ export class AgencyRuleRecalculationNestService {
           'Sales order does not exist.',
         );
       }
+      if (order.orderType === 'AFTER_SALES') {
+        return {
+          orders: [],
+          warnings: [
+            {
+              code: 'after_sales_order_skipped',
+              message: '售后调整单使用创建时规则快照，不参与原订单规则重算。',
+            },
+          ],
+        };
+      }
       return { orders: [order], warnings: [] };
     }
     if (scope.travelGroupIds?.length) {
       const orders = await this.prisma.salesOrder.findMany({
         where: {
           travelGroupId: { in: scope.travelGroupIds },
+          orderType: { not: 'AFTER_SALES' },
         },
         select: affectedOrderSelect(),
         orderBy: [{ travelGroupId: 'asc' }, { orderDate: 'asc' }],
@@ -434,6 +463,7 @@ export class AgencyRuleRecalculationNestService {
     );
     const candidates = await this.prisma.salesOrder.findMany({
       where: {
+        orderType: { not: 'AFTER_SALES' },
         travelGroup: {
           is: {
             OR: agencyNames.map((name) => ({
@@ -472,6 +502,7 @@ export class AgencyRuleRecalculationNestService {
 function affectedOrderSelect() {
   return {
     id: true,
+    orderType: true,
     orderDate: true,
     travelGroupId: true,
     travelGroup: {
@@ -547,6 +578,20 @@ function translateCalculationWarnings(warnings: any[], order: any) {
             context,
           },
         );
+        break;
+      case 'agency_rebate_rule_fallback_applied':
+        result.push({
+          code: warning.code,
+          message: '该历史订单已使用当前启用的旅行社返点规则补算。',
+          context,
+        });
+        break;
+      case 'ambiguous_agency_rebate_rule':
+        result.push({
+          code: warning.code,
+          message: '存在多条同优先级旅行社返点规则，系统未自动选择。',
+          context,
+        });
         break;
       default:
         if (

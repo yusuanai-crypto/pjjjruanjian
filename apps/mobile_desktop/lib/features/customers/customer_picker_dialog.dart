@@ -104,60 +104,26 @@ class _CustomerPickerDialogState extends State<CustomerPickerDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final viewportSize = MediaQuery.sizeOf(context);
+    final isCompact = viewportSize.width < 600;
+    final compactContentHeight = viewportSize.height * 0.62;
+
     return AlertDialog(
+      insetPadding: isCompact
+          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+          : null,
+      contentPadding:
+          isCompact ? const EdgeInsets.fromLTRB(16, 20, 16, 0) : null,
       title: const Text('选择客户'),
       content: SizedBox(
-        width: 680,
-        height: 540,
+        width: isCompact ? double.maxFinite : 680,
+        height: isCompact && compactContentHeight < 540
+            ? compactContentHeight
+            : 540,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const ValueKey('customer-search-field'),
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      labelText: '搜索客户',
-                      hintText: '输入姓名、电话或地址',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      suffixIcon: _searchController.text.trim().isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: '清空搜索',
-                              onPressed: () {
-                                _searchController.clear();
-                                _load();
-                              },
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                    ),
-                    textInputAction: TextInputAction.search,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: (_) => _load(),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                FilledButton.icon(
-                  key: const ValueKey('customer-search-button'),
-                  onPressed: _loading ? null : _load,
-                  icon: const Icon(Icons.search_rounded),
-                  label: const Text('搜索'),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  key: const ValueKey('open-create-customer-button'),
-                  onPressed: widget.businessApi == null &&
-                          widget.createCustomer == null
-                      ? null
-                      : _openCreateDialog,
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('新建客户'),
-                ),
-              ],
-            ),
+            if (isCompact) _buildCompactToolbar() else _buildDesktopToolbar(),
             const SizedBox(height: 14),
             Expanded(child: _buildResult()),
           ],
@@ -169,6 +135,94 @@ class _CustomerPickerDialogState extends State<CustomerPickerDialog> {
           child: const Text('取消'),
         ),
       ],
+    );
+  }
+
+  Widget _buildCompactToolbar() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 56,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildSearchField(compact: true)),
+              const SizedBox(width: 8),
+              SizedBox(
+                key: const ValueKey('customer-search-button-container'),
+                width: 92,
+                child: _buildSearchButton(compact: true),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        _buildCreateCustomerButton(),
+      ],
+    );
+  }
+
+  Widget _buildDesktopToolbar() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: _buildSearchField()),
+        const SizedBox(width: 10),
+        _buildSearchButton(),
+        const SizedBox(width: 10),
+        _buildCreateCustomerButton(),
+      ],
+    );
+  }
+
+  Widget _buildSearchField({bool compact = false}) {
+    return TextField(
+      key: const ValueKey('customer-search-field'),
+      controller: _searchController,
+      decoration: InputDecoration(
+        labelText: '搜索客户',
+        hintText: '输入姓名、电话或地址',
+        prefixIcon: compact ? null : const Icon(Icons.search_rounded),
+        suffixIcon: _searchController.text.trim().isEmpty
+            ? null
+            : IconButton(
+                tooltip: '清空搜索',
+                onPressed: () {
+                  _searchController.clear();
+                  _load();
+                },
+                icon: const Icon(Icons.close_rounded),
+              ),
+      ),
+      textInputAction: TextInputAction.search,
+      onChanged: (_) => setState(() {}),
+      onSubmitted: (_) => _load(),
+    );
+  }
+
+  Widget _buildSearchButton({bool compact = false}) {
+    return FilledButton.icon(
+      key: const ValueKey('customer-search-button'),
+      style: compact
+          ? FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            )
+          : null,
+      onPressed: _loading ? null : _load,
+      icon: const Icon(Icons.search_rounded),
+      label: const Text('搜索'),
+    );
+  }
+
+  Widget _buildCreateCustomerButton() {
+    return OutlinedButton.icon(
+      key: const ValueKey('open-create-customer-button'),
+      onPressed: widget.businessApi == null && widget.createCustomer == null
+          ? null
+          : _openCreateDialog,
+      icon: const Icon(Icons.add_rounded),
+      label: const Text('新建客户'),
     );
   }
 

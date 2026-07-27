@@ -13,6 +13,7 @@ import {
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
+import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
 import { BusinessDataNestService } from './business-data.nest.service';
 import { getConfiguredPublicSalesSheetBaseUrl } from './qr-code-token.helper';
 
@@ -21,6 +22,7 @@ export class SalesOrdersNestController {
   constructor(
     private readonly authService: AuthNestService,
     private readonly businessDataService: BusinessDataNestService,
+    private readonly guidePointsService: GuidePointsSummaryNestService,
   ) {}
 
   @Get()
@@ -132,6 +134,24 @@ export class SalesOrdersNestController {
     };
   }
 
+  @Patch(':id/points-destination')
+  async updatePointsDestination(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    await this.guidePointsService.updateSalesOrderPointsDestination(
+      actor,
+      id,
+      body,
+      { ipAddress: getRequestIp(request) },
+    );
+    return {
+      salesOrder: await this.businessDataService.getSalesOrder(actor, id),
+    };
+  }
+
   @Patch(':id/packing')
   async updatePacking(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
@@ -139,6 +159,26 @@ export class SalesOrdersNestController {
       salesOrder: await this.businessDataService.updateSalesOrderPacking(actor, id, body, {
         ipAddress: getRequestIp(request),
       }),
+    };
+  }
+
+  @Patch(':id/shipping-date')
+  async updateShippingDate(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder:
+        await this.businessDataService.updateSalesOrderShippingDate(
+          actor,
+          id,
+          body,
+          {
+            ipAddress: getRequestIp(request),
+          },
+        ),
     };
   }
 

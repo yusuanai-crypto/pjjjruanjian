@@ -35,6 +35,7 @@ export interface CalculateStage7CommissionInput {
   commissionRules?: any[];
   travelAgencies?: any[];
   calculationVersion?: string;
+  allowLatestAgencyRebateRuleFallback?: boolean;
 }
 
 export function calculateStage7CommissionAndPoints(
@@ -50,37 +51,16 @@ export function calculateStage7CommissionAndPoints(
   const afterSalesOrders = normalizeAfterSalesOrders(
     salesOrder.afterSalesOrders,
   );
-  const confirmedRefunds = afterSalesOrders.filter(
-    (order: any) => order.financeConfirmed,
-  );
-  const unconfirmedRefunds = afterSalesOrders.filter(
-    (order: any) => !order.financeConfirmed && order.refundAmountCents > 0,
-  );
-  const confirmedRefundAmountCents = sumBy(
-    confirmedRefunds,
-    (order: any) => order.refundAmountCents,
-  );
-  const unconfirmedRefundAmountCents = sumBy(
-    unconfirmedRefunds,
-    (order: any) => order.refundAmountCents,
-  );
-  if (unconfirmedRefundAmountCents > 0) {
-    addWarning(
-      warnings,
-      'unconfirmed_after_sales_refund',
-      'Unconfirmed after-sales refund is pending finance adjustment.',
-      {
-        count: unconfirmedRefunds.length,
-        totalAmountCents: unconfirmedRefundAmountCents,
-        afterSalesOrderIds: unconfirmedRefunds
-          .map((order: any) => normalizeOptionalString(order.id))
-          .filter(Boolean),
-      },
-    );
-  }
-  const effectiveAmountCents = CLOSED_ORDER_STATUSES.has(orderStatus)
-    ? 0
-    : Math.max(0, grossAmountCents - confirmedRefundAmountCents);
+  // After-sales adjustments are independent orders/commission records. They
+  // must never be folded back into or overwrite the original order.
+  const confirmedRefunds: any[] = [];
+  const unconfirmedRefunds: any[] = [];
+  const confirmedRefundAmountCents = 0;
+  const unconfirmedRefundAmountCents = 0;
+  const effectiveAmountCents =
+    CLOSED_ORDER_STATUSES.has(orderStatus) && afterSalesOrders.length === 0
+      ? 0
+      : grossAmountCents;
 
   const agencyMatch = resolveTravelAgencyMatch(
     salesOrder,
@@ -127,25 +107,40 @@ export function calculateStage7CommissionAndPoints(
     warnings,
   });
 
-  const agencyRebateRule = matchAgencyRule(
-    input?.agencyRebateRules || [],
-    agencyMatch,
-    null,
-    calculationDate,
-  );
-  if (!agencyRebateRule.rule) {
+  const guidePersonal =
+    normalizePointsDestination(salesOrder.pointsDestination) ===
+    'GUIDE_PERSONAL';
+  const agencyRebateRule = guidePersonal
+    ? { rule: null, matchMode: 'guide_personal_order_snapshot' }
+    : matchAgencyRule(
+        input?.agencyRebateRules || [],
+        agencyMatch,
+        null,
+        calculationDate,
+        {
+          allowLatestActiveFallback:
+            input?.allowLatestAgencyRebateRuleFallback === true,
+          warnings,
+          salesOrder,
+        },
+      );
+  if (!guidePersonal && !agencyRebateRule.rule) {
     addWarning(warnings, 'missing_agency_rebate_rule', 'Missing agency rebate rule.', {
       agencyId: agencyMatch.agencyId,
       agencyName: agencyMatch.agencyName,
       date: toDateOnly(calculationDate),
     });
   }
-  const dailyRebateRate = agencyRebateRule.rule
-    ? normalizeRate(agencyRebateRule.rule.dailyRebateRate)
-    : '0.0000';
-  const monthlyRebateRate = agencyRebateRule.rule
-    ? normalizeRate(agencyRebateRule.rule.monthlyRebateRate)
-    : '0.0000';
+  const dailyRebateRate = guidePersonal
+    ? normalizeRate(salesOrder.personalDailyRebateRate)
+    : agencyRebateRule.rule
+      ? normalizeRate(agencyRebateRule.rule.dailyRebateRate)
+      : '0.0000';
+  const monthlyRebateRate = guidePersonal
+    ? normalizeRate(salesOrder.personalMonthlyRebateRate)
+    : agencyRebateRule.rule
+      ? normalizeRate(agencyRebateRule.rule.monthlyRebateRate)
+      : '0.0000';
   const dailyRebateCents = multiplyCentsByRate(
     agencyBaseAmountCents,
     dailyRebateRate,
@@ -154,20 +149,22 @@ export function calculateStage7CommissionAndPoints(
     agencyBaseAmountCents,
     monthlyRebateRate,
   );
-  const agencyRebateLines = buildAgencyRebateLines({
-    salesOrder,
-    agencyMatch,
-    agencyBaseAmountCents,
-    agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
-    grossAmountCents,
-    confirmedRefundAmountCents,
-    agencyRebateRule: agencyRebateRule.rule,
-    dailyRebateRate,
-    monthlyRebateRate,
-    dailyRebateCents,
-    monthlyRebateCents,
-    calculationVersion,
-  });
+  const agencyRebateLines = guidePersonal
+    ? []
+    : buildAgencyRebateLines({
+        salesOrder,
+        agencyMatch,
+        agencyBaseAmountCents,
+        agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
+        grossAmountCents,
+        confirmedRefundAmountCents,
+        agencyRebateRule: agencyRebateRule.rule,
+        dailyRebateRate,
+        monthlyRebateRate,
+        dailyRebateCents,
+        monthlyRebateCents,
+        calculationVersion,
+      });
 
   const ruleSnapshot = {
     salesDeductionRules: salesDeduction.ruleSnapshots,
@@ -178,6 +175,15 @@ export function calculateStage7CommissionAndPoints(
       : null,
   };
   const sourceSnapshot = {
+    pointsDestination: guidePersonal ? 'GUIDE_PERSONAL' : 'TRAVEL_AGENCY',
+    personalPointsGuideId: guidePersonal
+      ? normalizeOptionalString(salesOrder.personalPointsGuideId)
+      : null,
+    personalGuideNameSnapshot: guidePersonal
+      ? normalizeOptionalString(salesOrder.personalGuideNameSnapshot)
+      : null,
+    personalDailyRebateRate: guidePersonal ? dailyRebateRate : null,
+    personalMonthlyRebateRate: guidePersonal ? monthlyRebateRate : null,
     salesOrder: snapshotSalesOrder(salesOrder, orderStatus, calculationDate),
     items,
     afterSalesOrderIds: afterSalesOrders
@@ -241,18 +247,17 @@ export function calculateStage7CommissionAndPoints(
 export function calculateOrderEffectiveAmount(salesOrder: any) {
   const orderStatus = normalizeOrderStatus(salesOrder?.status);
   const grossAmountCents = toCents(salesOrder?.totalAmountCents);
-  const confirmedRefundAmountCents = sumBy(
-    normalizeAfterSalesOrders(salesOrder?.afterSalesOrders).filter(
-      (order: any) => order.financeConfirmed,
-    ),
-    (order: any) => order.refundAmountCents,
+  const afterSalesOrders = normalizeAfterSalesOrders(
+    salesOrder?.afterSalesOrders,
   );
+  const confirmedRefundAmountCents = 0;
   return {
     grossAmountCents,
     confirmedRefundAmountCents,
-    effectiveAmountCents: CLOSED_ORDER_STATUSES.has(orderStatus)
-      ? 0
-      : Math.max(0, grossAmountCents - confirmedRefundAmountCents),
+    effectiveAmountCents:
+      CLOSED_ORDER_STATUSES.has(orderStatus) && afterSalesOrders.length === 0
+        ? 0
+        : grossAmountCents,
   };
 }
 
@@ -697,39 +702,132 @@ function matchAgencyRule(
   agencyMatch: any,
   item: any,
   date: Date,
+  options: any = {},
 ) {
+  let agencyRules: any[];
+  let strictMatchMode: string;
   if (agencyMatch.agencyId) {
-    const agencyRules =
-      rules.filter(
-        (candidate: any) =>
-          normalizeOptionalString(candidate.agencyId) === agencyMatch.agencyId,
-      );
+    agencyRules = rules.filter(
+      (candidate: any) =>
+        normalizeOptionalString(candidate.agencyId) === agencyMatch.agencyId,
+    );
     const rule = matchEffectiveProductRule(
       agencyRules,
       item,
       date,
     );
-    return {
-      rule,
-      matchMode: 'agency_id',
-    };
-  }
-
-  const normalizedName = normalizeComparable(agencyMatch.agencyName);
-  const agencyRules =
-    rules.filter(
+    if (rule) {
+      return { rule, matchMode: 'agency_id' };
+    }
+    strictMatchMode = 'agency_id';
+  } else {
+    const normalizedName = normalizeComparable(agencyMatch.agencyName);
+    agencyRules = rules.filter(
       (candidate: any) =>
+        !normalizeOptionalString(candidate.agencyId) &&
         normalizedName &&
         normalizeComparable(candidate.agencyName) === normalizedName,
     );
-  const rule = matchEffectiveProductRule(
-    agencyRules,
-    item,
+    const rule = matchEffectiveProductRule(agencyRules, item, date);
+    if (rule) {
+      return { rule, matchMode: 'agency_name' };
+    }
+    strictMatchMode = 'agency_name';
+  }
+
+  if (options.allowLatestActiveFallback !== true) {
+    return { rule: null, matchMode: strictMatchMode };
+  }
+  const fallback = selectLatestActiveAgencyRebateFallback(
+    agencyRules.filter((rule: any) => rule?.isActive !== false),
     date,
   );
+  if (fallback.ambiguous) {
+    addWarning(
+      options.warnings || [],
+      'ambiguous_agency_rebate_rule',
+      'Multiple active agency rebate rules have the same fallback priority.',
+      buildAgencyRebateFallbackContext(
+        options.salesOrder,
+        agencyMatch,
+        date,
+        null,
+        { ruleIds: fallback.ruleIds },
+      ),
+    );
+    return { rule: null, matchMode: strictMatchMode };
+  }
+  if (!fallback.rule) {
+    return { rule: null, matchMode: strictMatchMode };
+  }
+  addWarning(
+    options.warnings || [],
+    'agency_rebate_rule_fallback_applied',
+    'The current active agency rebate rule was used for a historical order.',
+    buildAgencyRebateFallbackContext(
+      options.salesOrder,
+      agencyMatch,
+      date,
+      fallback.rule,
+    ),
+  );
   return {
-    rule,
-    matchMode: 'agency_name',
+    rule: fallback.rule,
+    matchMode: 'latest_active_manual_fallback',
+  };
+}
+
+function selectLatestActiveAgencyRebateFallback(rules: any[], date: Date) {
+  if (rules.length === 1) {
+    return { rule: rules[0], ambiguous: false, ruleIds: [rules[0]?.id] };
+  }
+  const laterRules = rules.filter(
+    (rule: any) =>
+      normalizeDateOnly(rule.effectiveFrom).getTime() > date.getTime(),
+  );
+  if (laterRules.length === 0) {
+    return {
+      rule: null,
+      ambiguous: rules.length > 1,
+      ruleIds: rules.map((rule: any) => rule?.id).filter(Boolean),
+    };
+  }
+  const earliestTime = Math.min(
+    ...laterRules.map((rule: any) =>
+      normalizeDateOnly(rule.effectiveFrom).getTime(),
+    ),
+  );
+  const nearest = laterRules.filter(
+    (rule: any) =>
+      normalizeDateOnly(rule.effectiveFrom).getTime() === earliestTime,
+  );
+  return {
+    rule: nearest.length === 1 ? nearest[0] : null,
+    ambiguous: nearest.length !== 1,
+    ruleIds: nearest.map((rule: any) => rule?.id).filter(Boolean),
+  };
+}
+
+function buildAgencyRebateFallbackContext(
+  salesOrder: any,
+  agencyMatch: any,
+  date: Date,
+  rule: any,
+  extra: any = {},
+) {
+  return {
+    salesOrderId: normalizeOptionalString(salesOrder?.id),
+    travelGroupId:
+      normalizeOptionalString(salesOrder?.travelGroupId) ||
+      normalizeOptionalString(salesOrder?.travelGroup?.id),
+    agencyId: agencyMatch.agencyId,
+    agencyName: agencyMatch.agencyName,
+    orderDate: toDateOnly(date),
+    ruleId: normalizeOptionalString(rule?.id),
+    effectiveFrom: rule?.effectiveFrom
+      ? toDateOnly(normalizeDateOnly(rule.effectiveFrom))
+      : null,
+    ...extra,
   };
 }
 
@@ -1029,6 +1127,12 @@ function normalizeOrderStatus(value: unknown) {
     .toUpperCase();
 }
 
+function normalizePointsDestination(value: unknown) {
+  return String(value || 'TRAVEL_AGENCY')
+    .trim()
+    .toUpperCase();
+}
+
 function normalizeTargetType(value: unknown) {
   const text = String(value || '').trim();
   return TARGET_TYPE_TO_PRISMA[text] || TARGET_TYPE_TO_PRISMA[text.toLowerCase()] || text.toUpperCase();
@@ -1043,7 +1147,10 @@ function normalizeOptionalString(value: unknown) {
 }
 
 function normalizeComparable(value: unknown) {
-  return String(normalizeOptionalString(value) || '').toLowerCase();
+  return String(normalizeOptionalString(value) || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
 }
 
 function normalizeProductComparable(value: unknown) {

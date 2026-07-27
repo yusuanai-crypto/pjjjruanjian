@@ -12,6 +12,7 @@ import '../travel_group_attachments/incoming_attachment_service.dart';
 import '../todo_reminders/todo_reminder_controller.dart';
 import '../../shared/widgets/brand_logo.dart';
 import '../../shared/widgets/responsive.dart';
+import 'global_mark_query_controller.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -43,6 +44,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   late final TodoReminderController _todoReminderController;
   late final AttachmentPickerService _attachmentPickerService;
   late final IncomingAttachmentService _incomingAttachmentService;
+  late GlobalMarkQueryController _globalMarkQueryController;
+  int _lastGlobalMarkDataRevision = 0;
+  int _pageRefreshRevision = 0;
 
   ApiClient get apiClient => widget.apiClient;
   String get token => widget.token;
@@ -65,8 +69,46 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _attachmentPickerService = AttachmentPickerService();
     _incomingAttachmentService = IncomingAttachmentService.instance;
     _incomingAttachmentService.addListener(_onIncomingAttachmentsChanged);
+    _createGlobalMarkQueryController();
     unawaited(_initializeTodoReminders());
     unawaited(_initializeIncomingAttachments());
+  }
+
+  void _createGlobalMarkQueryController() {
+    _globalMarkQueryController = GlobalMarkQueryController(
+      apiClient: widget.apiClient,
+      token: widget.token,
+    );
+    _lastGlobalMarkDataRevision = _globalMarkQueryController.dataRevision;
+    _globalMarkQueryController.addListener(_onGlobalMarkQueryChanged);
+    unawaited(_globalMarkQueryController.start());
+  }
+
+  void _onGlobalMarkQueryChanged() {
+    final nextRevision = _globalMarkQueryController.dataRevision;
+    if (!mounted || nextRevision == _lastGlobalMarkDataRevision) {
+      return;
+    }
+    final navigator = Navigator.maybeOf(context);
+    if (navigator?.canPop() ?? false) {
+      navigator!.popUntil((route) => route.isFirst);
+    }
+    setState(() {
+      _lastGlobalMarkDataRevision = nextRevision;
+      _pageRefreshRevision += 1;
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiClient != widget.apiClient ||
+        oldWidget.user.id != widget.user.id) {
+      _globalMarkQueryController.removeListener(_onGlobalMarkQueryChanged);
+      _globalMarkQueryController.dispose();
+      _createGlobalMarkQueryController();
+      _pageRefreshRevision += 1;
+    }
   }
 
   Future<void> _initializeIncomingAttachments() async {
@@ -103,6 +145,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   Future<void> _logout() async {
+    await _globalMarkQueryController.stop();
     await _todoReminderController.cancelAllForUser();
     widget.onLogout();
   }
@@ -112,6 +155,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       unawaited(_todoReminderController.onResumed());
       unawaited(_incomingAttachmentService.refresh());
+      unawaited(_globalMarkQueryController.onResumed());
     }
   }
 
@@ -119,6 +163,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _incomingAttachmentService.removeListener(_onIncomingAttachmentsChanged);
+    _globalMarkQueryController.removeListener(_onGlobalMarkQueryChanged);
+    _globalMarkQueryController.dispose();
     _todoReminderController.dispose();
     super.dispose();
   }
@@ -136,17 +182,22 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     return LayoutBuilder(
       builder: (context, constraints) {
         final desktop = isDesktopWidth(constraints.maxWidth);
-        final page = buildPageForDestination(
-          destinationId: selectedDestination.id,
-          apiClient: apiClient,
-          token: token,
-          role: role,
-          currentUserId: user.id,
-          allowedDestinations: destinations,
-          onOpenDestination: onDestinationChanged,
-          todoReminderController: _todoReminderController,
-          attachmentPickerService: _attachmentPickerService,
-          incomingAttachmentService: _incomingAttachmentService,
+        final page = KeyedSubtree(
+          key: ValueKey(
+            '${selectedDestination.id}:$_pageRefreshRevision',
+          ),
+          child: buildPageForDestination(
+            destinationId: selectedDestination.id,
+            apiClient: apiClient,
+            token: token,
+            role: role,
+            currentUserId: user.id,
+            allowedDestinations: destinations,
+            onOpenDestination: onDestinationChanged,
+            todoReminderController: _todoReminderController,
+            attachmentPickerService: _attachmentPickerService,
+            incomingAttachmentService: _incomingAttachmentService,
+          ),
         );
         final attachmentAwarePage = _withIncomingAttachmentBanner(
           page,
@@ -158,9 +209,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             body: Row(
               children: [
                 _DesktopSideNav(
-                  apiClient: apiClient,
-                  token: token,
                   role: role,
+                  globalMarkQueryController: _globalMarkQueryController,
                   destinations: destinations,
                   selectedId: selectedDestination.id,
                   onSelect: onDestinationChanged,
@@ -211,9 +261,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             ],
           ),
           drawer: _MobileDrawer(
-            apiClient: apiClient,
-            token: token,
             role: role,
+            globalMarkQueryController: _globalMarkQueryController,
             user: user,
             destinations: destinations,
             selectedId: selectedDestination.id,
@@ -259,18 +308,16 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
 class _DesktopSideNav extends StatelessWidget {
   const _DesktopSideNav({
-    required this.apiClient,
-    required this.token,
     required this.role,
+    required this.globalMarkQueryController,
     required this.destinations,
     required this.selectedId,
     required this.onSelect,
     required this.onLogout,
   });
 
-  final ApiClient apiClient;
-  final String token;
   final UserRole role;
+  final GlobalMarkQueryController globalMarkQueryController;
   final List<AppDestination> destinations;
   final String selectedId;
   final ValueChanged<String> onSelect;
@@ -312,9 +359,8 @@ class _DesktopSideNav extends StatelessWidget {
                 ),
               ),
               _GlobalMarkQueryControl(
-                apiClient: apiClient,
-                token: token,
                 role: role,
+                controller: globalMarkQueryController,
               ),
               Expanded(
                 child: ListView(
@@ -438,14 +484,12 @@ class _TodoBadgeButton extends StatelessWidget {
 
 class _GlobalMarkQueryControl extends StatefulWidget {
   const _GlobalMarkQueryControl({
-    required this.apiClient,
-    required this.token,
     required this.role,
+    required this.controller,
   });
 
-  final ApiClient apiClient;
-  final String token;
   final UserRole role;
+  final GlobalMarkQueryController controller;
 
   @override
   State<_GlobalMarkQueryControl> createState() =>
@@ -453,92 +497,47 @@ class _GlobalMarkQueryControl extends StatefulWidget {
 }
 
 class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
-  _GlobalMarkQuerySettings? _settings;
-  bool _loading = false;
-  bool _busy = false;
-  String? _error;
-
   @override
   void initState() {
     super.initState();
-    if (_canControlGlobalMarkQuery(widget.role)) {
-      _loadSettings();
-    }
+    widget.controller.addListener(_handleControllerChanged);
   }
 
   @override
   void didUpdateWidget(covariant _GlobalMarkQueryControl oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.token != widget.token || oldWidget.role != widget.role) {
-      _settings = null;
-      _error = null;
-      if (_canControlGlobalMarkQuery(widget.role)) {
-        _loadSettings();
-      }
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChanged);
+      widget.controller.addListener(_handleControllerChanged);
     }
   }
 
-  Future<void> _loadSettings() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final payload = await widget.apiClient.getJson(
-        '/api/settings/global-mark-query',
-        token: widget.token,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _settings = _GlobalMarkQuerySettings.fromPayload(payload);
-        _loading = false;
-      });
-    } on ApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _error = error.message;
-        _loading = false;
-      });
+  void _handleControllerChanged() {
+    if (mounted) {
+      setState(() {});
     }
   }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
+    super.dispose();
+  }
+
+  Future<void> _loadSettings() => widget.controller.calibrate();
 
   Future<void> _setRestricted(bool restricted) async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      final payload = await widget.apiClient.postJson(
-        restricted
-            ? '/api/settings/global-mark-query/enable'
-            : '/api/settings/global-mark-query/restore',
-        token: widget.token,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _settings = _GlobalMarkQuerySettings.fromPayload(payload);
-        _busy = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(restricted ? '已开启：未标记信息不可查询。' : '已关闭：未标记信息可以查询。'),
-        ),
-      );
-    } on ApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _error = error.message;
-        _busy = false;
-      });
+    await widget.controller.setRestricted(restricted);
+    if (!mounted || widget.controller.error != null) {
+      return;
     }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          restricted ? '已开启：未标记信息不可查询。' : '已恢复：未标记信息可以查询。',
+        ),
+      ),
+    );
   }
 
   @override
@@ -547,7 +546,7 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
       return const SizedBox.shrink();
     }
 
-    final settings = _settings;
+    final settings = widget.controller.settings;
     if (settings != null &&
         settings.onlyShowMarkedRecords &&
         widget.role != UserRole.superAdmin &&
@@ -573,8 +572,8 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
   }
 
   Widget _buildContent(BuildContext context) {
-    final settings = _settings;
-    if (_loading && settings == null) {
+    final settings = widget.controller.settings;
+    if (widget.controller.loading && settings == null) {
       return const Row(
         children: [
           SizedBox(
@@ -588,7 +587,7 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
       );
     }
 
-    if (_error != null && settings == null) {
+    if (widget.controller.error != null && settings == null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -598,7 +597,7 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: _loading ? null : _loadSettings,
+            onPressed: widget.controller.loading ? null : _loadSettings,
             icon: const Icon(Icons.refresh_rounded),
             label: const Text('重试'),
           ),
@@ -609,7 +608,8 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
     final restricted = settings?.onlyShowMarkedRecords ?? false;
     final actionLabel = restricted ? '允许查询未标记' : '隐藏未标记信息';
     final statusLabel = restricted ? '仅已标记可查询' : '未标记可查询';
-    final onPressed = _busy ? null : () => _setRestricted(!restricted);
+    final onPressed =
+        widget.controller.busy ? null : () => _setRestricted(!restricted);
     final button = restricted
         ? OutlinedButton.icon(
             onPressed: onPressed,
@@ -640,10 +640,10 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
             ),
           ],
         ),
-        if (_error != null) ...[
+        if (widget.controller.error != null) ...[
           const SizedBox(height: 6),
           Text(
-            _error!,
+            widget.controller.error!,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -658,23 +658,6 @@ class _GlobalMarkQueryControlState extends State<_GlobalMarkQueryControl> {
   }
 }
 
-class _GlobalMarkQuerySettings {
-  const _GlobalMarkQuerySettings({required this.onlyShowMarkedRecords});
-
-  final bool onlyShowMarkedRecords;
-
-  factory _GlobalMarkQuerySettings.fromPayload(Map<String, dynamic> payload) {
-    final data = _stringKeyMap(payload['data']);
-    final settings = _stringKeyMap(data['settings'] ?? payload['settings']);
-    final rawOnlyShowMarkedRecords = settings['onlyShowMarkedRecords'] ??
-        settings['only_show_marked_records'];
-    return _GlobalMarkQuerySettings(
-      onlyShowMarkedRecords: rawOnlyShowMarkedRecords == true ||
-          rawOnlyShowMarkedRecords == 'true',
-    );
-  }
-}
-
 bool _canControlGlobalMarkQuery(UserRole role) {
   return role == UserRole.admin ||
       role == UserRole.superAdmin ||
@@ -683,30 +666,18 @@ bool _canControlGlobalMarkQuery(UserRole role) {
       role == UserRole.afterSales;
 }
 
-Map<String, dynamic> _stringKeyMap(Object? value) {
-  if (value is Map<String, dynamic>) {
-    return value;
-  }
-  if (value is Map) {
-    return value.map((key, mapValue) => MapEntry('$key', mapValue));
-  }
-  return const <String, dynamic>{};
-}
-
 class _MobileDrawer extends StatelessWidget {
   const _MobileDrawer({
-    required this.apiClient,
-    required this.token,
     required this.role,
+    required this.globalMarkQueryController,
     required this.user,
     required this.destinations,
     required this.selectedId,
     required this.onSelect,
   });
 
-  final ApiClient apiClient;
-  final String token;
   final UserRole role;
+  final GlobalMarkQueryController globalMarkQueryController;
   final AuthUser user;
   final List<AppDestination> destinations;
   final String selectedId;
@@ -739,9 +710,8 @@ class _MobileDrawer extends StatelessWidget {
             ),
             const Divider(height: 1),
             _GlobalMarkQueryControl(
-              apiClient: apiClient,
-              token: token,
               role: role,
+              controller: globalMarkQueryController,
             ),
             Expanded(
               child: ListView(

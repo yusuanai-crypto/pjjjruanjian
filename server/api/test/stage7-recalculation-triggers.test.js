@@ -69,6 +69,237 @@ test('contract: stage7 recalculation runs after sales order creation', async () 
   });
 });
 
+test('contract: creating, updating, and disabling an outreach rule recalculates existing order snapshots idempotently', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  prisma.commissionRules = prisma.commissionRules.filter(
+    (rule) => rule.targetType !== 'OUTREACH_COMMISSION',
+  );
+
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+    const before = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    assert.equal(
+      before.some((record) => record.targetType === 'outreach_commission'),
+      false,
+    );
+
+    const createdRule = await requestJson(
+      baseUrl,
+      '/api/commission-rules',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          ruleName: 'stage7 late outreach commission',
+          targetType: 'outreach_commission',
+          rate: '0.0080',
+          effectiveFrom: '2026-01-01',
+        },
+      },
+    );
+    assert.equal(
+      createdRule.response.status,
+      201,
+      JSON.stringify(createdRule.body),
+    );
+    const createRecalculation =
+      createdRule.body.data.commissionRule.recalculation;
+    assert.equal(createRecalculation.source, 'commission_rules.create');
+    assert.equal(createRecalculation.orderCount, 1);
+    assert.equal(createRecalculation.successCount, 1);
+    assert.equal(createRecalculation.failureCount, 0);
+    assert.equal(createRecalculation.generatedCount, 1);
+    assert.deepEqual(createRecalculation.targetTypes, [
+      'OUTREACH_COMMISSION',
+    ]);
+    const generatedOutreach = createRecalculation.generatedRecords.find(
+      (record) => record.targetType === 'outreach_commission',
+    );
+    assert.ok(generatedOutreach);
+    assert.equal(generatedOutreach.salesOrderId, createdOrder.id);
+    assert.equal(generatedOutreach.amountCents, 1440);
+
+    const updatedRule = await requestJson(
+      baseUrl,
+      `/api/commission-rules/${createdRule.body.data.commissionRule.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          rate: '0.0100',
+        },
+      },
+    );
+    assert.equal(updatedRule.response.status, 200);
+    const updateRecalculation =
+      updatedRule.body.data.commissionRule.recalculation;
+    assert.equal(updateRecalculation.generatedCount, 0);
+    assert.equal(updateRecalculation.updatedCount, 1);
+    assert.equal(
+      updateRecalculation.updatedRecords.find(
+        (record) => record.targetType === 'outreach_commission',
+      ).amountCents,
+      1800,
+    );
+    let records = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    assert.equal(
+      records.filter(
+        (record) => record.targetType === 'outreach_commission',
+      ).length,
+      1,
+    );
+
+    const repeatedRule = await requestJson(
+      baseUrl,
+      `/api/commission-rules/${createdRule.body.data.commissionRule.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          rate: '0.0100',
+        },
+      },
+    );
+    assert.equal(repeatedRule.response.status, 200);
+    const repeatedRecalculation =
+      repeatedRule.body.data.commissionRule.recalculation;
+    assert.equal(repeatedRecalculation.generatedCount, 0);
+    assert.equal(repeatedRecalculation.updatedCount, 0);
+    assert.equal(repeatedRecalculation.unchangedCount, 1);
+
+    const disabledRule = await requestJson(
+      baseUrl,
+      `/api/commission-rules/${createdRule.body.data.commissionRule.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: {
+          isActive: false,
+        },
+      },
+    );
+    assert.equal(disabledRule.response.status, 200);
+    const disableRecalculation =
+      disabledRule.body.data.commissionRule.recalculation;
+    assert.equal(disableRecalculation.generatedCount, 0);
+    assert.equal(disableRecalculation.updatedCount, 1);
+    assert.equal(
+      disableRecalculation.updatedRecords.find(
+        (record) => record.targetType === 'outreach_commission',
+      ).amountCents,
+      0,
+    );
+    assert.equal(
+      disableRecalculation.warnings.some(
+        (warning) => warning.code === 'missing_commission_rule',
+      ),
+      true,
+    );
+
+    records = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    assert.equal(
+      records.filter(
+        (record) => record.targetType === 'outreach_commission',
+      ).length,
+      1,
+    );
+    assert.equal(
+      records.find(
+        (record) => record.targetType === 'outreach_commission',
+      ).amountCents,
+      0,
+    );
+
+    const profits = await requestJson(
+      baseUrl,
+      '/api/analytics/travel-group-profits?preset=custom&dateFrom=2026-07-01&dateTo=2026-07-01',
+      { token: admin.token },
+    );
+    assert.equal(profits.response.status, 200, JSON.stringify(profits.body));
+    const groupProfit = profits.body.data.items.find(
+      (item) => item.travelGroupId === TRAVEL_GROUP_ID,
+    );
+    assert.ok(groupProfit);
+    assert.equal(groupProfit.outreachCommissionCents, 0);
+
+    const aggregateLogs = await operationLogs(
+      baseUrl,
+      admin.token,
+      'commission_records.employee_scope.recalculate',
+    );
+    assert.equal(
+      aggregateLogs.some(
+        (log) =>
+          log.afterData.triggerSource === 'commission_rules.create' &&
+          log.afterData.targetTypes.includes('OUTREACH_COMMISSION') &&
+          log.afterData.orderCount === 1,
+      ),
+      true,
+    );
+  }, {
+    prisma,
+  });
+});
+
+test('contract: creating a leader rule after the order generates the existing order leader commission', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  prisma.commissionRules = prisma.commissionRules.filter(
+    (rule) => rule.targetType !== 'LEADER_COMMISSION',
+  );
+
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+    const createdRule = await requestJson(
+      baseUrl,
+      '/api/commission-rules',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          ruleName: 'stage7 late leader commission',
+          targetType: 'leader_commission',
+          rate: '0.0024',
+          effectiveFrom: '2026-01-01',
+        },
+      },
+    );
+
+    assert.equal(
+      createdRule.response.status,
+      201,
+      JSON.stringify(createdRule.body),
+    );
+    const recalculation =
+      createdRule.body.data.commissionRule.recalculation;
+    assert.equal(recalculation.orderCount, 1);
+    assert.equal(recalculation.successCount, 1);
+    assert.equal(recalculation.generatedCount, 1);
+    const generatedLeader = recalculation.generatedRecords.find(
+      (record) => record.targetType === 'leader_commission',
+    );
+    assert.ok(generatedLeader);
+    assert.equal(generatedLeader.salesOrderId, createdOrder.id);
+    assert.equal(generatedLeader.targetUserId, 'usr-stage7-recalc-leader');
+    assert.equal(generatedLeader.amountCents, 432);
+  }, {
+    prisma,
+  });
+});
+
 test('contract: creating a 30 percent agency deduction rule recalculates existing orders and summary', async () => {
   const prisma = buildStage7RecalculationPrisma();
   prisma.agencyDeductionRules = [];
@@ -249,6 +480,9 @@ test('contract: batch importing an agency rule recalculates only that agency', a
     tasterId: TASTER_USER_ID,
     tasterName: 'stage7 smoke taster',
     liquorCostDeductionCents: 0,
+    cigaretteFeeCents: 1000,
+    arrivalTime: '10:00',
+    groupType: '其他',
     status: 'UNMARKED',
   });
 
@@ -982,7 +1216,7 @@ async function createStage7Order(baseUrl, token, overrides = {}) {
       ...overrides,
     },
   });
-  assert.equal(result.response.status, 201);
+  assert.equal(result.response.status, 201, JSON.stringify(result.body));
   return result.body.data.salesOrder;
 }
 
@@ -1081,6 +1315,9 @@ function buildStage7RecalculationPrisma() {
         tasterId: TASTER_USER_ID,
         tasterName: 'stage7 smoke taster',
         liquorCostDeductionCents: 30000,
+        cigaretteFeeCents: 1000,
+        arrivalTime: '10:00',
+        groupType: '其他',
         status: 'UNMARKED',
       },
       {
@@ -1091,6 +1328,9 @@ function buildStage7RecalculationPrisma() {
         tasterId: TASTER_USER_ID,
         tasterName: 'stage7 smoke taster',
         liquorCostDeductionCents: 30000,
+        cigaretteFeeCents: 1000,
+        arrivalTime: '10:00',
+        groupType: '其他',
         status: 'UNMARKED',
       },
     ],

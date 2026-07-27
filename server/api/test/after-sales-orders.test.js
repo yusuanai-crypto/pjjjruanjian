@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const ExcelJS = require('exceljs');
 
 const {
   assertErrorContract,
@@ -21,7 +22,7 @@ test('unit: finance role menu includes after-sales orders', () => {
 });
 
 test('contract: after-sales order creation validates payload and writes an operation log', async () => {
-  await withNestApiServer(async (baseUrl) => {
+  await withNestApiServer(async (baseUrl, { prisma }) => {
     const admin = await login(baseUrl, 'admin');
     const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
 
@@ -29,7 +30,7 @@ test('contract: after-sales order creation validates payload and writes an opera
       method: 'POST',
       token: afterSales.token,
       body: {
-        salesOrderId: 'so_after_sales_owner',
+        sourceSalesOrderId: 'so_after_sales_owner',
         issueType: 'logistics_damage',
         actionType: 'refund',
         description: 'smoke test customer reports logistics damage',
@@ -37,6 +38,13 @@ test('contract: after-sales order creation validates payload and writes an opera
         refundAmountCents: 1200,
         status: 'waiting_refund',
         notes: 'smoke test after sales create',
+        items: [
+          {
+            sourceSalesOrderItemId: 'so_after_sales_owner_item_1',
+            quantity: 1,
+            totalPriceCents: 1200,
+          },
+        ],
       },
     });
 
@@ -46,6 +54,7 @@ test('contract: after-sales order creation validates payload and writes an opera
     assertAfterSalesOrderContract(order);
     assert.match(order.afterSalesNo, /^AS\d{11}$/);
     assert.equal(order.salesOrderId, 'so_after_sales_owner');
+    assert.equal(order.sourceSalesOrderId, 'so_after_sales_owner');
     assert.equal(order.customerId, 'cust_after_sales_marked');
     assert.equal(order.issueType, 'logistics_damage');
     assert.equal(order.actionType, 'refund');
@@ -53,8 +62,45 @@ test('contract: after-sales order creation validates payload and writes an opera
     assert.equal(order.refundAmountCents, 1200);
     assert.equal(order.financeConfirmed, false);
     assert.equal(order.salesOrder.orderNo, 'SO-AFTER-SALES-OWNER');
-    assert.equal(order.salesOrder.status, 'partial_refund');
+    assert.equal(order.salesOrder.status, 'valid');
+    assert.equal(order.sourceSalesOrder.status, 'valid');
+    assert.equal(order.afterSalesSalesOrder.orderType, 'after_sales');
+    assert.equal(order.afterSalesSalesOrder.orderNo, order.afterSalesNo);
+    assert.equal(order.afterSalesSalesOrder.sourceSalesOrderId, order.salesOrderId);
+    assert.equal(order.afterSalesSalesOrder.totalAmountCents, 1200);
+    assert.equal(order.items.length, 1);
+    assert.equal(
+      order.items[0].sourceSalesOrderItemId,
+      'so_after_sales_owner_item_1',
+    );
+    assert.equal(order.items[0].subtotalCents, 1200);
+    assert.equal(order.items[0].returnRequired, false);
+    assert.equal(order.items[0].expectedReturnQty, 0);
+    assert.equal(order.items[0].postedReceivedQty, 0);
+    assert.equal(order.items[0].remainingReturnQty, 0);
+    assert.equal(order.items[0].returnProgressStatus, 'not_required');
     assert.equal(order.customer.name, 'After Sales Smoke Marked Customer');
+
+    const unchangedSource = await prisma.salesOrder.findUnique({
+      where: { id: 'so_after_sales_owner' },
+      include: { items: true },
+    });
+    assert.equal(unchangedSource.status, 'VALID');
+    assert.equal(unchangedSource.totalAmountCents, 99000);
+    assert.equal(unchangedSource.items.length, 1);
+    const adjustmentRecords = await prisma.commissionRecord.findMany({
+      where: { afterSalesOrderId: order.id },
+    });
+    assert.equal(adjustmentRecords.length >= 2, true);
+    assert.equal(
+      adjustmentRecords.every(
+        (record) =>
+          record.amountCents <= 0 &&
+          record.pointsCents <= 0 &&
+          record.deductionAmountCents <= 0,
+      ),
+      true,
+    );
 
     const logs = await requestJson(
       baseUrl,
@@ -107,6 +153,13 @@ test('contract: after-sales order creation rejects missing orders and invalid re
           salesOrderId: 'so_after_sales_owner',
           actionType: 'refund',
           description: 'smoke test missing issue type',
+          items: [
+            {
+              sourceSalesOrderItemId: 'so_after_sales_owner_item_1',
+              quantity: 1,
+              totalPriceCents: 1,
+            },
+          ],
         },
       },
     );
@@ -124,10 +177,216 @@ test('contract: after-sales order creation rejects missing orders and invalid re
           actionType: 'refund',
           description: 'smoke test invalid refund amount',
           refundAmountCents: -1,
+          items: [
+            {
+              sourceSalesOrderItemId: 'so_after_sales_owner_item_1',
+              quantity: 1,
+              totalPriceCents: 1,
+            },
+          ],
         },
       },
     );
     assertErrorContract(invalidRefund, 400, 'VALIDATION_FAILED');
+  }, createAfterSalesTestOptions());
+});
+
+test('contract: after-sales item validation enforces source membership, quantity and refund sum', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
+    const create = (body) =>
+      requestJson(baseUrl, '/api/after-sales-orders', {
+        method: 'POST',
+        token: afterSales.token,
+        body: {
+          sourceSalesOrderId: 'so_after_sales_other',
+          issueType: 'quality_issue',
+          actionType: 'refund',
+          description: 'item validation smoke test',
+          ...body,
+        },
+      });
+
+    const wrongSource = await create({
+      refundAmountCents: 100,
+      items: [
+        {
+          sourceSalesOrderItemId: 'so_after_sales_owner_item_1',
+          quantity: 1,
+          totalPriceCents: 100,
+        },
+      ],
+    });
+    assertErrorContract(
+      wrongSource,
+      400,
+      'AFTER_SALES_ITEM_NOT_IN_SOURCE_ORDER',
+    );
+
+    const excessiveQuantity = await create({
+      refundAmountCents: 200,
+      items: [
+        {
+          sourceSalesOrderItemId: 'so_after_sales_other_item_1',
+          quantity: 2,
+          totalPriceCents: 200,
+        },
+      ],
+    });
+    assertErrorContract(
+      excessiveQuantity,
+      400,
+      'AFTER_SALES_ITEM_QUANTITY_EXCEEDED',
+    );
+
+    const mismatchedRefund = await create({
+      refundAmountCents: 199,
+      items: [
+        {
+          sourceSalesOrderItemId: 'so_after_sales_other_item_1',
+          quantity: 1,
+          totalPriceCents: 200,
+        },
+      ],
+    });
+    assertErrorContract(
+      mismatchedRefund,
+      400,
+      'AFTER_SALES_REFUND_AMOUNT_MISMATCH',
+    );
+
+    const recordOnly = await create({
+      actionType: 'record_only',
+      refundAmountCents: 0,
+      items: [],
+    });
+    assert.equal(recordOnly.response.status, 201);
+    assert.deepEqual(recordOnly.body.data.afterSalesOrder.items, []);
+    assert.equal(
+      recordOnly.body.data.afterSalesOrder.afterSalesSalesOrder
+        .totalAmountCents,
+      0,
+    );
+  }, createAfterSalesTestOptions());
+});
+
+test('contract: after-sales transaction rolls back generated order on partial failure', async () => {
+  await withNestApiServer(
+    async (baseUrl, { prisma }) => {
+      const afterSales = await login(
+        baseUrl,
+        'after_sales_user',
+        TEST_PASSWORD,
+      );
+      const failed = await requestJson(baseUrl, '/api/after-sales-orders', {
+        method: 'POST',
+        token: afterSales.token,
+        body: {
+          sourceSalesOrderId: 'so_after_sales_other',
+          issueType: 'quality_issue',
+          actionType: 'refund',
+          description: 'transaction rollback smoke test',
+          refundAmountCents: 100,
+          items: [
+            {
+              sourceSalesOrderItemId: 'so_after_sales_other_item_1',
+              quantity: 1,
+              totalPriceCents: 100,
+            },
+          ],
+        },
+      });
+      assert.equal(failed.response.status, 500);
+      const generatedOrders = await prisma.salesOrder.findMany({
+        where: { orderType: 'AFTER_SALES' },
+      });
+      assert.deepEqual(generatedOrders, []);
+      const createdAfterSales = await prisma.afterSalesOrder.findMany({
+        where: { description: 'transaction rollback smoke test' },
+      });
+      assert.deepEqual(createdAfterSales, []);
+    },
+    {
+      ...createAfterSalesTestOptions(),
+      prisma: {
+        ...createAfterSalesTestOptions().prisma,
+        failAfterSalesOrderCreateOnce: true,
+      },
+    },
+  );
+});
+
+test('contract: finance rows expose and export after-sales as numeric negative entries', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
+    const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+    const created = await requestJson(baseUrl, '/api/after-sales-orders', {
+      method: 'POST',
+      token: afterSales.token,
+      body: {
+        sourceSalesOrderId: 'so_after_sales_owner',
+        issueType: 'quality_issue',
+        actionType: 'refund',
+        description: 'finance negative row smoke test',
+        refundAmountCents: 1200,
+        items: [
+          {
+            sourceSalesOrderItemId: 'so_after_sales_owner_item_1',
+            quantity: 1,
+            totalPriceCents: 1200,
+          },
+        ],
+      },
+    });
+    assert.equal(created.response.status, 201);
+    const afterSalesOrder = created.body.data.afterSalesOrder;
+
+    const listed = await requestJson(
+      baseUrl,
+      '/api/travel-group-finance-summaries/finance-rows?limit=200',
+      { token: finance.token },
+    );
+    assert.equal(listed.response.status, 200);
+    const row = listed.body.data.financeRows.find(
+      (item) => item.financeRowId === `after_sales:${afterSalesOrder.id}`,
+    );
+    assert.ok(row);
+    assert.equal(row.rowKind, 'after_sales_adjustment');
+    assert.equal(row.orderType, 'after_sales');
+    assert.equal(row.afterSalesNo, afterSalesOrder.afterSalesNo);
+    assert.equal(row.sourceSalesOrderNo, 'SO-AFTER-SALES-OWNER');
+    assert.equal(row.totalSalesAmountCents, -1200);
+    assert.equal(row.effectiveSalesAmountCents, -1200);
+    assert.equal(row.financialAmountsReady, false);
+    assert.equal(row.includedInFormalTotals, false);
+
+    const exported = await fetch(
+      `${baseUrl}/api/travel-group-finance-summaries/finance-rows/export`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${finance.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          financeRowIds: [row.financeRowId],
+        }),
+      },
+    );
+    assert.equal(exported.status, 200);
+    assert.equal(
+      exported.headers.get('content-type'),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exported.arrayBuffer());
+    const worksheet = workbook.worksheets[0];
+    const headers = worksheet.getRow(1).values;
+    const salesColumn = headers.indexOf('销售额调整');
+    const rowIdColumn = headers.indexOf('财务行ID');
+    assert.equal(worksheet.getCell(2, rowIdColumn).value, row.financeRowId);
+    assert.equal(typeof worksheet.getCell(2, salesColumn).value, 'number');
+    assert.equal(worksheet.getCell(2, salesColumn).value, -12);
   }, createAfterSalesTestOptions());
 });
 
@@ -407,10 +666,12 @@ test('contract: after-sales orders obey global mark filtering and do not expose 
       );
       assert.equal(afterEnable.response.status, 200);
       assert.deepEqual(
-        afterEnable.body.data.afterSalesOrders.map((order) => order.id),
-        ['as_global_marked'],
+        afterEnable.body.data.afterSalesOrders.map((order) => order.id).sort(),
+        ['as_global_marked', 'as_global_unmarked_group'],
       );
-      assertNoShippedFields(afterEnable.body.data.afterSalesOrders[0]);
+      for (const order of afterEnable.body.data.afterSalesOrders) {
+        assertNoShippedFields(order);
+      }
 
       const visibleDetail = await requestJson(
         baseUrl,
@@ -438,7 +699,8 @@ test('contract: after-sales orders obey global mark filtering and do not expose 
           token: admin.token,
         },
       );
-      assertErrorContract(hiddenGroupDetail, 404, 'SALES_ORDER_NOT_FOUND');
+      assert.equal(hiddenGroupDetail.response.status, 200);
+      assertNoShippedFields(hiddenGroupDetail.body.data.afterSalesOrder);
     },
     createAfterSalesGlobalMarkTestOptions(),
   );
@@ -457,10 +719,8 @@ test('contract: PATCH /api/after-sales-orders/:id updates base fields and writes
         token: afterSales.token,
         body: {
           issueType: 'logistics_damage',
-          actionType: 'exchange',
           description: 'smoke test updated logistics damage description',
           resolution: 'smoke test updated exchange resolution',
-          refundAmountCents: 1500,
           notes: 'smoke test updated after sales notes',
         },
       },
@@ -470,13 +730,13 @@ test('contract: PATCH /api/after-sales-orders/:id updates base fields and writes
     assertAfterSalesOrderContract(order);
     assert.equal(order.afterSalesNo, 'AS20260701001');
     assert.equal(order.issueType, 'logistics_damage');
-    assert.equal(order.actionType, 'exchange');
+    assert.equal(order.actionType, 'refund');
     assert.equal(order.description, 'smoke test updated logistics damage description');
     assert.equal(order.resolution, 'smoke test updated exchange resolution');
-    assert.equal(order.refundAmountCents, 1500);
+    assert.equal(order.refundAmountCents, 1000);
     assert.equal(order.notes, 'smoke test updated after sales notes');
     assert.equal(order.status, 'waiting_refund');
-    assert.equal(order.salesOrder.status, 'partial_refund');
+    assert.equal(order.salesOrder.status, 'valid');
     assert.equal(order.financeConfirmed, false);
 
     const logs = await requestJson(
@@ -504,8 +764,8 @@ test('contract: PATCH /api/after-sales-orders/:id updates base fields and writes
     assert.equal(updateLog.beforeData.refundAmountCents, 1000);
     assert.equal(updateLog.beforeData.status, 'waiting_refund');
     assert.equal(updateLog.afterData.issueType, 'logistics_damage');
-    assert.equal(updateLog.afterData.actionType, 'exchange');
-    assert.equal(updateLog.afterData.refundAmountCents, 1500);
+    assert.equal(updateLog.afterData.actionType, 'refund');
+    assert.equal(updateLog.afterData.refundAmountCents, 1000);
     assert.equal(updateLog.afterData.status, 'waiting_refund');
   }, createAfterSalesTestOptions());
 });
@@ -786,129 +1046,56 @@ test('contract: warehouse confirms waiting receive or waiting resend only', asyn
   }, createAfterSalesTestOptions());
 });
 
-test('contract: after-sales refund and cancel changes sync sales order status and travel group summaries', async () => {
+test('contract: after-sales status changes never mutate source sales orders or travel-group totals', async () => {
   await withNestApiServer(async (baseUrl) => {
     const admin = await login(baseUrl, 'admin');
     const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
 
-    const partialRefund = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_partial_refund/status',
-      {
-        method: 'PATCH',
-        token: afterSales.token,
-        body: {
-          status: 'waiting_refund',
+    const cases = [
+      ['as_partial_refund', 'waiting_refund', 'valid', 10000],
+      ['as_full_refund', 'completed', 'valid', 3000],
+      ['as_cancel_order', 'completed', 'valid', 6000],
+      ['as_resend_no_refund', 'completed', 'valid', 7000],
+    ];
+    for (const [id, status, sourceStatus, totalAmountCents] of cases) {
+      const response = await requestJson(
+        baseUrl,
+        `/api/after-sales-orders/${id}/status`,
+        {
+          method: 'PATCH',
+          token: afterSales.token,
+          body: {
+            status,
+            notes: `smoke test ${id} status transition`,
+          },
         },
-      },
-    );
-    assert.equal(partialRefund.response.status, 200);
-    assert.equal(
-      partialRefund.body.data.afterSalesOrder.salesOrder.status,
-      'partial_refund',
-    );
-    assert.equal(
-      partialRefund.body.data.afterSalesOrder.salesOrder.totalAmountCents,
-      10000,
-    );
+      );
+      assert.equal(response.response.status, 200);
+      assert.equal(
+        response.body.data.afterSalesOrder.salesOrder.status,
+        sourceStatus,
+      );
+      assert.equal(
+        response.body.data.afterSalesOrder.salesOrder.totalAmountCents,
+        totalAmountCents,
+      );
+    }
 
-    const partialGroup = await requestJson(
-      baseUrl,
-      '/api/travel-groups/tg_after_sales_partial',
-      {
-        token: admin.token,
-      },
-    );
-    assert.equal(partialGroup.response.status, 200);
-    assert.equal(partialGroup.body.data.travelGroup.status, 'ordered');
-    assert.equal(partialGroup.body.data.travelGroup.salesAmountCents, 10000);
-    assert.equal(partialGroup.body.data.travelGroup.orderSummary.orderCount, 1);
-    assert.equal(
-      partialGroup.body.data.travelGroup.orderSummary.totalAmountCents,
-      10000,
-    );
-
-    const fullRefund = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_full_refund/status',
-      {
-        method: 'PATCH',
-        token: afterSales.token,
-        body: {
-          status: 'completed',
-          notes: 'smoke test full refund completed',
-        },
-      },
-    );
-    assert.equal(fullRefund.response.status, 200);
-    assert.equal(
-      fullRefund.body.data.afterSalesOrder.salesOrder.status,
-      'refunded',
-    );
-    assert.equal(
-      fullRefund.body.data.afterSalesOrder.salesOrder.totalAmountCents,
-      3000,
-    );
-
-    const fullGroup = await requestJson(
-      baseUrl,
-      '/api/travel-groups/tg_after_sales_full',
-      {
-        token: admin.token,
-      },
-    );
-    assert.equal(fullGroup.response.status, 200);
-    assert.equal(fullGroup.body.data.travelGroup.status, 'unmarked');
-    assert.equal(fullGroup.body.data.travelGroup.salesAmountCents, 0);
-    assert.equal(fullGroup.body.data.travelGroup.orderSummary.orderCount, 0);
-
-    const cancelled = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_cancel_order/status',
-      {
-        method: 'PATCH',
-        token: afterSales.token,
-        body: {
-          status: 'completed',
-          notes: 'smoke test cancellation completed',
-        },
-      },
-    );
-    assert.equal(cancelled.response.status, 200);
-    assert.equal(
-      cancelled.body.data.afterSalesOrder.salesOrder.status,
-      'cancelled',
-    );
-
-    const cancelledGroup = await requestJson(
-      baseUrl,
-      '/api/travel-groups/tg_after_sales_cancel',
-      {
-        token: admin.token,
-      },
-    );
-    assert.equal(cancelledGroup.response.status, 200);
-    assert.equal(cancelledGroup.body.data.travelGroup.status, 'unmarked');
-    assert.equal(cancelledGroup.body.data.travelGroup.orderSummary.orderCount, 0);
-
-    const resend = await requestJson(
-      baseUrl,
-      '/api/after-sales-orders/as_resend_no_refund/status',
-      {
-        method: 'PATCH',
-        token: afterSales.token,
-        body: {
-          status: 'completed',
-          notes: 'smoke test resend completed without refund',
-        },
-      },
-    );
-    assert.equal(resend.response.status, 200);
-    assert.equal(resend.body.data.afterSalesOrder.salesOrder.status, 'valid');
-    assert.equal(
-      resend.body.data.afterSalesOrder.salesOrder.totalAmountCents,
-      7000,
-    );
+    for (const travelGroupId of [
+      'tg_after_sales_partial',
+      'tg_after_sales_full',
+      'tg_after_sales_cancel',
+    ]) {
+      const group = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${travelGroupId}`,
+        { token: admin.token },
+      );
+      assert.equal(group.response.status, 200);
+      assert.equal(group.body.data.travelGroup.status, 'unmarked');
+      assert.equal(group.body.data.travelGroup.salesAmountCents, 0);
+      assert.equal(group.body.data.travelGroup.orderSummary.orderCount, 1);
+    }
 
     const salesLogs = await requestJson(
       baseUrl,
@@ -918,40 +1105,14 @@ test('contract: after-sales refund and cancel changes sync sales order status an
       },
     );
     assert.equal(salesLogs.response.status, 200);
-    const findStatusLog = (entityId, status) =>
-      salesLogs.body.data.logs.find(
-        (log) =>
-          log.action === 'sales_orders.status.update' &&
-          log.entityId === entityId &&
-          log.afterData.status === status,
-      );
-    assertPhase6OperationLog(
-      findStatusLog('so_after_sales_partial', 'partial_refund'),
-      {
-        action: 'sales_orders.status.update',
-        entityType: 'sales_order',
-        entityId: 'so_after_sales_partial',
-        userId: 'usr_after_sales',
-      },
-    );
     assert.equal(
-      findStatusLog('so_after_sales_partial', 'partial_refund').beforeData
-        .status,
-      'valid',
-    );
-    assert.equal(
-      findStatusLog('so_after_sales_full', 'refunded').beforeData.status,
-      'valid',
-    );
-    assert.equal(
-      findStatusLog('so_after_sales_cancel', 'cancelled').beforeData.status,
-      'valid',
-    );
-    assert.equal(
-      salesLogs.body.data.logs.some(
-        (log) =>
-          log.action === 'sales_orders.status.update' &&
-          log.entityId === 'so_after_sales_resend',
+      salesLogs.body.data.logs.some((log) =>
+        [
+          'so_after_sales_partial',
+          'so_after_sales_full',
+          'so_after_sales_cancel',
+          'so_after_sales_resend',
+        ].includes(log.entityId),
       ),
       false,
     );
@@ -978,24 +1139,35 @@ test('contract: after-sales refund and cancel changes sync sales order status an
     });
     assert.equal(
       partialAfterSalesLog.afterData.salesOrder.status,
-      'partial_refund',
+      'valid',
     );
   }, createAfterSalesTestOptions());
 });
 
-test('contract: after-sales status rejects cumulative refund above sales order total', async () => {
+test('contract: after-sales creation rejects cumulative refund above source order total', async () => {
   await withNestApiServer(async (baseUrl) => {
     const admin = await login(baseUrl, 'admin');
     const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
 
     const denied = await requestJson(
       baseUrl,
-      '/api/after-sales-orders/as_over_refund_new/status',
+      '/api/after-sales-orders',
       {
-        method: 'PATCH',
+        method: 'POST',
         token: afterSales.token,
         body: {
-          status: 'waiting_refund',
+          sourceSalesOrderId: 'so_after_sales_over_refund',
+          issueType: 'quality_issue',
+          actionType: 'refund',
+          description: 'new refund exceeds cumulative source total',
+          refundAmountCents: 300,
+          items: [
+            {
+              sourceSalesOrderItemId: 'so_after_sales_over_refund_item_1',
+              quantity: 1,
+              totalPriceCents: 300,
+            },
+          ],
         },
       },
     );
@@ -1181,6 +1353,74 @@ test('contract: finance refund confirmation requires and stores proof attachment
       },
     );
   });
+});
+
+test('contract: finance can fill manual after-sales liquor cost but cannot override rate mode', async () => {
+  await withNestApiServer(async (baseUrl, { prisma }) => {
+    const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+    const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
+
+    const deniedRole = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_waiting_receive/agency-deduction',
+      {
+        method: 'PATCH',
+        token: afterSales.token,
+        body: { agencyDeductionAdjustmentCents: 100 },
+      },
+    );
+    assertErrorContract(deniedRole, 403, 'PERMISSION_DENIED');
+
+    const excessive = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_waiting_receive/agency-deduction',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: { agencyDeductionAdjustmentCents: 501 },
+      },
+    );
+    assertErrorContract(
+      excessive,
+      400,
+      'AFTER_SALES_DEDUCTION_EXCEEDS_REFUND',
+    );
+
+    const updated = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_waiting_receive/agency-deduction',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: { agencyDeductionAdjustmentCents: 100 },
+      },
+    );
+    assert.equal(updated.response.status, 200);
+    assert.equal(
+      updated.body.data.afterSalesOrder.agencyDeductionAdjustmentCents,
+      100,
+    );
+    const records = await prisma.commissionRecord.findMany({
+      where: { afterSalesOrderId: 'as_waiting_receive' },
+    });
+    assert.equal(records.length >= 2, true);
+    assert.equal(records.every((record) => record.pointsCents <= 0), true);
+
+    const automatic = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders/as_partial_refund/agency-deduction',
+      {
+        method: 'PATCH',
+        token: finance.token,
+        body: { agencyDeductionAdjustmentCents: 100 },
+      },
+    );
+    assertErrorContract(
+      automatic,
+      400,
+      'AFTER_SALES_DEDUCTION_NOT_MANUAL',
+    );
+  }, createAfterSalesTestOptions());
 });
 
 test('contract: PATCH /api/after-sales-orders/:id/finance-confirm validates roles and refund amount', async () => {
@@ -1470,7 +1710,7 @@ test('contract: PATCH /api/after-sales-orders/:id enforces field and role permis
         },
       },
     );
-    assertErrorContract(invalidRefund, 400, 'VALIDATION_FAILED');
+    assertErrorContract(invalidRefund, 403, 'FIELD_PERMISSION_DENIED');
   }, createAfterSalesTestOptions());
 });
 
@@ -1634,6 +1874,7 @@ function createAfterSalesTestOptions() {
           actionType: 'REFUND',
           description: 'smoke test bottle seal issue refund',
           refundAmountCents: 1000,
+          agencyDeductionAdjustmentCents: 100,
           status: 'WAITING_REFUND',
           financeConfirmed: false,
           createdAt: '2026-07-01T00:00:00.000Z',
@@ -1702,6 +1943,9 @@ function createAfterSalesTestOptions() {
           actionType: 'REFUND',
           description: 'smoke test partial refund linkage',
           refundAmountCents: 3000,
+          deductionCalculationMode: 'effective_sales_rate',
+          sourceAgencyDeductionCents: 1000,
+          agencyDeductionAdjustmentCents: 300,
           status: 'NEGOTIATING',
           createdAt: '2026-07-03T00:00:00.000Z',
         }),
@@ -1820,20 +2064,21 @@ function createAfterSalesGlobalMarkTestOptions() {
         createSalesOrderSeed({
           id: 'so_as_global_marked',
           orderNo: 'SO-AS-GLOBAL-MARKED',
-          customerId: 'cust_as_global_marked',
-          customerName: 'After Sales Global Smoke Marked Customer',
-          customerPhone: '13800007101',
+          customerId: 'cust_as_global_unmarked',
+          customerName: 'After Sales Global Smoke Unmarked Customer',
+          customerPhone: '13800007102',
           orderDate: '2026-07-05T00:00:00.000Z',
           totalAmountCents: 1000,
         }),
         createSalesOrderSeed({
           id: 'so_as_global_unmarked_customer',
           orderNo: 'SO-AS-GLOBAL-UNMARKED-CUSTOMER',
-          customerId: 'cust_as_global_unmarked',
-          customerName: 'After Sales Global Smoke Unmarked Customer',
-          customerPhone: '13800007102',
+          customerId: 'cust_as_global_marked',
+          customerName: 'After Sales Global Smoke Marked Customer',
+          customerPhone: '13800007101',
           orderDate: '2026-07-05T00:00:00.000Z',
           totalAmountCents: 1000,
+          financeMark: false,
         }),
         createSalesOrderSeed({
           id: 'so_as_global_unmarked_group',
@@ -1954,21 +2199,23 @@ function createUserSeed(id, username, role) {
 }
 
 function createSalesOrderSeed(overrides) {
+  const items = overrides.items || [
+    {
+      id: `${overrides.id}_item_1`,
+      productName: 'Smoke Test Wine',
+      quantity: 1,
+      unitPriceCents: overrides.totalAmountCents ?? 99000,
+      deliveryType: 'SHIPPING',
+    },
+  ];
   return {
     orderType: 'EXTERNAL',
     orderDate: '2026-07-01T00:00:00.000Z',
     totalAmountCents: 99000,
     packingStatus: 'PACKED',
     financeMark: true,
-    items: [
-      {
-        productName: 'Smoke Test Wine',
-        quantity: 1,
-        unitPriceCents: 99000,
-        deliveryType: 'SHIPPING',
-      },
-    ],
     ...overrides,
+    items,
   };
 }
 
@@ -2033,25 +2280,40 @@ function assertAfterSalesOrderContract(order) {
   assert.deepEqual(Object.keys(order).sort(), [
     'actionType',
     'afterSalesNo',
+    'afterSalesSalesOrder',
+    'afterSalesSalesOrderId',
+    'agencyDeductionAdjustmentCents',
+    'agencyDeductionRate',
+    'agencyDeductionRuleId',
+    'agencyRebateRuleId',
+    'calculationDate',
     'completedAt',
     'createdAt',
     'createdById',
     'customer',
     'customerId',
+    'dailyRebateRate',
+    'deductionCalculationMode',
     'description',
     'financeConfirmed',
     'financeConfirmedAt',
     'financeConfirmedById',
+    'financialEffectStatus',
     'handledAt',
     'handledById',
     'id',
     'issueType',
+    'items',
+    'monthlyRebateRate',
     'notes',
     'refundAmountCents',
     'refundProofAttachments',
     'resolution',
     'salesOrder',
     'salesOrderId',
+    'sourceAgencyDeductionCents',
+    'sourceSalesOrder',
+    'sourceSalesOrderId',
     'status',
     'updatedAt',
     'updatedById',
@@ -2062,6 +2324,7 @@ function assertAfterSalesOrderContract(order) {
   assert.equal(typeof order.id, 'string');
   assert.equal(typeof order.afterSalesNo, 'string');
   assert.equal(typeof order.salesOrderId, 'string');
+  assert.equal(typeof order.sourceSalesOrderId, 'string');
   assert.equal(typeof order.issueType, 'string');
   assert.equal(typeof order.actionType, 'string');
   assert.equal(typeof order.description, 'string');
@@ -2069,8 +2332,28 @@ function assertAfterSalesOrderContract(order) {
   assert.equal(typeof order.status, 'string');
   assert.equal(typeof order.financeConfirmed, 'boolean');
   assert.equal(Array.isArray(order.refundProofAttachments), true);
+  assert.equal(Array.isArray(order.items), true);
   assert.equal(typeof order.createdAt, 'string');
   assert.equal(typeof order.updatedAt, 'string');
   assertNoShippedFields(order);
   assertNoStorageLocation(order);
+  const serialized = JSON.stringify(order);
+  for (const internalField of [
+    'fulfillmentWarehouseId',
+    'inventoryAppliedAt',
+    'inventoryPolicyVersion',
+    'inventoryVersion',
+    'inventoryLineKey',
+    'onHandQty',
+    'availableQty',
+    'shortageQty',
+    'purchaseUnitCostCents',
+    'inventoryAmountCents',
+  ]) {
+    assert.equal(
+      serialized.includes(internalField),
+      false,
+      `after-sales DTO must not expose ${internalField}`,
+    );
+  }
 }

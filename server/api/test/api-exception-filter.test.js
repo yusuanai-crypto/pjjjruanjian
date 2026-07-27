@@ -33,6 +33,10 @@ test('unknown exceptions return a generic 5xx response and a generated request I
   exception.password = 'fake-password-value';
   exception.details = {
     authorization: 'Bearer fake-bearer-value',
+    purchaseUnitCostCents: 987654321,
+    inventoryAmountCents: 876543210,
+    onHandQty: 765432109,
+    logisticsCode: 'inventory-logistics-secret',
     nested: [
       {
         verificationCode: '246810',
@@ -67,6 +71,10 @@ test('unknown exceptions return a generic 5xx response and a generated request I
     'C:\\private',
     'fake-sensitive-value',
     '13800138000',
+    '987654321',
+    '876543210',
+    '765432109',
+    'inventory-logistics-secret',
   ]) {
     assert.equal(responseText.includes(forbidden), false);
   }
@@ -81,6 +89,10 @@ test('unknown exceptions return a generic 5xx response and a generated request I
     '13800138000',
     'Fake full street address',
     'fake-query-token',
+    '987654321',
+    '876543210',
+    '765432109',
+    'inventory-logistics-secret',
   ]) {
     assert.equal(logText.includes(forbidden), false);
   }

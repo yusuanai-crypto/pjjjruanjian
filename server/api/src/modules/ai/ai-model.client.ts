@@ -6,7 +6,10 @@ import {
 } from '../../common/errors';
 import { AiConfig, AiConfigService } from './ai-config';
 import { buildAiPromptMessages } from './ai-prompt.builder';
-import { formatAiResponse } from './ai-response.formatter';
+import {
+  ensureCompliantAiAnswer,
+  formatAiResponse,
+} from './ai-response.formatter';
 
 export interface AiModelToolResult {
   toolName: string;
@@ -141,7 +144,7 @@ export class AiModelClient {
       }
 
       return {
-        answer,
+        answer: ensureCompliantAiAnswer(answer, input),
         modelProvider: config.provider || 'custom',
         modelName: config.model || 'unknown',
         promptTokens: readTokenCount(payload, 'prompt_tokens'),

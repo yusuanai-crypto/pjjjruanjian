@@ -6,61 +6,63 @@ const {
   calculateStage7CommissionAndPoints,
 } = require('../src/modules/commissions/commission-calculation.helper');
 
-test('unit: stage7 calculation handles a valid partial-refund order with full snapshots', () => {
+test('unit: stage7 original-order calculation ignores independent after-sales adjustments', () => {
   const result = calculateStage7CommissionAndPoints(buildCalculationInput());
 
   assert.deepEqual(result.amounts, {
     grossAmountCents: 1000000,
-    confirmedRefundAmountCents: 100000,
-    unconfirmedRefundAmountCents: 50000,
-    effectiveAmountCents: 900000,
+    confirmedRefundAmountCents: 0,
+    unconfirmedRefundAmountCents: 0,
+    effectiveAmountCents: 1000000,
     salesDeductionAmountCents: 100000,
-    employeeBaseAmountCents: 800000,
+    employeeBaseAmountCents: 900000,
     agencyDeductionAmountCents: 120000,
-    agencyBaseAmountCents: 780000,
-    dailyRebateCents: 23400,
-    monthlyRebateCents: 15600,
+    agencyBaseAmountCents: 880000,
+    dailyRebateCents: 26400,
+    monthlyRebateCents: 17600,
   });
-  assertWarningCodes(result, ['unconfirmed_after_sales_refund']);
+  assert.equal(
+    result.warnings.some(
+      (warning) => warning.code === 'unconfirmed_after_sales_refund',
+    ),
+    false,
+  );
 
   assertLine(result.commissionLines, 'SALES_COMMISSION', {
     targetUserId: 'user-sales',
     commissionRuleId: 'rule-sales',
-    baseAmountCents: 800000,
+    baseAmountCents: 900000,
     deductionAmountCents: 100000,
     rateSnapshot: '0.0200',
-    amountCents: 16000,
+    amountCents: 18000,
   });
   assertLine(result.commissionLines, 'OUTREACH_COMMISSION', {
     targetUserId: 'user-outreach',
     commissionRuleId: 'rule-outreach',
     rateSnapshot: '0.0080',
-    amountCents: 6400,
+    amountCents: 7200,
   });
   assertLine(result.commissionLines, 'LEADER_COMMISSION', {
     targetUserId: 'user-leader',
     commissionRuleId: 'rule-leader',
     rateSnapshot: '0.0024',
-    amountCents: 1920,
+    amountCents: 2160,
   });
   assertLine(result.agencyRebateLines, 'AGENCY_DAILY_REBATE', {
     agencyRebateRuleId: 'rule-agency-rebate',
     agencyId: 'agency-1',
     rateSnapshot: '0.0300',
-    pointsCents: 23400,
+    pointsCents: 26400,
   });
   assertLine(result.agencyRebateLines, 'AGENCY_MONTHLY_REBATE', {
     agencyRebateRuleId: 'rule-agency-rebate',
     agencyId: 'agency-1',
     rateSnapshot: '0.0200',
-    pointsCents: 15600,
+    pointsCents: 17600,
   });
 
-  assert.equal(
-    result.sourceSnapshot.confirmedRefunds[0].afterSalesNo,
-    'AS-STAGE7-001',
-  );
-  assert.equal(result.sourceSnapshot.unconfirmedRefundSummary.count, 1);
+  assert.deepEqual(result.sourceSnapshot.confirmedRefunds, []);
+  assert.equal(result.sourceSnapshot.unconfirmedRefundSummary.count, 0);
   assert.equal(
     result.sourceSnapshot.travelAgencyMatch.matchMode,
     'travel_agency_name_to_id',
@@ -69,10 +71,10 @@ test('unit: stage7 calculation handles a valid partial-refund order with full sn
   assert.equal(result.ruleSnapshot.salesDeductionRules.length, 2);
   assert.equal(result.ruleSnapshot.agencyDeductionRules.length, 2);
   assert.equal(result.ruleSnapshot.agencyRebateRule.id, 'rule-agency-rebate');
-  assert.match(result.calculationNote, /effective=900000/);
+  assert.match(result.calculationNote, /effective=1000000/);
 });
 
-test('unit: stage7 effective amount is zero for refunded and cancelled orders', () => {
+test('unit: historical refunded sources stay positive while standalone cancelled orders are zero', () => {
   const refunded = calculateStage7CommissionAndPoints(
     buildCalculationInput({
       salesOrder: {
@@ -87,20 +89,20 @@ test('unit: stage7 effective amount is zero for refunded and cancelled orders', 
       },
     }),
   );
-  assert.equal(refunded.amounts.effectiveAmountCents, 0);
-  assert.equal(refunded.amounts.employeeBaseAmountCents, 0);
-  assert.equal(refunded.amounts.agencyBaseAmountCents, 0);
+  assert.equal(refunded.amounts.effectiveAmountCents, 1000000);
+  assert.equal(refunded.amounts.employeeBaseAmountCents, 900000);
+  assert.equal(refunded.amounts.agencyBaseAmountCents, 880000);
   assert.equal(
     refunded.commissionLines.find(
       (line) => line.targetType === 'SALES_COMMISSION',
     ).amountCents,
-    0,
+    18000,
   );
   assert.equal(
     refunded.agencyRebateLines.find(
       (line) => line.targetType === 'AGENCY_DAILY_REBATE',
     ).pointsCents,
-    0,
+    26400,
   );
 
   const cancelled = calculateStage7CommissionAndPoints(
@@ -131,8 +133,8 @@ test('unit: stage7 effective amount is zero for refunded and cancelled orders', 
     }),
     {
       grossAmountCents: 5000,
-      confirmedRefundAmountCents: 4999,
-      effectiveAmountCents: 1,
+      confirmedRefundAmountCents: 0,
+      effectiveAmountCents: 5000,
     },
   );
 });
@@ -319,11 +321,11 @@ test('unit: agency deduction effective_sales_rate uses 30 percent of effective s
   );
 
   assert.equal(result.agencyDeduction.calculationMode, 'effective_sales_rate');
-  assert.equal(result.amounts.effectiveAmountCents, 900000);
-  assert.equal(result.amounts.agencyDeductionAmountCents, 270000);
-  assert.equal(result.amounts.agencyBaseAmountCents, 630000);
+  assert.equal(result.amounts.effectiveAmountCents, 1000000);
+  assert.equal(result.amounts.agencyDeductionAmountCents, 300000);
+  assert.equal(result.amounts.agencyBaseAmountCents, 700000);
   assert.equal(result.ruleSnapshot.agencyDeductionRules[0].deductionRate, '0.3000');
-  assert.equal(result.ruleSnapshot.agencyDeductionRules[0].deductionAmountCents, 270000);
+  assert.equal(result.ruleSnapshot.agencyDeductionRules[0].deductionAmountCents, 300000);
 });
 
 test('unit: agency deduction manual_product_reference reads manual liquor cost instead of summing products', () => {
@@ -358,7 +360,7 @@ test('unit: agency deduction manual_product_reference reads manual liquor cost i
   assert.equal(result.agencyDeduction.items[0].referenceAmountCents, 777770);
   assert.equal(result.agencyDeduction.items[0].deductionAmountCents, 0);
   assert.equal(result.amounts.agencyDeductionAmountCents, 12345);
-  assert.equal(result.amounts.agencyBaseAmountCents, 887655);
+  assert.equal(result.amounts.agencyBaseAmountCents, 987655);
   assert.equal(
     result.ruleSnapshot.agencyDeductionRules[0].manualInputDeductionCents,
     12345,
@@ -433,7 +435,7 @@ test('unit: stage7 calculation uses rules effective on the order date', () => {
   assert.equal(result.salesDeduction.items[1].ruleId, 'active-sales-deduction-b');
   assertLine(result.commissionLines, 'SALES_COMMISSION', {
     commissionRuleId: 'rule-sales-new',
-    amountCents: 16000,
+    amountCents: 18000,
   });
 });
 
@@ -609,7 +611,7 @@ test('unit: stage10 deduction matching prefers productId and falls back only for
   );
   assert.equal(legacyOrderFallback.salesDeduction.items[0].ruleId, 'new-rule-for-legacy-order');
   assert.equal(legacyOrderFallback.salesDeduction.totalAmountCents, 3000);
-  assert.equal(legacyOrderFallback.amounts.employeeBaseAmountCents, 897000);
+  assert.equal(legacyOrderFallback.amounts.employeeBaseAmountCents, 997000);
 });
 
 test('unit: stage10 product actual-cost fields do not change commission rebate or points results', () => {
@@ -677,6 +679,143 @@ test('unit: stage10 product actual-cost fields do not change commission rebate o
   assert.deepEqual(withActualCost.agencyRebateLines, withoutActualCost.agencyRebateLines);
 });
 
+test('unit: manual fallback applies the only later active agency rebate rule', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      allowLatestAgencyRebateRuleFallback: true,
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'later-rule',
+          effectiveFrom: '2026-08-01',
+          dailyRebateRate: '0.0300',
+          monthlyRebateRate: '0.0200',
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(result.amounts.dailyRebateCents, 26400);
+  assert.equal(result.amounts.monthlyRebateCents, 17600);
+  assertWarningCodes(result, ['agency_rebate_rule_fallback_applied']);
+  assert.equal(
+    result.ruleSnapshot.agencyRebateRule.matchMode,
+    'latest_active_manual_fallback',
+  );
+  const context = result.warnings.find(
+    (warning) => warning.code === 'agency_rebate_rule_fallback_applied',
+  ).context;
+  assert.equal(context.salesOrderId, 'order-stage7-calc');
+  assert.equal(context.travelGroupId, 'travel-group-stage7-calc');
+  assert.equal(context.agencyId, 'agency-1');
+  assert.equal(context.ruleId, 'later-rule');
+  assert.equal(context.orderDate, '2026-07-15');
+  assert.equal(context.effectiveFrom, '2026-08-01');
+});
+
+test('unit: default matching stays strict and historical rule wins before fallback', () => {
+  const laterRule = agencyRebateRule({
+    id: 'later-rule',
+    effectiveFrom: '2026-08-01',
+    dailyRebateRate: '0.0900',
+    monthlyRebateRate: '0.0800',
+  });
+  const strict = calculateStage7CommissionAndPoints(
+    buildCalculationInput({ agencyRebateRules: [laterRule] }),
+  );
+  assert.equal(strict.amounts.dailyRebateCents, 0);
+  assertWarningCodes(strict, ['missing_agency_rebate_rule']);
+
+  const historical = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      allowLatestAgencyRebateRuleFallback: true,
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'historical-rule',
+          effectiveFrom: '2026-07-01',
+          effectiveTo: '2026-07-31',
+          dailyRebateRate: '0.0100',
+          monthlyRebateRate: '0.0200',
+        }),
+        laterRule,
+      ],
+    }),
+  );
+  assert.equal(historical.amounts.dailyRebateCents, 8800);
+  assert.equal(historical.ruleSnapshot.agencyRebateRule.id, 'historical-rule');
+  assert.equal(historical.ruleSnapshot.agencyRebateRule.matchMode, 'agency_id');
+  assert.equal(
+    historical.warnings.some(
+      (warning) => warning.code === 'agency_rebate_rule_fallback_applied',
+    ),
+    false,
+  );
+});
+
+test('unit: fallback respects agency id and normalized exact legacy name', () => {
+  const idMatched = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      allowLatestAgencyRebateRuleFallback: true,
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'other-agency',
+          agencyId: 'agency-2',
+          agencyName: 'stage7 test agency',
+          effectiveFrom: '2026-08-01',
+          dailyRebateRate: '0.9900',
+        }),
+        agencyRebateRule({
+          id: 'correct-agency',
+          effectiveFrom: '2026-08-01',
+          dailyRebateRate: '0.0300',
+        }),
+      ],
+    }),
+  );
+  assert.equal(idMatched.ruleSnapshot.agencyRebateRule.id, 'correct-agency');
+
+  const nameMatched = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      allowLatestAgencyRebateRuleFallback: true,
+      travelAgencies: [],
+      salesOrder: {
+        travelGroup: {
+          ...buildOrder().travelGroup,
+          travelAgency: 'Ｓｔａｇｅ ７ Test Agency',
+        },
+      },
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'legacy-name',
+          agencyId: null,
+          agencyName: 'stage7testagency',
+          effectiveFrom: '2026-08-01',
+          dailyRebateRate: '0.0300',
+        }),
+      ],
+    }),
+  );
+  assert.equal(nameMatched.ruleSnapshot.agencyRebateRule.id, 'legacy-name');
+});
+
+test('unit: fallback reports ambiguity for equal-priority active rules', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      allowLatestAgencyRebateRuleFallback: true,
+      agencyRebateRules: [
+        agencyRebateRule({ id: 'ambiguous-a', effectiveFrom: '2026-08-01' }),
+        agencyRebateRule({ id: 'ambiguous-b', effectiveFrom: '2026-08-01' }),
+      ],
+    }),
+  );
+
+  assert.equal(result.amounts.dailyRebateCents, 0);
+  assertWarningCodes(result, [
+    'ambiguous_agency_rebate_rule',
+    'missing_agency_rebate_rule',
+  ]);
+  assert.equal(result.ruleSnapshot.agencyRebateRule, null);
+});
+
 function buildCalculationInput(overrides = {}) {
   const salesOrder = {
     ...buildOrder(),
@@ -696,6 +835,8 @@ function buildCalculationInput(overrides = {}) {
   }
 
   return {
+    allowLatestAgencyRebateRuleFallback:
+      overrides.allowLatestAgencyRebateRuleFallback === true,
     salesOrder,
     salesDeductionRules:
       overrides.salesDeductionRules || [

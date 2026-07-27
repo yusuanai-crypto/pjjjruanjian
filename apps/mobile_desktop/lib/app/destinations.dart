@@ -68,6 +68,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.account_balance_wallet_rounded,
       phase: 6),
   AppDestination(
+      id: 'guide_points_table',
+      label: '导游积分表',
+      icon: Icons.badge_rounded,
+      phase: 7),
+  AppDestination(
       id: 'travel_group_order_notes',
       label: '损耗与离店备注',
       icon: Icons.assignment_turned_in_rounded,
@@ -128,6 +133,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.inventory_2_rounded,
       phase: 6),
   AppDestination(
+      id: 'warehouse_management',
+      label: '仓库管理',
+      icon: Icons.warehouse_rounded,
+      phase: 11),
+  AppDestination(
       id: 'after_sales_form',
       label: '售后处理',
       icon: Icons.support_agent_rounded,
@@ -180,6 +190,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
   if (!canViewProfitAnalysis(role)) {
     ids.remove('profit_analysis');
   }
+  if (!canViewGuidePointsTable(role)) {
+    ids.remove('guide_points_table');
+  }
   if (role != UserRole.superAdmin && role != UserRole.admin) {
     ids.remove('operation_logs');
   }
@@ -193,6 +206,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       role != UserRole.finance &&
       role != UserRole.warehouse) {
     ids.remove('moutai_inventory');
+  }
+  if (!canAccessInventory(role)) {
+    ids.remove('warehouse_management');
   }
   if (role != UserRole.superAdmin &&
       role != UserRole.admin &&
@@ -338,6 +354,8 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'warehouse_packing';
     case 'serialized_inventory':
       return 'moutai_inventory';
+    case 'warehouse_management':
+      return 'warehouse_management';
     case 'own_taster_receptions':
       return 'taster_summary';
     case 'own_commissions':

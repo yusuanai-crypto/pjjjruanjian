@@ -71,6 +71,7 @@ const MENU_ENTRIES = {
   guide_management: { id: 'guide_management', title: '导游管理', phase: 3 },
   travel_agency_management: { id: 'travel_agency_management', title: '旅行社管理', phase: 7 },
   travel_group_finance_supplement: { id: 'travel_group_finance_supplement', title: '积分表', phase: 6 },
+  guide_points_table: { id: 'guide_points_table', title: '导游积分表', phase: 7 },
   travel_group_order_notes: { id: 'travel_group_order_notes', title: '损耗与离店备注', phase: 4 },
   own_taster_receptions: { id: 'own_taster_receptions', title: '我的接待', phase: 3, dataScope: 'self' },
   sales_orders: { id: 'sales_orders', title: '销售订单', phase: 4 },
@@ -103,6 +104,7 @@ const ROLE_MENU_IDS = {
     'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
+    'guide_points_table',
     'travel_group_order_notes',
     'customers',
     'sales_orders',
@@ -132,6 +134,7 @@ const ROLE_MENU_IDS = {
     'guide_management',
     'travel_agency_management',
     'travel_group_finance_supplement',
+    'guide_points_table',
     'travel_group_order_notes',
     'customers',
     'sales_orders',
@@ -156,6 +159,7 @@ const ROLE_MENU_IDS = {
     'travel_group_query',
     'customers',
     'order_query',
+    'guide_points_table',
     'analytics',
     'profit_analysis',
     'ai_assistant',
@@ -183,6 +187,7 @@ const ROLE_MENU_IDS = {
     'travel_group_query',
     'travel_agency_management',
     'travel_group_finance_supplement',
+    'guide_points_table',
     'customers',
     'order_query',
     'after_sales_orders',
@@ -249,6 +254,38 @@ const GLOBAL_MARK_READ_PERMISSION = ['settings:global_mark:read'];
 const GLOBAL_MARK_ENABLE_PERMISSION = ['settings:global_mark:enable'];
 const GLOBAL_MARK_RESTORE_PERMISSION = ['settings:global_mark:restore'];
 const OPERATION_LOG_PERMISSIONS = ['operation_logs:list'];
+const INVENTORY_READ_PERMISSIONS = [
+  'inventory:configuration:read',
+  'inventory:warehouses:read',
+  'inventory:stocks:read',
+  'inventory:movements:read',
+  'inventory:inbounds:read',
+  'inventory:transfers:read',
+  'inventory:alert_configs:read',
+];
+const INVENTORY_COST_READ_PERMISSIONS = [
+  'inventory:purchase_costs:read',
+];
+const INVENTORY_MANAGE_PERMISSIONS = [
+  'inventory:configuration:manage',
+  'inventory:warehouses:manage',
+  'inventory:alert_configs:manage',
+  'inventory:rebuild_check',
+];
+const INVENTORY_INBOUND_WRITE_PERMISSIONS = [
+  'inventory:inbounds:create',
+  'inventory:inbounds:reverse',
+];
+const INVENTORY_COST_WRITE_PERMISSIONS = [
+  'inventory:batch_costs:write',
+];
+const INVENTORY_QUANTITY_WRITE_PERMISSIONS = [
+  'inventory:transfers:create',
+  'inventory:transfers:confirm_outbound',
+  'inventory:transfers:receive',
+  'inventory:transfers:reverse',
+  'inventory:unavailable:write',
+];
 
 const TRAVEL_GROUP_READ_PERMISSIONS = ['travel_groups:list', 'travel_groups:read'];
 const TRAVEL_GROUP_WRITE_PERMISSIONS = [
@@ -298,6 +335,22 @@ const GROUP_FINANCE_MARK_PERMISSIONS = [
 const SALES_ORDER_READ_PERMISSIONS = ['sales_orders:list', 'sales_orders:read'];
 const SALES_ORDER_CREATE_PERMISSIONS = ['sales_orders:create'];
 const SALES_ORDER_FINANCE_MARK_PERMISSIONS = ['sales_orders:finance_mark'];
+const SALES_ORDER_SHIPPING_DATE_PERMISSIONS = [
+  'sales_orders:update_shipping_date',
+];
+const GUIDE_POINTS_READ_PERMISSIONS = [
+  'guide_points_summaries:list',
+  'guide_points_summaries:read',
+];
+const GUIDE_POINTS_WRITE_PERMISSIONS = [
+  ...GUIDE_POINTS_READ_PERMISSIONS,
+  'guide_points_summaries:update',
+  'guide_points_orders:update_rates',
+  'guide_points_summaries:update_payment_status',
+];
+const GUIDE_POINTS_SWITCH_PERMISSIONS = [
+  'sales_orders:update_points_destination',
+];
 const CUSTOMER_READ_PERMISSIONS = ['customers:list', 'customers:read'];
 const CUSTOMER_CREATE_PERMISSIONS = ['customers:create'];
 const CUSTOMER_UPDATE_PERMISSIONS = ['customers:update'];
@@ -317,6 +370,12 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_ENABLE_PERMISSION,
     ...GLOBAL_MARK_RESTORE_PERMISSION,
     ...OPERATION_LOG_PERMISSIONS,
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_MANAGE_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     ...GROUP_WRITE_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
@@ -326,6 +385,8 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
+    ...GUIDE_POINTS_WRITE_PERMISSIONS,
+    ...GUIDE_POINTS_SWITCH_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
     ...RECONCILIATION_READ_PERMISSIONS,
     ...RECONCILIATION_REVIEW_PERMISSIONS,
@@ -338,6 +399,12 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_ENABLE_PERMISSION,
     ...GLOBAL_MARK_RESTORE_PERMISSION,
     ...OPERATION_LOG_PERMISSIONS,
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_MANAGE_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     ...GROUP_WRITE_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
@@ -347,6 +414,8 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
+    ...GUIDE_POINTS_WRITE_PERMISSIONS,
+    ...GUIDE_POINTS_SWITCH_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
     ...RECONCILIATION_READ_PERMISSIONS,
     ...RECONCILIATION_REVIEW_PERMISSIONS,
@@ -359,6 +428,10 @@ const ROLE_PERMISSIONS = {
     ...GROUP_WRITE_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
+    ...GUIDE_POINTS_READ_PERMISSIONS,
+    ...GUIDE_POINTS_SWITCH_PERMISSIONS,
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
   ],
   front_desk: [
     ...AUTHENTICATED_PERMISSIONS,
@@ -376,6 +449,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
+    ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
   ],
   finance: [
     ...AUTHENTICATED_PERMISSIONS,
@@ -388,16 +462,26 @@ const ROLE_PERMISSIONS = {
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
+    ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
+    ...GUIDE_POINTS_WRITE_PERMISSIONS,
+    ...GUIDE_POINTS_SWITCH_PERMISSIONS,
     ...FINANCE_OVERVIEW_PERMISSIONS,
     ...RECONCILIATION_READ_PERMISSIONS,
     ...RECONCILIATION_WRITE_PERMISSIONS,
     ...STRIKE_BONUS_PERMISSIONS,
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_COST_READ_PERMISSIONS,
+    ...INVENTORY_COST_WRITE_PERMISSIONS,
   ],
   warehouse: [
     ...AUTHENTICATED_PERMISSIONS,
     ...GLOBAL_MARK_READ_PERMISSION,
     ...TRAVEL_GROUP_READ_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
+    ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
+    ...INVENTORY_READ_PERMISSIONS,
+    ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
+    ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
   ],
   after_sales: [
     ...AUTHENTICATED_PERMISSIONS,
@@ -408,6 +492,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_CREATE_PERMISSIONS,
     ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
+    ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
   ],
   taster: [
     ...AUTHENTICATED_PERMISSIONS,

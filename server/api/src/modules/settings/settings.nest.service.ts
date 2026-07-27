@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { MessageEvent } from '@nestjs/common';
+import { Observable, Subject, Subscription, interval } from 'rxjs';
 
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -12,10 +14,14 @@ const SETTING_KEYS = {
   restoredBy: 'global_mark_query_restored_by',
   restoredAt: 'global_mark_query_restored_at',
   updatedAt: 'global_mark_query_updated_at',
+  revision: 'global_mark_query_revision',
 };
 
 @Injectable()
 export class SettingsNestService {
+  private readonly globalMarkQueryEvents = new Subject<MessageEvent>();
+  private globalMarkQueryEventSubscribers = 0;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
@@ -45,9 +51,11 @@ export class SettingsNestService {
       restoredBy: null,
       restoredAt: null,
       updatedAt: now,
+      revision: current.revision + 1,
     };
 
     const saved = await this.saveGlobalMarkQuery(nextSettings, actor.id);
+    this.broadcastGlobalMarkQuery(saved);
     await this.operationLogsService.appendLog({
       userId: actor.id,
       action: 'settings.global_mark.enable',
@@ -71,9 +79,11 @@ export class SettingsNestService {
       restoredBy: actor.id,
       restoredAt: now,
       updatedAt: now,
+      revision: current.revision + 1,
     };
 
     const saved = await this.saveGlobalMarkQuery(nextSettings, actor.id);
+    this.broadcastGlobalMarkQuery(saved);
     await this.operationLogsService.appendLog({
       userId: actor.id,
       action: 'settings.global_mark.restore',
@@ -86,6 +96,70 @@ export class SettingsNestService {
     return saved;
   }
 
+  watchGlobalMarkQuery(): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      this.globalMarkQueryEventSubscribers += 1;
+      let closed = false;
+      const subscriptions = new Subscription();
+
+      subscriptions.add(
+        this.globalMarkQueryEvents.subscribe({
+          next: (event) => subscriber.next(event),
+          error: (error) => subscriber.error(error),
+        }),
+      );
+
+      void this.getGlobalMarkQuery()
+        .then((settings) => {
+          if (closed) {
+            return;
+          }
+          subscriber.next(
+            toGlobalMarkQueryMessageEvent(
+              'global-mark-query.snapshot',
+              settings,
+            ),
+          );
+          subscriptions.add(
+            interval(globalMarkQueryHeartbeatIntervalMs()).subscribe(() => {
+              subscriber.next({
+                type: 'heartbeat',
+                data: {
+                  event: 'heartbeat',
+                  updatedAt: new Date().toISOString(),
+                },
+              });
+            }),
+          );
+        })
+        .catch((error) => subscriber.error(error));
+
+      return () => {
+        closed = true;
+        subscriptions.unsubscribe();
+        this.globalMarkQueryEventSubscribers = Math.max(
+          0,
+          this.globalMarkQueryEventSubscribers - 1,
+        );
+      };
+    });
+  }
+
+  getGlobalMarkQueryEventSubscriberCount() {
+    return this.globalMarkQueryEventSubscribers;
+  }
+
+  private broadcastGlobalMarkQuery(settings: any) {
+    // This in-process stream is sufficient for a single API instance. A
+    // multi-instance deployment must fan out through Redis Pub/Sub or similar.
+    this.globalMarkQueryEvents.next(
+      toGlobalMarkQueryMessageEvent(
+        'global-mark-query.changed',
+        settings,
+      ),
+    );
+  }
+
   private async saveGlobalMarkQuery(settings: any, updatedBy: string) {
     const updates = [
       [SETTING_KEYS.onlyShowMarkedRecords, String(Boolean(settings.onlyShowMarkedRecords))],
@@ -95,6 +169,7 @@ export class SettingsNestService {
       [SETTING_KEYS.restoredBy, settings.restoredBy || ''],
       [SETTING_KEYS.restoredAt, settings.restoredAt || ''],
       [SETTING_KEYS.updatedAt, settings.updatedAt || new Date().toISOString()],
+      [SETTING_KEYS.revision, String(normalizeRevision(settings.revision))],
     ];
 
     await this.prisma.$transaction(
@@ -132,7 +207,40 @@ function toGlobalMarkQuerySettings(settings: any[]) {
     restoredBy: nonEmptyOrNull(values[SETTING_KEYS.restoredBy]),
     restoredAt: nonEmptyOrNull(values[SETTING_KEYS.restoredAt]),
     updatedAt: nonEmptyOrNull(values[SETTING_KEYS.updatedAt]),
+    revision: normalizeRevision(values[SETTING_KEYS.revision]),
   };
+}
+
+function toGlobalMarkQueryMessageEvent(
+  event: 'global-mark-query.snapshot' | 'global-mark-query.changed',
+  settings: any,
+): MessageEvent {
+  const revision = normalizeRevision(settings?.revision);
+  return {
+    id: String(revision),
+    type: event,
+    data: {
+      event,
+      onlyShowMarkedRecords: Boolean(settings?.onlyShowMarkedRecords),
+      restoreRequired: Boolean(settings?.restoreRequired),
+      updatedAt: nonEmptyOrNull(settings?.updatedAt),
+      revision,
+    },
+  };
+}
+
+function globalMarkQueryHeartbeatIntervalMs() {
+  const configured = Number(
+    process.env.GLOBAL_MARK_QUERY_HEARTBEAT_INTERVAL_MS,
+  );
+  return Number.isFinite(configured) && configured >= 1000
+    ? Math.trunc(configured)
+    : 15_000;
+}
+
+function normalizeRevision(value: unknown) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function requireAdmin(actor: any) {

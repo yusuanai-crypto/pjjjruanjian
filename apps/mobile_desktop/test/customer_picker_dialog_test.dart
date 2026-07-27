@@ -6,6 +6,60 @@ import 'package:jiangjiu_mobile_desktop/features/customers/customer_picker_dialo
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
+  for (final viewportWidth in <double>[320, 360, 375, 390]) {
+    testWidgets(
+      'fits customer picker within ${viewportWidth.toInt()}px viewport',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = Size(viewportWidth, 700);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.view.resetPhysicalSize);
+
+        await _openPicker(
+          tester,
+          loadCustomers: (_, __) async => _customers,
+        );
+
+        expect(tester.takeException(), isNull);
+
+        final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
+        final searchFieldRect = tester.getRect(
+          find.byKey(const ValueKey('customer-search-field')),
+        );
+        final searchButtonRect = tester.getRect(
+          find.byKey(const ValueKey('customer-search-button')),
+        );
+        final searchButtonContainerRect = tester.getRect(
+          find.byKey(const ValueKey('customer-search-button-container')),
+        );
+        final createButtonRect = tester.getRect(
+          find.byKey(const ValueKey('open-create-customer-button')),
+        );
+        final resultListRect = tester.getRect(
+          find.byKey(const ValueKey('customer-result-list')),
+        );
+
+        expect(
+          dialog.insetPadding,
+          const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        );
+        expect(searchFieldRect.left, greaterThanOrEqualTo(16));
+        expect(searchFieldRect.width, greaterThan(0));
+        expect(searchFieldRect.right, lessThanOrEqualTo(searchButtonRect.left));
+        expect(searchButtonContainerRect.width, 92);
+        expect(
+          searchButtonRect.width,
+          lessThanOrEqualTo(searchButtonContainerRect.width),
+        );
+        expect(searchButtonRect.right, lessThanOrEqualTo(viewportWidth - 16));
+        expect(createButtonRect.left, greaterThanOrEqualTo(16));
+        expect(createButtonRect.right, lessThanOrEqualTo(viewportWidth - 16));
+        expect(resultListRect.left, greaterThanOrEqualTo(16));
+        expect(resultListRect.right, lessThanOrEqualTo(viewportWidth - 16));
+      },
+    );
+  }
+
   testWidgets('searches customers by name phone or address', (tester) async {
     final queries = <String>[];
     await _openPicker(

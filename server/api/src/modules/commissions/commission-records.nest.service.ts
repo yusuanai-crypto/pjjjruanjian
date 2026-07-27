@@ -171,6 +171,8 @@ export class CommissionRecordsNestService {
       agencyRebateRules,
       commissionRules,
       travelAgencies,
+      allowLatestAgencyRebateRuleFallback:
+        options.allowLatestAgencyRebateRuleFallback === true,
     });
     const requestedTargetTypes = normalizeRecalculationTargetTypes(
       options.targetTypes,

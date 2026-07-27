@@ -24,15 +24,15 @@
 | `orderDate` | 已有 | `orderDate DateTime @map("order_date") @db.Date`，适合订单经营口径日期范围。 |
 | `status` | 已有 | `SalesOrderStatus` 含 `valid`、`partial_refund`、`refunded`、`cancelled`。 |
 | `travelGroupId` | 已有 | 可关联旅行团，用于团维度统计、打蛋率和品鉴师排名。 |
-| `customerId` | 已有 | 可关联客户，用于全局标记过滤和客户追溯。 |
+| `customerId` | 已有 | 可关联客户，用于客户追溯；客户标记不参与订单可见性判断。 |
 | `totalAmountCents` | 已有 | 订单原始销售额，单位分。 |
-| `financeMark` | 已有 | 订单自身标记字段已存在；但现有全局标记作用域主要按客户和旅行团标记过滤。 |
+| `financeMark` | 已有 | 订单自身确认标记，决定订单在全局过滤下是否可见。 |
 | `items` | 已有 | `SalesOrderItem[]`，可追溯订单明细。 |
 | `afterSalesOrders` | 已有 | 可追溯售后退款记录。 |
 
 兼容提醒：
-- 第 8 阶段统计文档要求“订单统计只包含已标记客户和已标记旅行团相关数据”，现有 helper 也是通过 `customer.financeMark=true` 与 `travelGroup.financeMark=true` 实现，不应仅依赖 `SalesOrder.financeMark`。
-- `travelGroupId` 是可空字段。订单经营总览如果包含非旅行团订单，开启全局标记过滤时可沿用现有订单作用域：客户已标记，且无旅行团或旅行团已标记。品鉴师排名、团均、人均、打蛋率等旅行团口径必须要求旅行团作用域通过。
+- 订单统计开启全局过滤时只依赖 `SalesOrder.financeMark=true`，不附加 `customer.financeMark` 或 `travelGroup.financeMark` 条件。
+- `travelGroupId` 是可空字段。订单经营指标沿用订单自身标记作用域；品鉴师排名、团均、人均、打蛋率等旅行团本体口径仍要求旅行团自身标记作用域通过。
 
 ### 2.2 `AfterSalesOrder`
 
@@ -180,7 +180,7 @@
 
 | 作用域 | 建议规则 |
 | --- | --- |
-| 订单作用域 | 复用现有 `buildGlobalSalesOrderMarkScope` 逻辑：开启全局标记过滤时，要求关联客户 `financeMark=true`，且无旅行团或关联旅行团 `financeMark=true`。 |
+| 订单作用域 | 复用现有 `buildGlobalSalesOrderMarkScope` 逻辑：开启全局标记过滤时，只要求订单自身 `SalesOrder.financeMark=true`。 |
 | 旅行团作用域 | 复用现有 `buildGlobalGroupMarkScope` 逻辑：开启全局标记过滤时，要求 `travel_groups.finance_mark=true`。 |
 | 售后作用域 | 不给售后单另建标记口径，统一通过 `salesOrder` 套订单作用域。 |
 | 品鉴师排名作用域 | 先按旅行团作用域筛 `visitDate` 范围内的团，再在这些团的关联订单和售后中聚合金额。 |
@@ -188,7 +188,7 @@
 | 第 7 阶段表作用域 | 如果读取 `CommissionRecord`，优先通过 `salesOrder` 过滤；没有订单但有旅行团的记录，通过旅行团作用域过滤。读取 `TravelGroupFinanceSummary` 时通过 `travelGroup.financeMark` 过滤。 |
 
 注意：
-- `SalesOrder.financeMark` 已存在，但当前 PRD 和第 8 阶段文档更强调客户与旅行团标记。若后续业务要求订单自身也必须标记，需要先更新口径文档和现有 helper，不建议在 analytics 单独加严。
+- `SalesOrder.financeMark` 是订单查询、统计、导出、售后和 AI 订单数据的统一标记条件；analytics 不得另行叠加客户或旅行团标记条件。
 - 打蛋率、团均、人均、品鉴师排名都属于旅行团口径，必须以过滤后的旅行团集合为分母。
 
 ## 8. 迁移风险

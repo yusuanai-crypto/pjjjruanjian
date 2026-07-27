@@ -95,14 +95,18 @@ export class ProductsNestService {
     const name = normalizeLimitedRequiredString(payload.name, 'name', 160);
     const normalizedName = normalizeProductName(name);
     await this.assertUniqueProductName(normalizedName);
+    const inventoryTrackingMode = normalizeInventoryTrackingMode(
+      payload.inventoryTrackingMode,
+    );
+    if (inventoryTrackingMode !== 'NONE') {
+      throw productInventoryModeChangeRequiresCommandError();
+    }
     const data: any = {
       id: crypto.randomUUID(),
       name,
       normalizedName,
       unit: normalizeLimitedRequiredString(payload.unit, 'unit', 20),
-      inventoryTrackingMode: normalizeInventoryTrackingMode(
-        payload.inventoryTrackingMode,
-      ),
+      inventoryTrackingMode: 'NONE',
       isActive:
         payload.isActive === undefined
           ? true
@@ -149,9 +153,13 @@ export class ProductsNestService {
       data.unit = normalizeLimitedRequiredString(payload.unit, 'unit', 20);
     }
     if (hasOwn(payload, 'inventoryTrackingMode')) {
-      data.inventoryTrackingMode = normalizeInventoryTrackingMode(
+      const requestedMode = normalizeInventoryTrackingMode(
         payload.inventoryTrackingMode,
       );
+      if (requestedMode !== String(current.inventoryTrackingMode).toUpperCase()) {
+        throw productInventoryModeChangeRequiresCommandError();
+      }
+      data.inventoryTrackingMode = current.inventoryTrackingMode;
     }
     if (hasOwn(payload, 'notes')) {
       data.notes = normalizeOptionalString(payload.notes);
@@ -451,9 +459,13 @@ function normalizeInventoryTrackingMode(value: unknown) {
     return 'NONE';
   }
   const normalized = String(value).trim().toUpperCase();
-  if (normalized !== 'NONE' && normalized !== 'SERIALIZED') {
+  if (
+    normalized !== 'NONE' &&
+    normalized !== 'QUANTITY' &&
+    normalized !== 'SERIALIZED'
+  ) {
     throw validationError(
-      'inventoryTrackingMode must be NONE or SERIALIZED.',
+      'inventoryTrackingMode must be NONE, QUANTITY, or SERIALIZED.',
     );
   }
   return normalized;
@@ -646,6 +658,14 @@ function actualCostOverlapError() {
     409,
     'PRODUCT_ACTUAL_COST_RANGE_OVERLAP',
     'Active actual-cost effective ranges for the same product must not overlap.',
+  );
+}
+
+function productInventoryModeChangeRequiresCommandError() {
+  return createHttpError(
+    409,
+    'PRODUCT_INVENTORY_MODE_CHANGE_REQUIRES_COMMAND',
+    'Inventory tracking mode changes require the dedicated inventory mode command.',
   );
 }
 

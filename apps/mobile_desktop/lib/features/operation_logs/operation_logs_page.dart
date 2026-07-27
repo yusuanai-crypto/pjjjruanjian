@@ -1,10 +1,12 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart';
+import 'operation_log_presentation.dart';
+
+export 'operation_log_presentation.dart' show OperationLogEntry;
 
 typedef OperationLogFileSaver = Future<String?> Function(
   String fileName,
@@ -97,8 +99,7 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
       HttpOperationLogsApi(widget.apiClient, widget.token);
   final _keywordController = TextEditingController();
   final _ipController = TextEditingController();
-  OperationLogFilterOptions _options =
-      const OperationLogFilterOptions.empty();
+  OperationLogFilterOptions _options = const OperationLogFilterOptions.empty();
   OperationLogPageResult? _page;
   String? _userId;
   String? _module;
@@ -170,11 +171,15 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
   }
 
   OperationLogQuery _query({required int page}) {
+    final keyword = _nonEmpty(_keywordController.text);
+    final automaticKeywordStart = keyword == null || _dateRange != null
+        ? null
+        : DateTime.now().subtract(const Duration(days: 365));
     return OperationLogQuery(
       page: page,
       pageSize: widget.pageSize,
       userId: _userId,
-      startTime: _dateRange?.start,
+      startTime: _dateRange?.start ?? automaticKeywordStart,
       endTime: _dateRange == null
           ? null
           : DateTime(
@@ -190,7 +195,7 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
       operationType: _operationType,
       result: _result,
       ipAddress: _nonEmpty(_ipController.text),
-      keyword: _nonEmpty(_keywordController.text),
+      keyword: keyword,
       archived: _archived,
     );
   }
@@ -261,8 +266,7 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (context) =>
-          const Center(child: CircularProgressIndicator()),
+      builder: (context) => const Center(child: CircularProgressIndicator()),
     );
     try {
       final detail = await _api.detail(entry.id, archived: _archived);
@@ -316,145 +320,178 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
 
   Widget _buildFilters() {
     final content = Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SegmentedButton<bool>(
-              key: const ValueKey('operation-log-archive-switch'),
-              segments: const [
-                ButtonSegment(
-                  value: false,
-                  label: Text('在线日志'),
-                  icon: Icon(Icons.history_rounded),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text('历史归档'),
-                  icon: Icon(Icons.inventory_2_outlined),
-                ),
-              ],
-              selected: {_archived},
-              onSelectionChanged: (values) {
-                setState(() => _archived = values.first);
-                _loadPage();
-              },
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _FilterBox(
-                  child: KeyedSubtree(
-                    key: const ValueKey('operation-log-user-filter'),
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(_userId),
-                      initialValue: _userId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '用户'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('全部用户'),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SegmentedButton<bool>(
+            key: const ValueKey('operation-log-archive-switch'),
+            segments: const [
+              ButtonSegment(
+                value: false,
+                label: Text('在线日志'),
+                icon: Icon(Icons.history_rounded),
+              ),
+              ButtonSegment(
+                value: true,
+                label: Text('历史归档'),
+                icon: Icon(Icons.inventory_2_outlined),
+              ),
+            ],
+            selected: {_archived},
+            onSelectionChanged: (values) {
+              setState(() => _archived = values.first);
+              _loadPage();
+            },
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _FilterBox(
+                child: KeyedSubtree(
+                  key: const ValueKey('operation-log-user-filter'),
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey(_userId),
+                    initialValue: _userId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '操作人'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('全部操作人'),
+                      ),
+                      ..._options.users.map(
+                        (user) => DropdownMenuItem(
+                          value: user.id,
+                          child: Text(user.displayLabel),
                         ),
-                        ..._options.users.map(
-                          (user) => DropdownMenuItem(
-                            value: user.id,
-                            child: Text(user.displayLabel),
+                      ),
+                    ],
+                    onChanged: (value) => setState(() => _userId = value),
+                  ),
+                ),
+              ),
+              _FilterBox(
+                child: KeyedSubtree(
+                  key: const ValueKey('operation-log-module-filter'),
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey(_module),
+                    initialValue: _module,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '所属模块'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('全部所属模块'),
+                      ),
+                      ..._options.modules.map(
+                        (module) => DropdownMenuItem(
+                          value: module,
+                          child: Text(
+                            OperationLogPresentation.moduleLabel(module),
                           ),
                         ),
-                      ],
-                      onChanged: (value) => setState(() => _userId = value),
-                    ),
+                      ),
+                    ],
+                    onChanged: (value) => setState(() => _module = value),
                   ),
                 ),
-                _FilterBox(
-                  child: KeyedSubtree(
-                    key: const ValueKey('operation-log-module-filter'),
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(_module),
-                      initialValue: _module,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '模块'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('全部模块'),
-                        ),
-                        ..._options.modules.map(
-                          (module) => DropdownMenuItem(
-                            value: module,
-                            child: Text(module),
+              ),
+              _FilterBox(
+                child: KeyedSubtree(
+                  key: const ValueKey('operation-log-type-filter'),
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey(_operationType),
+                    initialValue: _operationType,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '操作类型'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('全部类型'),
+                      ),
+                      ..._options.operationTypes.map(
+                        (option) => DropdownMenuItem(
+                          value: option.value,
+                          child: Text(
+                            OperationLogPresentation.operationLabel(
+                              option.value,
+                              '',
+                            ),
                           ),
                         ),
-                      ],
-                      onChanged: (value) => setState(() => _module = value),
-                    ),
+                      ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _operationType = value),
                   ),
                 ),
-                _FilterBox(
-                  child: KeyedSubtree(
-                    key: const ValueKey('operation-log-type-filter'),
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(_operationType),
-                      initialValue: _operationType,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '操作类型'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('全部类型'),
+              ),
+              _FilterBox(
+                child: KeyedSubtree(
+                  key: const ValueKey('operation-log-result-filter'),
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey(_result),
+                    initialValue: _result,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '操作结果'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('全部结果'),
+                      ),
+                      ..._options.results.map(
+                        (option) => DropdownMenuItem(
+                          value: option.value,
+                          child: Text(option.label),
                         ),
-                        ..._options.operationTypes.map(
-                          (option) => DropdownMenuItem(
-                            value: option.value,
-                            child: Text(option.label),
-                          ),
-                        ),
-                      ],
-                      onChanged: (value) =>
-                          setState(() => _operationType = value),
-                    ),
+                      ),
+                    ],
+                    onChanged: (value) => setState(() => _result = value),
                   ),
                 ),
-                _FilterBox(
-                  child: KeyedSubtree(
-                    key: const ValueKey('operation-log-result-filter'),
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(_result),
-                      initialValue: _result,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '结果'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('全部结果'),
-                        ),
-                        ..._options.results.map(
-                          (option) => DropdownMenuItem(
-                            value: option.value,
-                            child: Text(option.label),
-                          ),
-                        ),
-                      ],
-                      onChanged: (value) => setState(() => _result = value),
-                    ),
+              ),
+              _FilterBox(
+                width: 220,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('operation-log-date-filter'),
+                  onPressed: _chooseDateRange,
+                  icon: const Icon(Icons.date_range_rounded),
+                  label: Text(
+                    _dateRange == null
+                        ? '操作时间'
+                        : '${_date(_dateRange!.start)} 至 '
+                            '${_date(_dateRange!.end)}',
                   ),
                 ),
-                _FilterBox(
-                  width: 260,
-                  child: TextField(
-                    key: const ValueKey('operation-log-keyword-filter'),
-                    controller: _keywordController,
-                    decoration: const InputDecoration(
-                      labelText: '业务对象或关键词',
-                      prefixIcon: Icon(Icons.search_rounded),
-                    ),
-                    onSubmitted: (_) => _loadPage(),
+              ),
+              _FilterBox(
+                width: 210,
+                child: TextField(
+                  key: const ValueKey('operation-log-keyword-filter'),
+                  controller: _keywordController,
+                  decoration: const InputDecoration(
+                    labelText: '关键词',
+                    hintText: '用户名、订单编号、商品名称',
+                    prefixIcon: Icon(Icons.search_rounded),
                   ),
+                  onSubmitted: (_) => _loadPage(),
                 ),
-                _FilterBox(
+              ),
+            ],
+          ),
+          ExpansionTile(
+            key: const ValueKey('operation-log-more-filters'),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 8),
+            title: const Text('更多筛选'),
+            dense: true,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: _FilterBox(
                   child: TextField(
                     key: const ValueKey('operation-log-ip-filter'),
                     controller: _ipController,
@@ -462,60 +499,48 @@ class _OperationLogsPageState extends State<OperationLogsPage> {
                     onSubmitted: (_) => _loadPage(),
                   ),
                 ),
-                SizedBox(
-                  width: 210,
-                  child: OutlinedButton.icon(
-                    key: const ValueKey('operation-log-date-filter'),
-                    onPressed: _chooseDateRange,
-                    icon: const Icon(Icons.date_range_rounded),
-                    label: Text(
-                      _dateRange == null
-                          ? '选择时间范围'
-                          : '${_date(_dateRange!.start)} 至 ${_date(_dateRange!.end)}',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('operation-log-reset-button'),
-                  onPressed: _loading ? null : _reset,
-                  icon: const Icon(Icons.restart_alt_rounded),
-                  label: const Text('重置'),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('operation-log-search-button'),
-                  onPressed: _loading ? null : () => _loadPage(),
-                  icon: const Icon(Icons.search_rounded),
-                  label: const Text('查询'),
-                ),
-                FilledButton.tonalIcon(
-                  key: const ValueKey('operation-log-export-button'),
-                  onPressed: _exporting ? null : _export,
-                  icon: _exporting
-                      ? const SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.download_rounded),
-                  label: const Text('导出 Excel'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('operation-log-reset-button'),
+                onPressed: _loading ? null : _reset,
+                icon: const Icon(Icons.restart_alt_rounded),
+                label: const Text('重置'),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('operation-log-search-button'),
+                onPressed: _loading ? null : () => _loadPage(),
+                icon: const Icon(Icons.search_rounded),
+                label: const Text('查询'),
+              ),
+              FilledButton.tonalIcon(
+                key: const ValueKey('operation-log-export-button'),
+                onPressed: _exporting ? null : _export,
+                icon: _exporting
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_rounded),
+                label: const Text('导出 Excel'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
     return LayoutBuilder(
       builder: (context, constraints) => Card(
         child: constraints.maxWidth < 700
             ? ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 300),
+                constraints: const BoxConstraints(maxHeight: 360),
                 child: SingleChildScrollView(child: content),
               )
             : content,
@@ -608,55 +633,154 @@ class _DesktopLogTable extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       key: const ValueKey('operation-log-desktop-table'),
-      child: Scrollbar(
-        thumbVisibility: true,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SingleChildScrollView(
-            child: DataTable(
-              showCheckboxColumn: false,
-              columns: const [
-                DataColumn(label: Text('时间')),
-                DataColumn(label: Text('操作人')),
-                DataColumn(label: Text('账号 / 角色')),
-                DataColumn(label: Text('模块')),
-                DataColumn(label: Text('动作')),
-                DataColumn(label: Text('业务对象')),
-                DataColumn(label: Text('结果')),
-                DataColumn(label: Text('IP')),
-              ],
-              rows: logs
-                  .map(
-                    (log) => DataRow(
-                      key: ValueKey('operation-log-row-${log.id}'),
-                      onSelectChanged: (_) => onOpen(log),
-                      cells: [
-                        DataCell(Text(_dateTime(log.createdAt))),
-                        DataCell(Text(log.actorNameSnapshot ?? '未知用户')),
-                        DataCell(
-                          Text(
-                            '${log.actorUsernameSnapshot ?? '-'}\n'
-                            '${log.actorRoleSnapshot ?? '-'}',
-                          ),
-                        ),
-                        DataCell(Text(log.module ?? '-')),
-                        DataCell(
-                          ConstrainedBox(
-                            constraints:
-                                const BoxConstraints(maxWidth: 240),
-                            child: Text(log.action),
-                          ),
-                        ),
-                        DataCell(Text(log.entityLabel)),
-                        DataCell(_ResultBadge(result: log.result)),
-                        DataCell(Text(log.ipAddress ?? '-')),
-                      ],
-                    ),
-                  )
-                  .toList(),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          const _LogTableCells(
+            isHeader: true,
+            time: '时间',
+            actor: '操作人',
+            module: '所属模块',
+            operation: '操作类型',
+            object: '操作对象',
+            content: '操作内容',
+            result: '结果',
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.separated(
+              itemCount: logs.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final log = logs[index];
+                final display = OperationLogPresentation.present(log);
+                return InkWell(
+                  key: ValueKey('operation-log-row-${log.id}'),
+                  onTap: () => onOpen(log),
+                  child: _LogTableCells(
+                    time: _dateTime(log.createdAt),
+                    actor: display.actor,
+                    module: display.module,
+                    operation: display.operation,
+                    object: display.object,
+                    content: display.summary,
+                    result: display.result,
+                    display: display,
+                  ),
+                );
+              },
             ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogTableCells extends StatelessWidget {
+  const _LogTableCells({
+    required this.time,
+    required this.actor,
+    required this.module,
+    required this.operation,
+    required this.object,
+    required this.content,
+    required this.result,
+    this.isHeader = false,
+    this.display,
+  });
+
+  final String time;
+  final String actor;
+  final String module;
+  final String operation;
+  final String object;
+  final String content;
+  final String result;
+  final bool isHeader;
+  final OperationLogDisplay? display;
+
+  @override
+  Widget build(BuildContext context) {
+    final headerStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+    final contentColor = display?.isRead == true
+        ? Theme.of(context).colorScheme.onSurfaceVariant
+        : Theme.of(context).colorScheme.onSurface;
+    Widget textCell(String value, {int maxLines = 2}) {
+      return Text(
+        value,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: isHeader
+            ? headerStyle
+            : TextStyle(
+                color: contentColor,
+                fontWeight: value == content && display?.isRead == false
+                    ? FontWeight.w600
+                    : FontWeight.normal,
+              ),
+      );
+    }
+
+    return Container(
+      color: isHeader
+          ? Theme.of(context).colorScheme.surfaceContainerHighest
+          : null,
+      constraints: BoxConstraints(minHeight: isHeader ? 46 : 70),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(flex: 18, child: textCell(time)),
+          const SizedBox(width: 8),
+          Expanded(flex: 13, child: textCell(actor)),
+          const SizedBox(width: 8),
+          Expanded(flex: 13, child: textCell(module)),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 12,
+            child: isHeader
+                ? textCell(operation)
+                : _OperationBadge(display: display!),
+          ),
+          const SizedBox(width: 8),
+          Expanded(flex: 18, child: textCell(object)),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 34,
+            child: isHeader
+                ? textCell(content)
+                : Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      if (display!.isImportant) const _ImportantBadge(),
+                      Text(
+                        content,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: contentColor,
+                          fontWeight: display!.isRead
+                              ? FontWeight.normal
+                              : FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 10,
+            child: isHeader
+                ? textCell(result)
+                : _ResultBadge(result: display!.result),
+          ),
+        ],
       ),
     );
   }
@@ -676,6 +800,7 @@ class _MobileLogList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final log = logs[index];
+        final display = OperationLogPresentation.present(log);
         return Card(
           key: ValueKey('operation-log-card-${log.id}'),
           child: InkWell(
@@ -689,25 +814,39 @@ class _MobileLogList extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          log.action,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _OperationBadge(display: display),
+                            if (display.isImportant) const _ImportantBadge(),
+                          ],
                         ),
                       ),
-                      _ResultBadge(result: log.result),
+                      _ResultBadge(result: display.result),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '${log.actorNameSnapshot ?? '未知用户'} · '
-                    '${log.actorUsernameSnapshot ?? '-'} · '
-                    '${log.actorRoleSnapshot ?? '-'}',
+                    display.summary,
+                    style: TextStyle(
+                      fontWeight:
+                          display.isRead ? FontWeight.normal : FontWeight.w600,
+                      color: display.isRead
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : null,
+                    ),
                   ),
                   const SizedBox(height: 4),
-                  Text('${log.module ?? '-'} · ${log.entityLabel}'),
+                  Text(
+                    '${display.actor} · ${display.module} · ${display.object}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                    '${_dateTime(log.createdAt)} · ${log.ipAddress ?? '-'}',
+                    _dateTime(log.createdAt),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
@@ -719,6 +858,61 @@ class _MobileLogList extends StatelessWidget {
   }
 }
 
+class _OperationBadge extends StatelessWidget {
+  const _OperationBadge({required this.display});
+
+  final OperationLogDisplay display;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = display.isRead
+        ? Theme.of(context).colorScheme.outline
+        : Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: display.isRead ? 0.08 : 0.12),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Text(
+        display.operation,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: display.isRead ? FontWeight.w500 : FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _ImportantBadge extends StatelessWidget {
+  const _ImportantBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('operation-log-important-badge'),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: Colors.red.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        '重要操作',
+        style: TextStyle(
+          color: Colors.red.shade800,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
 class _ResultBadge extends StatelessWidget {
   const _ResultBadge({required this.result});
 
@@ -726,12 +920,10 @@ class _ResultBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final success = result == 'SUCCESS';
+    final success = result == 'SUCCESS' || result == '成功';
     return Container(
       key: ValueKey(
-        success
-            ? 'operation-log-success-badge'
-            : 'operation-log-failure-badge',
+        success ? 'operation-log-success-badge' : 'operation-log-failure-badge',
       ),
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
@@ -797,6 +989,7 @@ class _OperationLogDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final display = OperationLogPresentation.present(log);
     return Dialog(
       key: const ValueKey('operation-log-detail-dialog'),
       child: ConstrainedBox(
@@ -808,7 +1001,7 @@ class _OperationLogDetailDialog extends StatelessWidget {
                 '日志详情',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: Text('${log.action} · ${_dateTime(log.createdAt)}'),
+              subtitle: Text('${display.module} · ${display.operation}'),
               trailing: IconButton(
                 onPressed: () => Navigator.of(context).pop(),
                 icon: const Icon(Icons.close_rounded),
@@ -819,63 +1012,52 @@ class _OperationLogDetailDialog extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  Wrap(
-                    spacing: 20,
-                    runSpacing: 8,
-                    children: [
-                      _DetailField(
-                        label: '操作人',
-                        value: log.actorNameSnapshot ?? '未知用户',
-                      ),
-                      _DetailField(
-                        label: '账号',
-                        value: log.actorUsernameSnapshot ?? '-',
-                      ),
-                      _DetailField(
-                        label: '角色',
-                        value: log.actorRoleSnapshot ?? '-',
-                      ),
-                      _DetailField(
-                        label: '结果',
-                        value: log.result == 'SUCCESS' ? '成功' : '失败',
-                      ),
-                      _DetailField(
-                        label: '请求编号',
-                        value: log.requestId ?? '-',
-                      ),
-                      _DetailField(
-                        label: 'HTTP',
-                        value:
-                            '${log.httpMethod ?? '-'} ${log.requestPath ?? '-'}',
-                      ),
-                      _DetailField(
-                        label: '状态 / 耗时',
-                        value:
-                            '${log.statusCode ?? '-'} / ${log.durationMs ?? '-'} ms',
-                      ),
-                      _DetailField(
-                        label: '错误码',
-                        value: log.errorCode ?? '-',
-                      ),
-                    ],
+                  Container(
+                    key: const ValueKey('operation-log-plain-summary'),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primaryContainer
+                          .withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.auto_awesome_rounded,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            display.summary,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 16),
-                  _JsonSection(
-                    key: const ValueKey('operation-log-before-data'),
-                    title: '修改前',
-                    value: log.beforeData,
+                  _BasicInformation(
+                    log: log,
+                    display: display,
                   ),
-                  const SizedBox(height: 12),
-                  _JsonSection(
-                    key: const ValueKey('operation-log-after-data'),
-                    title: '修改后',
-                    value: log.afterData,
-                  ),
-                  const SizedBox(height: 12),
-                  _JsonSection(
-                    title: '请求摘要',
-                    value: log.requestSummary,
-                  ),
+                  if (display.comparisons.isNotEmpty &&
+                      (display.detailKind == OperationLogDetailKind.update ||
+                          display.detailKind ==
+                              OperationLogDetailKind.review)) ...[
+                    const SizedBox(height: 16),
+                    _ComparisonSection(rows: display.comparisons),
+                  ],
+                  for (final section in display.sections) ...[
+                    const SizedBox(height: 16),
+                    _BusinessDetailSection(section: section),
+                  ],
                 ],
               ),
             ),
@@ -886,47 +1068,273 @@ class _OperationLogDetailDialog extends StatelessWidget {
   }
 }
 
-class _DetailField extends StatelessWidget {
-  const _DetailField({required this.label, required this.value});
+class _BasicInformation extends StatelessWidget {
+  const _BasicInformation({required this.log, required this.display});
+
+  final OperationLogEntry log;
+  final OperationLogDisplay display;
+
+  @override
+  Widget build(BuildContext context) {
+    final fields = [
+      _DetailValue(
+        label: '操作时间',
+        value: OperationLogPresentation.formatDateTime(log.createdAt),
+      ),
+      _DetailValue(label: '操作人', value: display.actor),
+      _DetailValue(label: '所属模块', value: display.module),
+      _DetailValue(label: '操作类型', value: display.operation),
+      _DetailValue(label: '操作结果', value: display.result),
+      _DetailValue(label: '操作对象', value: display.object),
+      if (display.failureReason != null)
+        _DetailValue(label: '失败原因', value: display.failureReason!),
+    ];
+    return _DetailCard(
+      title: '基本信息',
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: fields
+            .map(
+              (field) => SizedBox(
+                width: 250,
+                child: field,
+              ),
+            )
+            .toList(growable: false),
+      ),
+    );
+  }
+}
+
+class _DetailValue extends StatelessWidget {
+  const _DetailValue({required this.label, required this.value});
 
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(width: 250, child: Text('$label：$value'));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+        const SizedBox(height: 3),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+    );
   }
 }
 
-class _JsonSection extends StatelessWidget {
-  const _JsonSection({
-    super.key,
-    required this.title,
-    required this.value,
-  });
+class _BusinessDetailSection extends StatelessWidget {
+  const _BusinessDetailSection({required this.section});
 
-  final String title;
-  final dynamic value;
+  final OperationLogDetailSection section;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
+    return _DetailCard(
+      title: section.title,
+      child: Column(
+        children: [
+          for (var index = 0; index < section.rows.length; index++) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 150,
+                    child: Text(
+                      section.rows[index].label,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SelectableText(
+                      section.rows[index].value,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (index < section.rows.length - 1) const Divider(height: 1),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ComparisonSection extends StatelessWidget {
+  const _ComparisonSection({required this.rows});
+
+  final List<OperationLogComparison> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = Theme.of(context).dividerColor;
+    return _DetailCard(
+      key: const ValueKey('operation-log-comparison'),
+      title: '修改前后对比',
+      padding: EdgeInsets.zero,
+      child: Table(
+        key: const ValueKey('operation-log-comparison-table'),
+        border: TableBorder.symmetric(inside: BorderSide(color: borderColor)),
+        columnWidths: const {
+          0: FlexColumnWidth(1.3),
+          1: FlexColumnWidth(2),
+          2: FlexColumnWidth(2),
+        },
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        children: [
+          TableRow(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            ),
+            children: const [
+              _ComparisonCell(text: '内容', isHeader: true),
+              _ComparisonCell(text: '修改前', isHeader: true),
+              _ComparisonCell(text: '修改后', isHeader: true),
+            ],
           ),
-          child: SelectableText(
-            _formatJson(value),
-            style: const TextStyle(fontFamily: 'monospace'),
+          for (final row in rows)
+            TableRow(
+              key: ValueKey(
+                'operation-log-comparison-${row.label}-${row.changed}',
+              ),
+              decoration: row.changed
+                  ? BoxDecoration(
+                      color: Colors.amber.withValues(alpha: 0.1),
+                    )
+                  : null,
+              children: [
+                _ComparisonCell(
+                  text: row.label,
+                  changed: row.changed,
+                ),
+                _ComparisonCell(
+                  text: row.before,
+                  changed: row.changed,
+                  before: true,
+                ),
+                _ComparisonCell(
+                  text: row.after,
+                  changed: row.changed,
+                  after: true,
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComparisonCell extends StatelessWidget {
+  const _ComparisonCell({
+    required this.text,
+    this.isHeader = false,
+    this.changed = false,
+    this.before = false,
+    this.after = false,
+  });
+
+  final String text;
+  final bool isHeader;
+  final bool changed;
+  final bool before;
+  final bool after;
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = changed && before
+        ? Colors.red.shade700
+        : changed && after
+            ? Colors.green.shade800
+            : null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SelectableText(
+            text,
+            style: TextStyle(
+              color: textColor,
+              fontWeight: isHeader || (changed && after)
+                  ? FontWeight.w700
+                  : FontWeight.normal,
+            ),
           ),
-        ),
-      ],
+          if (changed && after)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(99),
+              ),
+              child: Text(
+                '已修改',
+                style: TextStyle(
+                  color: Colors.green.shade800,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailCard extends StatelessWidget {
+  const _DetailCard({
+    super.key,
+    required this.title,
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  final String title;
+  final Widget child;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(padding: padding, child: child),
+        ],
+      ),
     );
   }
 }
@@ -1028,90 +1436,6 @@ class OperationLogPageResult {
       pageSize: _int(json['pageSize'], 20),
       total: _int(json['total'], 0),
       totalPages: _int(json['totalPages'], 0),
-    );
-  }
-}
-
-class OperationLogEntry {
-  const OperationLogEntry({
-    required this.id,
-    required this.action,
-    required this.entityType,
-    required this.result,
-    required this.createdAt,
-    this.userId,
-    this.actorNameSnapshot,
-    this.actorUsernameSnapshot,
-    this.actorRoleSnapshot,
-    this.module,
-    this.operationType,
-    this.entityId,
-    this.beforeData,
-    this.afterData,
-    this.requestSummary,
-    this.httpMethod,
-    this.requestPath,
-    this.requestId,
-    this.statusCode,
-    this.errorCode,
-    this.durationMs,
-    this.ipAddress,
-    this.archived = false,
-  });
-
-  final String id;
-  final String? userId;
-  final String? actorNameSnapshot;
-  final String? actorUsernameSnapshot;
-  final String? actorRoleSnapshot;
-  final String? module;
-  final String? operationType;
-  final String action;
-  final String entityType;
-  final String? entityId;
-  final String result;
-  final dynamic beforeData;
-  final dynamic afterData;
-  final dynamic requestSummary;
-  final String? httpMethod;
-  final String? requestPath;
-  final String? requestId;
-  final int? statusCode;
-  final String? errorCode;
-  final int? durationMs;
-  final String? ipAddress;
-  final bool archived;
-  final DateTime createdAt;
-
-  String get entityLabel =>
-      entityId == null ? entityType : '$entityType · $entityId';
-
-  factory OperationLogEntry.fromJson(Map<String, dynamic> json) {
-    return OperationLogEntry(
-      id: '${json['id'] ?? ''}',
-      userId: _string(json['userId']),
-      actorNameSnapshot: _string(json['actorNameSnapshot']),
-      actorUsernameSnapshot: _string(json['actorUsernameSnapshot']),
-      actorRoleSnapshot: _string(json['actorRoleSnapshot']),
-      module: _string(json['module']),
-      operationType: _string(json['operationType']),
-      action: '${json['action'] ?? ''}',
-      entityType: '${json['entityType'] ?? ''}',
-      entityId: _string(json['entityId']),
-      result: '${json['result'] ?? 'SUCCESS'}'.toUpperCase(),
-      beforeData: json['beforeData'],
-      afterData: json['afterData'],
-      requestSummary: json['requestSummary'],
-      httpMethod: _string(json['httpMethod']),
-      requestPath: _string(json['requestPath']),
-      requestId: _string(json['requestId']),
-      statusCode: _nullableInt(json['statusCode']),
-      errorCode: _string(json['errorCode']),
-      durationMs: _nullableInt(json['durationMs']),
-      ipAddress: _string(json['ipAddress']),
-      archived: json['archived'] == true,
-      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}') ??
-          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
   }
 }
@@ -1228,16 +1552,12 @@ String? _string(dynamic value) {
 
 int _int(dynamic value, int fallback) => int.tryParse('$value') ?? fallback;
 
-int? _nullableInt(dynamic value) =>
-    value == null ? null : int.tryParse('$value');
-
 String? _nonEmpty(String? value) {
   final normalized = value?.trim() ?? '';
   return normalized.isEmpty ? null : normalized;
 }
 
-String _date(DateTime value) =>
-    '${value.year.toString().padLeft(4, '0')}-'
+String _date(DateTime value) => '${value.year.toString().padLeft(4, '0')}-'
     '${value.month.toString().padLeft(2, '0')}-'
     '${value.day.toString().padLeft(2, '0')}';
 
@@ -1249,22 +1569,12 @@ String _dateTime(DateTime value) {
       '${local.second.toString().padLeft(2, '0')}';
 }
 
-String _formatJson(dynamic value) {
-  if (value == null) return '暂无数据';
-  try {
-    return const JsonEncoder.withIndent('  ').convert(value);
-  } catch (_) {
-    return '$value';
-  }
-}
-
 String _messageFor(Object error) {
   return error is ApiException ? error.message : '请求失败，请稍后重试。';
 }
 
 String _safeFileName(String value) {
-  final sanitized = value
-      .replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001f]'), '_')
-      .trim();
+  final sanitized =
+      value.replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001f]'), '_').trim();
   return sanitized.isEmpty ? '操作日志.xlsx' : sanitized;
 }

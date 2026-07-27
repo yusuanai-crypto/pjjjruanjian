@@ -128,12 +128,13 @@ test('unit: AI mock mode returns predictable Chinese answer without network', as
   assert.equal(result.modelName, 'jiangjiu-ai-mock');
   assert.equal(result.latencyMs, 0);
   assert.deepEqual(result.warnings, ['样例提示']);
-  assert.match(result.answer, /查询范围：2026-07-04 至 2026-07-04/);
-  assert.match(result.answer, /老板可见经营统计/);
-  assert.match(result.answer, /只查询已标记信息/);
-  assert.match(result.answer, /analytics\.overview/);
+  assert.match(result.answer, /统计时间是 2026-07-04 至 2026-07-04/);
+  assert.match(result.answer, /当前账号可以查看的数据/);
+  assert.match(result.answer, /目前只统计已标记的数据/);
   assert.match(result.answer, /净销售额 950\.00 元/);
-  assert.match(result.answer, /返回 3 行/);
+  assert.match(result.answer, /净销售额是销售金额减去已确认退款后的金额/);
+  assert.equal(result.answer.includes('analytics.overview'), false);
+  assert.equal(result.answer.includes('返回 3 行'), false);
 });
 
 test('unit: AI real-provider mode rejects missing API key before network', async () => {

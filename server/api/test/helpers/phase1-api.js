@@ -21,6 +21,9 @@ const {
 } = require('../../src/common/rate-limit/rate-limit.tokens');
 const { hashPassword } = require('../../src/modules/auth/password');
 const { PrismaService } = require('../../src/prisma/prisma.service');
+const {
+  SettingsNestService,
+} = require('../../src/modules/settings/settings.nest.service');
 
 const BOOTSTRAP_ADMIN_PASSWORD =
   'test-only-bootstrap-admin-password';
@@ -112,6 +115,8 @@ async function withNestApiServer(run, options = {}) {
     AI_RATE_LIMIT_WINDOW_SECONDS:
       process.env.AI_RATE_LIMIT_WINDOW_SECONDS,
     TRUSTED_PROXY_IPS: process.env.TRUSTED_PROXY_IPS,
+    GLOBAL_MARK_QUERY_HEARTBEAT_INTERVAL_MS:
+      process.env.GLOBAL_MARK_QUERY_HEARTBEAT_INTERVAL_MS,
   };
 
   process.env.PHASE0_CONFIRMATION_STORE = stores.phase0StorePath;
@@ -160,7 +165,11 @@ async function withNestApiServer(run, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    await run(baseUrl, { prisma, stores });
+    await run(baseUrl, {
+      prisma,
+      settingsService: moduleFixture.get(SettingsNestService),
+      stores,
+    });
   } finally {
     stage10FixtureCatalogs.delete(baseUrl);
     stage10FixtureAdminTokens.delete(baseUrl);
@@ -204,9 +213,12 @@ function createInMemoryPrisma(options = {}) {
       null,
       now,
     ),
+    createSystemSetting('global_mark_query_revision', '0', null, now),
   ];
   const operationLogs = [];
   const operationLogArchives = [];
+  const businessTodos = [];
+  const todoRecipients = [];
   const smsVerificationCodes = [];
   const refreshSessions = [];
   const aiChatMessages = [];
@@ -221,13 +233,31 @@ function createInMemoryPrisma(options = {}) {
   const customers = [];
   const salesOrders = [];
   const salesOrderItems = [];
+  const inventoryConfigurations = [];
+  const warehouses = [];
+  const warehouseProductStocks = [];
+  const inventoryReservations = [];
+  const inventoryCommandReceipts = [];
+  const inventoryDocuments = [];
+  const inventoryDocumentLines = [];
+  const inventoryMovements = [];
+  const inventoryPostCommitTasks = [];
+  const inventoryBatches = [];
+  const inventoryAlerts = [];
+  const serializedInventoryUnits = [];
+  const serializedInventoryAssignments = [];
   const afterSalesOrders = [];
+  const afterSalesOrderItems = [];
+  const afterSalesReceipts = [];
+  const afterSalesReceiptLines = [];
+  const afterSalesReceiptSerializedUnits = [];
   const commissionRules = [];
   const salesDeductionRules = [];
   const agencyDeductionRules = [];
   const agencyRebateRules = [];
   const commissionRecords = [];
   const travelGroupFinanceSummaries = [];
+  const guidePointsSummaries = [];
   let failSalesOrderCreateOrderNoOnce = Boolean(
     options.failSalesOrderCreateOrderNoOnce,
   );
@@ -242,10 +272,64 @@ function createInMemoryPrisma(options = {}) {
     now,
     true,
   );
+  seedTravelAgencies(
+    travelAgencies,
+    options.travelAgencies || [],
+    now,
+  );
+  seedGuides(guides, options.guides || [], now);
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
+  seedSimpleRows(
+    inventoryConfigurations,
+    options.inventoryConfigurations || [],
+    now,
+  );
+  seedSimpleRows(warehouses, options.warehouses || [], now);
+  seedSimpleRows(
+    warehouseProductStocks,
+    options.warehouseProductStocks || [],
+    now,
+  );
+  seedSimpleRows(
+    inventoryReservations,
+    options.inventoryReservations || [],
+    now,
+  );
+  seedSimpleRows(inventoryBatches, options.inventoryBatches || [], now);
+  seedSimpleRows(inventoryAlerts, options.inventoryAlerts || [], now);
+  seedSimpleRows(
+    serializedInventoryUnits,
+    options.serializedInventoryUnits || [],
+    now,
+  );
+  seedSimpleRows(
+    serializedInventoryAssignments,
+    options.serializedInventoryAssignments || [],
+    now,
+  );
   seedAfterSalesOrders(afterSalesOrders, options.afterSalesOrders || [], now);
+  seedAfterSalesOrderItems(
+    afterSalesOrderItems,
+    options.afterSalesOrderItems || [],
+    now,
+  );
+  seedSimpleRows(
+    afterSalesReceipts,
+    options.afterSalesReceipts || [],
+    now,
+  );
+  seedSimpleRows(
+    afterSalesReceiptLines,
+    options.afterSalesReceiptLines || [],
+    now,
+  );
+  seedSimpleRows(
+    afterSalesReceiptSerializedUnits,
+    options.afterSalesReceiptSerializedUnits || [],
+    now,
+  );
   seedRuleRows(commissionRules, options.commissionRules || [], now);
   seedRuleRows(salesDeductionRules, options.salesDeductionRules || [], now);
   seedRuleRows(agencyDeductionRules, options.agencyDeductionRules || [], now);
@@ -256,11 +340,18 @@ function createInMemoryPrisma(options = {}) {
     options.travelGroupFinanceSummaries || [],
     now,
   );
+  seedGuidePointsSummaries(
+    guidePointsSummaries,
+    options.guidePointsSummaries || [],
+    now,
+  );
   const transactionalRows = [
     users,
     systemSettings,
     operationLogs,
     operationLogArchives,
+    businessTodos,
+    todoRecipients,
     smsVerificationCodes,
     refreshSessions,
     aiChatMessages,
@@ -275,13 +366,31 @@ function createInMemoryPrisma(options = {}) {
     customers,
     salesOrders,
     salesOrderItems,
+    inventoryConfigurations,
+    warehouses,
+    warehouseProductStocks,
+    inventoryReservations,
+    inventoryCommandReceipts,
+    inventoryDocuments,
+    inventoryDocumentLines,
+    inventoryMovements,
+    inventoryPostCommitTasks,
+    inventoryBatches,
+    inventoryAlerts,
+    serializedInventoryUnits,
+    serializedInventoryAssignments,
     afterSalesOrders,
+    afterSalesOrderItems,
+    afterSalesReceipts,
+    afterSalesReceiptLines,
+    afterSalesReceiptSerializedUnits,
     commissionRules,
     salesDeductionRules,
     agencyDeductionRules,
     agencyRebateRules,
     commissionRecords,
     travelGroupFinanceSummaries,
+    guidePointsSummaries,
     dailyReconciliations,
     reconciliationPaymentMethods,
     strikeBonusAwards,
@@ -540,6 +649,127 @@ function createInMemoryPrisma(options = {}) {
         return { count };
       },
     },
+    businessTodo: {
+      findUnique: async ({ where } = {}) => {
+        const row = businessTodos.find((item) =>
+          matchesBusinessTodoUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      findMany: async ({ where, orderBy, skip, take } = {}) => {
+        const rows = sortRows(
+          businessTodos
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        );
+        const start = skip || 0;
+        return rows.slice(start, take ? start + take : rows.length);
+      },
+      create: async ({ data } = {}) => {
+        if (
+          businessTodos.some(
+            (item) =>
+              item.ruleCode === data.ruleCode &&
+              item.sourceType === data.sourceType &&
+              item.sourceId === data.sourceId,
+          )
+        ) {
+          throw createPrismaUniqueError('business_todo');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          firstDetectedAt:
+            asDate(data.firstDetectedAt) || new Date(),
+          lastDetectedAt:
+            asDate(data.lastDetectedAt) || new Date(),
+          dueAt: asDate(data.dueAt) || new Date(),
+          resolvedAt: asDate(data.resolvedAt),
+          createdAt: asDate(data.createdAt) || new Date(),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        businessTodos.push(row);
+        return copyRow(row);
+      },
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(businessTodos, where, data),
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(businessTodos, where, data),
+      count: async ({ where } = {}) =>
+        businessTodos.filter((item) => matchesWhere(item, where)).length,
+    },
+    todoRecipient: {
+      upsert: async ({ where, update, create } = {}) => {
+        const index = todoRecipients.findIndex((item) =>
+          matchesTodoRecipientUnique(item, where),
+        );
+        if (index >= 0) {
+          todoRecipients[index] = {
+            ...applyAtomicUpdateData(todoRecipients[index], update),
+            updatedAt: new Date(),
+          };
+          return copyRow(todoRecipients[index]);
+        }
+        const row = {
+          ...create,
+          id: create.id || crypto.randomUUID(),
+          readAt: null,
+          personalNote: null,
+          personalRemindAt: null,
+          snoozedUntil: null,
+          archivedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        todoRecipients.push(row);
+        return copyRow(row);
+      },
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(todoRecipients, where, data),
+      findFirst: async ({ where, include } = {}) => {
+        const row = todoRecipients.find((item) =>
+          matchesWhere(item, where),
+        );
+        if (!row) return null;
+        return include?.todo
+          ? {
+              ...copyRow(row),
+              todo:
+                copyRow(
+                  businessTodos.find(
+                    (todo) => todo.id === row.todoId,
+                  ),
+                ) || null,
+            }
+          : copyRow(row);
+      },
+      findMany: async ({ where, include, orderBy, skip, take } = {}) => {
+        const rows = sortRows(
+          todoRecipients
+            .filter((item) => matchesWhere(item, where))
+            .map((item) => {
+              const row = copyRow(item);
+              if (include?.todo) {
+                row.todo =
+                  copyRow(
+                    businessTodos.find(
+                      (todo) => todo.id === item.todoId,
+                    ),
+                  ) || null;
+              }
+              return row;
+            }),
+          orderBy,
+        );
+        const start = skip || 0;
+        return rows.slice(start, take ? start + take : rows.length);
+      },
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(todoRecipients, where, data),
+      count: async ({ where } = {}) =>
+        todoRecipients.filter((item) => matchesWhere(item, where)).length,
+    },
     smsVerificationCode: {
       create: async ({ data }) => {
         if (
@@ -673,6 +903,17 @@ function createInMemoryPrisma(options = {}) {
         users,
       },
     ),
+    guidePointsSummary: createGuidePointsSummaryDelegate(
+      guidePointsSummaries,
+      {
+        travelGroups,
+        guides,
+        users,
+        failCreateOnce: Boolean(
+          options.failGuidePointsSummaryCreateOnce,
+        ),
+      },
+    ),
     travelGroup: createTravelGroupDelegate(travelGroups, {
       failUpdateOnce: Boolean(options.failTravelGroupUpdateOnce),
       tastingItems: travelGroupTastingItems,
@@ -683,21 +924,415 @@ function createInMemoryPrisma(options = {}) {
     guideCarriedGroup: createTravelGroupDelegate(guideCarriedGroups),
     pendingTravelGroup: createTravelGroupDelegate(pendingTravelGroups),
     customer: createCustomerDelegate(customers),
+    inventoryConfiguration: createSimpleInventoryDelegate(
+      inventoryConfigurations,
+      {
+        uniqueFields: ['id', 'singletonKey'],
+      },
+    ),
+    warehouse: createSimpleInventoryDelegate(warehouses, {
+      uniqueFields: [
+        'id',
+        'normalizedCode',
+        'normalizedName',
+        'activeDefaultKey',
+      ],
+    }),
+    warehouseProductStock: {
+      findUnique: async ({ where } = {}) => {
+        const row = warehouseProductStocks.find((item) =>
+          matchesWarehouseProductUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      create: async ({ data } = {}) => {
+        if (
+          warehouseProductStocks.some(
+            (item) =>
+              item.warehouseId === data.warehouseId &&
+              item.productId === data.productId,
+          )
+        ) {
+          throw createPrismaUniqueError(
+            'warehouse_id_product_id',
+          );
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          onHandQty: Number(data.onHandQty || 0),
+          reservedQty: Number(data.reservedQty || 0),
+          unavailableQty: Number(data.unavailableQty || 0),
+          inTransitQty: Number(data.inTransitQty || 0),
+          version: Number(data.version || 0),
+          lastMovementId: data.lastMovementId || null,
+          createdAt: asDate(data.createdAt) || new Date(),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        warehouseProductStocks.push(row);
+        return copyRow(row);
+      },
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(
+          warehouseProductStocks,
+          where,
+          data,
+        ),
+    },
+    inventoryReservation: {
+      findUnique: async ({ where } = {}) => {
+        const row = inventoryReservations.find((item) =>
+          matchesInventoryReservationUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      findMany: async ({ where, orderBy } = {}) =>
+        sortRows(
+          inventoryReservations
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        ),
+      create: async ({ data } = {}) => {
+        if (
+          inventoryReservations.some(
+            (item) =>
+              item.sourceKey === data.sourceKey ||
+              (item.salesOrderId === data.salesOrderId &&
+                item.inventoryLineKey === data.inventoryLineKey),
+          )
+        ) {
+          throw createPrismaUniqueError('inventory_reservation');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          requestedQty: Number(data.requestedQty || 0),
+          reservedQty: Number(data.reservedQty || 0),
+          assignedQty: Number(data.assignedQty || 0),
+          outboundQty: Number(data.outboundQty || 0),
+          version: Number(data.version || 0),
+          releasedAt: asDate(data.releasedAt),
+          consumedAt: asDate(data.consumedAt),
+          createdAt: asDate(data.createdAt) || new Date(),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        inventoryReservations.push(row);
+        return copyRow(row);
+      },
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(inventoryReservations, where, data),
+    },
+    inventoryCommandReceipt: {
+      findUnique: async ({ where } = {}) => {
+        const row = inventoryCommandReceipts.find((item) =>
+          matchesUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      create: async ({ data } = {}) => {
+        if (
+          inventoryCommandReceipts.some(
+            (item) =>
+              item.sourceKey === data.sourceKey ||
+              item.idempotencyKey === data.idempotencyKey,
+          )
+        ) {
+          throw createPrismaUniqueError(
+            'inventory_command_receipt',
+          );
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          resultDocumentId: null,
+          resultSnapshot: null,
+          completedAt: null,
+          errorCode: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        inventoryCommandReceipts.push(row);
+        return copyRow(row);
+      },
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(
+          inventoryCommandReceipts,
+          where,
+          data,
+        ),
+    },
+    inventoryDocument: {
+      findUnique: async ({ where, include } = {}) => {
+        const row = inventoryDocuments.find((item) =>
+          matchesUnique(item, where),
+        );
+        if (!row) return null;
+        const expanded = copyRow(row);
+        if (include?.reversedByDocument) {
+          const reversal = inventoryDocuments.find(
+            (item) => item.reversalOfDocumentId === row.id,
+          );
+          expanded.reversedByDocument = reversal
+            ? { id: reversal.id }
+            : null;
+        }
+        if (include?.lines) {
+          expanded.lines = sortRows(
+            inventoryDocumentLines
+              .filter((line) => line.documentId === row.id)
+              .map((line) => ({
+                ...copyRow(line),
+                movements: inventoryMovements
+                  .filter(
+                    (movement) =>
+                      movement.documentLineId === line.id,
+                  )
+                  .map(copyRow),
+              })),
+            include.lines.orderBy,
+          );
+        }
+        return expanded;
+      },
+      findMany: async ({ where, orderBy } = {}) =>
+        sortRows(
+          inventoryDocuments
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        ),
+      create: async ({ data } = {}) => {
+        if (
+          inventoryDocuments.some(
+            (item) =>
+              item.sourceKey === data.sourceKey ||
+              item.documentNo === data.documentNo,
+          )
+        ) {
+          throw createPrismaUniqueError('inventory_document');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        inventoryDocuments.push(row);
+        return copyRow(row);
+      },
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(inventoryDocuments, where, data),
+    },
+    inventoryDocumentLine: {
+      create: async ({ data } = {}) => {
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          createdAt: new Date(),
+        };
+        inventoryDocumentLines.push(row);
+        return copyRow(row);
+      },
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(
+          inventoryDocumentLines,
+          where,
+          data,
+        ),
+    },
+    inventoryMovement: {
+      create: async ({ data } = {}) => {
+        if (
+          inventoryMovements.some(
+            (item) => item.sourceKey === data.sourceKey,
+          )
+        ) {
+          throw createPrismaUniqueError('inventory_movement');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          createdAt: new Date(),
+        };
+        inventoryMovements.push(row);
+        return copyRow(row);
+      },
+      findMany: async ({ where, include, orderBy } = {}) =>
+        sortRows(
+          inventoryMovements
+            .filter((item) => matchesWhere(item, where))
+            .map((item) =>
+              include?.reversalOf
+                ? { ...copyRow(item), reversalOf: null }
+                : copyRow(item),
+            ),
+          orderBy,
+        ),
+    },
+    inventoryPostCommitTask: {
+      create: async ({ data } = {}) => {
+        if (
+          inventoryPostCommitTasks.some(
+            (item) => item.sourceKey === data.sourceKey,
+          )
+        ) {
+          throw createPrismaUniqueError(
+            'inventory_post_commit_task',
+          );
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          attempts: Number(data.attempts || 0),
+          nextAttemptAt: asDate(data.nextAttemptAt) || new Date(),
+          lockedAt: asDate(data.lockedAt),
+          completedAt: asDate(data.completedAt),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        inventoryPostCommitTasks.push(row);
+        return copyRow(row);
+      },
+      findFirst: async ({ where, orderBy } = {}) => {
+        const rows = sortRows(
+          inventoryPostCommitTasks
+            .filter((item) => matchesWhere(item, where))
+            .map(copyRow),
+          orderBy,
+        );
+        return rows[0] || null;
+      },
+      findUnique: async ({ where } = {}) => {
+        const row = inventoryPostCommitTasks.find((item) =>
+          matchesUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      findMany: async ({ where, select, orderBy, take } = {}) =>
+        sortRows(
+          inventoryPostCommitTasks
+            .filter((item) => matchesWhere(item, where))
+            .map((item) =>
+              select ? selectRow(item, select) : copyRow(item),
+            ),
+          orderBy,
+        ).slice(0, take || inventoryPostCommitTasks.length),
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(
+          inventoryPostCommitTasks,
+          where,
+          data,
+        ),
+      update: async ({ where, data } = {}) =>
+        updateOneInventoryRow(
+          inventoryPostCommitTasks,
+          where,
+          data,
+        ),
+    },
+    inventoryBatch: {
+      findUnique: async ({ where } = {}) => {
+        const row = inventoryBatches.find((item) =>
+          matchesUnique(item, where),
+        );
+        return row ? copyRow(row) : null;
+      },
+      findMany: async ({ where, select, orderBy } = {}) =>
+        sortRows(
+          inventoryBatches
+            .filter((item) => matchesWhere(item, where))
+            .map((item) =>
+              select ? selectRow(item, select) : copyRow(item),
+            ),
+          orderBy,
+        ),
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(inventoryBatches, where, data),
+    },
+    inventoryAlert: {
+      findMany: async ({ where, select, orderBy } = {}) =>
+        sortRows(
+          inventoryAlerts
+            .filter((item) => matchesWhere(item, where))
+            .map((item) =>
+              select ? selectRow(item, select) : copyRow(item),
+            ),
+          orderBy,
+        ),
+      upsert: async ({ where, update, create } = {}) => {
+        const index = inventoryAlerts.findIndex((item) =>
+          matchesUnique(item, where),
+        );
+        if (index >= 0) {
+          inventoryAlerts[index] = {
+            ...applyAtomicUpdateData(
+              inventoryAlerts[index],
+              update,
+            ),
+            updatedAt: new Date(),
+          };
+          return copyRow(inventoryAlerts[index]);
+        }
+        const row = {
+          ...create,
+          id: create.id || crypto.randomUUID(),
+          resolvedAt: asDate(create.resolvedAt),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        inventoryAlerts.push(row);
+        return copyRow(row);
+      },
+      updateMany: async ({ where, data } = {}) =>
+        updateInventoryRows(inventoryAlerts, where, data),
+    },
+    serializedInventoryUnit: createSerializedInventoryUnitDelegate(
+      serializedInventoryUnits,
+      {
+        serializedInventoryAssignments,
+        inventoryReservations,
+      },
+    ),
+    serializedInventoryAssignment: createSerializedInventoryAssignmentDelegate(
+      serializedInventoryAssignments,
+      serializedInventoryUnits,
+    ),
     salesOrder: {
       findUnique: async ({ where, include } = {}) => {
         const row = salesOrders.find((order) => matchesUnique(order, where));
-        return row
-          ? withSalesOrderIncludes(
-              row,
-              include,
-              salesOrderItems,
-              travelGroups,
-              customers,
-              users,
-              afterSalesOrders,
-              commissionRecords,
+        if (!row) {
+          return null;
+        }
+        const expanded = withSalesOrderIncludes(
+          row,
+          include,
+          salesOrderItems,
+          travelGroups,
+          customers,
+          users,
+          afterSalesOrders,
+          commissionRecords,
+          guides,
+        );
+        if (include?.inventoryAlerts) {
+          const config =
+            typeof include.inventoryAlerts === 'object'
+              ? include.inventoryAlerts
+              : {};
+          expanded.inventoryAlerts = inventoryAlerts
+            .filter(
+              (alert) =>
+                alert.salesOrderId === row.id &&
+                matchesWhere(alert, config.where),
             )
-          : null;
+            .map((alert) =>
+              config.select
+                ? selectRow(alert, config.select)
+                : copyRow(alert),
+            );
+        }
+        return expanded;
       },
       findMany: async ({ where, include, select, orderBy, take } = {}) => {
         const rows = sortRows(
@@ -717,6 +1352,7 @@ function createInMemoryPrisma(options = {}) {
                   users,
                   afterSalesOrders,
                   commissionRecords,
+                  guides,
                 ),
                 where,
               ),
@@ -736,6 +1372,7 @@ function createInMemoryPrisma(options = {}) {
               users,
               afterSalesOrders,
               commissionRecords,
+              guides,
             );
             return select ? selectRow(expanded, select) : expanded;
           });
@@ -750,6 +1387,15 @@ function createInMemoryPrisma(options = {}) {
           updatedAt: asDate(data.updatedAt) || new Date(),
           salesEditCount: data.salesEditCount ?? 0,
           salesEditedAt: asDate(data.salesEditedAt) || null,
+          pointsDestination:
+            data.pointsDestination || 'TRAVEL_AGENCY',
+          fulfillmentWarehouseId:
+            data.fulfillmentWarehouseId ?? null,
+          inventoryAppliedAt:
+            asDate(data.inventoryAppliedAt) || null,
+          inventoryPolicyVersion:
+            data.inventoryPolicyVersion ?? null,
+          inventoryVersion: data.inventoryVersion ?? 0,
         };
         if (failSalesOrderCreateOrderNoOnce) {
           failSalesOrderCreateOrderNoOnce = false;
@@ -780,6 +1426,7 @@ function createInMemoryPrisma(options = {}) {
           users,
           afterSalesOrders,
           commissionRecords,
+          guides,
         );
       },
       updateMany: async ({ where, data } = {}) => {
@@ -832,17 +1479,45 @@ function createInMemoryPrisma(options = {}) {
           users,
           afterSalesOrders,
           commissionRecords,
+          guides,
         );
       },
     },
     afterSalesOrder: createAfterSalesOrderDelegate(afterSalesOrders, {
       salesOrders,
       salesOrderItems,
+      afterSalesOrderItems,
       travelGroups,
       customers,
       users,
       commissionRecords,
+      products,
+      failCreateOnce: Boolean(options.failAfterSalesOrderCreateOnce),
     }),
+    afterSalesOrderItem: createSimpleInventoryDelegate(
+      afterSalesOrderItems,
+      { uniqueFields: ['id'] },
+    ),
+    afterSalesReceipt: createAfterSalesReceiptDelegate(
+      afterSalesReceipts,
+      {
+        afterSalesOrders,
+        afterSalesOrderItems,
+        afterSalesReceiptLines,
+        afterSalesReceiptSerializedUnits,
+        products,
+        warehouses,
+        inventoryBatches,
+        salesOrders,
+      },
+    ),
+    afterSalesReceiptLine: createAfterSalesReceiptLineDelegate(
+      afterSalesReceiptLines,
+    ),
+    afterSalesReceiptSerializedUnit: createAfterSalesReceiptSerializedUnitDelegate(
+      afterSalesReceiptSerializedUnits,
+      afterSalesReceiptLines,
+    ),
     dailyReconciliation: {
       findUnique: async ({ where, include } = {}) => {
         const row = dailyReconciliations.find((item) =>
@@ -977,6 +1652,8 @@ function createInMemoryPrisma(options = {}) {
     systemSettings,
     operationLogs,
     operationLogArchives,
+    businessTodos,
+    todoRecipients,
     smsVerificationCodes,
     refreshSessions,
     aiChatMessages,
@@ -989,7 +1666,24 @@ function createInMemoryPrisma(options = {}) {
     customers,
     salesOrders,
     salesOrderItems,
+    inventoryConfigurations,
+    warehouses,
+    warehouseProductStocks,
+    inventoryReservations,
+    inventoryCommandReceipts,
+    inventoryDocuments,
+    inventoryDocumentLines,
+    inventoryMovements,
+    inventoryPostCommitTasks,
+    inventoryBatches,
+    inventoryAlerts,
+    serializedInventoryUnits,
+    serializedInventoryAssignments,
     afterSalesOrders,
+    afterSalesOrderItems,
+    afterSalesReceipts,
+    afterSalesReceiptLines,
+    afterSalesReceiptSerializedUnits,
     commissionRecords,
     travelGroupFinanceSummaries,
   };
@@ -1384,6 +2078,99 @@ function createTravelGroupFinanceSummaryDelegate(rows, relations = {}) {
   };
 }
 
+function createGuidePointsSummaryDelegate(rows, relations = {}) {
+  let failCreateOnce = Boolean(relations.failCreateOnce);
+  const matchesGuideUnique = (row, where = {}) => {
+    if (where.travelGroupId_guideId) {
+      return (
+        row.travelGroupId === where.travelGroupId_guideId.travelGroupId &&
+        row.guideId === where.travelGroupId_guideId.guideId
+      );
+    }
+    return matchesUnique(row, where);
+  };
+  const expandedForFilter = (row) =>
+    withGuidePointsSummaryIncludes(
+      row,
+      {
+        travelGroup: true,
+        guide: true,
+        dailyPointsPaidBy: true,
+        monthlyPointsPaidBy: true,
+        updatedBy: true,
+      },
+      relations,
+    );
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesGuideUnique(item, where));
+      return row
+        ? withGuidePointsSummaryIncludes(row, include, relations)
+        : null;
+    },
+    findFirst: async ({ where, include, orderBy } = {}) => {
+      const row = sortRows(
+        rows.map(expandedForFilter).filter((item) => matchesWhere(item, where)),
+        orderBy,
+      )[0];
+      return row
+        ? withGuidePointsSummaryIncludes(row, include, relations)
+        : null;
+    },
+    findMany: async ({ where, include, orderBy, take } = {}) => {
+      const result = sortRows(
+        rows.map(expandedForFilter).filter((item) => matchesWhere(item, where)),
+        orderBy,
+      );
+      return result
+        .slice(0, take || result.length)
+        .map((row) =>
+          withGuidePointsSummaryIncludes(row, include, relations),
+        );
+    },
+    create: async ({ data, include } = {}) => {
+      if (failCreateOnce) {
+        failCreateOnce = false;
+        throw new Error(
+          'Injected guide points summary create failure.',
+        );
+      }
+      if (
+        rows.some(
+          (item) =>
+            item.travelGroupId === data.travelGroupId &&
+            item.guideId === data.guideId,
+        )
+      ) {
+        throw createPrismaUniqueError('travelGroupId_guideId');
+      }
+      const row = normalizeGuidePointsSummaryRow(data);
+      rows.push(row);
+      return withGuidePointsSummaryIncludes(row, include, relations);
+    },
+    update: async ({ where, data, include } = {}) => {
+      const index = rows.findIndex((item) =>
+        matchesGuideUnique(item, where),
+      );
+      if (index < 0) {
+        throw new Error(
+          'Guide points summary not found in test Prisma store.',
+        );
+      }
+      rows[index] = normalizeGuidePointsSummaryRow({
+        ...rows[index],
+        ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      });
+      return withGuidePointsSummaryIncludes(
+        rows[index],
+        include,
+        relations,
+      );
+    },
+  };
+}
+
 function createCustomerDelegate(rows) {
   return {
     findUnique: async ({ where } = {}) => {
@@ -1426,6 +2213,7 @@ function createCustomerDelegate(rows) {
 }
 
 function createAfterSalesOrderDelegate(rows, relations = {}) {
+  let failCreateOnce = Boolean(relations.failCreateOnce);
   return {
     findUnique: async ({ where, include } = {}) => {
       const row = rows.find((item) => matchesUnique(item, where));
@@ -1447,21 +2235,34 @@ function createAfterSalesOrderDelegate(rows, relations = {}) {
       );
     },
     create: async ({ data, include } = {}) => {
+      if (failCreateOnce) {
+        failCreateOnce = false;
+        throw new Error('Simulated after-sales create failure.');
+      }
       if (rows.some((item) => item.afterSalesNo === data.afterSalesNo)) {
         throw createPrismaUniqueError('afterSalesNo');
       }
+      const nestedItems = data.items?.create || [];
       const row = {
-        ...data,
+        ...withoutNested(data, 'items'),
         id: data.id || crypto.randomUUID(),
-      financeConfirmed: Boolean(data.financeConfirmed),
-      warehouseConfirmedById: data.warehouseConfirmedById ?? null,
-      warehouseConfirmedAt: asDate(data.warehouseConfirmedAt) || null,
-      warehouseConfirmNote: data.warehouseConfirmNote ?? null,
-      refundProofAttachments: data.refundProofAttachments || [],
-      createdAt: asDate(data.createdAt) || new Date(),
-      updatedAt: asDate(data.updatedAt) || new Date(),
+        financeConfirmed: Boolean(data.financeConfirmed),
+        warehouseConfirmedById: data.warehouseConfirmedById ?? null,
+        warehouseConfirmedAt: asDate(data.warehouseConfirmedAt) || null,
+        warehouseConfirmNote: data.warehouseConfirmNote ?? null,
+        refundProofAttachments: data.refundProofAttachments || [],
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
       };
       rows.push(row);
+      for (const item of nestedItems) {
+        relations.afterSalesOrderItems.push({
+          ...item,
+          id: item.id || crypto.randomUUID(),
+          afterSalesOrderId: row.id,
+          createdAt: asDate(item.createdAt) || new Date(),
+        });
+      }
       return withAfterSalesOrderIncludes(row, include, relations);
     },
     update: async ({ where, data, include } = {}) => {
@@ -1477,6 +2278,324 @@ function createAfterSalesOrderDelegate(rows, relations = {}) {
       return withAfterSalesOrderIncludes(rows[index], include, relations);
     },
   };
+}
+
+function createAfterSalesReceiptDelegate(rows, relations = {}) {
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row
+        ? withAfterSalesReceiptIncludes(row, include, relations)
+        : null;
+    },
+    findMany: async ({ where, include, orderBy } = {}) =>
+      sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      ).map((row) =>
+        withAfterSalesReceiptIncludes(row, include, relations),
+      ),
+    create: async ({ data, include } = {}) => {
+      for (const field of ['sourceKey', 'idempotencyKey']) {
+        if (rows.some((item) => item[field] === data[field])) {
+          throw createPrismaUniqueError(field);
+        }
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        status: data.status || 'DRAFT',
+        postSourceKey: data.postSourceKey ?? null,
+        postIdempotencyKey: data.postIdempotencyKey ?? null,
+        postRequestHash: data.postRequestHash ?? null,
+        reverseSourceKey: data.reverseSourceKey ?? null,
+        reverseIdempotencyKey: data.reverseIdempotencyKey ?? null,
+        reverseRequestHash: data.reverseRequestHash ?? null,
+        confirmedAt: asDate(data.confirmedAt) || null,
+        reversedAt: asDate(data.reversedAt) || null,
+        version: Number(data.version || 0),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return withAfterSalesReceiptIncludes(row, include, relations);
+    },
+    update: async ({ where, data, include } = {}) => {
+      await updateOneInventoryRow(rows, where, data);
+      const row = rows.find((item) => matchesUnique(item, where));
+      return withAfterSalesReceiptIncludes(row, include, relations);
+    },
+    updateMany: async ({ where, data } = {}) =>
+      updateInventoryRows(rows, where, data),
+  };
+}
+
+function createAfterSalesReceiptLineDelegate(rows) {
+  return {
+    create: async ({ data } = {}) => {
+      if (
+        rows.some(
+          (item) =>
+            item.receiptId === data.receiptId &&
+            Number(item.lineNo) === Number(data.lineNo),
+        )
+      ) {
+        throw createPrismaUniqueError('receipt_id_line_no');
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        version: Number(data.version || 0),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+  };
+}
+
+function createSerializedInventoryUnitDelegate(rows, relations = {}) {
+  return {
+    findUnique: async ({ where, include } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      if (!row) return null;
+      const expanded = copyRow(row);
+      if (include?.assignments) {
+        const config =
+          typeof include.assignments === 'object'
+            ? include.assignments
+            : {};
+        expanded.assignments = (
+          relations.serializedInventoryAssignments || []
+        )
+          .filter(
+            (assignment) =>
+              assignment.serializedUnitId === row.id &&
+              matchesWhere(assignment, config.where),
+          )
+          .map((assignment) => {
+            const result = copyRow(assignment);
+            if (config.include?.reservation) {
+              const reservation = (
+                relations.inventoryReservations || []
+              ).find(
+                (candidate) =>
+                  candidate.id === assignment.reservationId,
+              );
+              result.reservation = reservation
+                ? copyRow(reservation)
+                : null;
+            }
+            return result;
+          });
+      }
+      return expanded;
+    },
+    findMany: async ({ where, orderBy, take } = {}) =>
+      sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      ).slice(0, take || rows.length),
+    create: async ({ data } = {}) => {
+      if (
+        rows.some(
+          (item) =>
+            item.id === data.id ||
+            (data.normalizedLogisticsCode &&
+              item.normalizedLogisticsCode ===
+                data.normalizedLogisticsCode),
+        )
+      ) {
+        throw createPrismaUniqueError('normalized_logistics_code');
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        version: Number(data.version || 0),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    updateMany: async ({ where, data } = {}) =>
+      updateInventoryRows(rows, where, data),
+    update: async ({ where, data } = {}) =>
+      updateOneInventoryRow(rows, where, data),
+  };
+}
+
+function createAfterSalesReceiptSerializedUnitDelegate(rows, receiptLines) {
+  return {
+    create: async ({ data } = {}) => {
+      for (const field of [
+        'activeOriginalUnitKey',
+        'inventoryMovementId',
+      ]) {
+        if (
+          data[field] !== null &&
+          data[field] !== undefined &&
+          rows.some((item) => item[field] === data[field])
+        ) {
+          throw createPrismaUniqueError(field);
+        }
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data } = {}) => {
+      const current = rows.find((item) => matchesUnique(item, where));
+      if (!current) {
+        throw new Error('Serialized receipt fixture row not found.');
+      }
+      if (
+        data.activeOriginalUnitKey &&
+        rows.some(
+          (item) =>
+            item.id !== current.id &&
+            item.activeOriginalUnitKey ===
+              data.activeOriginalUnitKey,
+        )
+      ) {
+        throw createPrismaUniqueError('active_original_unit_key');
+      }
+      return updateOneInventoryRow(rows, where, data);
+    },
+    updateMany: async ({ where, data } = {}) => {
+      let count = 0;
+      for (let index = 0; index < rows.length; index += 1) {
+        const receiptLine = receiptLines.find(
+          (line) => line.id === rows[index].receiptLineId,
+        );
+        const {
+          receiptLine: receiptLineWhere,
+          ...scalarWhere
+        } = where || {};
+        if (
+          !matchesWhere(rows[index], scalarWhere) ||
+          (receiptLineWhere &&
+            (!receiptLine ||
+              !matchesWhere(receiptLine, receiptLineWhere)))
+        ) {
+          continue;
+        }
+        rows[index] = {
+          ...applyAtomicUpdateData(rows[index], data),
+          updatedAt: new Date(),
+        };
+        count += 1;
+      }
+      return { count };
+    },
+  };
+}
+
+function createSerializedInventoryAssignmentDelegate(rows, units) {
+  return {
+    findMany: async ({ where, include, orderBy } = {}) =>
+      sortRows(
+        rows
+          .filter((item) => matchesWhere(item, where))
+          .map((item) => {
+            const expanded = copyRow(item);
+            if (include?.serializedUnit) {
+              const unit = units.find(
+                (candidate) =>
+                  candidate.id === item.serializedUnitId,
+              );
+              expanded.serializedUnit = unit ? copyRow(unit) : null;
+            }
+            return expanded;
+          }),
+        orderBy,
+      ),
+    create: async ({ data } = {}) => {
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        version: Number(data.version || 0),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    updateMany: async ({ where, data } = {}) =>
+      updateInventoryRows(rows, where, data),
+  };
+}
+
+function withAfterSalesReceiptIncludes(receipt, include, relations = {}) {
+  const row = copyRow(receipt);
+  if (include?.warehouse) {
+    const warehouse = (relations.warehouses || []).find(
+      (item) => item.id === receipt.warehouseId,
+    );
+    row.warehouse = warehouse ? copyRow(warehouse) : null;
+  }
+  if (include?.afterSalesOrder) {
+    const order = (relations.afterSalesOrders || []).find(
+      (item) => item.id === receipt.afterSalesOrderId,
+    );
+    if (order) {
+      const sourceOrder = (relations.salesOrders || []).find(
+        (item) => item.id === order.salesOrderId,
+      );
+      row.afterSalesOrder = {
+        ...copyRow(order),
+        salesOrder: sourceOrder ? copyRow(sourceOrder) : null,
+      };
+    } else {
+      row.afterSalesOrder = null;
+    }
+  }
+  if (include?.lines) {
+    const config =
+      typeof include.lines === 'object' ? include.lines : {};
+    row.lines = sortRows(
+      (relations.afterSalesReceiptLines || [])
+        .filter((line) => line.receiptId === receipt.id)
+        .map((line) => {
+          const expanded = copyRow(line);
+          const item = (relations.afterSalesOrderItems || []).find(
+            (candidate) =>
+              candidate.id === line.afterSalesOrderItemId,
+          );
+          if (config.include?.afterSalesOrderItem && item) {
+            const product = (relations.products || []).find(
+              (candidate) => candidate.id === item.productId,
+            );
+            expanded.afterSalesOrderItem = {
+              ...copyRow(item),
+              product: product ? copyRow(product) : null,
+            };
+          }
+          if (config.include?.inventoryBatch) {
+            const batch = (relations.inventoryBatches || []).find(
+              (candidate) => candidate.id === line.inventoryBatchId,
+            );
+            expanded.inventoryBatch = batch ? copyRow(batch) : null;
+          }
+          if (config.include?.serializedUnits) {
+            expanded.serializedUnits = (
+              relations.afterSalesReceiptSerializedUnits || []
+            )
+              .filter((fact) => fact.receiptLineId === line.id)
+              .map(copyRow);
+          }
+          return expanded;
+        }),
+      config.orderBy,
+    );
+  }
+  return row;
 }
 
 function createTravelGroupDelegate(rows, options = {}) {
@@ -1796,6 +2915,35 @@ function toSeedPrismaRole(role) {
   return map[value] || value.toUpperCase();
 }
 
+function seedTravelAgencies(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      ...seed,
+      id: seed.id || crypto.randomUUID(),
+      name: seed.name || 'Seed Travel Agency',
+      isActive: seed.isActive ?? true,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function seedGuides(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      ...seed,
+      id: seed.id || crypto.randomUUID(),
+      name: seed.name || 'Seed Guide',
+      phone: seed.phone || `139${String(rows.length + 1).padStart(8, '0')}`,
+      travelAgency: seed.travelAgency ?? null,
+      remarks: seed.remarks ?? null,
+      isActive: seed.isActive ?? true,
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
 function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
   for (const seed of seeds) {
     const row = {
@@ -1841,8 +2989,32 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       markedAt: asDate(seed.markedAt) || null,
       outreachUserId: seed.outreachUserId ?? null,
       salesUserId: seed.salesUserId ?? null,
+      pointsDestination:
+        seed.pointsDestination || 'TRAVEL_AGENCY',
+      personalPointsGuideId: seed.personalPointsGuideId ?? null,
+      personalGuideNameSnapshot:
+        seed.personalGuideNameSnapshot ?? null,
+      personalDailyRebateRate:
+        seed.personalDailyRebateRate ?? null,
+      personalMonthlyRebateRate:
+        seed.personalMonthlyRebateRate ?? null,
+      pointsDestinationChangedById:
+        seed.pointsDestinationChangedById ?? null,
+      pointsDestinationChangedAt:
+        asDate(seed.pointsDestinationChangedAt) || null,
+      personalRatesUpdatedById:
+        seed.personalRatesUpdatedById ?? null,
+      personalRatesUpdatedAt:
+        asDate(seed.personalRatesUpdatedAt) || null,
       salesEditCount: seed.salesEditCount ?? 0,
       salesEditedAt: asDate(seed.salesEditedAt) || null,
+      fulfillmentWarehouseId:
+        seed.fulfillmentWarehouseId ?? null,
+      inventoryAppliedAt:
+        asDate(seed.inventoryAppliedAt) || null,
+      inventoryPolicyVersion:
+        seed.inventoryPolicyVersion ?? null,
+      inventoryVersion: seed.inventoryVersion ?? 0,
       createdById: seed.createdById ?? null,
       updatedById: seed.updatedById ?? null,
       createdAt: asDate(seed.createdAt) || now,
@@ -1855,6 +3027,7 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       salesOrderItems.push({
         id: item.id || crypto.randomUUID(),
         salesOrderId: row.id,
+        inventoryLineKey: item.inventoryLineKey ?? null,
         productId: item.productId ?? null,
         productName: item.productName || 'Seed Product',
         unit: item.unit ?? null,
@@ -1880,12 +3053,26 @@ function seedAfterSalesOrders(rows, seeds, now) {
       id: seed.id || crypto.randomUUID(),
       afterSalesNo: seed.afterSalesNo || `AS20260702${String(rows.length + 1).padStart(3, '0')}`,
       salesOrderId: seed.salesOrderId,
+      afterSalesSalesOrderId: seed.afterSalesSalesOrderId ?? null,
       customerId: seed.customerId ?? null,
       issueType: seed.issueType || 'OTHER',
       actionType: seed.actionType || 'RECORD_ONLY',
       description: seed.description || 'seed smoke test after sales description',
       resolution: seed.resolution ?? null,
       refundAmountCents: seed.refundAmountCents ?? 0,
+      deductionCalculationMode:
+        seed.deductionCalculationMode || 'manual_product_reference',
+      sourceAgencyDeductionCents: seed.sourceAgencyDeductionCents ?? 0,
+      agencyDeductionRate: seed.agencyDeductionRate ?? null,
+      dailyRebateRate: seed.dailyRebateRate ?? 0,
+      monthlyRebateRate: seed.monthlyRebateRate ?? 0,
+      agencyDeductionRuleId: seed.agencyDeductionRuleId ?? null,
+      agencyRebateRuleId: seed.agencyRebateRuleId ?? null,
+      calculationDate: asDate(seed.calculationDate || seed.createdAt) || now,
+      agencyDeductionAdjustmentCents:
+        seed.agencyDeductionAdjustmentCents ?? null,
+      financialEffectStatus:
+        seed.financialEffectStatus || 'PENDING_CONFIRMATION',
       status: seed.status || 'NEGOTIATING',
       financeConfirmed: Boolean(seed.financeConfirmed),
       financeConfirmedById: seed.financeConfirmedById ?? null,
@@ -1902,6 +3089,30 @@ function seedAfterSalesOrders(rows, seeds, now) {
       updatedById: seed.updatedById ?? null,
       createdAt: asDate(seed.createdAt) || now,
       updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function seedAfterSalesOrderItems(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      id: seed.id || crypto.randomUUID(),
+      afterSalesOrderId: seed.afterSalesOrderId,
+      sourceSalesOrderItemId: seed.sourceSalesOrderItemId ?? null,
+      productId: seed.productId ?? null,
+      productName: seed.productName || 'Seed After-sales Product',
+      unit: seed.unit ?? null,
+      quantity: seed.quantity ?? 1,
+      originalUnitPriceCents: seed.originalUnitPriceCents ?? 0,
+      subtotalCents: seed.subtotalCents ?? 0,
+      returnRequired: Boolean(seed.returnRequired),
+      expectedReturnQty: seed.expectedReturnQty ?? 0,
+      postedReceivedQty: seed.postedReceivedQty ?? 0,
+      returnVersion: seed.returnVersion ?? 0,
+      isHistoricalPlaceholder: Boolean(seed.isHistoricalPlaceholder),
+      notes: seed.notes ?? null,
+      sortOrder: seed.sortOrder ?? 0,
+      createdAt: asDate(seed.createdAt) || now,
     });
   }
 }
@@ -1937,6 +3148,19 @@ function seedTravelGroupFinanceSummaries(rows, seeds, now) {
   for (const seed of seeds) {
     rows.push(
       normalizeTravelGroupFinanceSummaryRow({
+        ...seed,
+        id: seed.id || crypto.randomUUID(),
+        createdAt: asDate(seed.createdAt) || now,
+        updatedAt: asDate(seed.updatedAt) || now,
+      }),
+    );
+  }
+}
+
+function seedGuidePointsSummaries(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push(
+      normalizeGuidePointsSummaryRow({
         ...seed,
         id: seed.id || crypto.randomUUID(),
         createdAt: asDate(seed.createdAt) || now,
@@ -2052,6 +3276,169 @@ function createSystemSetting(settingKey, settingValue, updatedBy, updatedAt) {
     updatedBy,
     updatedAt,
   };
+}
+
+function normalizeGuidePointsSummaryRow(data = {}) {
+  return {
+    ...data,
+    id: data.id || crypto.randomUUID(),
+    travelGroupId: data.travelGroupId,
+    guideId: data.guideId,
+    guideNameSnapshot: data.guideNameSnapshot || 'Seed Guide',
+    orderCount: data.orderCount ?? 0,
+    totalSalesAmountCents: data.totalSalesAmountCents ?? 0,
+    totalCashOnDeliveryCents: data.totalCashOnDeliveryCents ?? 0,
+    totalPaidDepositCents: data.totalPaidDepositCents ?? 0,
+    confirmedRefundAmountCents:
+      data.confirmedRefundAmountCents ?? 0,
+    effectiveSalesAmountCents: data.effectiveSalesAmountCents ?? 0,
+    totalLiquorCostDeductionCents:
+      data.totalLiquorCostDeductionCents ?? 0,
+    totalNetAmountCents: data.totalNetAmountCents ?? 0,
+    totalDailyPointsCents: data.totalDailyPointsCents ?? 0,
+    totalMonthlyPointsCents: data.totalMonthlyPointsCents ?? 0,
+    paidPointsCents: data.paidPointsCents ?? 0,
+    unpaidPointsCents: data.unpaidPointsCents ?? 0,
+    dailyPointsPaid: Boolean(data.dailyPointsPaid),
+    dailyPointsPaidById: data.dailyPointsPaidById ?? null,
+    dailyPointsPaidAt: asDate(data.dailyPointsPaidAt) || null,
+    monthlyPointsPaid: Boolean(data.monthlyPointsPaid),
+    monthlyPointsPaidById: data.monthlyPointsPaidById ?? null,
+    monthlyPointsPaidAt: asDate(data.monthlyPointsPaidAt) || null,
+    notes: data.notes ?? null,
+    calculationVersion: data.calculationVersion || 'guide_points_v1',
+    sourceSnapshot: data.sourceSnapshot ?? null,
+    updatedById: data.updatedById ?? null,
+    createdAt: asDate(data.createdAt) || new Date(),
+    updatedAt: asDate(data.updatedAt) || new Date(),
+  };
+}
+
+function seedSimpleRows(rows, seeds, now) {
+  for (const seed of seeds) {
+    rows.push({
+      ...seed,
+      id: seed.id || crypto.randomUUID(),
+      createdAt: asDate(seed.createdAt) || now,
+      updatedAt: asDate(seed.updatedAt) || now,
+    });
+  }
+}
+
+function createSimpleInventoryDelegate(rows, options = {}) {
+  return {
+    findUnique: async ({ where, select } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      if (!row) return null;
+      return select ? selectRow(row, select) : copyRow(row);
+    },
+    findMany: async ({ where, select, orderBy, skip, take } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      const start = skip || 0;
+      return result
+        .slice(start, take ? start + take : result.length)
+        .map((row) => (select ? selectRow(row, select) : row));
+    },
+    create: async ({ data } = {}) => {
+      for (const field of options.uniqueFields || ['id']) {
+        if (
+          data[field] !== null &&
+          data[field] !== undefined &&
+          rows.some((item) => item[field] === data[field])
+        ) {
+          throw createPrismaUniqueError(field);
+        }
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data } = {}) =>
+      updateOneInventoryRow(rows, where, data),
+    updateMany: async ({ where, data } = {}) =>
+      updateInventoryRows(rows, where, data),
+    count: async ({ where } = {}) =>
+      rows.filter((item) => matchesWhere(item, where)).length,
+  };
+}
+
+function matchesWarehouseProductUnique(row, where = {}) {
+  if (where?.warehouseId_productId) {
+    return (
+      row.warehouseId === where.warehouseId_productId.warehouseId &&
+      row.productId === where.warehouseId_productId.productId
+    );
+  }
+  return matchesUnique(row, where);
+}
+
+function matchesInventoryReservationUnique(row, where = {}) {
+  if (where?.salesOrderId_inventoryLineKey) {
+    return (
+      row.salesOrderId ===
+        where.salesOrderId_inventoryLineKey.salesOrderId &&
+      row.inventoryLineKey ===
+        where.salesOrderId_inventoryLineKey.inventoryLineKey
+    );
+  }
+  return matchesUnique(row, where);
+}
+
+function matchesBusinessTodoUnique(row, where = {}) {
+  if (where?.ruleCode_sourceType_sourceId) {
+    const key = where.ruleCode_sourceType_sourceId;
+    return (
+      row.ruleCode === key.ruleCode &&
+      row.sourceType === key.sourceType &&
+      row.sourceId === key.sourceId
+    );
+  }
+  return matchesUnique(row, where);
+}
+
+function matchesTodoRecipientUnique(row, where = {}) {
+  if (where?.todoId_userId) {
+    return (
+      row.todoId === where.todoId_userId.todoId &&
+      row.userId === where.todoId_userId.userId
+    );
+  }
+  return matchesUnique(row, where);
+}
+
+async function updateOneInventoryRow(rows, where, data) {
+  const index = rows.findIndex((item) => matchesUnique(item, where));
+  if (index < 0) {
+    throw new Error('Inventory fixture row not found.');
+  }
+  rows[index] = {
+    ...applyAtomicUpdateData(rows[index], data),
+    updatedAt: asDate(data?.updatedAt) || new Date(),
+  };
+  return copyRow(rows[index]);
+}
+
+async function updateInventoryRows(rows, where, data) {
+  let count = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (!matchesWhere(rows[index], where)) {
+      continue;
+    }
+    rows[index] = {
+      ...applyAtomicUpdateData(rows[index], data),
+      updatedAt: asDate(data?.updatedAt) || new Date(),
+    };
+    count += 1;
+  }
+  return { count };
 }
 
 function matchesUnique(row, where = {}) {
@@ -2326,6 +3713,7 @@ function withSalesOrderIncludes(
   users = [],
   afterSalesOrders = [],
   commissionRecords = [],
+  guides = [],
 ) {
   const row = copyRow(order);
   if (include?.items) {
@@ -2367,6 +3755,12 @@ function withSalesOrderIncludes(
     const user = users.find((item) => item.id === order.outreachUserId);
     row.outreachUser = user ? copyRow(user) : null;
   }
+  if (include?.personalPointsGuide) {
+    const guide = guides.find(
+      (item) => item.id === order.personalPointsGuideId,
+    );
+    row.personalPointsGuide = guide ? copyRow(guide) : null;
+  }
   if (include?.afterSalesOrders) {
     const includeConfig =
       typeof include.afterSalesOrders === 'object'
@@ -2405,6 +3799,39 @@ function withSalesOrderIncludes(
   return row;
 }
 
+function withGuidePointsSummaryIncludes(
+  summary,
+  include,
+  relations = {},
+) {
+  const row = copyRow(summary);
+  if (include?.travelGroup) {
+    const group = (relations.travelGroups || []).find(
+      (item) => item.id === summary.travelGroupId,
+    );
+    row.travelGroup = group ? copyRow(group) : null;
+  }
+  if (include?.guide) {
+    const guide = (relations.guides || []).find(
+      (item) => item.id === summary.guideId,
+    );
+    row.guide = guide ? copyRow(guide) : null;
+  }
+  for (const [includeKey, idKey] of [
+    ['dailyPointsPaidBy', 'dailyPointsPaidById'],
+    ['monthlyPointsPaidBy', 'monthlyPointsPaidById'],
+    ['updatedBy', 'updatedById'],
+  ]) {
+    if (include?.[includeKey]) {
+      const user = (relations.users || []).find(
+        (item) => item.id === summary[idKey],
+      );
+      row[includeKey] = user ? copyRow(user) : null;
+    }
+  }
+  return row;
+}
+
 function getAfterSalesOrderFilterInclude() {
   return {
     salesOrder: {
@@ -2438,6 +3865,46 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
           relations.commissionRecords || [],
         )
       : null;
+  }
+  if (include?.afterSalesSalesOrder) {
+    const salesOrder = (relations.salesOrders || []).find(
+      (item) => item.id === order.afterSalesSalesOrderId,
+    );
+    const salesOrderInclude =
+      typeof include.afterSalesSalesOrder === 'object'
+        ? include.afterSalesSalesOrder.include
+        : {};
+    row.afterSalesSalesOrder = salesOrder
+      ? withSalesOrderIncludes(
+          salesOrder,
+          salesOrderInclude,
+          relations.salesOrderItems || [],
+          relations.travelGroups || [],
+          relations.customers || [],
+          relations.users || [],
+          relations.afterSalesOrders || [],
+          relations.commissionRecords || [],
+        )
+      : null;
+  }
+  if (include?.items) {
+    const includeConfig =
+      typeof include.items === 'object' ? include.items : {};
+    row.items = sortRows(
+      (relations.afterSalesOrderItems || [])
+        .filter((item) => item.afterSalesOrderId === order.id)
+        .map((item) => {
+          const expanded = copyRow(item);
+          if (includeConfig.include?.product) {
+            const product = (relations.products || []).find(
+              (candidate) => candidate.id === item.productId,
+            );
+            expanded.product = product ? copyRow(product) : null;
+          }
+          return expanded;
+        }),
+      includeConfig.orderBy,
+    );
   }
   if (include?.customer) {
     const customer = (relations.customers || []).find(
@@ -2909,10 +4376,12 @@ function assertSettingsContract(settings) {
     'restoreRequired',
     'restoredAt',
     'restoredBy',
+    'revision',
     'updatedAt',
   ]);
   assert.equal(typeof settings.onlyShowMarkedRecords, 'boolean');
   assert.equal(typeof settings.restoreRequired, 'boolean');
+  assert.equal(Number.isSafeInteger(settings.revision), true);
 }
 
 function assertOperationLogContract(log) {

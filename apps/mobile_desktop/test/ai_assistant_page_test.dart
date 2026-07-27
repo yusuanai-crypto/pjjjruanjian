@@ -34,7 +34,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('AI 能力'), findsOneWidget);
-      expect(find.text('${role.value} scope'), findsOneWidget);
+      expect(find.text(role.label), findsOneWidget);
+      expect(find.text('${role.value} scope'), findsNothing);
+      expect(find.textContaining('mock'), findsNothing);
+      expect(find.textContaining('模型模式'), findsNothing);
       expect(find.text(entry.value), findsOneWidget);
       for (final otherTemplate in roleTemplates.values.where(
         (template) => template != entry.value,
@@ -115,10 +118,12 @@ void main() {
 
     expect(find.text('按今天数据看，净销售额为 1000 元。'), findsOneWidget);
     expect(find.textContaining('查询范围：2026-07-05 至 2026-07-05'), findsOneWidget);
-    expect(find.text('来源摘要'), findsOneWidget);
-    expect(find.textContaining('analytics.overview'), findsOneWidget);
-    expect(find.text('风险提示'), findsOneWidget);
-    expect(find.text('当前仅基于已标记数据。'), findsOneWidget);
+    expect(find.text('查询情况'), findsOneWidget);
+    expect(find.textContaining('经营概况'), findsWidgets);
+    expect(find.textContaining('analytics.overview'), findsNothing);
+    expect(find.textContaining('找到 3 条记录'), findsOneWidget);
+    expect(find.text('请注意'), findsOneWidget);
+    expect(find.text('目前只统计已标记的数据。'), findsOneWidget);
   });
 
   testWidgets('shows recent history and restores selected answer',
@@ -156,7 +161,11 @@ void main() {
 
     expect(find.text('历史详情'), findsOneWidget);
     expect(find.text('历史回答：该客户有 1 笔订单。'), findsOneWidget);
-    expect(find.textContaining('全局标记过滤：已开启'), findsOneWidget);
+    expect(find.textContaining('目前只统计已标记的数据'), findsOneWidget);
+    expect(find.text('问题类型'), findsOneWidget);
+    expect(find.text('客户订单'), findsWidgets);
+    expect(find.textContaining('customer_order_lookup'), findsNothing);
+    expect(find.textContaining('customer.orderLookup'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('ai-history-restore')));
     await tester.pumpAndSettle();
@@ -222,12 +231,12 @@ void main() {
         statusCode: 403,
         code: 'AI_PERMISSION_DENIED',
         message: 'forbidden',
-      ): '当前问题超出该角色可访问的 AI 数据范围。',
+      ): '当前账号不能查看这类数据。',
       const ApiException(
         statusCode: 403,
         code: 'FORBIDDEN',
         message: 'forbidden',
-      ): 'AI 请求被拒绝，请确认当前账号权限或联系管理员。',
+      ): '当前账号不能完成这项查询。',
       const ApiException(
         statusCode: 429,
         code: 'AI_DAILY_LIMIT_EXCEEDED',
@@ -237,7 +246,7 @@ void main() {
         statusCode: 500,
         code: 'AI_MODEL_TIMEOUT',
         message: 'timeout',
-      ): 'AI 模型暂时不可用，系统没有暴露任何业务数据，请稍后重试或联系管理员。',
+      ): 'AI 助手暂时不可用，请稍后重试或联系管理员。',
     };
 
     for (final entry in cases.entries) {
@@ -271,7 +280,7 @@ void main() {
 
     await tester.pumpWidget(_page(disabledClient, role: UserRole.boss));
     await tester.pumpAndSettle();
-    expect(find.textContaining('AI 助手未启用'), findsWidgets);
+    expect(find.textContaining('AI 助手暂未启用'), findsWidgets);
 
     final modelUnavailableClient = _FakeAiApiClient(
       capabilities: _capabilities(
@@ -288,7 +297,10 @@ void main() {
       _page(modelUnavailableClient, role: UserRole.boss),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('AI 模型未配置或暂不可用'), findsWidgets);
+    expect(find.textContaining('AI 助手暂时不可用'), findsWidgets);
+    expect(find.textContaining('模型'), findsNothing);
+    expect(find.textContaining('API Key'), findsNothing);
+    expect(find.textContaining('mock'), findsNothing);
   });
 
   testWidgets('shows 403 no permission state from capabilities loading',
@@ -351,7 +363,7 @@ void main() {
     await tester.pumpWidget(_page(client, role: UserRole.sales));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('当前角色暂无 AI 助手权限'), findsWidgets);
+    expect(find.textContaining('当前账号不能使用 AI 助手'), findsWidgets);
     expect(find.text('隐藏模板'), findsNothing);
     expect(find.text('不可见历史'), findsNothing);
     expect(client.getPaths.map((path) => Uri.parse(path).path), [
@@ -399,9 +411,7 @@ void main() {
       );
       expect(
         find.text(
-          error.statusCode == 403
-              ? '当前问题超出该角色可访问的 AI 数据范围。'
-              : 'AI 服务暂时不可用，请稍后重试。',
+          error.statusCode == 403 ? '当前账号不能查看这类数据。' : 'AI 服务暂时不可用，请稍后重试。',
         ),
         findsOneWidget,
       );
@@ -493,6 +503,108 @@ void main() {
     expect(find.text('按今天数据看，净销售额为 1000 元。'), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-retry-history')), findsOneWidget);
   });
+
+  testWidgets('hides technical assistant content and keeps business metadata',
+      (tester) async {
+    final client = _FakeAiApiClient(
+      capabilities: _capabilities(role: 'boss'),
+      chatResponse: {
+        'data': {
+          'answer': '```js\nconst total = 1000;\n```',
+          'intent': 'analytics_overview',
+          'range': {
+            'preset': 'today',
+            'dateFrom': '2026-07-05',
+            'dateTo': '2026-07-05',
+            'timezone': 'Asia/Shanghai',
+          },
+          'sourceSummary': [
+            {
+              'toolName': 'analytics.overview',
+              'rowCount': 3,
+              'dateFrom': '2026-07-05',
+              'dateTo': '2026-07-05',
+              'globalMarkedFilterEnabled': true,
+              'scopeDescription': 'boss scope',
+            },
+          ],
+          'warnings': ['AI 模型配置异常'],
+        },
+      },
+    );
+
+    await tester.pumpWidget(_page(client, role: UserRole.boss));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-question-input')),
+      '今天销售额是多少？',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('ai-send-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('这次回答含有不适合直接展示的内容'), findsOneWidget);
+    expect(find.text('问题类型：经营概况'), findsOneWidget);
+    expect(find.textContaining('找到 3 条记录'), findsOneWidget);
+    expect(find.text('暂时无法完成查询，请稍后再试。'), findsOneWidget);
+    _expectNoTechnicalUiText(tester);
+  });
+
+  testWidgets('hides technical old history and internal names', (tester) async {
+    final client = _FakeAiApiClient(
+      capabilities: _capabilities(role: 'after_sales'),
+      historyItems: [
+        _historyItem(
+          id: 'unsafe-history',
+          question: '历史客户订单问题',
+          answer: '{"toolName":"customer.orderLookup","rowCount":1}',
+          intent: 'customer_order_lookup',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(_page(client, role: UserRole.afterSales));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('客户订单'), findsWidgets);
+    _expectNoTechnicalUiText(tester);
+
+    final historyItem = find.byKey(const ValueKey('ai-history-unsafe-history'));
+    await tester.ensureVisible(historyItem);
+    await tester.tap(historyItem);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('这条历史回答含有不适合直接展示的内容'), findsOneWidget);
+    expect(find.text('问题类型'), findsOneWidget);
+    expect(find.text('客户订单'), findsWidgets);
+    expect(find.textContaining('找到 1 条记录'), findsOneWidget);
+    _expectNoTechnicalUiText(tester);
+  });
+}
+
+void _expectNoTechnicalUiText(WidgetTester tester) {
+  final visibleText = tester
+      .widgetList<Text>(find.byType(Text))
+      .map((widget) => widget.data ?? '')
+      .join('\n');
+  for (final forbidden in [
+    '```',
+    'const total',
+    'analytics.overview',
+    'analytics_overview',
+    'customer.orderLookup',
+    'customer_order_lookup',
+    'mock',
+    'API Key',
+    '模型',
+    '配置',
+    '接口地址',
+    '内部字段',
+    '返回行数',
+    '全局标记过滤',
+    '风险提示',
+  ]) {
+    expect(visibleText, isNot(contains(forbidden)), reason: forbidden);
+  }
 }
 
 Widget _page(_FakeAiApiClient client, {required UserRole role}) {

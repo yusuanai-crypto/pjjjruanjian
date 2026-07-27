@@ -76,6 +76,8 @@ const WRITE_REQUEST_PATTERN =
   /(修改|改成|改为|更改|更新|删除|删掉|新增|创建|录入|写入|导入|批量导入|重算|重新计算|刷新|关闭全局|恢复全局|change|update|delete|insert|create|patch|post|write|recalculate|confirm|import|(?:帮我|请|把|将|给我|直接).{0,20}(确认|取消确认|结算|发货|打包|标记))/i;
 const SQL_REQUEST_PATTERN =
   /(\bsql\b|\bselect\b|\binsert\b|\bupdate\b|\bdelete\b|\bdrop\b|\balter\b|\btruncate\b|\bjoin\b|\bwhere\b|写\s*sql|执行\s*sql|生成\s*sql|跑\s*sql|数据库连接|连接数据库|查库|数据表)/i;
+const RESTRICTED_CONTENT_REQUEST_PATTERN =
+  /(程序代码|源代码|代码块|行内代码|编程|脚本|函数|网页标签|接口地址|接口路径|内部字段|内部标识|原始数据|原始格式|配置内容|配置文件|系统提示|提示词|开发者模式|越狱|忽略.{0,12}(规则|限制|要求|指令)|绕过.{0,12}(规则|限制|检查)|\b(?:json|xml|yaml|html|css|python|javascript|java|dart|curl|powershell|bash|shell)\b)/i;
 
 @Injectable()
 export class AiPolicyService {
@@ -169,6 +171,9 @@ export function classifyUnsafeQuestion(
   }
   if (SQL_REQUEST_PATTERN.test(normalized)) {
     return 'AI_SQL_REQUEST_DENIED';
+  }
+  if (RESTRICTED_CONTENT_REQUEST_PATTERN.test(normalized)) {
+    return 'AI_OUT_OF_SCOPE';
   }
   return null;
 }

@@ -174,10 +174,20 @@ class TravelGroupDetailPanel extends StatelessWidget {
           for (final item in group.tastingItems)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(child: Text(item.productName)),
-                  Text('${item.quantity} ${item.unit}'),
+                  Row(
+                    children: [
+                      Expanded(child: Text(item.productName)),
+                      Text('${item.quantity} ${item.unit}'),
+                    ],
+                  ),
+                  if ((item.note ?? '').trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('备注：${item.note!.trim()}'),
+                    ),
                 ],
               ),
             ),

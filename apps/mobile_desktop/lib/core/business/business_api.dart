@@ -759,6 +759,9 @@ class BusinessApi {
     bool? financeMark,
     bool? customerFinanceMark,
     String? salesUserId,
+    DateTime? shippingDateStart,
+    DateTime? shippingDateEnd,
+    String? shippingDateSort,
   }) async {
     final queryParameters = _salesOrderQueryParameters(
       limit: limit,
@@ -776,6 +779,9 @@ class BusinessApi {
       financeMark: financeMark,
       customerFinanceMark: customerFinanceMark,
       salesUserId: salesUserId,
+      shippingDateStart: shippingDateStart,
+      shippingDateEnd: shippingDateEnd,
+      shippingDateSort: shippingDateSort,
     );
 
     final payload = await _apiClient.getJson(
@@ -804,6 +810,9 @@ class BusinessApi {
     bool? financeMark,
     bool? customerFinanceMark,
     String? salesUserId,
+    DateTime? shippingDateStart,
+    DateTime? shippingDateEnd,
+    String? shippingDateSort,
   }) {
     final queryParameters = _salesOrderQueryParameters(
       limit: limit,
@@ -821,6 +830,9 @@ class BusinessApi {
       financeMark: financeMark,
       customerFinanceMark: customerFinanceMark,
       salesUserId: salesUserId,
+      shippingDateStart: shippingDateStart,
+      shippingDateEnd: shippingDateEnd,
+      shippingDateSort: shippingDateSort,
     );
     return _apiClient.getBytes(
       _path('/api/sales-orders/export.xlsx', queryParameters),
@@ -845,6 +857,9 @@ class BusinessApi {
     bool? financeMark,
     bool? customerFinanceMark,
     String? salesUserId,
+    DateTime? shippingDateStart,
+    DateTime? shippingDateEnd,
+    String? shippingDateSort,
   }) {
     final queryParameters = <String, String>{};
     if (limit != null) {
@@ -855,6 +870,12 @@ class BusinessApi {
     }
     if (end != null) {
       queryParameters['dateTo'] = formatDate(end);
+    }
+    if (shippingDateStart != null) {
+      queryParameters['shippingDateFrom'] = formatDate(shippingDateStart);
+    }
+    if (shippingDateEnd != null) {
+      queryParameters['shippingDateTo'] = formatDate(shippingDateEnd);
     }
     _putNonEmpty(queryParameters, 'keyword', keyword);
     _putNonEmpty(queryParameters, 'query', query);
@@ -872,6 +893,7 @@ class BusinessApi {
       queryParameters['customerFinanceMark'] = '$customerFinanceMark';
     }
     _putNonEmpty(queryParameters, 'salesUserId', salesUserId);
+    _putNonEmpty(queryParameters, 'shippingDateSort', shippingDateSort);
     return queryParameters;
   }
 
@@ -947,6 +969,28 @@ class BusinessApi {
     return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
   }
 
+  Future<SalesOrderRecord> updateSalesOrderPointsDestination(
+    String id, {
+    required String pointsDestination,
+    String? guideId,
+    String? dailyRebateRate,
+    String? monthlyRebateRate,
+  }) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(id)}/points-destination',
+      body: {
+        'pointsDestination': pointsDestination,
+        if (guideId != null) 'guideId': guideId,
+        if (dailyRebateRate != null) 'dailyRebateRate': dailyRebateRate,
+        if (monthlyRebateRate != null) 'monthlyRebateRate': monthlyRebateRate,
+      },
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(
+      _map(_data(payload)['salesOrder']),
+    );
+  }
+
   Future<SalesOrderRecord> salesEditSalesOrder(
     String id,
     Map<String, dynamic> body,
@@ -990,6 +1034,23 @@ class BusinessApi {
     final payload = await _apiClient.patchJson(
       '/api/sales-orders/$id/packing',
       body: body,
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
+  Future<SalesOrderRecord> updateSalesOrderShippingDate(
+    String id, {
+    required String shippingDate,
+    String? reason,
+  }) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(id)}/shipping-date',
+      body: {
+        'shippingDate': shippingDate,
+        if (reason != null && reason.trim().isNotEmpty)
+          'reason': reason.trim(),
+      },
       token: _token,
     );
     return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
@@ -1267,6 +1328,32 @@ class BusinessApi {
       token: _token,
     );
     return SalesOrderRecord.fromJson(_map(_data(payload)['warehouseOrder']));
+  }
+
+  Future<SalesOrderRecord> changeWarehouseOrderFulfillment(
+    String orderId,
+    String warehouseId,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/warehouse/orders/${Uri.encodeComponent(orderId)}/fulfillment-warehouse',
+      body: {'fulfillmentWarehouseId': warehouseId},
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['warehouseOrder']));
+  }
+
+  Future<AfterSalesOrderRecord> createAfterSalesReceipt(
+    String afterSalesOrderId,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/after-sales-orders/${Uri.encodeComponent(afterSalesOrderId)}/receipts',
+      body: body,
+      token: _token,
+    );
+    return AfterSalesOrderRecord.fromJson(
+      _map(_data(payload)['afterSalesOrder']),
+    );
   }
 
   Future<ReconciliationRecord> getReconciliation(DateTime businessDate) async {
@@ -1606,6 +1693,7 @@ class BusinessApi {
       body: {
         'travelGroupIds': travelGroupIds,
         'agencyOnly': true,
+        'allowLatestAgencyRebateRuleFallback': true,
       },
       token: _token,
     );
@@ -1803,6 +1891,35 @@ class BusinessApi {
         .toList();
   }
 
+  Future<List<TravelGroupFinanceSummaryRecord>> listFinanceRows({
+    int limit = 100,
+    DateTime? start,
+    DateTime? end,
+    String? travelGroupId,
+    String? agencyName,
+    String? guideName,
+    String? query,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/travel-group-finance-summaries/finance-rows',
+        _travelGroupFinanceSummaryQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          travelGroupId: travelGroupId,
+          agencyName: agencyName,
+          guideName: guideName,
+          query: query,
+        ),
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['financeRows'])
+        .map((item) => TravelGroupFinanceSummaryRecord.fromJson(item))
+        .toList();
+  }
+
   Future<TravelGroupFinanceSummaryRecord> getTravelGroupFinanceSummary(
     String travelGroupId,
   ) async {
@@ -1858,6 +1975,22 @@ class BusinessApi {
     );
     return TravelGroupFinanceSummaryRecord.fromJson(
       _map(_data(payload)['travelGroupFinanceSummary']),
+    );
+  }
+
+  Future<AfterSalesOrderRecord> updateAfterSalesAgencyDeduction(
+    String afterSalesOrderId,
+    int agencyDeductionAdjustmentCents,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/after-sales-orders/$afterSalesOrderId/agency-deduction',
+      body: {
+        'agencyDeductionAdjustmentCents': agencyDeductionAdjustmentCents,
+      },
+      token: _token,
+    );
+    return AfterSalesOrderRecord.fromJson(
+      _map(_data(payload)['afterSalesOrder']),
     );
   }
 
@@ -1926,6 +2059,188 @@ class BusinessApi {
       ),
       token: _token,
       defaultFileName: 'travel-group-finance-summaries.xlsx',
+    );
+  }
+
+  Future<DownloadedFile> downloadSelectedTravelGroupFinanceSummariesExcel(
+    List<String> travelGroupIds,
+  ) {
+    final normalizedIds = travelGroupIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (normalizedIds.isEmpty) {
+      throw ArgumentError.value(
+        travelGroupIds,
+        'travelGroupIds',
+        'At least one non-empty travel group ID is required.',
+      );
+    }
+    return _apiClient.postBytes(
+      '/api/travel-group-finance-summaries/export',
+      body: {'travelGroupIds': normalizedIds},
+      token: _token,
+      defaultFileName: 'points-table-selected.xlsx',
+    );
+  }
+
+  Future<DownloadedFile> downloadFinanceRowsExcel({
+    int? limit,
+    DateTime? start,
+    DateTime? end,
+    String? agencyName,
+    String? guideName,
+    String? query,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/travel-group-finance-summaries/finance-rows/export',
+        _travelGroupFinanceSummaryQueryParameters(
+          limit: limit,
+          start: start,
+          end: end,
+          agencyName: agencyName,
+          guideName: guideName,
+          query: query,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'finance-rows.xlsx',
+    );
+  }
+
+  Future<DownloadedFile> downloadSelectedFinanceRowsExcel(
+    List<String> financeRowIds,
+  ) {
+    final normalizedIds = financeRowIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (normalizedIds.isEmpty) {
+      throw ArgumentError.value(
+        financeRowIds,
+        'financeRowIds',
+        'At least one non-empty finance row ID is required.',
+      );
+    }
+    return _apiClient.postBytes(
+      '/api/travel-group-finance-summaries/finance-rows/export',
+      body: {'financeRowIds': normalizedIds},
+      token: _token,
+      defaultFileName: 'finance-rows-selected.xlsx',
+    );
+  }
+
+  Future<List<GuidePointsSummaryRecord>> listGuidePointsSummaries({
+    int limit = 100,
+    DateTime? start,
+    DateTime? end,
+    String? travelGroupId,
+    String? guideId,
+    String? guideName,
+    String? query,
+  }) async {
+    final parameters = <String, String>{'limit': '$limit'};
+    if (start != null) {
+      parameters['dateFrom'] = formatDate(start);
+    }
+    if (end != null) {
+      parameters['dateTo'] = formatDate(end);
+    }
+    _putNonEmpty(parameters, 'travelGroupId', travelGroupId);
+    _putNonEmpty(parameters, 'guideId', guideId);
+    _putNonEmpty(parameters, 'guideName', guideName);
+    _putNonEmpty(parameters, 'query', query);
+    final payload = await _apiClient.getJson(
+      _path('/api/guide-points-summaries', parameters),
+      token: _token,
+    );
+    return _list(_data(payload)['guidePointsSummaries'])
+        .map(GuidePointsSummaryRecord.fromJson)
+        .toList();
+  }
+
+  Future<GuidePointsSummaryRecord> getGuidePointsSummary(
+    String id,
+  ) async {
+    final payload = await _apiClient.getJson(
+      '/api/guide-points-summaries/${Uri.encodeComponent(id)}',
+      token: _token,
+    );
+    return GuidePointsSummaryRecord.fromJson(
+      _map(_data(payload)['guidePointsSummary']),
+    );
+  }
+
+  Future<GuidePointsSummaryRecord?> updateGuidePersonalOrderRates(
+    String orderId, {
+    String? dailyRebateRate,
+    String? monthlyRebateRate,
+  }) async {
+    final payload = await _apiClient.patchJson(
+      '/api/guide-points-summaries/orders/'
+      '${Uri.encodeComponent(orderId)}/rates',
+      body: {
+        if (dailyRebateRate != null) 'dailyRebateRate': dailyRebateRate,
+        if (monthlyRebateRate != null) 'monthlyRebateRate': monthlyRebateRate,
+      },
+      token: _token,
+    );
+    final value = _data(payload)['guidePointsSummary'];
+    return value is Map ? GuidePointsSummaryRecord.fromJson(_map(value)) : null;
+  }
+
+  Future<GuidePointsSummaryRecord> setGuideDailyPointsPaid(
+    String id,
+    bool isPaid,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/guide-points-summaries/${Uri.encodeComponent(id)}/'
+      'daily-points-paid',
+      body: {'isPaid': isPaid},
+      token: _token,
+    );
+    return GuidePointsSummaryRecord.fromJson(
+      _map(_data(payload)['guidePointsSummary']),
+    );
+  }
+
+  Future<GuidePointsSummaryRecord> setGuideMonthlyPointsPaid(
+    String id,
+    bool isPaid,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/guide-points-summaries/${Uri.encodeComponent(id)}/'
+      'monthly-points-paid',
+      body: {'isPaid': isPaid},
+      token: _token,
+    );
+    return GuidePointsSummaryRecord.fromJson(
+      _map(_data(payload)['guidePointsSummary']),
+    );
+  }
+
+  Future<DownloadedFile> downloadGuidePointsSummariesExcel({
+    DateTime? start,
+    DateTime? end,
+    String? guideId,
+    String? query,
+  }) {
+    final parameters = <String, String>{};
+    if (start != null) {
+      parameters['dateFrom'] = formatDate(start);
+    }
+    if (end != null) {
+      parameters['dateTo'] = formatDate(end);
+    }
+    _putNonEmpty(parameters, 'guideId', guideId);
+    _putNonEmpty(parameters, 'query', query);
+    return _apiClient.getBytes(
+      _path('/api/guide-points-summaries/export.xlsx', parameters),
+      token: _token,
+      defaultFileName: 'guide-points.xlsx',
     );
   }
 
@@ -2496,6 +2811,53 @@ class GuideRecord {
   }
 }
 
+class AfterSalesOrderItemRecord {
+  const AfterSalesOrderItemRecord({
+    required this.id,
+    required this.afterSalesOrderId,
+    required this.sourceSalesOrderItemId,
+    required this.productId,
+    required this.productName,
+    required this.unit,
+    required this.quantity,
+    required this.originalUnitPriceCents,
+    required this.subtotalCents,
+    required this.isHistoricalPlaceholder,
+    required this.notes,
+    required this.sortOrder,
+  });
+
+  final String id;
+  final String afterSalesOrderId;
+  final String? sourceSalesOrderItemId;
+  final String? productId;
+  final String productName;
+  final String? unit;
+  final int quantity;
+  final int originalUnitPriceCents;
+  final int subtotalCents;
+  final bool isHistoricalPlaceholder;
+  final String? notes;
+  final int sortOrder;
+
+  factory AfterSalesOrderItemRecord.fromJson(Map<String, dynamic> json) {
+    return AfterSalesOrderItemRecord(
+      id: '${json['id'] ?? ''}',
+      afterSalesOrderId: '${json['afterSalesOrderId'] ?? ''}',
+      sourceSalesOrderItemId: _stringOrNull(json['sourceSalesOrderItemId']),
+      productId: _stringOrNull(json['productId']),
+      productName: '${json['productName'] ?? ''}',
+      unit: _stringOrNull(json['unit']),
+      quantity: _intValue(json['quantity']),
+      originalUnitPriceCents: _intValue(json['originalUnitPriceCents']),
+      subtotalCents: _intValue(json['subtotalCents']),
+      isHistoricalPlaceholder: _boolValue(json['isHistoricalPlaceholder']),
+      notes: _stringOrNull(json['notes']),
+      sortOrder: _intValue(json['sortOrder']),
+    );
+  }
+}
+
 class GuidePage {
   const GuidePage({
     required this.guides,
@@ -2911,8 +3273,7 @@ class TravelGroupRecord {
       lossStatus: '${json['lossStatus'] ?? 'PENDING'}'.toUpperCase(),
       lossConfirmedAt: _stringOrNull(json['lossConfirmedAt']),
       lossConfirmedById: _stringOrNull(json['lossConfirmedById']),
-      lossConfirmedByName:
-          _stringOrNull(_map(json['lossConfirmedBy'])['name']),
+      lossConfirmedByName: _stringOrNull(_map(json['lossConfirmedBy'])['name']),
       salesAmountCents: _intValue(json['salesAmountCents']),
       paidDepositCents: _intValue(json['paidDepositCents']),
       cashOnDeliveryCents: _intValue(json['cashOnDeliveryCents']),
@@ -3158,6 +3519,9 @@ class SalesOrderRecord {
     required this.city,
     required this.district,
     required this.orderDate,
+    required this.shippingDate,
+    required this.shippingRiskWarnings,
+    required this.canEditShippingDate,
     required this.salesFormNo,
     required this.totalAmountCents,
     required this.entryAmountCents,
@@ -3173,6 +3537,7 @@ class SalesOrderRecord {
     required this.packingStatus,
     required this.packageCount,
     required this.warehouseRemark,
+    required this.hasPackingMark,
     required this.logisticsNo,
     required this.trackingState,
     required this.trackingStateLabel,
@@ -3199,6 +3564,19 @@ class SalesOrderRecord {
     this.salesEditLimit = 1,
     this.salesEditRemaining = 1,
     this.canEditByCurrentUser = false,
+    this.pointsDestination = 'TRAVEL_AGENCY',
+    this.personalPointsGuideId,
+    this.personalPointsGuide,
+    this.personalGuideNameSnapshot,
+    this.personalDailyRebateRate,
+    this.personalMonthlyRebateRate,
+    this.pointsDestinationChangedById,
+    this.pointsDestinationChangedAt,
+    this.personalRatesUpdatedById,
+    this.personalRatesUpdatedAt,
+    this.sourceSalesOrderId,
+    this.fulfillmentWarehouseId,
+    this.fulfillmentWarehouseName,
   });
 
   final String id;
@@ -3212,6 +3590,9 @@ class SalesOrderRecord {
   final String? city;
   final String? district;
   final String orderDate;
+  final String? shippingDate;
+  final List<SalesOrderShippingRiskWarning> shippingRiskWarnings;
+  final bool canEditShippingDate;
   final String? salesFormNo;
   final int totalAmountCents;
   final int entryAmountCents;
@@ -3227,6 +3608,7 @@ class SalesOrderRecord {
   final String packingStatus;
   final int packageCount;
   final String? warehouseRemark;
+  final bool hasPackingMark;
   final String? logisticsNo;
   final String? trackingState;
   final String? trackingStateLabel;
@@ -3253,6 +3635,22 @@ class SalesOrderRecord {
   final int salesEditLimit;
   final int salesEditRemaining;
   final bool canEditByCurrentUser;
+  final String pointsDestination;
+  final String? personalPointsGuideId;
+  final GuideRecord? personalPointsGuide;
+  final String? personalGuideNameSnapshot;
+  final String? personalDailyRebateRate;
+  final String? personalMonthlyRebateRate;
+  final String? pointsDestinationChangedById;
+  final String? pointsDestinationChangedAt;
+  final String? personalRatesUpdatedById;
+  final String? personalRatesUpdatedAt;
+  final String? sourceSalesOrderId;
+  final String? fulfillmentWarehouseId;
+  final String? fulfillmentWarehouseName;
+
+  bool get isGuidePersonal =>
+      pointsDestination.toUpperCase() == 'GUIDE_PERSONAL';
 
   factory SalesOrderRecord.fromJson(Map<String, dynamic> json) {
     final customer = json['customer'] is Map
@@ -3266,10 +3664,22 @@ class SalesOrderRecord {
             _map(json['tasterCommission']),
           )
         : null;
+    final fulfillmentWarehouseJson = _map(json['fulfillmentWarehouse']);
+    final fulfillmentWarehouseId =
+        _stringOrNull(json['fulfillmentWarehouseId']) ??
+            (fulfillmentWarehouseJson.isNotEmpty
+                ? _stringOrNull(fulfillmentWarehouseJson['id'])
+                : null);
+    final fulfillmentWarehouseName =
+        _stringOrNull(json['fulfillmentWarehouseName']) ??
+            (fulfillmentWarehouseJson.isNotEmpty
+                ? _stringOrNull(fulfillmentWarehouseJson['name'])
+                : null);
     return SalesOrderRecord(
       id: '${json['id'] ?? ''}',
       orderNo: '${json['orderNo'] ?? ''}',
       orderType: '${json['orderType'] ?? 'travel_group'}',
+      sourceSalesOrderId: _stringOrNull(json['sourceSalesOrderId']),
       customerId: _stringOrNull(json['customerId']),
       customer: customer,
       customerName: '${json['customerName'] ?? customer?.name ?? ''}',
@@ -3278,6 +3688,11 @@ class SalesOrderRecord {
       city: _stringOrNull(json['city']),
       district: _stringOrNull(json['district']),
       orderDate: '${json['orderDate'] ?? ''}',
+      shippingDate: _stringOrNull(json['shippingDate']),
+      shippingRiskWarnings: _list(json['shippingRiskWarnings'])
+          .map((item) => SalesOrderShippingRiskWarning.fromJson(_map(item)))
+          .toList(),
+      canEditShippingDate: _boolValue(json['canEditShippingDate']),
       salesFormNo: _stringOrNull(json['salesFormNo']),
       totalAmountCents: _intValue(json['totalAmountCents']),
       entryAmountCents: _intValue(
@@ -3299,6 +3714,7 @@ class SalesOrderRecord {
       packingStatus: '${json['packingStatus'] ?? 'pending'}',
       packageCount: _intValue(json['packageCount']),
       warehouseRemark: _stringOrNull(json['warehouseRemark']),
+      hasPackingMark: _boolValue(json['hasPackingMark']),
       logisticsNo: _stringOrNull(json['logisticsNo']),
       trackingState: _stringOrNull(json['trackingState']),
       trackingStateLabel: _stringOrNull(json['trackingStateLabel']),
@@ -3332,6 +3748,25 @@ class SalesOrderRecord {
           ? _intValue(json['salesEditRemaining'])
           : 1,
       canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
+      pointsDestination:
+          '${json['pointsDestination'] ?? 'TRAVEL_AGENCY'}'.toUpperCase(),
+      personalPointsGuideId: _stringOrNull(json['personalPointsGuideId']),
+      personalPointsGuide: json['personalPointsGuide'] is Map
+          ? GuideRecord.fromJson(_map(json['personalPointsGuide']))
+          : null,
+      personalGuideNameSnapshot:
+          _stringOrNull(json['personalGuideNameSnapshot']),
+      personalDailyRebateRate: _stringOrNull(json['personalDailyRebateRate']),
+      personalMonthlyRebateRate:
+          _stringOrNull(json['personalMonthlyRebateRate']),
+      pointsDestinationChangedById:
+          _stringOrNull(json['pointsDestinationChangedById']),
+      pointsDestinationChangedAt:
+          _stringOrNull(json['pointsDestinationChangedAt']),
+      personalRatesUpdatedById: _stringOrNull(json['personalRatesUpdatedById']),
+      personalRatesUpdatedAt: _stringOrNull(json['personalRatesUpdatedAt']),
+      fulfillmentWarehouseId: fulfillmentWarehouseId,
+      fulfillmentWarehouseName: fulfillmentWarehouseName,
     );
   }
 }
@@ -3457,6 +3892,23 @@ class SalesOrderSerializedUnitRecord {
   }
 }
 
+class SalesOrderShippingRiskWarning {
+  const SalesOrderShippingRiskWarning({
+    required this.code,
+    required this.message,
+  });
+
+  final String code;
+  final String message;
+
+  factory SalesOrderShippingRiskWarning.fromJson(Map<String, dynamic> json) {
+    return SalesOrderShippingRiskWarning(
+      code: '${json['code'] ?? ''}',
+      message: '${json['message'] ?? ''}',
+    );
+  }
+}
+
 class AfterSalesOrderRecord {
   const AfterSalesOrderRecord({
     required this.id,
@@ -3486,6 +3938,22 @@ class AfterSalesOrderRecord {
     required this.updatedById,
     required this.createdAt,
     required this.updatedAt,
+    this.sourceSalesOrderId,
+    this.sourceSalesOrder,
+    this.afterSalesSalesOrderId,
+    this.afterSalesSalesOrder,
+    this.items = const <AfterSalesOrderItemRecord>[],
+    this.deductionCalculationMode = 'manual_product_reference',
+    this.sourceAgencyDeductionCents = 0,
+    this.agencyDeductionRate,
+    this.dailyRebateRate = 0,
+    this.monthlyRebateRate = 0,
+    this.agencyDeductionRuleId,
+    this.agencyRebateRuleId,
+    this.calculationDate,
+    this.agencyDeductionAdjustmentCents,
+    this.financialEffectStatus = 'pending_confirmation',
+    this.receipts = const <AfterSalesReceiptRecord>[],
   });
 
   final String id;
@@ -3515,6 +3983,22 @@ class AfterSalesOrderRecord {
   final String? updatedById;
   final String? createdAt;
   final String? updatedAt;
+  final String? sourceSalesOrderId;
+  final SalesOrderRecord? sourceSalesOrder;
+  final String? afterSalesSalesOrderId;
+  final SalesOrderRecord? afterSalesSalesOrder;
+  final List<AfterSalesOrderItemRecord> items;
+  final String deductionCalculationMode;
+  final int sourceAgencyDeductionCents;
+  final double? agencyDeductionRate;
+  final double dailyRebateRate;
+  final double monthlyRebateRate;
+  final String? agencyDeductionRuleId;
+  final String? agencyRebateRuleId;
+  final String? calculationDate;
+  final int? agencyDeductionAdjustmentCents;
+  final String financialEffectStatus;
+  final List<AfterSalesReceiptRecord> receipts;
 
   factory AfterSalesOrderRecord.fromJson(Map<String, dynamic> json) {
     return AfterSalesOrderRecord(
@@ -3552,6 +4036,83 @@ class AfterSalesOrderRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      sourceSalesOrderId: _stringOrNull(
+        json['sourceSalesOrderId'] ?? json['salesOrderId'],
+      ),
+      sourceSalesOrder: json['sourceSalesOrder'] is Map
+          ? SalesOrderRecord.fromJson(_map(json['sourceSalesOrder']))
+          : json['salesOrder'] is Map
+              ? SalesOrderRecord.fromJson(_map(json['salesOrder']))
+              : null,
+      afterSalesSalesOrderId: _stringOrNull(json['afterSalesSalesOrderId']),
+      afterSalesSalesOrder: json['afterSalesSalesOrder'] is Map
+          ? SalesOrderRecord.fromJson(_map(json['afterSalesSalesOrder']))
+          : null,
+      items: _list(json['items'])
+          .map((item) => AfterSalesOrderItemRecord.fromJson(_map(item)))
+          .toList(),
+      deductionCalculationMode:
+          '${json['deductionCalculationMode'] ?? 'manual_product_reference'}',
+      sourceAgencyDeductionCents: _intValue(json['sourceAgencyDeductionCents']),
+      agencyDeductionRate: _doubleOrNull(json['agencyDeductionRate']),
+      dailyRebateRate: _doubleValue(json['dailyRebateRate']),
+      monthlyRebateRate: _doubleValue(json['monthlyRebateRate']),
+      agencyDeductionRuleId: _stringOrNull(json['agencyDeductionRuleId']),
+      agencyRebateRuleId: _stringOrNull(json['agencyRebateRuleId']),
+      calculationDate: _stringOrNull(json['calculationDate']),
+      agencyDeductionAdjustmentCents:
+          json.containsKey('agencyDeductionAdjustmentCents') &&
+                  json['agencyDeductionAdjustmentCents'] != null
+              ? _intValue(json['agencyDeductionAdjustmentCents'])
+              : null,
+      financialEffectStatus:
+          '${json['financialEffectStatus'] ?? 'pending_confirmation'}',
+      receipts: _list(json['receipts'])
+          .map((item) => AfterSalesReceiptRecord.fromJson(_map(item)))
+          .toList(),
+    );
+  }
+}
+
+class AfterSalesReceiptRecord {
+  const AfterSalesReceiptRecord({
+    required this.id,
+    required this.afterSalesOrderId,
+    required this.warehouseId,
+    required this.warehouseName,
+    required this.productId,
+    required this.productName,
+    required this.quantity,
+    required this.condition,
+    required this.note,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String afterSalesOrderId;
+  final String? warehouseId;
+  final String? warehouseName;
+  final String? productId;
+  final String productName;
+  final int quantity;
+  final String condition;
+  final String? note;
+  final String? createdAt;
+
+  factory AfterSalesReceiptRecord.fromJson(Map<String, dynamic> json) {
+    final warehouse = _map(json['warehouse']);
+    final product = _map(json['product']);
+    return AfterSalesReceiptRecord(
+      id: '${json['id'] ?? ''}',
+      afterSalesOrderId: '${json['afterSalesOrderId'] ?? ''}',
+      warehouseId: _stringOrNull(json['warehouseId']),
+      warehouseName: _stringOrNull(warehouse['name']),
+      productId: _stringOrNull(json['productId']),
+      productName: '${json['productName'] ?? product['name'] ?? ''}',
+      quantity: _intValue(json['quantity']),
+      condition: '${json['condition'] ?? 'SALEABLE'}',
+      note: _stringOrNull(json['note']),
+      createdAt: _stringOrNull(json['createdAt']),
     );
   }
 }
@@ -4308,15 +4869,45 @@ class CommissionRecalculationResult {
       ];
 
   String get displayMessage {
-    final base =
-        '自动重算：订单 $orderCount 笔，成功 $successCount 笔，更新 $updatedCountOrRecords 条，跳过 $skippedCount 项';
-    final warningMessages = warnings
-        .map((warning) => warning.message.trim())
-        .where((message) => message.isNotEmpty)
-        .toSet()
-        .take(3)
-        .join('；');
-    return warningMessages.isEmpty ? base : '$base；$warningMessages';
+    final warningCodes = warnings.map((warning) => warning.code).toSet();
+    const noRuleCodes = {
+      'missing_agency_rebate_rule',
+      'missing_agency_daily_rebate_rule',
+      'missing_agency_monthly_rebate_rule',
+    };
+    final ordersWithoutRules = warnings
+        .where((warning) => noRuleCodes.contains(warning.code))
+        .map((warning) => '${warning.context?['salesOrderId'] ?? ''}')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (orderCount > 0 &&
+        ordersWithoutRules.length >= orderCount &&
+        !warningCodes.contains('agency_rebate_rule_fallback_applied')) {
+      return '未找到适用的旅行社返点规则，日返和月返未更新';
+    }
+    final parts = <String>[
+      '重新计算：成功订单 $successCount 笔',
+      '更新记录 ${updatedRecords.length} 条',
+      '生成记录 ${generatedRecords.length} 条',
+      '跳过 $skippedCount 项',
+      '警告 ${warnings.length} 条',
+    ];
+    if (warningCodes.contains('agency_rebate_rule_fallback_applied')) {
+      parts.add('部分历史订单使用当前启用的返点规则补算');
+    }
+    const warningMessages = <String, String>{
+      'missing_agency_rebate_rule': '部分订单未找到适用的旅行社返点规则',
+      'missing_agency_daily_rebate_rule': '部分订单未找到适用的日返规则',
+      'missing_agency_monthly_rebate_rule': '部分订单未找到适用的月返规则',
+      'ambiguous_agency_rebate_rule': '存在多条同优先级旅行社返点规则，未自动选择',
+      'travel_agency_id_not_matched': '部分订单的旅行社名称未匹配到旅行社档案',
+    };
+    for (final entry in warningMessages.entries) {
+      if (warningCodes.contains(entry.key)) {
+        parts.add(entry.value);
+      }
+    }
+    return parts.join('；');
   }
 
   int get updatedCountOrRecords =>
@@ -4425,6 +5016,20 @@ class TravelGroupFinanceSummaryRecord {
     required this.updatedBy,
     required this.createdAt,
     required this.updatedAt,
+    this.financeRowId = '',
+    this.rowKind = 'travel_group_summary',
+    this.orderType = 'travel_group',
+    this.financeDate,
+    this.afterSalesNo,
+    this.sourceSalesOrderNo,
+    this.afterSalesStatus,
+    this.deductionCalculationMode,
+    this.agencyDeductionAdjustmentCents,
+    this.sourceAgencyDeductionCents = 0,
+    this.financialEffectStatus,
+    this.financeConfirmed = true,
+    this.financialAmountsReady = true,
+    this.includedInFormalTotals = true,
   });
 
   final String? id;
@@ -4474,6 +5079,22 @@ class TravelGroupFinanceSummaryRecord {
   final Stage7UserSummaryRecord? updatedBy;
   final String? createdAt;
   final String? updatedAt;
+  final String financeRowId;
+  final String rowKind;
+  final String orderType;
+  final String? financeDate;
+  final String? afterSalesNo;
+  final String? sourceSalesOrderNo;
+  final String? afterSalesStatus;
+  final String? deductionCalculationMode;
+  final int? agencyDeductionAdjustmentCents;
+  final int sourceAgencyDeductionCents;
+  final String? financialEffectStatus;
+  final bool financeConfirmed;
+  final bool financialAmountsReady;
+  final bool includedInFormalTotals;
+
+  bool get isAfterSales => rowKind == 'after_sales_adjustment';
 
   factory TravelGroupFinanceSummaryRecord.fromJson(
     Map<String, dynamic> json,
@@ -4546,6 +5167,216 @@ class TravelGroupFinanceSummaryRecord {
           : null,
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      financeRowId: _stringOrNull(
+            json['financeRowId'] ?? json['rowId'],
+          ) ??
+          '${json['travelGroupId'] ?? ''}',
+      rowKind: '${json['rowKind'] ?? 'travel_group_summary'}',
+      orderType: '${json['orderType'] ?? 'travel_group'}',
+      financeDate: _stringOrNull(
+        json['financeDate'] ?? _map(json['travelGroup'])['visitDate'],
+      ),
+      afterSalesNo: _stringOrNull(json['afterSalesNo']),
+      sourceSalesOrderNo: _stringOrNull(json['sourceSalesOrderNo']),
+      afterSalesStatus: _stringOrNull(json['afterSalesStatus']),
+      deductionCalculationMode: _stringOrNull(json['deductionCalculationMode']),
+      agencyDeductionAdjustmentCents:
+          json.containsKey('agencyDeductionAdjustmentCents') &&
+                  json['agencyDeductionAdjustmentCents'] != null
+              ? _intValue(json['agencyDeductionAdjustmentCents'])
+              : null,
+      sourceAgencyDeductionCents: _intValue(json['sourceAgencyDeductionCents']),
+      financialEffectStatus: _stringOrNull(json['financialEffectStatus']),
+      financeConfirmed: _boolValue(json['financeConfirmed'] ?? true),
+      financialAmountsReady: _boolValue(json['financialAmountsReady'] ?? true),
+      includedInFormalTotals:
+          _boolValue(json['includedInFormalTotals'] ?? true),
+    );
+  }
+}
+
+class GuidePointsSummaryRecord {
+  const GuidePointsSummaryRecord({
+    required this.id,
+    required this.travelGroupId,
+    required this.guideId,
+    required this.guideNameSnapshot,
+    required this.guide,
+    required this.travelGroup,
+    required this.orderCount,
+    required this.totalSalesAmountCents,
+    required this.totalCashOnDeliveryCents,
+    required this.totalPaidDepositCents,
+    required this.confirmedRefundAmountCents,
+    required this.effectiveSalesAmountCents,
+    required this.totalLiquorCostDeductionCents,
+    required this.totalNetAmountCents,
+    required this.totalDailyPointsCents,
+    required this.totalMonthlyPointsCents,
+    required this.paidPointsCents,
+    required this.unpaidPointsCents,
+    required this.paidDailyPointsCents,
+    required this.unpaidDailyPointsCents,
+    required this.paidMonthlyPointsCents,
+    required this.unpaidMonthlyPointsCents,
+    required this.dailyPointsPaid,
+    required this.dailyPointsPaidBy,
+    required this.dailyPointsPaidAt,
+    required this.monthlyPointsPaid,
+    required this.monthlyPointsPaidBy,
+    required this.monthlyPointsPaidAt,
+    required this.notes,
+    required this.afterSalesImpactStatus,
+    required this.orders,
+    required this.calculationVersion,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String travelGroupId;
+  final String guideId;
+  final String guideNameSnapshot;
+  final GuideRecord? guide;
+  final Stage7TravelGroupSummaryRecord? travelGroup;
+  final int orderCount;
+  final int totalSalesAmountCents;
+  final int totalCashOnDeliveryCents;
+  final int totalPaidDepositCents;
+  final int confirmedRefundAmountCents;
+  final int effectiveSalesAmountCents;
+  final int totalLiquorCostDeductionCents;
+  final int totalNetAmountCents;
+  final int totalDailyPointsCents;
+  final int totalMonthlyPointsCents;
+  final int paidPointsCents;
+  final int unpaidPointsCents;
+  final int paidDailyPointsCents;
+  final int unpaidDailyPointsCents;
+  final int paidMonthlyPointsCents;
+  final int unpaidMonthlyPointsCents;
+  final bool dailyPointsPaid;
+  final Stage7UserSummaryRecord? dailyPointsPaidBy;
+  final String? dailyPointsPaidAt;
+  final bool monthlyPointsPaid;
+  final Stage7UserSummaryRecord? monthlyPointsPaidBy;
+  final String? monthlyPointsPaidAt;
+  final String? notes;
+  final String afterSalesImpactStatus;
+  final List<GuidePointsOrderRecord> orders;
+  final String? calculationVersion;
+  final String? updatedAt;
+
+  factory GuidePointsSummaryRecord.fromJson(Map<String, dynamic> json) {
+    final impact = _map(json['afterSalesImpact']);
+    return GuidePointsSummaryRecord(
+      id: '${json['id'] ?? ''}',
+      travelGroupId: '${json['travelGroupId'] ?? ''}',
+      guideId: '${json['guideId'] ?? ''}',
+      guideNameSnapshot: '${json['guideNameSnapshot'] ?? ''}',
+      guide: json['guide'] is Map
+          ? GuideRecord.fromJson(_map(json['guide']))
+          : null,
+      travelGroup: json['travelGroup'] is Map
+          ? Stage7TravelGroupSummaryRecord.fromJson(
+              _map(json['travelGroup']),
+            )
+          : null,
+      orderCount: _intValue(json['orderCount']),
+      totalSalesAmountCents: _intValue(json['totalSalesAmountCents']),
+      totalCashOnDeliveryCents: _intValue(json['totalCashOnDeliveryCents']),
+      totalPaidDepositCents: _intValue(json['totalPaidDepositCents']),
+      confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
+      effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
+      totalLiquorCostDeductionCents:
+          _intValue(json['totalLiquorCostDeductionCents']),
+      totalNetAmountCents: _intValue(json['totalNetAmountCents']),
+      totalDailyPointsCents: _intValue(json['totalDailyPointsCents']),
+      totalMonthlyPointsCents: _intValue(json['totalMonthlyPointsCents']),
+      paidPointsCents: _intValue(json['paidPointsCents']),
+      unpaidPointsCents: _intValue(json['unpaidPointsCents']),
+      paidDailyPointsCents: _intValue(json['paidDailyPointsCents']),
+      unpaidDailyPointsCents: _intValue(json['unpaidDailyPointsCents']),
+      paidMonthlyPointsCents: _intValue(json['paidMonthlyPointsCents']),
+      unpaidMonthlyPointsCents: _intValue(json['unpaidMonthlyPointsCents']),
+      dailyPointsPaid: _boolValue(json['dailyPointsPaid']),
+      dailyPointsPaidBy: json['dailyPointsPaidBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(
+              _map(json['dailyPointsPaidBy']),
+            )
+          : null,
+      dailyPointsPaidAt: _stringOrNull(json['dailyPointsPaidAt']),
+      monthlyPointsPaid: _boolValue(json['monthlyPointsPaid']),
+      monthlyPointsPaidBy: json['monthlyPointsPaidBy'] is Map
+          ? Stage7UserSummaryRecord.fromJson(
+              _map(json['monthlyPointsPaidBy']),
+            )
+          : null,
+      monthlyPointsPaidAt: _stringOrNull(json['monthlyPointsPaidAt']),
+      notes: _stringOrNull(json['notes']),
+      afterSalesImpactStatus: _stringOrNull(impact['status']) ?? 'none',
+      orders:
+          _list(json['orders']).map(GuidePointsOrderRecord.fromJson).toList(),
+      calculationVersion: _stringOrNull(json['calculationVersion']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class GuidePointsOrderRecord {
+  const GuidePointsOrderRecord({
+    required this.id,
+    required this.orderNo,
+    required this.orderDate,
+    required this.customerName,
+    required this.status,
+    required this.grossAmountCents,
+    required this.confirmedRefundAmountCents,
+    required this.effectiveAmountCents,
+    required this.liquorCostDeductionCents,
+    required this.netAmountCents,
+    required this.guideId,
+    required this.guideName,
+    required this.dailyRebateRate,
+    required this.dailyPointsCents,
+    required this.monthlyRebateRate,
+    required this.monthlyPointsCents,
+  });
+
+  final String id;
+  final String orderNo;
+  final String? orderDate;
+  final String customerName;
+  final String status;
+  final int grossAmountCents;
+  final int confirmedRefundAmountCents;
+  final int effectiveAmountCents;
+  final int liquorCostDeductionCents;
+  final int netAmountCents;
+  final String? guideId;
+  final String? guideName;
+  final String dailyRebateRate;
+  final int dailyPointsCents;
+  final String monthlyRebateRate;
+  final int monthlyPointsCents;
+
+  factory GuidePointsOrderRecord.fromJson(Map<String, dynamic> json) {
+    return GuidePointsOrderRecord(
+      id: '${json['id'] ?? ''}',
+      orderNo: '${json['orderNo'] ?? ''}',
+      orderDate: _stringOrNull(json['orderDate']),
+      customerName: '${json['customerName'] ?? ''}',
+      status: '${json['status'] ?? ''}',
+      grossAmountCents: _intValue(json['grossAmountCents']),
+      confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
+      effectiveAmountCents: _intValue(json['effectiveAmountCents']),
+      liquorCostDeductionCents: _intValue(json['liquorCostDeductionCents']),
+      netAmountCents: _intValue(json['netAmountCents']),
+      guideId: _stringOrNull(json['guideId']),
+      guideName: _stringOrNull(json['guideName']),
+      dailyRebateRate: _stringOrNull(json['dailyRebateRate']) ?? '0.0000',
+      dailyPointsCents: _intValue(json['dailyPointsCents']),
+      monthlyRebateRate: _stringOrNull(json['monthlyRebateRate']) ?? '0.0000',
+      monthlyPointsCents: _intValue(json['monthlyPointsCents']),
     );
   }
 }
@@ -5663,6 +6494,7 @@ class SalesSheetOrderRecord {
     required this.orderTypeLabel,
     required this.salesFormNo,
     required this.orderDate,
+    required this.shippingDate,
     required this.remark,
   });
 
@@ -5672,6 +6504,7 @@ class SalesSheetOrderRecord {
   final String? orderTypeLabel;
   final String? salesFormNo;
   final String? orderDate;
+  final String? shippingDate;
   final String? remark;
 
   factory SalesSheetOrderRecord.fromJson(Map<String, dynamic> json) {
@@ -5682,6 +6515,7 @@ class SalesSheetOrderRecord {
       orderTypeLabel: _stringOrNull(json['orderTypeLabel']),
       salesFormNo: _stringOrNull(json['salesFormNo']),
       orderDate: _stringOrNull(json['orderDate']),
+      shippingDate: _stringOrNull(json['shippingDate']),
       remark: _stringOrNull(json['remark']),
     );
   }
@@ -6814,6 +7648,16 @@ double _doubleValue(Object? value) {
     return value.toDouble();
   }
   return double.tryParse('${value ?? 0}') ?? 0;
+}
+
+double? _doubleOrNull(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  return double.tryParse('$value');
 }
 
 bool _boolValue(Object? value) {
