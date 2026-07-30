@@ -144,12 +144,43 @@ export class CommissionRecordsNestService {
   async recalculateSalesOrderRecords(
     salesOrderId: string,
     options: any = {},
-  ) {
+  ): Promise<any> {
     const orderId = normalizeRequiredString(salesOrderId, 'salesOrderId');
     const prisma = options.prisma || this.prisma;
     const actor = options.actor || null;
 
     const salesOrder = await this.loadSalesOrderForCalculation(prisma, orderId);
+    const requestedTargetTypes = normalizeRecalculationTargetTypes(
+      options.targetTypes,
+    );
+    const skippedTargetTypes = new Set(
+      normalizeRecalculationTargetTypes(options.skipTargetTypes, []),
+    );
+    if (!isCommissionEligibleSalesOrder(salesOrder)) {
+      return {
+        salesOrderId: orderId,
+        records: [],
+        generatedRecords: [],
+        updatedRecords: [],
+        unchangedRecords: [],
+        warnings: [
+          {
+            code: 'sales_order_not_commission_eligible',
+            message:
+              salesOrder.orderType === 'BUYBACK'
+                ? '回购单不产生销售提成、积分或返点。'
+                : '未审核生效的特殊订单不产生销售提成、积分或返点。',
+          },
+        ],
+        requestedTargetTypes,
+        skippedTargetTypes: Array.from(skippedTargetTypes),
+        calculation: {
+          calculationVersion: 'ineligible-sales-order',
+          amounts: {},
+          calculationNote: 'Sales commission calculation was skipped.',
+        },
+      };
+    }
     const [
       salesDeductionRules,
       agencyDeductionRules,
@@ -174,12 +205,6 @@ export class CommissionRecordsNestService {
       allowLatestAgencyRebateRuleFallback:
         options.allowLatestAgencyRebateRuleFallback === true,
     });
-    const requestedTargetTypes = normalizeRecalculationTargetTypes(
-      options.targetTypes,
-    );
-    const skippedTargetTypes = new Set(
-      normalizeRecalculationTargetTypes(options.skipTargetTypes, []),
-    );
     const activeTargetTypes = requestedTargetTypes.filter(
       (targetType) => !skippedTargetTypes.has(targetType),
     );
@@ -766,6 +791,13 @@ export class CommissionRecordsNestService {
         404,
         'SALES_ORDER_NOT_FOUND',
         'Sales order does not exist.',
+      );
+    }
+    if (!isCommissionEligibleSalesOrder(salesOrder)) {
+      throw createHttpError(
+        400,
+        'SALES_ORDER_COMMISSION_INELIGIBLE',
+        'Buyback and non-effective workflow orders cannot receive taster commission.',
       );
     }
     const travelGroup = salesOrder.travelGroup;
@@ -2129,6 +2161,18 @@ function normalizeRole(value: unknown) {
     TASTER: 'taster',
   };
   return map[text] || text.toLowerCase();
+}
+
+function isCommissionEligibleSalesOrder(order: any) {
+  if (String(order?.orderType || '').toUpperCase() === 'BUYBACK') {
+    return false;
+  }
+  const workflowStatus = String(order?.workflowStatus || '').toUpperCase();
+  return (
+    !workflowStatus ||
+    workflowStatus === 'APPROVED' ||
+    workflowStatus === 'COMPLETED'
+  );
 }
 
 function normalizeNullableRate(value: unknown) {

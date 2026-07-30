@@ -42,9 +42,11 @@ test('reconciliation aggregates order types, confirmed refunds, manual receipts,
           internalPurchaseCents: 40000,
           afterSalesCents: 50000,
           refundsCents: 15000,
-          receivableTotalCents: 225000,
+          receivableTotalCents: 205000,
+          payableTotalCents: 20000,
+          netCashFlowCents: 185000,
           actualTotalCents: 0,
-          differenceCents: -225000,
+          differenceCents: -185000,
         },
       );
       assert.equal(initial.body.data.reconciliation.timezone, 'Asia/Shanghai');
@@ -117,9 +119,11 @@ test('reconciliation aggregates order types, confirmed refunds, manual receipts,
         internalPurchaseCents: 40000,
         afterSalesCents: 50000,
         refundsCents: 15000,
-        receivableTotalCents: 231000,
+        receivableTotalCents: 211000,
+        payableTotalCents: 20000,
+        netCashFlowCents: 191000,
         actualTotalCents: 230000,
-        differenceCents: -1000,
+        differenceCents: 39000,
       });
       assert.equal(saved.body.data.reconciliation.reviewStatus, 'pending_review');
 
@@ -234,6 +238,8 @@ function pickAmounts(record) {
     afterSalesCents: record.afterSalesCents,
     refundsCents: record.refundsCents,
     receivableTotalCents: record.receivableTotalCents,
+    payableTotalCents: record.payableTotalCents,
+    netCashFlowCents: record.netCashFlowCents,
     actualTotalCents: record.actualTotalCents,
     differenceCents: record.differenceCents,
   };

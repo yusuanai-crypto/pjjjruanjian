@@ -547,6 +547,7 @@ test('contract: stage7 recalculation runs after sales order amount and item chan
         method: 'PATCH',
         token: admin.token,
         body: {
+          cashOnDeliveryAmountCents: createdOrder.cashOnDeliveryAmountCents,
           items: [
             {
               productName: PRODUCT_NAME,

@@ -1030,6 +1030,45 @@ test('smoke: Prisma schema exposes phase 2 business models and scope fields', ()
   );
 });
 
+test('smoke: sales order payment details are snapshot-based, signed, and independently locked', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const migration = readMigration(
+    '20260729000100_sales_order_payment_details',
+  );
+
+  assert.match(
+    schema,
+    /enum PaymentMethodCategory[\s\S]*DIRECT_RECEIPT[\s\S]*COLLECT_ON_DELIVERY/,
+  );
+  assert.match(schema, /model PaymentMethod[\s\S]*code\s+String[\s\S]*isActive\s+Boolean[\s\S]*isDefault\s+Boolean/);
+  assert.match(schema, /model SalesOrderPaymentDetail[\s\S]*paymentMethodNameSnapshot\s+String[\s\S]*paymentMethodCategorySnapshot\s+PaymentMethodCategory[\s\S]*amountCents\s+Int/);
+  assert.match(schema, /completedAt\s+DateTime\?/);
+  assert.match(schema, /paymentDetailsLocked\s+Boolean\s+@default\(false\)/);
+  assert.match(schema, /paymentDetailsLockedAt\s+DateTime\?/);
+  assert.match(schema, /paymentDetailsUnlockedAt\s+DateTime\?/);
+  assert.doesNotMatch(
+    schema.match(/enum SalesOrderStatus \{[\s\S]*?\n\}/)?.[0] || '',
+    /COMPLETED/,
+  );
+
+  for (const name of [
+    '收钱吧',
+    '中行POS机',
+    '光大POS机',
+    '现金',
+    '货到付款',
+    '转账',
+  ]) {
+    assert.match(migration, new RegExp(name));
+  }
+  assert.match(migration, /'收钱吧', 'direct_receipt', true, 10, true/);
+  assert.match(migration, /'货到付款', 'collect_on_delivery'/);
+  assert.match(migration, /`total_amount_cents` - `cash_on_delivery_amount_cents`/);
+  assert.match(migration, /`collection_confirmed` BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(migration, /ON DELETE RESTRICT/);
+  assert.doesNotMatch(migration, /UNSIGNED/i);
+});
+
 test('smoke: phase 2 Prisma migrations create and evolve business tables', () => {
   assert.equal(
     fs.existsSync(
@@ -2167,6 +2206,59 @@ test('smoke: travel group loss confirmation migration is additive and traceable'
   assert.doesNotMatch(
     migration,
     /DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE|^\s*UPDATE\s+`|INSERT\s+INTO/im,
+  );
+});
+
+test('smoke: travel group not-entered confirmation is nullable, related, and additive', () => {
+  const schema = readPrismaFile('schema.prisma');
+  const user = extractPrismaBlock(schema, 'model User {');
+  const travelGroup = extractPrismaBlock(schema, 'model TravelGroup {');
+
+  assert.match(
+    travelGroup,
+    /notEnteredConfirmedAt\s+DateTime\?\s+@map\("not_entered_confirmed_at"\)\s+@db\.DateTime\(0\)/,
+  );
+  assert.match(
+    travelGroup,
+    /notEnteredConfirmedById\s+String\?\s+@map\("not_entered_confirmed_by_id"\)\s+@db\.Char\(36\)/,
+  );
+  assert.match(
+    travelGroup,
+    /notEnteredConfirmedBy\s+User\?\s+@relation\("TravelGroupNotEnteredConfirmedBy", fields: \[notEnteredConfirmedById\], references: \[id\], onDelete: SetNull\)/,
+  );
+  assert.match(travelGroup, /@@index\(\[notEnteredConfirmedAt\]\)/);
+  assert.match(travelGroup, /@@index\(\[notEnteredConfirmedById\]\)/);
+  assert.match(
+    user,
+    /notEnteredConfirmedTravelGroups\s+TravelGroup\[\]\s+@relation\("TravelGroupNotEnteredConfirmedBy"\)/,
+  );
+
+  const migrationName =
+    '20260729000300_travel_group_not_entered_confirmation';
+  const migration = readMigration(migrationName);
+  assert.match(
+    migration,
+    /ADD COLUMN `not_entered_confirmed_at` DATETIME\(0\) NULL/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `not_entered_confirmed_by_id` CHAR\(36\) NULL/,
+  );
+  assert.match(
+    migration,
+    /travel_groups_not_entered_confirmed_at_idx/,
+  );
+  assert.match(
+    migration,
+    /travel_groups_not_entered_confirmed_by_id_idx/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(`not_entered_confirmed_by_id`\) REFERENCES `users` \(`id`\)\s+ON DELETE SET NULL ON UPDATE CASCADE/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /^\s*(UPDATE|DELETE|DROP|TRUNCATE)\b/im,
   );
 });
 

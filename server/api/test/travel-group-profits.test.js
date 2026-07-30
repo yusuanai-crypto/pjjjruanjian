@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const ExcelJS = require('exceljs');
 
 const {
   assertErrorContract,
@@ -77,8 +78,8 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
-    assert.equal(result.body.data.pagination.total, 6);
-    assert.equal(result.body.data.items[0].groupNo, 'TG-UNMARKED');
+    assert.equal(result.body.data.pagination.total, 7);
+    assert.equal(result.body.data.items[0].groupNo, 'TG-CROSS-DAY');
     const complete = result.body.data.items.find(
       (item) => item.groupNo === 'TG-COMPLETE',
     );
@@ -95,10 +96,63 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
     assert.equal(complete.tasterCommissionCents, 400);
     assert.equal(complete.dailyAgencyRebateCents, 500);
     assert.equal(complete.monthlyAgencyRebateCents, 600);
-    assert.equal(complete.totalExpenseCents, 6300);
-    assert.equal(complete.estimatedProfitCents, 3700);
-    assert.equal(complete.estimatedProfitRate, 0.37);
+    assert.equal(complete.taxFeeCents, 100);
+    assert.equal(complete.paymentServiceFeeCents, 76);
+    assert.equal(complete.totalExpenseCents, 6476);
+    assert.equal(complete.estimatedProfitCents, 3524);
+    assert.equal(complete.estimatedProfitRate, 0.3524);
     assert.equal(complete.calculationStatus, 'complete');
+    assert.deepEqual(complete.paymentMethodFeeBreakdown, [
+      {
+        paymentMethodId: 'payment-method-wallet',
+        paymentMethodNameSnapshot: '收钱吧',
+        serviceFeeRateSnapshot: '0.006000',
+        originalPaymentAmountCents: 6000,
+        sameDayRefundAmountCents: 0,
+        serviceFeeBaseAmountCents: 6000,
+        serviceFeeCents: 36,
+        orderCount: 1,
+      },
+      {
+        paymentMethodId: 'payment-method-card',
+        paymentMethodNameSnapshot: '银行卡',
+        serviceFeeRateSnapshot: '0.010000',
+        originalPaymentAmountCents: 4000,
+        sameDayRefundAmountCents: 0,
+        serviceFeeBaseAmountCents: 4000,
+        serviceFeeCents: 40,
+        orderCount: 1,
+      },
+    ]);
+
+    const estimated = result.body.data.items.find(
+      (item) => item.groupNo === 'TG-ESTIMATED',
+    );
+    assert.equal(estimated.taxFeeCents, 70);
+    assert.equal(estimated.paymentServiceFeeCents, 42);
+    assert.equal(
+      estimated.paymentMethodFeeBreakdown[0].sameDayRefundAmountCents,
+      1000,
+    );
+    assert.equal(
+      estimated.paymentMethodFeeBreakdown[0].serviceFeeBaseAmountCents,
+      7000,
+    );
+
+    const crossDay = result.body.data.items.find(
+      (item) => item.groupNo === 'TG-CROSS-DAY',
+    );
+    assert.equal(crossDay.effectiveSalesAmountCents, 0);
+    assert.equal(crossDay.taxFeeCents, 0);
+    assert.equal(crossDay.paymentServiceFeeCents, 60);
+    assert.equal(
+      crossDay.paymentMethodFeeBreakdown[0].sameDayRefundAmountCents,
+      0,
+    );
+    assert.equal(
+      crossDay.paymentMethodFeeBreakdown[0].serviceFeeBaseAmountCents,
+      10000,
+    );
 
     const incomplete = result.body.data.items.find(
       (item) => item.groupNo === 'TG-INCOMPLETE',
@@ -111,9 +165,29 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
         (warning) => warning.code === 'CIGARETTE_FEE_MISSING',
       ),
     );
+    assert.equal(incomplete.taxFeeCents, null);
+    assert.equal(incomplete.paymentServiceFeeCents, null);
+    assert.ok(
+      incomplete.warnings.some(
+        (warning) =>
+          warning.code === 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
+      ),
+    );
     assert.equal(result.body.data.summary.incompleteGroupCount, 1);
     assert.equal(result.body.data.summary.estimatedProfitCents, null);
-    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 5100);
+    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 4052);
+    assert.equal(result.body.data.summary.taxFeeCents, null);
+    assert.equal(
+      result.body.data.summary.paymentServiceFeeCents,
+      null,
+    );
+
+    const unmarked = result.body.data.items.find(
+      (item) => item.groupNo === 'TG-UNMARKED',
+    );
+    assert.equal(unmarked.effectiveSalesAmountCents, 2000);
+    assert.equal(unmarked.taxFeeCents, 0);
+    assert.equal(unmarked.paymentServiceFeeCents, 0);
 
     const encoded = JSON.stringify(result.body.data);
     for (const forbiddenField of [
@@ -127,6 +201,9 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
       'targetUserId',
       'targetUser',
       'deductionAmountCents',
+      'orderTaxAndServiceFees',
+      'paymentDetailIds',
+      'refundPaymentDetailId',
     ]) {
       assert.equal(encoded.includes(forbiddenField), false, forbiddenField);
     }
@@ -154,10 +231,10 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
 
     const sortedAndPaged = await requestJson(
       baseUrl,
-      `${ENDPOINT}&sortBy=effectiveSalesAmountCents&sortDirection=asc&page=2&pageSize=1`,
+      `${ENDPOINT}&sortBy=effectiveSalesAmountCents&sortDirection=asc&page=3&pageSize=1`,
       { token: admin.token },
     );
-    assert.equal(sortedAndPaged.body.data.pagination.page, 2);
+    assert.equal(sortedAndPaged.body.data.pagination.page, 3);
     assert.equal(sortedAndPaged.body.data.pagination.pageSize, 1);
     assert.equal(sortedAndPaged.body.data.items.length, 1);
     assert.equal(
@@ -172,7 +249,7 @@ test('contract: travel group profit scope uses visit date and global marks', asy
     const boss = await login(baseUrl, 'profit-boss', PASSWORD);
     const open = await requestJson(baseUrl, ENDPOINT, { token: boss.token });
     assert.equal(open.response.status, 200);
-    assert.equal(open.body.data.pagination.total, 6);
+    assert.equal(open.body.data.pagination.total, 7);
     assert.ok(
       open.body.data.items.some((item) => item.groupNo === 'TG-COMPLETE'),
       'order outside the travel-group date range must still be included',
@@ -191,11 +268,115 @@ test('contract: travel group profit scope uses visit date and global marks', asy
       token: boss.token,
     });
     assert.equal(markedOnly.response.status, 200);
-    assert.equal(markedOnly.body.data.pagination.total, 5);
+    assert.equal(markedOnly.body.data.pagination.total, 6);
     assert.equal(
       markedOnly.body.data.items.some(
         (item) => item.groupNo === 'TG-UNMARKED',
       ),
+      false,
+    );
+  });
+});
+
+test('contract: travel group profit export reuses filters and sort without pagination, writes three safe worksheets and logs the action', async () => {
+  await withTravelGroupProfitServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const finance = await login(
+      baseUrl,
+      'profit-finance',
+      PASSWORD,
+    );
+    const exportPath =
+      '/api/analytics/travel-group-profits/export?' +
+      'preset=custom&dateFrom=2026-07-01&dateTo=2026-07-31' +
+      '&sortBy=visitDate&sortDirection=desc&page=1&pageSize=1';
+
+    const anonymous = await fetch(`${baseUrl}${exportPath}`);
+    assert.equal(anonymous.status, 401);
+    const denied = await fetch(`${baseUrl}${exportPath}`, {
+      headers: {
+        authorization: `Bearer ${finance.token}`,
+      },
+    });
+    assert.equal(denied.status, 403);
+
+    const response = await fetch(`${baseUrl}${exportPath}`, {
+      headers: {
+        authorization: `Bearer ${admin.token}`,
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.match(
+      response.headers.get('content-type') || '',
+      /spreadsheetml\.sheet/,
+    );
+    assert.match(
+      response.headers.get('content-disposition') || '',
+      /travel-group-profits-2026-07-01-2026-07-31\.xlsx/,
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()));
+    assert.deepEqual(
+      workbook.worksheets.map((sheet) => sheet.name),
+      ['旅行团利润', '订单税费手续费', '付款方式手续费明细'],
+    );
+    const groupSheet = workbook.getWorksheet('旅行团利润');
+    const orderSheet = workbook.getWorksheet('订单税费手续费');
+    const paymentSheet = workbook.getWorksheet('付款方式手续费明细');
+    assert.equal(groupSheet.actualRowCount, 8);
+    assert.equal(
+      groupSheet.getCell(2, 1).value,
+      'TG-CROSS-DAY',
+      'export must preserve page sorting while ignoring pageSize=1',
+    );
+    assert.equal(orderSheet.actualRowCount, 8);
+    assert.equal(paymentSheet.actualRowCount, 6);
+
+    const groupRows = readWorksheetRows(groupSheet);
+    const complete = groupRows.find((row) => row['团号'] === 'TG-COMPLETE');
+    assert.equal(complete['税费（元）'], 1);
+    assert.equal(complete['付款手续费（元）'], 0.76);
+    const paymentRows = readWorksheetRows(paymentSheet);
+    const estimatedWallet = paymentRows.find(
+      (row) =>
+        row['团号'] === 'TG-ESTIMATED' &&
+        row['付款方式名称快照'] === '收钱吧',
+    );
+    assert.equal(estimatedWallet['当天退款（元）'], 10);
+    assert.equal(estimatedWallet['手续费基数（元）'], 70);
+
+    const workbookText = JSON.stringify(
+      workbook.worksheets.flatMap((sheet) =>
+        sheet.getSheetValues(),
+      ),
+    );
+    for (const privateValue of [
+      'Sensitive Customer',
+      '13900000000',
+      'Sensitive Address',
+      'sensitive-user-id',
+      'ruleSnapshot',
+      'sourceSnapshot',
+    ]) {
+      assert.equal(workbookText.includes(privateValue), false, privateValue);
+    }
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=analytics.travel_group_profit.export',
+      { token: admin.token },
+    );
+    assert.equal(logs.response.status, 200);
+    assert.equal(logs.body.data.logs.length, 1);
+    assert.equal(logs.body.data.logs[0].afterData.rowCount, 19);
+    assert.deepEqual(logs.body.data.logs[0].afterData.rowCounts, {
+      travelGroups: 7,
+      orders: 7,
+      paymentMethods: 5,
+    });
+    assert.equal(
+      'page' in logs.body.data.logs[0].afterData.filters,
       false,
     );
   });
@@ -255,6 +436,13 @@ function withTravelGroupProfitServer(run) {
           'Agency Hidden',
         ),
         group(
+          'cross-day',
+          'TG-CROSS-DAY',
+          '2026-07-16',
+          true,
+          'Agency Cross Day',
+        ),
+        group(
           'outside',
           'TG-OUTSIDE',
           '2026-08-01',
@@ -285,6 +473,9 @@ function withTravelGroupProfitServer(run) {
         order('unmarked', '2026-07-15', 2000, 0, [
           line('unmarked', 2000, 500),
         ]),
+        order('cross-day', '2026-07-16', 10000, 0, [
+          line('cross-day', 10000, 3000),
+        ]),
         order('outside', '2026-08-01', 9999, 0, [
           line('outside', 9999, 1),
         ]),
@@ -301,6 +492,10 @@ function withTravelGroupProfitServer(run) {
           refundAmountCents: 1000,
           status: 'COMPLETED',
           financeConfirmed: true,
+          refundPaymentDetailId: 'payment-estimated-wallet',
+          refundPaymentMethodNameSnapshot: '收钱吧',
+          refundOccurredAt: '2026-08-01T12:00:00.000Z',
+          deductsPaymentServiceFee: true,
           createdAt: '2026-07-11T08:00:00.000Z',
         },
         {
@@ -315,6 +510,23 @@ function withTravelGroupProfitServer(run) {
           status: 'WAITING_REFUND',
           financeConfirmed: false,
           createdAt: '2026-07-11T09:00:00.000Z',
+        },
+        {
+          id: 'refund-cross-day-confirmed',
+          afterSalesNo: 'AS-CROSS-DAY-CONFIRMED',
+          salesOrderId: 'order-cross-day',
+          customerId: 'profit-customer-marked',
+          issueType: 'OTHER',
+          actionType: 'REFUND',
+          description: 'full cross-day refund keeps service fee',
+          refundAmountCents: 10000,
+          status: 'COMPLETED',
+          financeConfirmed: true,
+          refundPaymentDetailId: null,
+          refundPaymentMethodNameSnapshot: null,
+          refundOccurredAt: '2026-07-16T16:00:00.000Z',
+          deductsPaymentServiceFee: false,
+          createdAt: '2026-07-16T16:00:00.000Z',
         },
       ],
       commissionRecords: [
@@ -337,6 +549,7 @@ function withTravelGroupProfitServer(run) {
         financeSummary('incomplete', 0, 0),
         financeSummary('loss', 200, 100),
         financeSummary('unmarked', 0, 0),
+        financeSummary('cross-day', 0, 0),
       ],
     },
   });
@@ -368,6 +581,61 @@ function group(id, groupNo, visitDate, financeMark, travelAgency) {
 }
 
 function order(id, orderDate, totalAmountCents, logisticsFeeCents, items) {
+  const financeMark = [
+    'complete',
+    'estimated',
+    'incomplete',
+    'cross-day',
+  ].includes(id);
+  const paymentDetails =
+    id === 'complete'
+      ? [
+          payment(
+            'payment-complete-wallet',
+            'payment-method-wallet',
+            '收钱吧',
+            6000,
+            '0.006000',
+          ),
+          payment(
+            'payment-complete-card',
+            'payment-method-card',
+            '银行卡',
+            4000,
+            '0.010000',
+          ),
+        ]
+      : id === 'estimated'
+        ? [
+            payment(
+              'payment-estimated-wallet',
+              'payment-method-wallet',
+              '收钱吧',
+              8000,
+              '0.006000',
+            ),
+          ]
+        : id === 'incomplete'
+          ? [
+              payment(
+                'payment-incomplete-wallet',
+                'payment-method-wallet',
+                '收钱吧',
+                6000,
+                null,
+              ),
+            ]
+          : id === 'cross-day'
+            ? [
+                payment(
+                  'payment-cross-day-wallet',
+                  'payment-method-wallet',
+                  '收钱吧',
+                  10000,
+                  '0.006000',
+                ),
+              ]
+            : [];
   return {
     id: `order-${id}`,
     orderNo: `SO-${id}`,
@@ -379,6 +647,14 @@ function order(id, orderDate, totalAmountCents, logisticsFeeCents, items) {
     status: id === 'estimated' ? 'PARTIAL_REFUND' : 'VALID',
     totalAmountCents,
     logisticsFeeCents,
+    financeMark,
+    taxRateSnapshot:
+      id === 'incomplete'
+        ? null
+        : financeMark
+          ? '0.010000'
+          : null,
+    paymentDetails,
     items,
   };
 }
@@ -424,4 +700,38 @@ function financeSummary(id, totalDailyRebateCents, totalMonthlyRebateCents) {
     totalMonthlyRebateCents,
     sourceSnapshot: { sensitive: true },
   };
+}
+
+function payment(
+  id,
+  paymentMethodId,
+  paymentMethodNameSnapshot,
+  amountCents,
+  serviceFeeRateSnapshot,
+) {
+  return {
+    id,
+    paymentMethodId,
+    paymentMethodNameSnapshot,
+    amountCents,
+    serviceFeeRateSnapshot,
+    serviceFeeBaseAmountSnapshotCents: amountCents,
+  };
+}
+
+function readWorksheetRows(sheet) {
+  const headers = sheet.getRow(1).values.slice(1).map(String);
+  const rows = [];
+  for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+    const values = sheet.getRow(rowNumber).values.slice(1);
+    rows.push(
+      Object.fromEntries(
+        headers.map((header, index) => [
+          header,
+          values[index] ?? '',
+        ]),
+      ),
+    );
+  }
+  return rows;
 }

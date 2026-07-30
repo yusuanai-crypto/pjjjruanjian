@@ -39,7 +39,7 @@ void main() {
   });
 
   testWidgets(
-      'personal dialog defaults to group guide and 50/0, validates percent, and can choose another guide',
+      'personal dialog requires a final amount, supports partial changes and cancels with zero',
       (tester) async {
     final client = _OrderPointsApiClient();
     await _pumpOrderPage(tester, client, UserRole.finance);
@@ -52,12 +52,16 @@ void main() {
     await tester.tap(action);
     await tester.pumpAndSettle();
 
-    expect(find.text('确认订单走个人'), findsOneWidget);
+    expect(find.text('调整订单走个人金额'), findsOneWidget);
     expect(find.text('SO-PERSONAL-001'), findsWidgets);
     expect(find.text('TG-PERSONAL-001'), findsOneWidget);
     expect(find.text('测试旅行社'), findsOneWidget);
     expect(find.text('默认导游'), findsWidgets);
     expect(find.text('¥1000.00'), findsWidgets);
+    final amountField = tester.widget<TextFormField>(
+      find.byKey(const ValueKey('personal-points-amount')),
+    );
+    expect(amountField.controller?.text, isEmpty);
 
     final dailyField = tester.widget<TextFormField>(
       find.byKey(const ValueKey('personal-points-daily-percent')),
@@ -73,17 +77,17 @@ void main() {
     );
     expect(dropdown.initialValue, 'guide-a');
 
-    await tester.enterText(
-      find.byKey(const ValueKey('personal-points-daily-percent')),
-      '100.01',
-    );
     await tester.tap(
       find.byKey(const ValueKey('personal-points-confirm-button')),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('必须在 0% 至 100% 之间'), findsOneWidget);
+    expect(find.textContaining('请输入调整后的走个人金额'), findsOneWidget);
     expect(client.pointsDestinationBodies, isEmpty);
 
+    await tester.enterText(
+      find.byKey(const ValueKey('personal-points-amount')),
+      '300.00',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('personal-points-daily-percent')),
       '50',
@@ -103,90 +107,57 @@ void main() {
     expect(
       client.pointsDestinationBodies.single,
       {
-        'pointsDestination': 'GUIDE_PERSONAL',
+        'personalAmountCents': 30000,
         'guideId': 'guide-b',
         'dailyRebateRate': '0.5000',
         'monthlyRebateRate': '0.0000',
       },
     );
-    expect(find.text('走个人'), findsWidgets);
+    expect(find.textContaining('走个人 ¥300.00 / 正常 ¥700.00'), findsWidgets);
     expect(
       find.byKey(
-        const ValueKey('order-points-destination-agency-button'),
+        const ValueKey('order-points-destination-personal-button'),
       ),
       findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey('order-personal-points-edit-button')),
-      findsOneWidget,
+      findsNothing,
     );
 
     await tester.tap(
-      find.byKey(const ValueKey('order-personal-points-edit-button')),
+      find.byKey(
+        const ValueKey('order-points-destination-personal-button'),
+      ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('修改个人积分设置'), findsOneWidget);
-    final editDailyField = tester.widget<TextFormField>(
-      find.byKey(const ValueKey('personal-points-daily-percent')),
+    final editAmountField = tester.widget<TextFormField>(
+      find.byKey(const ValueKey('personal-points-amount')),
     );
-    final editMonthlyField = tester.widget<TextFormField>(
-      find.byKey(const ValueKey('personal-points-monthly-percent')),
-    );
-    expect(editDailyField.controller?.text, '50');
-    expect(editMonthlyField.controller?.text, '0');
-    final editDropdown = tester.widget<DropdownButtonFormField<String>>(
-      find.byKey(const ValueKey('personal-points-guide-picker')),
-    );
-    expect(editDropdown.initialValue, 'guide-b');
-
+    expect(editAmountField.controller?.text, '300.00');
     await tester.enterText(
-      find.byKey(const ValueKey('personal-points-monthly-percent')),
-      '10',
+      find.byKey(const ValueKey('personal-points-amount')),
+      '0',
     );
-    await tester.tap(
-      find.byKey(const ValueKey('personal-points-guide-picker')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('默认导游').last);
-    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('personal-points-confirm-button')),
     );
     await tester.pumpAndSettle();
     expect(client.pointsDestinationBodies.last, {
-      'pointsDestination': 'GUIDE_PERSONAL',
-      'guideId': 'guide-a',
-      'dailyRebateRate': '0.5000',
-      'monthlyRebateRate': '0.1000',
-    });
-
-    await tester.tap(
-      find.byKey(
-        const ValueKey('order-points-destination-agency-button'),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(
-        const ValueKey('order-points-destination-agency-confirm'),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(client.pointsDestinationBodies.last, {
-      'pointsDestination': 'TRAVEL_AGENCY',
+      'personalAmountCents': 0,
     });
   });
 
   testWidgets(
-      'boss can transfer a personal order back but cannot edit its guide',
+      'boss can adjust a personal order independently of guide table maintenance',
       (tester) async {
-    final client = _OrderPointsApiClient()..personal = true;
+    final client = _OrderPointsApiClient()..personalAmountCents = 100000;
     await _pumpOrderPage(tester, client, UserRole.boss);
     await _openDetail(tester);
 
     expect(
       find.byKey(
-        const ValueKey('order-points-destination-agency-button'),
+        const ValueKey('order-points-destination-personal-button'),
       ),
       findsOneWidget,
     );
@@ -228,7 +199,7 @@ Future<void> _openDetail(WidgetTester tester) async {
 class _OrderPointsApiClient extends ApiClient {
   _OrderPointsApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
 
-  bool personal = false;
+  int personalAmountCents = 0;
   String personalGuideId = 'guide-b';
   final List<Map<String, dynamic>> pointsDestinationBodies = [];
 
@@ -271,7 +242,7 @@ class _OrderPointsApiClient extends ApiClient {
     if (path == '/api/sales-orders/order-personal/points-destination') {
       final request = Map<String, dynamic>.from(body ?? {});
       pointsDestinationBodies.add(request);
-      personal = request['pointsDestination'] == 'GUIDE_PERSONAL';
+      personalAmountCents = request['personalAmountCents'] as int;
       personalGuideId = '${request['guideId'] ?? personalGuideId}';
       return {
         'data': {'salesOrder': _orderJson()},
@@ -281,6 +252,7 @@ class _OrderPointsApiClient extends ApiClient {
   }
 
   Map<String, dynamic> _orderJson() {
+    final personal = personalAmountCents > 0;
     final guide = personalGuideId == 'guide-a'
         ? _guideJson('guide-a', '默认导游', '13900000001')
         : _guideJson('guide-b', '其他导游', '13900000002');
@@ -292,6 +264,8 @@ class _OrderPointsApiClient extends ApiClient {
       'customerName': '积分客户',
       'orderDate': '2026-07-27T00:00:00.000Z',
       'totalAmountCents': 100000,
+      'personalAmountCents': personalAmountCents,
+      'normalAmountCents': 100000 - personalAmountCents,
       'cashOnDeliveryAmountCents': 0,
       'status': 'VALID',
       'packingStatus': 'PACKED',

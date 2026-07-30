@@ -2,7 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  allocateCentsByPersonalRatio,
   calculateOrderEffectiveAmount,
+  calculateSalesOrderPointsSplit,
   calculateStage7CommissionAndPoints,
 } = require('../src/modules/commissions/commission-calculation.helper');
 
@@ -18,8 +20,8 @@ test('unit: stage7 original-order calculation ignores independent after-sales ad
     employeeBaseAmountCents: 900000,
     agencyDeductionAmountCents: 120000,
     agencyBaseAmountCents: 880000,
-    dailyRebateCents: 26400,
-    monthlyRebateCents: 17600,
+    dailyRebateCents: 23400,
+    monthlyRebateCents: 15600,
   });
   assert.equal(
     result.warnings.some(
@@ -52,13 +54,13 @@ test('unit: stage7 original-order calculation ignores independent after-sales ad
     agencyRebateRuleId: 'rule-agency-rebate',
     agencyId: 'agency-1',
     rateSnapshot: '0.0300',
-    pointsCents: 26400,
+    pointsCents: 23400,
   });
   assertLine(result.agencyRebateLines, 'AGENCY_MONTHLY_REBATE', {
     agencyRebateRuleId: 'rule-agency-rebate',
     agencyId: 'agency-1',
     rateSnapshot: '0.0200',
-    pointsCents: 17600,
+    pointsCents: 15600,
   });
 
   assert.deepEqual(result.sourceSnapshot.confirmedRefunds, []);
@@ -72,6 +74,98 @@ test('unit: stage7 original-order calculation ignores independent after-sales ad
   assert.equal(result.ruleSnapshot.agencyDeductionRules.length, 2);
   assert.equal(result.ruleSnapshot.agencyRebateRule.id, 'rule-agency-rebate');
   assert.match(result.calculationNote, /effective=1000000/);
+});
+
+test('unit: points split uses integer cents for zero, partial, and full personal amounts without changing employee commissions', () => {
+  const partial = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        personalAmountCents: 300000,
+        pointsDestination: 'GUIDE_PERSONAL',
+        personalDailyRebateRate: '0.5000',
+        personalMonthlyRebateRate: '0.1000',
+        afterSalesOrders: [
+          {
+            id: 'after-sales-split',
+            refundAmountCents: 100000,
+            personalPointsRefundAmountCents: 40000,
+            financeConfirmed: true,
+          },
+        ],
+      },
+    }),
+  );
+  assert.deepEqual(
+    {
+      total: partial.pointsSplit.totalAmountCents,
+      personal: partial.pointsSplit.personalAmountCents,
+      normal: partial.pointsSplit.normalAmountCents,
+      personalRefund: partial.pointsSplit.personalRefundAmountCents,
+      normalRefund: partial.pointsSplit.normalRefundAmountCents,
+      personalEffective:
+        partial.pointsSplit.personalEffectiveAmountCents,
+      normalEffective: partial.pointsSplit.normalEffectiveAmountCents,
+      personalDeduction:
+        partial.pointsSplit.personalAgencyDeductionAmountCents,
+      normalDeduction:
+        partial.pointsSplit.normalAgencyDeductionAmountCents,
+      personalBase: partial.pointsSplit.personalAgencyBaseAmountCents,
+      normalBase: partial.pointsSplit.normalAgencyBaseAmountCents,
+    },
+    {
+      total: 1000000,
+      personal: 300000,
+      normal: 700000,
+      personalRefund: 40000,
+      normalRefund: 60000,
+      personalEffective: 260000,
+      normalEffective: 640000,
+      personalDeduction: 36000,
+      normalDeduction: 84000,
+      personalBase: 224000,
+      normalBase: 556000,
+    },
+  );
+  assert.equal(partial.pointsSplit.normalDailyRebateCents, 16680);
+  assert.equal(partial.pointsSplit.normalMonthlyRebateCents, 11120);
+  assert.equal(partial.pointsSplit.personalDailyRebateCents, 112000);
+  assert.equal(partial.pointsSplit.personalMonthlyRebateCents, 22400);
+  assert.equal(
+    partial.commissionLines.find(
+      (line) => line.targetType === 'SALES_COMMISSION',
+    ).amountCents,
+    18000,
+  );
+  assert.equal(partial.amounts.grossAmountCents, 1000000);
+
+  const zero = calculateSalesOrderPointsSplit({
+    totalAmountCents: 1000,
+    personalAmountCents: 0,
+    afterSalesOrders: [],
+  });
+  assert.equal(zero.personalAmountCents, 0);
+  assert.equal(zero.normalAmountCents, 1000);
+
+  const full = calculateSalesOrderPointsSplit({
+    totalAmountCents: 1000,
+    personalAmountCents: 1000,
+    afterSalesOrders: [
+      {
+        refundAmountCents: 200,
+        personalPointsRefundAmountCents: 200,
+        financeConfirmed: true,
+      },
+    ],
+  });
+  assert.equal(full.personalAmountCents, 1000);
+  assert.equal(full.normalAmountCents, 0);
+  assert.equal(full.personalEffectiveAmountCents, 800);
+  assert.equal(full.normalEffectiveAmountCents, 0);
+
+  assert.deepEqual(
+    allocateCentsByPersonalRatio(101, 100, 33),
+    { normalAmountCents: 68, personalAmountCents: 33 },
+  );
 });
 
 test('unit: historical refunded sources stay positive while standalone cancelled orders are zero', () => {
@@ -102,7 +196,7 @@ test('unit: historical refunded sources stay positive while standalone cancelled
     refunded.agencyRebateLines.find(
       (line) => line.targetType === 'AGENCY_DAILY_REBATE',
     ).pointsCents,
-    26400,
+    0,
   );
 
   const cancelled = calculateStage7CommissionAndPoints(
@@ -694,8 +788,8 @@ test('unit: manual fallback applies the only later active agency rebate rule', (
     }),
   );
 
-  assert.equal(result.amounts.dailyRebateCents, 26400);
-  assert.equal(result.amounts.monthlyRebateCents, 17600);
+  assert.equal(result.amounts.dailyRebateCents, 23400);
+  assert.equal(result.amounts.monthlyRebateCents, 15600);
   assertWarningCodes(result, ['agency_rebate_rule_fallback_applied']);
   assert.equal(
     result.ruleSnapshot.agencyRebateRule.matchMode,
@@ -740,7 +834,7 @@ test('unit: default matching stays strict and historical rule wins before fallba
       ],
     }),
   );
-  assert.equal(historical.amounts.dailyRebateCents, 8800);
+  assert.equal(historical.amounts.dailyRebateCents, 7800);
   assert.equal(historical.ruleSnapshot.agencyRebateRule.id, 'historical-rule');
   assert.equal(historical.ruleSnapshot.agencyRebateRule.matchMode, 'agency_id');
   assert.equal(

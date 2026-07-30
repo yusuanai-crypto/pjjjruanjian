@@ -42,7 +42,6 @@ class PlatformLocalReminderScheduler implements LocalReminderScheduler {
   final FlutterLocalNotificationsPlugin _plugin;
   ValueChanged<String>? _onActivated;
   bool _initialized = false;
-  bool _exactAlarmsAllowed = false;
 
   @override
   Future<void> initialize(ValueChanged<String> onReminderActivated) async {
@@ -70,8 +69,6 @@ class PlatformLocalReminderScheduler implements LocalReminderScheduler {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       await android?.requestNotificationsPermission();
-      _exactAlarmsAllowed =
-          await android?.requestExactAlarmsPermission() ?? false;
     }
     await handleNotificationActivation();
   }
@@ -172,32 +169,15 @@ class PlatformLocalReminderScheduler implements LocalReminderScheduler {
       ),
       windows: WindowsNotificationDetails(),
     );
-    final scheduleMode = _exactAlarmsAllowed
-        ? AndroidScheduleMode.exactAllowWhileIdle
-        : AndroidScheduleMode.inexactAllowWhileIdle;
-    try {
-      await _plugin.zonedSchedule(
-        id: scheduled.notificationId,
-        title: '你有一项待办需要处理',
-        body: '请打开品鉴酱酒中心查看待办详情。',
-        scheduledDate: tz.TZDateTime.from(scheduledAt, tz.local),
-        notificationDetails: details,
-        androidScheduleMode: scheduleMode,
-        payload: 'todo:${reminder.id}',
-      );
-    } catch (_) {
-      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) rethrow;
-      _exactAlarmsAllowed = false;
-      await _plugin.zonedSchedule(
-        id: scheduled.notificationId,
-        title: '你有一项待办需要处理',
-        body: '请打开品鉴酱酒中心查看待办详情。',
-        scheduledDate: tz.TZDateTime.from(scheduledAt, tz.local),
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: 'todo:${reminder.id}',
-      );
-    }
+    await _plugin.zonedSchedule(
+      id: scheduled.notificationId,
+      title: '你有一项待办需要处理',
+      body: '请打开品鉴酱酒中心查看待办详情。',
+      scheduledDate: tz.TZDateTime.from(scheduledAt, tz.local),
+      notificationDetails: details,
+      androidScheduleMode: todoReminderAndroidScheduleMode,
+      payload: 'todo:${reminder.id}',
+    );
   }
 
   void _handleResponse(NotificationResponse response) {
@@ -241,6 +221,10 @@ class PlatformLocalReminderScheduler implements LocalReminderScheduler {
     );
   }
 }
+
+@visibleForTesting
+const todoReminderAndroidScheduleMode =
+    AndroidScheduleMode.inexactAllowWhileIdle;
 
 @visibleForTesting
 class LocalReminderScheduleEntry {

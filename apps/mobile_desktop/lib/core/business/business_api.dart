@@ -1,6 +1,7 @@
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../api/api_client.dart';
+import '../file_security_policy.dart';
 
 typedef DownloadedFile = ApiDownloadedFile;
 
@@ -13,6 +14,252 @@ class BusinessApi {
 
   final ApiClient _apiClient;
   final String _token;
+
+  Future<SpecialOrderListPage> listSpecialOrders({
+    String? orderType,
+    String? workflowStatus,
+    String? keyword,
+    int limit = 100,
+    int skip = 0,
+  }) async {
+    final query = <String, String>{
+      'limit': '$limit',
+      'skip': '$skip',
+    };
+    _putNonEmpty(query, 'orderType', orderType);
+    _putNonEmpty(query, 'workflowStatus', workflowStatus);
+    _putNonEmpty(query, 'keyword', keyword);
+    final payload = await _apiClient.getJson(
+      _path('/api/special-orders', query),
+      token: _token,
+    );
+    return SpecialOrderListPage.fromJson(_data(payload));
+  }
+
+  Future<SpecialOrderReferenceData> getSpecialOrderReferenceData({
+    String? keyword,
+    String? customerId,
+  }) async {
+    final query = <String, String>{};
+    _putNonEmpty(query, 'keyword', keyword);
+    _putNonEmpty(query, 'customerId', customerId);
+    final payload = await _apiClient.getJson(
+      _path('/api/special-orders/reference-data', query),
+      token: _token,
+    );
+    return SpecialOrderReferenceData.fromJson(
+      _map(_data(payload)['referenceData']),
+    );
+  }
+
+  Future<SpecialOrderRecord> getSpecialOrder(String id) async {
+    final payload = await _apiClient.getJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}',
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<SpecialOrderRecord> createSpecialOrder(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/special-orders',
+      body: body,
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<SpecialOrderRecord> updateSpecialOrder(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}',
+      body: body,
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<SpecialOrderRecord> cancelSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+  }) async {
+    final payload = await _apiClient.deleteJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}',
+      body: {
+        'workflowVersion': workflowVersion,
+        'idempotencyKey': idempotencyKey,
+      },
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<SpecialOrderRecord> submitSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+  }) {
+    return _specialOrderAction(
+      id,
+      'submit',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<SpecialOrderRecord> withdrawSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+  }) {
+    return _specialOrderAction(
+      id,
+      'withdraw',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<SpecialOrderRecord> approveSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+  }) {
+    return _specialOrderAction(
+      id,
+      'approve',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<SpecialOrderRecord> rejectSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+    required String reason,
+  }) {
+    return _specialOrderAction(
+      id,
+      'reject',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+      reason: reason,
+    );
+  }
+
+  Future<SpecialOrderRecord> unapproveSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+    required String reason,
+  }) {
+    return _specialOrderAction(
+      id,
+      'unapprove',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+      reason: reason,
+    );
+  }
+
+  Future<SpecialOrderRecord> completeSpecialOrder(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+  }) {
+    return _specialOrderAction(
+      id,
+      'complete',
+      workflowVersion: workflowVersion,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<SpecialOrderRecord> recordSpecialOrderPayment(
+    String id, {
+    required int workflowVersion,
+    required String idempotencyKey,
+    required int amountCents,
+    required String paymentMethodId,
+    String? referenceNo,
+    String? remark,
+  }) async {
+    final payload = await _apiClient.postJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}/payments',
+      body: {
+        'workflowVersion': workflowVersion,
+        'idempotencyKey': idempotencyKey,
+        'amountCents': amountCents,
+        'paymentMethodId': paymentMethodId,
+        if (referenceNo?.trim().isNotEmpty == true)
+          'referenceNo': referenceNo!.trim(),
+        if (remark?.trim().isNotEmpty == true) 'remark': remark!.trim(),
+      },
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<SpecialOrderRecord> _specialOrderAction(
+    String id,
+    String action, {
+    required int workflowVersion,
+    required String idempotencyKey,
+    String? reason,
+  }) async {
+    final payload = await _apiClient.postJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}/$action',
+      body: {
+        'workflowVersion': workflowVersion,
+        'idempotencyKey': idempotencyKey,
+        if (reason?.trim().isNotEmpty == true) 'reason': reason!.trim(),
+      },
+      token: _token,
+    );
+    return SpecialOrderRecord.fromJson(
+      _map(_data(payload)['specialOrder']),
+    );
+  }
+
+  Future<DownloadedFile> downloadSpecialOrdersExcel({
+    String? orderType,
+    String? workflowStatus,
+    String? keyword,
+  }) {
+    final query = <String, String>{};
+    _putNonEmpty(query, 'orderType', orderType);
+    _putNonEmpty(query, 'workflowStatus', workflowStatus);
+    _putNonEmpty(query, 'keyword', keyword);
+    return _apiClient.getBytes(
+      _path('/api/special-orders/export.xlsx', query),
+      token: _token,
+      defaultFileName: 'special-orders.xlsx',
+    );
+  }
+
+  Future<Map<String, dynamic>> getSpecialOrderPrintData(String id) async {
+    final payload = await _apiClient.getJson(
+      '/api/special-orders/${Uri.encodeComponent(id)}/print-data',
+      token: _token,
+    );
+    return _map(_data(payload)['printData']);
+  }
 
   Future<AiChatResponse> sendAiChatMessage(AiChatRequest request) async {
     final payload = await _apiClient.postJson(
@@ -77,6 +324,7 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? tastingRoomNo,
     String? liaisonTasterId,
     String? travelAgency,
     String? groupType,
@@ -91,6 +339,7 @@ class BusinessApi {
       groupNo: groupNo,
       guideId: guideId,
       tasterId: tasterId,
+      tastingRoomNo: tastingRoomNo,
       liaisonTasterId: liaisonTasterId,
       travelAgency: travelAgency,
       groupType: groupType,
@@ -116,6 +365,7 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? tastingRoomNo,
     String? liaisonTasterId,
     String? travelAgency,
     String? groupType,
@@ -130,6 +380,7 @@ class BusinessApi {
       groupNo: groupNo,
       guideId: guideId,
       tasterId: tasterId,
+      tastingRoomNo: tastingRoomNo,
       liaisonTasterId: liaisonTasterId,
       travelAgency: travelAgency,
       groupType: groupType,
@@ -151,6 +402,7 @@ class BusinessApi {
     String? groupNo,
     String? guideId,
     String? tasterId,
+    String? tastingRoomNo,
     String? liaisonTasterId,
     String? travelAgency,
     String? groupType,
@@ -171,6 +423,7 @@ class BusinessApi {
     _putNonEmpty(query, 'groupNo', groupNo);
     _putNonEmpty(query, 'guideId', guideId);
     _putNonEmpty(query, 'tasterId', tasterId);
+    _putNonEmpty(query, 'tastingRoomNo', tastingRoomNo);
     _putNonEmpty(query, 'liaisonTasterId', liaisonTasterId);
     _putNonEmpty(query, 'travelAgency', travelAgency);
     _putNonEmpty(query, 'groupType', groupType);
@@ -289,6 +542,8 @@ class BusinessApi {
     String? batchSerialNo,
     String? status,
     String? orderNo,
+    String? warehouseId,
+    bool includeCost = true,
   }) async {
     final query = <String, String>{
       'page': '$page',
@@ -303,25 +558,38 @@ class BusinessApi {
     _putNonEmpty(query, 'batchSerialNo', batchSerialNo);
     _putNonEmpty(query, 'status', status);
     _putNonEmpty(query, 'orderNo', orderNo);
+    _putNonEmpty(query, 'warehouseId', warehouseId);
     final payload = await _apiClient.getJson(
       _path('/api/serialized-inventory', query),
       token: _token,
     );
-    return SerializedInventoryPage.fromJson(_data(payload));
+    return SerializedInventoryPage.fromJson(
+      _data(payload),
+      includeCost: includeCost,
+    );
   }
 
   Future<List<SerializedInventoryUnitRecord>> listAvailableSerializedInventory({
     required String productId,
+    required String warehouseId,
     String? query,
   }) async {
-    final parameters = <String, String>{'productId': productId};
+    final parameters = <String, String>{
+      'productId': productId,
+      'warehouseId': warehouseId,
+    };
     _putNonEmpty(parameters, 'query', query);
     final payload = await _apiClient.getJson(
       _path('/api/serialized-inventory/available', parameters),
       token: _token,
     );
     return _list(_data(payload)['units'])
-        .map(SerializedInventoryUnitRecord.fromJson)
+        .map(
+          (item) => SerializedInventoryUnitRecord.fromJson(
+            item,
+            includeCost: false,
+          ),
+        )
         .toList();
   }
 
@@ -614,6 +882,18 @@ class BusinessApi {
     return TravelGroupRecord.fromJson(_map(_data(payload)['travelGroup']));
   }
 
+  Future<TravelGroupRecord> setTravelGroupNotEntered(
+    String id,
+    bool confirmed,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/travel-groups/$id/not-entered',
+      body: {'confirmed': confirmed},
+      token: _token,
+    );
+    return TravelGroupRecord.fromJson(_map(_data(payload)['travelGroup']));
+  }
+
   Future<TravelGroupRecord> getTravelGroup(String id) async {
     final payload = await _apiClient.getJson(
       '/api/travel-groups/$id',
@@ -631,7 +911,7 @@ class BusinessApi {
       '/api/travel-groups/${Uri.encodeComponent(travelGroupId)}/attachments/'
       '${category.apiValue}',
       files: files,
-      maxFileSizeBytes: 10 * 1024 * 1024,
+      maxFileSizeBytes: fileSecurityMaxFileBytes,
       token: _token,
     );
     return TravelGroupAttachmentUploadResult.fromJson(_data(payload));
@@ -741,6 +1021,93 @@ class BusinessApi {
       token: _token,
     );
     return CustomerRecord.fromJson(_map(_data(payload)['customer']));
+  }
+
+  Future<List<PaymentMethodRecord>> listPaymentMethods({
+    bool includeInactive = false,
+  }) async {
+    final payload = await _apiClient.getJson(
+      includeInactive
+          ? _path('/api/payment-methods', const {'includeInactive': 'true'})
+          : '/api/payment-methods',
+      token: _token,
+    );
+    return _list(_data(payload)['paymentMethods'])
+        .map(PaymentMethodRecord.fromJson)
+        .toList();
+  }
+
+  Future<PaymentMethodRecord> createPaymentMethod(
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/payment-methods',
+      body: body,
+      token: _token,
+    );
+    return PaymentMethodRecord.fromJson(
+      _map(_data(payload)['paymentMethod']),
+    );
+  }
+
+  Future<PaymentMethodRecord> updatePaymentMethod(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/payment-methods/${Uri.encodeComponent(id)}',
+      body: body,
+      token: _token,
+    );
+    return PaymentMethodRecord.fromJson(
+      _map(_data(payload)['paymentMethod']),
+    );
+  }
+
+  Future<PaymentMethodRecord> enablePaymentMethod(String id) async {
+    final payload = await _apiClient.patchJson(
+      '/api/payment-methods/${Uri.encodeComponent(id)}/enable',
+      body: const <String, dynamic>{},
+      token: _token,
+    );
+    return PaymentMethodRecord.fromJson(
+      _map(_data(payload)['paymentMethod']),
+    );
+  }
+
+  Future<PaymentMethodRecord> disablePaymentMethod(String id) async {
+    final payload = await _apiClient.patchJson(
+      '/api/payment-methods/${Uri.encodeComponent(id)}/disable',
+      body: const <String, dynamic>{},
+      token: _token,
+    );
+    return PaymentMethodRecord.fromJson(
+      _map(_data(payload)['paymentMethod']),
+    );
+  }
+
+  Future<PaymentMethodRecord> setDefaultPaymentMethod(String id) async {
+    final payload = await _apiClient.patchJson(
+      '/api/payment-methods/${Uri.encodeComponent(id)}/default',
+      body: const <String, dynamic>{},
+      token: _token,
+    );
+    return PaymentMethodRecord.fromJson(
+      _map(_data(payload)['paymentMethod']),
+    );
+  }
+
+  Future<List<PaymentMethodRecord>> sortPaymentMethods(
+    List<Map<String, dynamic>> items,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/payment-methods/sort-order',
+      body: {'items': items},
+      token: _token,
+    );
+    return _list(_data(payload)['paymentMethods'])
+        .map(PaymentMethodRecord.fromJson)
+        .toList();
   }
 
   Future<List<SalesOrderRecord>> listSalesOrders({
@@ -969,9 +1336,82 @@ class BusinessApi {
     return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
   }
 
+  Future<SalesOrderRecord> replaceSalesOrderPaymentDetails(
+    String id,
+    List<Map<String, dynamic>> paymentDetails,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(id)}/payment-details',
+      body: {'paymentDetails': paymentDetails},
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
+  Future<SalesOrderRecord> setSalesOrderCompletion(
+    String id,
+    bool completed,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(id)}/completion',
+      body: {'completed': completed},
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
+  Future<SalesOrderRecord> completeSalesOrder(String id) {
+    return setSalesOrderCompletion(id, true);
+  }
+
+  Future<SalesOrderRecord> setSalesOrderPaymentDetailsLock(
+    String id,
+    bool locked,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(id)}/payment-details-lock',
+      body: {'locked': locked},
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
+  Future<SalesOrderRecord> lockSalesOrderPaymentDetails(String id) {
+    return setSalesOrderPaymentDetailsLock(id, true);
+  }
+
+  Future<SalesOrderRecord> unlockSalesOrderPaymentDetails(String id) {
+    return setSalesOrderPaymentDetailsLock(id, false);
+  }
+
+  Future<SalesOrderRecord> confirmCollectOnDeliveryPayment(
+    String orderId,
+    String detailId,
+    bool confirmed,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/sales-orders/${Uri.encodeComponent(orderId)}/payment-details/${Uri.encodeComponent(detailId)}/agency-confirmation',
+      body: {'confirmed': confirmed},
+      token: _token,
+    );
+    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+  }
+
+  Future<SalesOrderRecord> confirmAgencyCollectionPayment(
+    String orderId,
+    String detailId,
+    bool confirmed,
+  ) {
+    return confirmCollectOnDeliveryPayment(
+      orderId,
+      detailId,
+      confirmed,
+    );
+  }
+
   Future<SalesOrderRecord> updateSalesOrderPointsDestination(
     String id, {
-    required String pointsDestination,
+    required int personalAmountCents,
     String? guideId,
     String? dailyRebateRate,
     String? monthlyRebateRate,
@@ -979,7 +1419,7 @@ class BusinessApi {
     final payload = await _apiClient.patchJson(
       '/api/sales-orders/${Uri.encodeComponent(id)}/points-destination',
       body: {
-        'pointsDestination': pointsDestination,
+        'personalAmountCents': personalAmountCents,
         if (guideId != null) 'guideId': guideId,
         if (dailyRebateRate != null) 'dailyRebateRate': dailyRebateRate,
         if (monthlyRebateRate != null) 'monthlyRebateRate': monthlyRebateRate,
@@ -1048,8 +1488,7 @@ class BusinessApi {
       '/api/sales-orders/${Uri.encodeComponent(id)}/shipping-date',
       body: {
         'shippingDate': shippingDate,
-        if (reason != null && reason.trim().isNotEmpty)
-          'reason': reason.trim(),
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
       },
       token: _token,
     );
@@ -1217,11 +1656,16 @@ class BusinessApi {
   Future<AfterSalesOrderRecord> confirmAfterSalesFinanceRefund(
     String id, {
     required List<ApiMultipartFile> files,
+    String? refundPaymentDetailId,
   }) async {
     final payload = await _apiClient.postMultipartFiles(
       '/api/after-sales-orders/$id/finance-refund-confirm',
       files: files,
-      maxFileSizeBytes: 20 * 1024 * 1024,
+      fields: {
+        if (refundPaymentDetailId?.trim().isNotEmpty == true)
+          'refundPaymentDetailId': refundPaymentDetailId!.trim(),
+      },
+      maxFileSizeBytes: fileSecurityMaxFileBytes,
       token: _token,
     );
     return AfterSalesOrderRecord.fromJson(
@@ -1335,25 +1779,11 @@ class BusinessApi {
     String warehouseId,
   ) async {
     final payload = await _apiClient.patchJson(
-      '/api/warehouse/orders/${Uri.encodeComponent(orderId)}/fulfillment-warehouse',
+      '/api/warehouse/orders/${Uri.encodeComponent(orderId)}/packing',
       body: {'fulfillmentWarehouseId': warehouseId},
       token: _token,
     );
     return SalesOrderRecord.fromJson(_map(_data(payload)['warehouseOrder']));
-  }
-
-  Future<AfterSalesOrderRecord> createAfterSalesReceipt(
-    String afterSalesOrderId,
-    Map<String, dynamic> body,
-  ) async {
-    final payload = await _apiClient.postJson(
-      '/api/after-sales-orders/${Uri.encodeComponent(afterSalesOrderId)}/receipts',
-      body: body,
-      token: _token,
-    );
-    return AfterSalesOrderRecord.fromJson(
-      _map(_data(payload)['afterSalesOrder']),
-    );
   }
 
   Future<ReconciliationRecord> getReconciliation(DateTime businessDate) async {
@@ -2375,6 +2805,75 @@ class BusinessApi {
     return ProfitAnalysisResponse.fromJson(_data(payload));
   }
 
+  Future<DownloadedFile> exportTravelGroupProfits({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? query,
+    String? status,
+    String? sortBy,
+    String? sortDirection,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/analytics/travel-group-profits/export',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          query: query,
+          status: status,
+          sortBy: sortBy,
+          sortDirection: sortDirection,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'travel-group-profits.xlsx',
+    );
+  }
+
+  Future<DailyLossProfitResponse> getDailyLossProfits({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    int? page,
+    int? pageSize,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/analytics/daily-loss-profits',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          page: page,
+          pageSize: pageSize,
+        ),
+      ),
+      token: _token,
+    );
+    return DailyLossProfitResponse.fromJson(_data(payload));
+  }
+
+  Future<DownloadedFile> exportDailyLossProfits({
+    String? preset,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) {
+    return _apiClient.getBytes(
+      _path(
+        '/api/analytics/daily-loss-profits/export',
+        _analyticsQueryParameters(
+          preset: preset,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+        ),
+      ),
+      token: _token,
+      defaultFileName: 'daily-loss-profit.xlsx',
+    );
+  }
+
   Future<List<TasterRankingRecord>> listTasterRankings({
     String? preset,
     DateTime? dateFrom,
@@ -2822,6 +3321,11 @@ class AfterSalesOrderItemRecord {
     required this.quantity,
     required this.originalUnitPriceCents,
     required this.subtotalCents,
+    required this.returnRequired,
+    required this.expectedReturnQty,
+    required this.postedReceivedQty,
+    required this.remainingReturnQty,
+    required this.returnProgressStatus,
     required this.isHistoricalPlaceholder,
     required this.notes,
     required this.sortOrder,
@@ -2836,6 +3340,11 @@ class AfterSalesOrderItemRecord {
   final int quantity;
   final int originalUnitPriceCents;
   final int subtotalCents;
+  final bool returnRequired;
+  final int expectedReturnQty;
+  final int postedReceivedQty;
+  final int remainingReturnQty;
+  final String returnProgressStatus;
   final bool isHistoricalPlaceholder;
   final String? notes;
   final int sortOrder;
@@ -2851,6 +3360,17 @@ class AfterSalesOrderItemRecord {
       quantity: _intValue(json['quantity']),
       originalUnitPriceCents: _intValue(json['originalUnitPriceCents']),
       subtotalCents: _intValue(json['subtotalCents']),
+      returnRequired: _boolValue(json['returnRequired']),
+      expectedReturnQty: _intValue(json['expectedReturnQty']),
+      postedReceivedQty: _intValue(json['postedReceivedQty']),
+      remainingReturnQty: json.containsKey('remainingReturnQty')
+          ? _intValue(json['remainingReturnQty'])
+          : (_intValue(json['expectedReturnQty']) -
+                  _intValue(json['postedReceivedQty']))
+              .clamp(0, 1 << 31)
+              .toInt(),
+      returnProgressStatus:
+          '${json['returnProgressStatus'] ?? 'not_required'}'.toLowerCase(),
       isHistoricalPlaceholder: _boolValue(json['isHistoricalPlaceholder']),
       notes: _stringOrNull(json['notes']),
       sortOrder: _intValue(json['sortOrder']),
@@ -3031,6 +3551,28 @@ class TravelGroupLiaisonTasterRecord {
   }
 }
 
+class TravelGroupUserSnapshotRecord {
+  const TravelGroupUserSnapshotRecord({
+    required this.id,
+    required this.name,
+    required this.username,
+  });
+
+  final String? id;
+  final String? name;
+  final String? username;
+
+  factory TravelGroupUserSnapshotRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return TravelGroupUserSnapshotRecord(
+      id: _stringOrNull(json['id']),
+      name: _stringOrNull(json['name']),
+      username: _stringOrNull(json['username']),
+    );
+  }
+}
+
 class TravelGroupAttachmentUploadResult {
   const TravelGroupAttachmentUploadResult({
     required this.attachments,
@@ -3101,6 +3643,10 @@ class TravelGroupRecord {
     required this.liaisonTaster,
     required this.expectedArrivalTime,
     required this.arrivalTime,
+    this.entryStatus = 'pending_entry',
+    this.notEnteredConfirmedAt,
+    this.notEnteredConfirmedById,
+    this.notEnteredConfirmedBy,
     required this.groupType,
     required this.wineDetails,
     required this.departureTime,
@@ -3168,6 +3714,10 @@ class TravelGroupRecord {
   final TravelGroupLiaisonTasterRecord? liaisonTaster;
   final String? expectedArrivalTime;
   final String? arrivalTime;
+  final String entryStatus;
+  final String? notEnteredConfirmedAt;
+  final String? notEnteredConfirmedById;
+  final TravelGroupUserSnapshotRecord? notEnteredConfirmedBy;
   final String? groupType;
   final String? wineDetails;
   final String? departureTime;
@@ -3217,6 +3767,9 @@ class TravelGroupRecord {
     final orderSummary = _map(json['orderSummary']);
     final liaisonTasterId = _stringOrNull(json['liaisonTasterId']);
     final liaisonTasterName = _stringOrNull(json['liaisonTasterName']);
+    final arrivalTime = _stringOrNull(json['arrivalTime']);
+    final notEnteredConfirmedAt = _stringOrNull(json['notEnteredConfirmedAt']);
+    final notEnteredConfirmedByJson = _map(json['notEnteredConfirmedBy']);
     final liaisonTasterJson = _map(json['liaisonTaster']);
     final liaisonTaster = liaisonTasterJson.isNotEmpty
         ? TravelGroupLiaisonTasterRecord.fromJson(liaisonTasterJson)
@@ -3258,7 +3811,19 @@ class TravelGroupRecord {
       liaisonTasterName: liaisonTasterName,
       liaisonTaster: liaisonTaster,
       expectedArrivalTime: _stringOrNull(json['expectedArrivalTime']),
-      arrivalTime: _stringOrNull(json['arrivalTime']),
+      arrivalTime: arrivalTime,
+      entryStatus: _travelGroupEntryStatus(
+        json['entryStatus'],
+        arrivalTime: arrivalTime,
+        notEnteredConfirmedAt: notEnteredConfirmedAt,
+      ),
+      notEnteredConfirmedAt: notEnteredConfirmedAt,
+      notEnteredConfirmedById: _stringOrNull(json['notEnteredConfirmedById']),
+      notEnteredConfirmedBy: notEnteredConfirmedByJson.isEmpty
+          ? null
+          : TravelGroupUserSnapshotRecord.fromJson(
+              notEnteredConfirmedByJson,
+            ),
       groupType: _stringOrNull(json['groupType']),
       wineDetails: _stringOrNull(json['wineDetails']),
       departureTime: _stringOrNull(json['departureTime']),
@@ -3506,6 +4071,260 @@ class CustomerRecord {
   }
 }
 
+class PaymentMethodRecord {
+  const PaymentMethodRecord({
+    this.id = '',
+    this.code = '',
+    required this.name,
+    this.category = 'direct_receipt',
+    this.serviceFeeRate,
+    this.isActive = true,
+    this.sortOrder = 0,
+    this.isDefault = false,
+    this.createdById,
+    this.updatedById,
+    this.createdAt,
+    this.updatedAt,
+    this.amountCents = 0,
+  });
+
+  final String id;
+  final String code;
+  final String name;
+  final String category;
+  final String? serviceFeeRate;
+  final bool isActive;
+  final int sortOrder;
+  final bool isDefault;
+  final String? createdById;
+  final String? updatedById;
+  final String? createdAt;
+  final String? updatedAt;
+  final int amountCents;
+
+  bool get isCollectOnDelivery => category == 'collect_on_delivery';
+
+  bool get isAgencyCollection => isCollectOnDelivery;
+
+  factory PaymentMethodRecord.fromJson(Map<String, dynamic> json) {
+    return PaymentMethodRecord(
+      id: '${json['id'] ?? ''}',
+      code: '${json['code'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      category: _normalizePaymentMethodCategory(json['category']),
+      serviceFeeRate: _stringOrNull(json['serviceFeeRate']),
+      isActive:
+          json.containsKey('isActive') ? _boolValue(json['isActive']) : true,
+      sortOrder: _intValue(json['sortOrder']),
+      isDefault: _boolValue(json['isDefault']),
+      createdById: _stringOrNull(json['createdById']),
+      updatedById: _stringOrNull(json['updatedById']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+      amountCents: _intValue(json['amountCents']),
+    );
+  }
+}
+
+typedef SalesPaymentMethodRecord = PaymentMethodRecord;
+
+class SalesOrderPaymentDetailRecord {
+  const SalesOrderPaymentDetailRecord({
+    required this.id,
+    required this.paymentMethodId,
+    required this.paymentMethodNameSnapshot,
+    required this.paymentMethodCategorySnapshot,
+    required this.amountCents,
+    required this.sortOrder,
+    required this.requiresAgencyConfirmation,
+    required this.agencyCollectionConfirmed,
+    required this.agencyCollectionConfirmedAt,
+    required this.agencyCollectionConfirmedById,
+    this.agencyCollectionConfirmedByName,
+  });
+
+  final String id;
+  final String paymentMethodId;
+  final String paymentMethodNameSnapshot;
+  final String paymentMethodCategorySnapshot;
+  final int amountCents;
+  final int sortOrder;
+  final bool requiresAgencyConfirmation;
+  final bool agencyCollectionConfirmed;
+  final String? agencyCollectionConfirmedAt;
+  final String? agencyCollectionConfirmedById;
+  final String? agencyCollectionConfirmedByName;
+
+  bool get isCollectOnDelivery =>
+      paymentMethodCategorySnapshot == 'collect_on_delivery';
+
+  bool get isAgencyCollection => isCollectOnDelivery;
+
+  factory SalesOrderPaymentDetailRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SalesOrderPaymentDetailRecord(
+      id: '${json['id'] ?? ''}',
+      paymentMethodId: '${json['paymentMethodId'] ?? ''}',
+      paymentMethodNameSnapshot: '${json['paymentMethodNameSnapshot'] ?? ''}',
+      paymentMethodCategorySnapshot: _normalizePaymentMethodCategory(
+        json['paymentMethodCategorySnapshot'],
+      ),
+      amountCents: _intValue(json['amountCents']),
+      sortOrder: _intValue(json['sortOrder']),
+      requiresAgencyConfirmation: json.containsKey('requiresAgencyConfirmation')
+          ? _boolValue(json['requiresAgencyConfirmation'])
+          : _normalizePaymentMethodCategory(
+                json['paymentMethodCategorySnapshot'],
+              ) ==
+              'collect_on_delivery',
+      agencyCollectionConfirmed: _boolValue(
+        json['agencyCollectionConfirmed'] ?? json['collectionConfirmed'],
+      ),
+      agencyCollectionConfirmedAt: _stringOrNull(
+        json['agencyCollectionConfirmedAt'] ?? json['collectionConfirmedAt'],
+      ),
+      agencyCollectionConfirmedById: _stringOrNull(
+        json['agencyCollectionConfirmedById'] ??
+            json['collectionConfirmedById'],
+      ),
+      agencyCollectionConfirmedByName: _stringOrNull(
+        json['agencyCollectionConfirmedByName'] ??
+            json['collectionConfirmedByName'] ??
+            _map(
+              json['agencyCollectionConfirmedBy'] ??
+                  json['collectionConfirmedBy'],
+            )['name'],
+      ),
+    );
+  }
+}
+
+class PaymentSummaryRecord {
+  const PaymentSummaryRecord({
+    required this.directReceiptAmountCents,
+    required this.collectOnDeliveryAmountCents,
+    required this.confirmedCollectOnDeliveryAmountCents,
+    required this.pendingCollectOnDeliveryAmountCents,
+    required this.hasPendingCollectOnDelivery,
+  });
+
+  const PaymentSummaryRecord.empty()
+      : directReceiptAmountCents = 0,
+        collectOnDeliveryAmountCents = 0,
+        confirmedCollectOnDeliveryAmountCents = 0,
+        pendingCollectOnDeliveryAmountCents = 0,
+        hasPendingCollectOnDelivery = false;
+
+  final int directReceiptAmountCents;
+  final int collectOnDeliveryAmountCents;
+  final int confirmedCollectOnDeliveryAmountCents;
+  final int pendingCollectOnDeliveryAmountCents;
+  final bool hasPendingCollectOnDelivery;
+
+  bool get isCollectOnDelivery => hasPendingCollectOnDelivery;
+
+  factory PaymentSummaryRecord.fromJson(Map<String, dynamic> json) {
+    final pendingAmountCents = _intValue(
+      json['pendingCollectOnDeliveryAmountCents'],
+    );
+    return PaymentSummaryRecord(
+      directReceiptAmountCents: _intValue(json['directReceiptAmountCents']),
+      collectOnDeliveryAmountCents:
+          _intValue(json['collectOnDeliveryAmountCents']),
+      confirmedCollectOnDeliveryAmountCents:
+          _intValue(json['confirmedCollectOnDeliveryAmountCents']),
+      pendingCollectOnDeliveryAmountCents: pendingAmountCents,
+      hasPendingCollectOnDelivery:
+          json.containsKey('hasPendingCollectOnDelivery')
+              ? _boolValue(json['hasPendingCollectOnDelivery'])
+              : pendingAmountCents != 0,
+    );
+  }
+
+  factory PaymentSummaryRecord.fromSalesOrderDetails({
+    required List<SalesOrderPaymentDetailRecord> paymentDetails,
+    required int totalAmountCents,
+    required int cashOnDeliveryAmountCents,
+  }) {
+    if (paymentDetails.isEmpty) {
+      return PaymentSummaryRecord(
+        directReceiptAmountCents: totalAmountCents - cashOnDeliveryAmountCents,
+        collectOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+        confirmedCollectOnDeliveryAmountCents: 0,
+        pendingCollectOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+        hasPendingCollectOnDelivery: cashOnDeliveryAmountCents != 0,
+      );
+    }
+    var direct = 0;
+    var collect = 0;
+    var confirmed = 0;
+    var pending = 0;
+    var hasPending = false;
+    for (final detail in paymentDetails) {
+      if (!detail.isCollectOnDelivery) {
+        direct += detail.amountCents;
+        continue;
+      }
+      collect += detail.amountCents;
+      if (detail.agencyCollectionConfirmed) {
+        confirmed += detail.amountCents;
+      } else {
+        pending += detail.amountCents;
+        hasPending = hasPending || detail.amountCents != 0;
+      }
+    }
+    return PaymentSummaryRecord(
+      directReceiptAmountCents: direct,
+      collectOnDeliveryAmountCents: collect,
+      confirmedCollectOnDeliveryAmountCents: confirmed,
+      pendingCollectOnDeliveryAmountCents: pending,
+      hasPendingCollectOnDelivery: hasPending,
+    );
+  }
+
+  factory PaymentSummaryRecord.fromSalesSheetDetails({
+    required List<SalesSheetPaymentDetailRecord> paymentDetails,
+    required int totalAmountCents,
+    required int cashOnDeliveryAmountCents,
+  }) {
+    if (paymentDetails.isEmpty) {
+      return PaymentSummaryRecord(
+        directReceiptAmountCents: totalAmountCents - cashOnDeliveryAmountCents,
+        collectOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+        confirmedCollectOnDeliveryAmountCents: 0,
+        pendingCollectOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+        hasPendingCollectOnDelivery: cashOnDeliveryAmountCents != 0,
+      );
+    }
+    var direct = 0;
+    var collect = 0;
+    var confirmed = 0;
+    var pending = 0;
+    var hasPending = false;
+    for (final detail in paymentDetails) {
+      if (!detail.isCollectOnDelivery) {
+        direct += detail.amountCents;
+        continue;
+      }
+      collect += detail.amountCents;
+      if (detail.agencyCollectionConfirmed) {
+        confirmed += detail.amountCents;
+      } else {
+        pending += detail.amountCents;
+        hasPending = hasPending || detail.amountCents != 0;
+      }
+    }
+    return PaymentSummaryRecord(
+      directReceiptAmountCents: direct,
+      collectOnDeliveryAmountCents: collect,
+      confirmedCollectOnDeliveryAmountCents: confirmed,
+      pendingCollectOnDeliveryAmountCents: pending,
+      hasPendingCollectOnDelivery: hasPending,
+    );
+  }
+}
+
 class SalesOrderRecord {
   const SalesOrderRecord({
     required this.id,
@@ -3565,6 +4384,8 @@ class SalesOrderRecord {
     this.salesEditRemaining = 1,
     this.canEditByCurrentUser = false,
     this.pointsDestination = 'TRAVEL_AGENCY',
+    this.personalAmountCents = 0,
+    this.normalAmountCents = 0,
     this.personalPointsGuideId,
     this.personalPointsGuide,
     this.personalGuideNameSnapshot,
@@ -3577,6 +4398,19 @@ class SalesOrderRecord {
     this.sourceSalesOrderId,
     this.fulfillmentWarehouseId,
     this.fulfillmentWarehouseName,
+    this.paymentDetails = const <SalesOrderPaymentDetailRecord>[],
+    this.paymentDetailsSummary = '',
+    this.paymentSummary = const PaymentSummaryRecord.empty(),
+    this.paymentStatus = 'received',
+    this.paymentStatusLabel = '已到账',
+    this.completedAt,
+    this.completedById,
+    this.isCompleted = false,
+    this.paymentDetailsLockedAt,
+    this.paymentDetailsLockedById,
+    this.paymentDetailsUnlockedAt,
+    this.paymentDetailsUnlockedById,
+    this.paymentDetailsLocked = false,
   });
 
   final String id;
@@ -3636,6 +4470,8 @@ class SalesOrderRecord {
   final int salesEditRemaining;
   final bool canEditByCurrentUser;
   final String pointsDestination;
+  final int personalAmountCents;
+  final int normalAmountCents;
   final String? personalPointsGuideId;
   final GuideRecord? personalPointsGuide;
   final String? personalGuideNameSnapshot;
@@ -3648,8 +4484,22 @@ class SalesOrderRecord {
   final String? sourceSalesOrderId;
   final String? fulfillmentWarehouseId;
   final String? fulfillmentWarehouseName;
+  final List<SalesOrderPaymentDetailRecord> paymentDetails;
+  final String paymentDetailsSummary;
+  final PaymentSummaryRecord paymentSummary;
+  final String paymentStatus;
+  final String paymentStatusLabel;
+  final String? completedAt;
+  final String? completedById;
+  final bool isCompleted;
+  final String? paymentDetailsLockedAt;
+  final String? paymentDetailsLockedById;
+  final String? paymentDetailsUnlockedAt;
+  final String? paymentDetailsUnlockedById;
+  final bool paymentDetailsLocked;
 
   bool get isGuidePersonal =>
+      personalAmountCents > 0 ||
       pointsDestination.toUpperCase() == 'GUIDE_PERSONAL';
 
   factory SalesOrderRecord.fromJson(Map<String, dynamic> json) {
@@ -3675,6 +4525,30 @@ class SalesOrderRecord {
             (fulfillmentWarehouseJson.isNotEmpty
                 ? _stringOrNull(fulfillmentWarehouseJson['name'])
                 : null);
+    final totalAmountCents = _intValue(json['totalAmountCents']);
+    final pointsDestination =
+        '${json['pointsDestination'] ?? 'TRAVEL_AGENCY'}'.toUpperCase();
+    final personalAmountCents = json.containsKey('personalAmountCents')
+        ? _intValue(json['personalAmountCents'])
+        : pointsDestination == 'GUIDE_PERSONAL'
+            ? totalAmountCents
+            : 0;
+    final cashOnDeliveryAmountCents =
+        _intValue(json['cashOnDeliveryAmountCents']);
+    final paymentDetails = _list(json['paymentDetails'])
+        .map(SalesOrderPaymentDetailRecord.fromJson)
+        .toList();
+    final paymentSummary = json['paymentSummary'] is Map
+        ? PaymentSummaryRecord.fromJson(_map(json['paymentSummary']))
+        : PaymentSummaryRecord.fromSalesOrderDetails(
+            paymentDetails: paymentDetails,
+            totalAmountCents: totalAmountCents,
+            cashOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+          );
+    final paymentDetailsLockedAt =
+        _stringOrNull(json['paymentDetailsLockedAt']);
+    final paymentDetailsUnlockedAt =
+        _stringOrNull(json['paymentDetailsUnlockedAt']);
     return SalesOrderRecord(
       id: '${json['id'] ?? ''}',
       orderNo: '${json['orderNo'] ?? ''}',
@@ -3694,7 +4568,7 @@ class SalesOrderRecord {
           .toList(),
       canEditShippingDate: _boolValue(json['canEditShippingDate']),
       salesFormNo: _stringOrNull(json['salesFormNo']),
-      totalAmountCents: _intValue(json['totalAmountCents']),
+      totalAmountCents: totalAmountCents,
       entryAmountCents: _intValue(
         json['entryAmountCents'] ??
             json['orderEntryAmountCents'] ??
@@ -3706,7 +4580,28 @@ class SalesOrderRecord {
       tasterCommission: tasterCommission,
       tasterId: _stringOrNull(json['tasterId'] ?? travelGroup?.tasterId),
       tasterName: _stringOrNull(json['tasterName'] ?? travelGroup?.tasterName),
-      cashOnDeliveryAmountCents: _intValue(json['cashOnDeliveryAmountCents']),
+      cashOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+      paymentDetails: paymentDetails,
+      paymentDetailsSummary:
+          '${json['paymentDetailsSummary'] ?? (json['paymentSummary'] is String ? json['paymentSummary'] : '')}',
+      paymentSummary: paymentSummary,
+      paymentStatus:
+          '${json['paymentStatus'] ?? (paymentSummary.hasPendingCollectOnDelivery ? 'collect_on_delivery' : 'received')}',
+      paymentStatusLabel:
+          '${json['paymentStatusLabel'] ?? (paymentSummary.hasPendingCollectOnDelivery ? '代收款' : '已到账')}',
+      completedAt: _stringOrNull(json['completedAt']),
+      completedById: _stringOrNull(json['completedById']),
+      isCompleted: json.containsKey('isCompleted')
+          ? _boolValue(json['isCompleted'])
+          : _stringOrNull(json['completedAt']) != null,
+      paymentDetailsLockedAt: paymentDetailsLockedAt,
+      paymentDetailsLockedById: _stringOrNull(json['paymentDetailsLockedById']),
+      paymentDetailsUnlockedAt: paymentDetailsUnlockedAt,
+      paymentDetailsUnlockedById:
+          _stringOrNull(json['paymentDetailsUnlockedById']),
+      paymentDetailsLocked: json.containsKey('paymentDetailsLocked')
+          ? _boolValue(json['paymentDetailsLocked'])
+          : paymentDetailsLockedAt != null && paymentDetailsUnlockedAt == null,
       status: '${json['status'] ?? 'valid'}',
       deliverySummary: _stringOrNull(json['deliverySummary']),
       logisticsMethod: _stringOrNull(json['logisticsMethod']),
@@ -3748,8 +4643,11 @@ class SalesOrderRecord {
           ? _intValue(json['salesEditRemaining'])
           : 1,
       canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
-      pointsDestination:
-          '${json['pointsDestination'] ?? 'TRAVEL_AGENCY'}'.toUpperCase(),
+      pointsDestination: pointsDestination,
+      personalAmountCents: personalAmountCents,
+      normalAmountCents: json.containsKey('normalAmountCents')
+          ? _intValue(json['normalAmountCents'])
+          : totalAmountCents - personalAmountCents,
       personalPointsGuideId: _stringOrNull(json['personalPointsGuideId']),
       personalPointsGuide: json['personalPointsGuide'] is Map
           ? GuideRecord.fromJson(_map(json['personalPointsGuide']))
@@ -3817,6 +4715,8 @@ class SalesOrderItemRecord {
     required this.sortOrder,
     required this.serializedUnitIds,
     required this.serializedUnits,
+    required this.inventoryLineKey,
+    required this.fulfillment,
   });
 
   final String? id;
@@ -3832,10 +4732,20 @@ class SalesOrderItemRecord {
   final int sortOrder;
   final List<String> serializedUnitIds;
   final List<SalesOrderSerializedUnitRecord> serializedUnits;
+  final String? inventoryLineKey;
+  final SalesOrderItemFulfillmentRecord? fulfillment;
 
   factory SalesOrderItemRecord.fromJson(Map<String, dynamic> json) {
     final quantity = _intValue(json['quantity']);
     final unitPriceCents = _intValue(json['unitPriceCents']);
+    final fulfillmentJson = _map(json['serializedFulfillment']);
+    final fulfillment = fulfillmentJson.isEmpty
+        ? null
+        : SalesOrderItemFulfillmentRecord.fromJson(fulfillmentJson);
+    final directSerializedUnits = _list(json['serializedUnits']);
+    final serializedUnitsJson = directSerializedUnits.isNotEmpty
+        ? directSerializedUnits
+        : _list(fulfillmentJson['units']);
     return SalesOrderItemRecord(
       id: _stringOrNull(json['id']),
       salesOrderId: _stringOrNull(json['salesOrderId']),
@@ -3854,7 +4764,42 @@ class SalesOrderItemRecord {
           .map((value) => '$value')
           .where((value) => value.isNotEmpty)
           .toList(),
-      serializedUnits: _list(json['serializedUnits'])
+      serializedUnits: serializedUnitsJson
+          .map(SalesOrderSerializedUnitRecord.fromJson)
+          .toList(),
+      inventoryLineKey: _stringOrNull(json['inventoryLineKey']),
+      fulfillment: fulfillment,
+    );
+  }
+}
+
+class SalesOrderItemFulfillmentRecord {
+  const SalesOrderItemFulfillmentRecord({
+    required this.status,
+    required this.requestedQty,
+    required this.assignedQty,
+    required this.outboundQty,
+    required this.unassignedQty,
+    required this.units,
+  });
+
+  final String status;
+  final int requestedQty;
+  final int assignedQty;
+  final int outboundQty;
+  final int unassignedQty;
+  final List<SalesOrderSerializedUnitRecord> units;
+
+  factory SalesOrderItemFulfillmentRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SalesOrderItemFulfillmentRecord(
+      status: '${json['status'] ?? ''}'.toLowerCase(),
+      requestedQty: _intValue(json['requestedQty']),
+      assignedQty: _intValue(json['assignedQty']),
+      outboundQty: _intValue(json['outboundQty']),
+      unassignedQty: _intValue(json['unassignedQty']),
+      units: _list(json['units'])
           .map(SalesOrderSerializedUnitRecord.fromJson)
           .toList(),
     );
@@ -3869,6 +4814,7 @@ class SalesOrderSerializedUnitRecord {
     required this.factoryDate,
     required this.productionBatch,
     required this.batchSerialNo,
+    required this.assignmentStatus,
   });
 
   final String id;
@@ -3877,6 +4823,7 @@ class SalesOrderSerializedUnitRecord {
   final String? factoryDate;
   final String? productionBatch;
   final String? batchSerialNo;
+  final String? assignmentStatus;
 
   factory SalesOrderSerializedUnitRecord.fromJson(
     Map<String, dynamic> json,
@@ -3888,6 +4835,7 @@ class SalesOrderSerializedUnitRecord {
       factoryDate: _stringOrNull(json['factoryDate']),
       productionBatch: _stringOrNull(json['productionBatch']),
       batchSerialNo: _stringOrNull(json['batchSerialNo']),
+      assignmentStatus: _stringOrNull(json['assignmentStatus'])?.toLowerCase(),
     );
   }
 }
@@ -3922,6 +4870,8 @@ class AfterSalesOrderRecord {
     required this.description,
     required this.resolution,
     required this.refundAmountCents,
+    this.personalPointsRefundAmountCents = 0,
+    this.normalPointsRefundAmountCents = 0,
     required this.status,
     required this.financeConfirmed,
     required this.financeConfirmedById,
@@ -3954,6 +4904,15 @@ class AfterSalesOrderRecord {
     this.agencyDeductionAdjustmentCents,
     this.financialEffectStatus = 'pending_confirmation',
     this.receipts = const <AfterSalesReceiptRecord>[],
+    this.refundPaymentDetailId,
+    this.refundPaymentMethodNameSnapshot,
+    this.refundOccurredAt,
+    this.deductsPaymentServiceFee = false,
+    this.refundTimingStatus = 'cross_day',
+    this.isSameDayRefund = false,
+    this.requiresRefundPaymentDetail = false,
+    this.refundPaymentDetailOptions =
+        const <AfterSalesRefundPaymentDetailOptionRecord>[],
   });
 
   final String id;
@@ -3967,6 +4926,8 @@ class AfterSalesOrderRecord {
   final String description;
   final String? resolution;
   final int refundAmountCents;
+  final int personalPointsRefundAmountCents;
+  final int normalPointsRefundAmountCents;
   final String status;
   final bool financeConfirmed;
   final String? financeConfirmedById;
@@ -3999,6 +4960,15 @@ class AfterSalesOrderRecord {
   final int? agencyDeductionAdjustmentCents;
   final String financialEffectStatus;
   final List<AfterSalesReceiptRecord> receipts;
+  final String? refundPaymentDetailId;
+  final String? refundPaymentMethodNameSnapshot;
+  final String? refundOccurredAt;
+  final bool deductsPaymentServiceFee;
+  final String refundTimingStatus;
+  final bool isSameDayRefund;
+  final bool requiresRefundPaymentDetail;
+  final List<AfterSalesRefundPaymentDetailOptionRecord>
+      refundPaymentDetailOptions;
 
   factory AfterSalesOrderRecord.fromJson(Map<String, dynamic> json) {
     return AfterSalesOrderRecord(
@@ -4017,6 +4987,13 @@ class AfterSalesOrderRecord {
       description: '${json['description'] ?? ''}',
       resolution: _stringOrNull(json['resolution']),
       refundAmountCents: _intValue(json['refundAmountCents']),
+      personalPointsRefundAmountCents:
+          _intValue(json['personalPointsRefundAmountCents']),
+      normalPointsRefundAmountCents:
+          json.containsKey('normalPointsRefundAmountCents')
+              ? _intValue(json['normalPointsRefundAmountCents'])
+              : _intValue(json['refundAmountCents']) -
+                  _intValue(json['personalPointsRefundAmountCents']),
       status: '${json['status'] ?? 'negotiating'}',
       financeConfirmed: _boolValue(json['financeConfirmed']),
       financeConfirmedById: _stringOrNull(json['financeConfirmedById']),
@@ -4070,6 +5047,52 @@ class AfterSalesOrderRecord {
       receipts: _list(json['receipts'])
           .map((item) => AfterSalesReceiptRecord.fromJson(_map(item)))
           .toList(),
+      refundPaymentDetailId: _stringOrNull(json['refundPaymentDetailId']),
+      refundPaymentMethodNameSnapshot:
+          _stringOrNull(json['refundPaymentMethodNameSnapshot']),
+      refundOccurredAt: _stringOrNull(json['refundOccurredAt']),
+      deductsPaymentServiceFee: _boolValue(json['deductsPaymentServiceFee']),
+      refundTimingStatus: '${json['refundTimingStatus'] ?? 'cross_day'}',
+      isSameDayRefund: _boolValue(json['isSameDayRefund']),
+      requiresRefundPaymentDetail:
+          _boolValue(json['requiresRefundPaymentDetail']),
+      refundPaymentDetailOptions: _list(json['refundPaymentDetailOptions'])
+          .map(
+            (item) => AfterSalesRefundPaymentDetailOptionRecord.fromJson(
+              _map(item),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class AfterSalesRefundPaymentDetailOptionRecord {
+  const AfterSalesRefundPaymentDetailOptionRecord({
+    required this.id,
+    required this.paymentMethodNameSnapshot,
+    required this.originalAmountCents,
+    required this.confirmedSameDayRefundAmountCents,
+    required this.remainingRefundableAmountCents,
+  });
+
+  final String id;
+  final String paymentMethodNameSnapshot;
+  final int originalAmountCents;
+  final int confirmedSameDayRefundAmountCents;
+  final int remainingRefundableAmountCents;
+
+  factory AfterSalesRefundPaymentDetailOptionRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return AfterSalesRefundPaymentDetailOptionRecord(
+      id: '${json['id'] ?? ''}',
+      paymentMethodNameSnapshot: '${json['paymentMethodNameSnapshot'] ?? ''}',
+      originalAmountCents: _intValue(json['originalAmountCents']),
+      confirmedSameDayRefundAmountCents:
+          _intValue(json['confirmedSameDayRefundAmountCents']),
+      remainingRefundableAmountCents:
+          _intValue(json['remainingRefundableAmountCents']),
     );
   }
 }
@@ -4310,11 +5333,19 @@ class SerializedInventoryPage {
   final int total;
   final int totalPages;
 
-  factory SerializedInventoryPage.fromJson(Map<String, dynamic> json) {
+  factory SerializedInventoryPage.fromJson(
+    Map<String, dynamic> json, {
+    bool includeCost = true,
+  }) {
     final pagination = _map(json['pagination']);
     return SerializedInventoryPage(
       units: _list(json['units'])
-          .map(SerializedInventoryUnitRecord.fromJson)
+          .map(
+            (item) => SerializedInventoryUnitRecord.fromJson(
+              item,
+              includeCost: includeCost,
+            ),
+          )
           .toList(),
       page: _intValue(pagination['page']),
       pageSize: _intValue(pagination['pageSize']),
@@ -4359,7 +5390,10 @@ class SerializedInventoryUnitRecord {
   final String? createdAt;
   final String? updatedAt;
 
-  factory SerializedInventoryUnitRecord.fromJson(Map<String, dynamic> json) {
+  factory SerializedInventoryUnitRecord.fromJson(
+    Map<String, dynamic> json, {
+    bool includeCost = true,
+  }) {
     final salesOrder = _map(json['salesOrder']);
     return SerializedInventoryUnitRecord(
       id: '${json['id'] ?? ''}',
@@ -4370,7 +5404,8 @@ class SerializedInventoryUnitRecord {
       productionBatch: _stringOrNull(json['productionBatch']),
       batchSerialNo: _stringOrNull(json['batchSerialNo']),
       logisticsCode: _stringOrNull(json['logisticsCode']),
-      purchaseCostCents: json.containsKey('purchaseCostCents') &&
+      purchaseCostCents: includeCost &&
+              json.containsKey('purchaseCostCents') &&
               json['purchaseCostCents'] != null
           ? _intValue(json['purchaseCostCents'])
           : null,
@@ -5659,6 +6694,117 @@ class SalesPerformanceDetail {
   }
 }
 
+class DailyLossProfitResponse {
+  const DailyLossProfitResponse({
+    required this.range,
+    required this.summary,
+    required this.items,
+    required this.pagination,
+  });
+
+  final AnalyticsDateRange range;
+  final DailyLossProfitSummary summary;
+  final List<DailyLossProfitRecord> items;
+  final ProfitAnalysisPagination pagination;
+
+  factory DailyLossProfitResponse.fromJson(Map<String, dynamic> json) {
+    return DailyLossProfitResponse(
+      range: AnalyticsDateRange.fromJson(_map(json['range'])),
+      summary: DailyLossProfitSummary.fromJson(_map(json['summary'])),
+      items: _list(json['items']).map(DailyLossProfitRecord.fromJson).toList(),
+      pagination: ProfitAnalysisPagination.fromJson(_map(json['pagination'])),
+    );
+  }
+}
+
+class DailyLossProfitSummary {
+  const DailyLossProfitSummary({
+    required this.rowCount,
+    required this.totalLossQuantity,
+    required this.calculableLossQuantity,
+    required this.unpricedLossQuantity,
+    required this.estimatedProfitLossCents,
+    required this.knownEstimatedProfitLossCents,
+    required this.incompleteRowCount,
+    required this.costCoverageStatus,
+  });
+
+  final int rowCount;
+  final int totalLossQuantity;
+  final int calculableLossQuantity;
+  final int unpricedLossQuantity;
+  final int? estimatedProfitLossCents;
+  final int knownEstimatedProfitLossCents;
+  final int incompleteRowCount;
+  final String costCoverageStatus;
+
+  factory DailyLossProfitSummary.fromJson(Map<String, dynamic> json) {
+    final incompleteRowCount = _intValue(json['incompleteRowCount']);
+    return DailyLossProfitSummary(
+      rowCount: _intValue(json['rowCount']),
+      totalLossQuantity: _intValue(json['totalLossQuantity']),
+      calculableLossQuantity: _intValue(json['calculableLossQuantity']),
+      unpricedLossQuantity: _intValue(json['unpricedLossQuantity']),
+      estimatedProfitLossCents: json['estimatedProfitLossCents'] == null
+          ? null
+          : _intValue(json['estimatedProfitLossCents']),
+      knownEstimatedProfitLossCents:
+          _intValue(json['knownEstimatedProfitLossCents']),
+      incompleteRowCount: incompleteRowCount,
+      costCoverageStatus: _stringOrNull(json['costCoverageStatus']) ??
+          (incompleteRowCount > 0 ? 'incomplete' : 'complete'),
+    );
+  }
+}
+
+class DailyLossProfitRecord {
+  const DailyLossProfitRecord({
+    required this.date,
+    required this.productId,
+    required this.productName,
+    required this.tastingRoomNo,
+    required this.operatorId,
+    required this.operatorName,
+    required this.lossQuantity,
+    required this.unit,
+    required this.estimatedProfitLossCents,
+    required this.costCoverageStatus,
+    required this.warnings,
+  });
+
+  final String date;
+  final String? productId;
+  final String productName;
+  final String tastingRoomNo;
+  final String? operatorId;
+  final String operatorName;
+  final int lossQuantity;
+  final String unit;
+  final int? estimatedProfitLossCents;
+  final String costCoverageStatus;
+  final List<AnalyticsWarning> warnings;
+
+  factory DailyLossProfitRecord.fromJson(Map<String, dynamic> json) {
+    final estimatedProfitLossCents = json['estimatedProfitLossCents'] == null
+        ? null
+        : _intValue(json['estimatedProfitLossCents']);
+    return DailyLossProfitRecord(
+      date: '${json['date'] ?? ''}',
+      productId: _stringOrNull(json['productId']),
+      productName: '${json['productName'] ?? ''}',
+      tastingRoomNo: _stringOrNull(json['tastingRoomNo']) ?? '未填写',
+      operatorId: _stringOrNull(json['operatorId']),
+      operatorName: _stringOrNull(json['operatorName']) ?? '未知操作员',
+      lossQuantity: _intValue(json['lossQuantity']),
+      unit: '${json['unit'] ?? ''}',
+      estimatedProfitLossCents: estimatedProfitLossCents,
+      costCoverageStatus: _stringOrNull(json['costCoverageStatus']) ??
+          (estimatedProfitLossCents == null ? 'unavailable' : 'available'),
+      warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
 class ProfitAnalysisResponse {
   const ProfitAnalysisResponse({
     required this.range,
@@ -5692,6 +6838,8 @@ class ProfitAnalysisSummary {
     required this.noSalesGroupCount,
     required this.effectiveSalesAmountCents,
     required this.actualProductCostCents,
+    required this.taxFeeCents,
+    required this.paymentServiceFeeCents,
     required this.totalExpenseCents,
     required this.estimatedProfitCents,
     required this.knownEstimatedProfitCents,
@@ -5705,6 +6853,8 @@ class ProfitAnalysisSummary {
   final int noSalesGroupCount;
   final int effectiveSalesAmountCents;
   final int actualProductCostCents;
+  final int? taxFeeCents;
+  final int? paymentServiceFeeCents;
   final int totalExpenseCents;
   final int? estimatedProfitCents;
   final int knownEstimatedProfitCents;
@@ -5722,6 +6872,9 @@ class ProfitAnalysisSummary {
       noSalesGroupCount: _intValue(json['noSalesGroupCount']),
       effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
       actualProductCostCents: _intValue(json['actualProductCostCents']),
+      taxFeeCents: _nullableNewCentsField(json, 'taxFeeCents'),
+      paymentServiceFeeCents:
+          _nullableNewCentsField(json, 'paymentServiceFeeCents'),
       totalExpenseCents: _intValue(json['totalExpenseCents']),
       estimatedProfitCents: json['estimatedProfitCents'] == null
           ? null
@@ -5758,6 +6911,9 @@ class TravelGroupProfitRecord {
     required this.tasterCommissionCents,
     required this.dailyAgencyRebateCents,
     required this.monthlyAgencyRebateCents,
+    required this.taxFeeCents,
+    required this.paymentServiceFeeCents,
+    required this.paymentMethodFeeBreakdown,
     required this.totalExpenseCents,
     required this.estimatedProfitCents,
     required this.estimatedProfitRate,
@@ -5787,6 +6943,9 @@ class TravelGroupProfitRecord {
   final int tasterCommissionCents;
   final int dailyAgencyRebateCents;
   final int monthlyAgencyRebateCents;
+  final int? taxFeeCents;
+  final int? paymentServiceFeeCents;
+  final List<PaymentMethodFeeBreakdownRecord> paymentMethodFeeBreakdown;
   final int totalExpenseCents;
   final int? estimatedProfitCents;
   final double? estimatedProfitRate;
@@ -5822,6 +6981,12 @@ class TravelGroupProfitRecord {
       tasterCommissionCents: _intValue(json['tasterCommissionCents']),
       dailyAgencyRebateCents: _intValue(json['dailyAgencyRebateCents']),
       monthlyAgencyRebateCents: _intValue(json['monthlyAgencyRebateCents']),
+      taxFeeCents: _nullableNewCentsField(json, 'taxFeeCents'),
+      paymentServiceFeeCents:
+          _nullableNewCentsField(json, 'paymentServiceFeeCents'),
+      paymentMethodFeeBreakdown: _list(json['paymentMethodFeeBreakdown'])
+          .map(PaymentMethodFeeBreakdownRecord.fromJson)
+          .toList(),
       totalExpenseCents: _intValue(json['totalExpenseCents']),
       estimatedProfitCents: json['estimatedProfitCents'] == null
           ? null
@@ -5832,6 +6997,50 @@ class TravelGroupProfitRecord {
       calculationStatus:
           _stringOrNull(json['calculationStatus']) ?? 'incomplete',
       warnings: _analyticsWarnings(json['warnings']),
+    );
+  }
+}
+
+class PaymentMethodFeeBreakdownRecord {
+  const PaymentMethodFeeBreakdownRecord({
+    required this.paymentMethodId,
+    required this.paymentMethodNameSnapshot,
+    required this.serviceFeeRateSnapshot,
+    required this.originalPaymentAmountCents,
+    required this.sameDayRefundAmountCents,
+    required this.serviceFeeBaseAmountCents,
+    required this.serviceFeeCents,
+    required this.orderCount,
+  });
+
+  final String? paymentMethodId;
+  final String paymentMethodNameSnapshot;
+  final String? serviceFeeRateSnapshot;
+  final int? originalPaymentAmountCents;
+  final int sameDayRefundAmountCents;
+  final int? serviceFeeBaseAmountCents;
+  final int? serviceFeeCents;
+  final int orderCount;
+
+  factory PaymentMethodFeeBreakdownRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return PaymentMethodFeeBreakdownRecord(
+      paymentMethodId: _stringOrNull(json['paymentMethodId']),
+      paymentMethodNameSnapshot:
+          _stringOrNull(json['paymentMethodNameSnapshot']) ?? '',
+      serviceFeeRateSnapshot: _stringOrNull(json['serviceFeeRateSnapshot']),
+      originalPaymentAmountCents: json['originalPaymentAmountCents'] == null
+          ? null
+          : _intValue(json['originalPaymentAmountCents']),
+      sameDayRefundAmountCents: _intValue(json['sameDayRefundAmountCents']),
+      serviceFeeBaseAmountCents: json['serviceFeeBaseAmountCents'] == null
+          ? null
+          : _intValue(json['serviceFeeBaseAmountCents']),
+      serviceFeeCents: json['serviceFeeCents'] == null
+          ? null
+          : _intValue(json['serviceFeeCents']),
+      orderCount: _intValue(json['orderCount']),
     );
   }
 }
@@ -6401,6 +7610,8 @@ class SalesSheetRecord {
     required this.travelGroup,
     required this.salesUser,
     required this.items,
+    this.paymentDetails = const <SalesSheetPaymentDetailRecord>[],
+    this.paymentSummary = const PaymentSummaryRecord.empty(),
     required this.amounts,
     required this.status,
     required this.delivery,
@@ -6420,6 +7631,8 @@ class SalesSheetRecord {
   final SalesSheetTravelGroupRecord? travelGroup;
   final SalesSheetSalesUserRecord? salesUser;
   final List<SalesSheetItemRecord> items;
+  final List<SalesSheetPaymentDetailRecord> paymentDetails;
+  final PaymentSummaryRecord paymentSummary;
   final SalesSheetAmountsRecord amounts;
   final SalesSheetStatusRecord status;
   final SalesSheetDeliveryRecord delivery;
@@ -6430,6 +7643,17 @@ class SalesSheetRecord {
   final SalesSheetRecord? public;
 
   factory SalesSheetRecord.fromJson(Map<String, dynamic> json) {
+    final paymentDetails = _list(json['paymentDetails'])
+        .map(SalesSheetPaymentDetailRecord.fromJson)
+        .toList();
+    final amounts = SalesSheetAmountsRecord.fromJson(_map(json['amounts']));
+    final paymentSummary = json['paymentSummary'] is Map
+        ? PaymentSummaryRecord.fromJson(_map(json['paymentSummary']))
+        : PaymentSummaryRecord.fromSalesSheetDetails(
+            paymentDetails: paymentDetails,
+            totalAmountCents: amounts.totalAmountCents,
+            cashOnDeliveryAmountCents: amounts.cashOnDeliveryAmountCents,
+          );
     return SalesSheetRecord(
       visibility: '${json['visibility'] ?? 'internal'}',
       companyName: '${json['companyName'] ?? ''}',
@@ -6446,7 +7670,9 @@ class SalesSheetRecord {
       items: _list(json['items'])
           .map((item) => SalesSheetItemRecord.fromJson(item))
           .toList(),
-      amounts: SalesSheetAmountsRecord.fromJson(_map(json['amounts'])),
+      paymentDetails: paymentDetails,
+      paymentSummary: paymentSummary,
+      amounts: amounts,
       status: SalesSheetStatusRecord.fromJson(_map(json['status'])),
       delivery: SalesSheetDeliveryRecord.fromJson(_map(json['delivery'])),
       logistics: SalesSheetLogisticsRecord.fromJson(_map(json['logistics'])),
@@ -6474,6 +7700,8 @@ class SalesSheetRecord {
       travelGroup: travelGroup,
       salesUser: salesUser,
       items: items,
+      paymentDetails: paymentDetails,
+      paymentSummary: paymentSummary,
       amounts: amounts,
       status: status,
       delivery: delivery,
@@ -6657,6 +7885,101 @@ class SalesSheetItemRecord {
       deliveryTypeLabel: _stringOrNull(json['deliveryTypeLabel']),
       notes: _stringOrNull(json['notes']),
       sortOrder: _intValue(json['sortOrder']),
+    );
+  }
+}
+
+class SalesSheetPaymentDetailRecord {
+  const SalesSheetPaymentDetailRecord({
+    required this.id,
+    required this.paymentMethodId,
+    required this.paymentMethodNameSnapshot,
+    required this.paymentMethodCategorySnapshot,
+    required this.paymentMethodCategoryLabel,
+    required this.amountCents,
+    required this.amountYuan,
+    required this.requiresAgencyConfirmation,
+    required this.agencyCollectionConfirmed,
+    required this.agencyCollectionConfirmedAt,
+    required this.agencyCollectionConfirmedById,
+    required this.agencyCollectionConfirmedByName,
+    required this.confirmationStatus,
+    required this.confirmationStatusLabel,
+  });
+
+  final String? id;
+  final String? paymentMethodId;
+  final String paymentMethodNameSnapshot;
+  final String paymentMethodCategorySnapshot;
+  final String paymentMethodCategoryLabel;
+  final int amountCents;
+  final String? amountYuan;
+  final bool requiresAgencyConfirmation;
+  final bool agencyCollectionConfirmed;
+  final String? agencyCollectionConfirmedAt;
+  final String? agencyCollectionConfirmedById;
+  final String? agencyCollectionConfirmedByName;
+  final String confirmationStatus;
+  final String confirmationStatusLabel;
+
+  bool get isCollectOnDelivery =>
+      paymentMethodCategorySnapshot == 'collect_on_delivery';
+
+  bool get isAgencyCollection => isCollectOnDelivery;
+
+  factory SalesSheetPaymentDetailRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    final category = _normalizePaymentMethodCategory(
+      json['paymentMethodCategorySnapshot'],
+    );
+    final requiresAgencyConfirmation =
+        json.containsKey('requiresAgencyConfirmation')
+            ? _boolValue(json['requiresAgencyConfirmation'])
+            : category == 'collect_on_delivery';
+    final agencyCollectionConfirmed = _boolValue(
+      json['agencyCollectionConfirmed'] ?? json['collectionConfirmed'],
+    );
+    final confirmationStatus = _stringOrNull(json['confirmationStatus']) ??
+        (!requiresAgencyConfirmation
+            ? 'not_required'
+            : agencyCollectionConfirmed
+                ? 'confirmed'
+                : 'pending');
+    return SalesSheetPaymentDetailRecord(
+      id: _stringOrNull(json['id']),
+      paymentMethodId: _stringOrNull(json['paymentMethodId']),
+      paymentMethodNameSnapshot: '${json['paymentMethodNameSnapshot'] ?? ''}',
+      paymentMethodCategorySnapshot: category,
+      paymentMethodCategoryLabel:
+          _stringOrNull(json['paymentMethodCategoryLabel']) ??
+              (category == 'collect_on_delivery' ? '代收营业款' : '即时收款'),
+      amountCents: _intValue(json['amountCents']),
+      amountYuan: _stringOrNull(json['amountYuan']),
+      requiresAgencyConfirmation: requiresAgencyConfirmation,
+      agencyCollectionConfirmed: agencyCollectionConfirmed,
+      agencyCollectionConfirmedAt: _stringOrNull(
+        json['agencyCollectionConfirmedAt'] ?? json['collectionConfirmedAt'],
+      ),
+      agencyCollectionConfirmedById: _stringOrNull(
+        json['agencyCollectionConfirmedById'] ??
+            json['collectionConfirmedById'],
+      ),
+      agencyCollectionConfirmedByName: _stringOrNull(
+        json['agencyCollectionConfirmedByName'] ??
+            json['collectionConfirmedByName'] ??
+            _map(
+              json['agencyCollectionConfirmedBy'] ??
+                  json['collectionConfirmedBy'],
+            )['name'],
+      ),
+      confirmationStatus: confirmationStatus,
+      confirmationStatusLabel: _stringOrNull(json['confirmationStatusLabel']) ??
+          (confirmationStatus == 'confirmed'
+              ? '已确认到账'
+              : confirmationStatus == 'pending'
+                  ? '代收款（待确认）'
+                  : '无需确认'),
     );
   }
 }
@@ -7014,6 +8337,386 @@ class FinancePendingLogisticsRecord {
   }
 }
 
+class SpecialOrderListPage {
+  const SpecialOrderListPage({
+    required this.orders,
+    required this.total,
+    required this.pendingCount,
+  });
+
+  final List<SpecialOrderRecord> orders;
+  final int total;
+  final int pendingCount;
+
+  factory SpecialOrderListPage.fromJson(Map<String, dynamic> json) {
+    return SpecialOrderListPage(
+      orders: _list(json['orders']).map(SpecialOrderRecord.fromJson).toList(),
+      total: _intValue(json['total']),
+      pendingCount: _intValue(json['pendingCount']),
+    );
+  }
+}
+
+class SpecialOrderRecord {
+  const SpecialOrderRecord({
+    required this.id,
+    required this.orderNo,
+    required this.orderType,
+    required this.workflowStatus,
+    required this.workflowVersion,
+    required this.orderDate,
+    required this.customerId,
+    required this.customerName,
+    required this.hasOriginalPurchase,
+    required this.sourceSalesOrderId,
+    required this.sourceRemark,
+    required this.internalEmployeeId,
+    required this.internalEmployeeName,
+    required this.externalPartyType,
+    required this.externalPartyId,
+    required this.externalPartyName,
+    required this.totalAmountCents,
+    required this.remark,
+    required this.rejectionReason,
+    required this.unapprovalReason,
+    required this.createdById,
+    required this.createdByName,
+    required this.approvedByName,
+    required this.createdAt,
+    required this.approvedAt,
+    required this.completedAt,
+    required this.items,
+    required this.workflowEvents,
+    required this.settlement,
+    required this.receivableTotalCents,
+    required this.payableTotalCents,
+    required this.netCashFlowCents,
+  });
+
+  final String id;
+  final String orderNo;
+  final String orderType;
+  final String workflowStatus;
+  final int workflowVersion;
+  final String orderDate;
+  final String? customerId;
+  final String customerName;
+  final bool? hasOriginalPurchase;
+  final String? sourceSalesOrderId;
+  final String? sourceRemark;
+  final String? internalEmployeeId;
+  final String? internalEmployeeName;
+  final String? externalPartyType;
+  final String? externalPartyId;
+  final String? externalPartyName;
+  final int totalAmountCents;
+  final String? remark;
+  final String? rejectionReason;
+  final String? unapprovalReason;
+  final String? createdById;
+  final String? createdByName;
+  final String? approvedByName;
+  final String? createdAt;
+  final String? approvedAt;
+  final String? completedAt;
+  final List<SpecialOrderItemRecord> items;
+  final List<SpecialOrderWorkflowEventRecord> workflowEvents;
+  final SpecialOrderSettlementRecord? settlement;
+  final int receivableTotalCents;
+  final int payableTotalCents;
+  final int netCashFlowCents;
+
+  bool get isEditable =>
+      workflowStatus == 'draft' || workflowStatus == 'rejected';
+
+  factory SpecialOrderRecord.fromJson(Map<String, dynamic> json) {
+    final financial = _map(json['financial']);
+    final internalEmployee = _map(json['internalEmployee']);
+    final createdBy = _map(json['createdBy']);
+    final approvedBy = _map(json['approvedBy']);
+    return SpecialOrderRecord(
+      id: '${json['id'] ?? ''}',
+      orderNo: '${json['orderNo'] ?? ''}',
+      orderType: '${json['orderType'] ?? ''}'.toLowerCase(),
+      workflowStatus: '${json['workflowStatus'] ?? ''}'.toLowerCase(),
+      workflowVersion: _intValue(json['workflowVersion']),
+      orderDate: '${json['orderDate'] ?? ''}',
+      customerId: _stringOrNull(json['customerId']),
+      customerName: '${json['customerName'] ?? ''}',
+      hasOriginalPurchase: json['hasOriginalPurchase'] == null
+          ? null
+          : _boolValue(json['hasOriginalPurchase']),
+      sourceSalesOrderId: _stringOrNull(json['sourceSalesOrderId']),
+      sourceRemark: _stringOrNull(json['sourceRemark']),
+      internalEmployeeId: _stringOrNull(json['internalEmployeeId']),
+      internalEmployeeName: _stringOrNull(internalEmployee['name']),
+      externalPartyType: _stringOrNull(json['externalPartyType']),
+      externalPartyId: _stringOrNull(json['externalPartyId']),
+      externalPartyName: _stringOrNull(json['externalPartyNameSnapshot']),
+      totalAmountCents: _intValue(json['totalAmountCents']),
+      remark: _stringOrNull(json['remark']),
+      rejectionReason: _stringOrNull(json['rejectionReason']),
+      unapprovalReason: _stringOrNull(json['unapprovalReason']),
+      createdById: _stringOrNull(json['createdById']),
+      createdByName: _stringOrNull(createdBy['name']),
+      approvedByName: _stringOrNull(approvedBy['name']),
+      createdAt: _stringOrNull(json['createdAt']),
+      approvedAt: _stringOrNull(json['approvedAt']),
+      completedAt: _stringOrNull(json['completedAt']),
+      items: _list(json['items']).map(SpecialOrderItemRecord.fromJson).toList(),
+      workflowEvents: _list(json['workflowEvents'])
+          .map(SpecialOrderWorkflowEventRecord.fromJson)
+          .toList(),
+      settlement: json['settlement'] is Map
+          ? SpecialOrderSettlementRecord.fromJson(
+              _map(json['settlement']),
+            )
+          : null,
+      receivableTotalCents: _intValue(financial['receivableTotalCents']),
+      payableTotalCents: _intValue(financial['payableTotalCents']),
+      netCashFlowCents: _intValue(financial['netCashFlowCents']),
+    );
+  }
+}
+
+class SpecialOrderItemRecord {
+  const SpecialOrderItemRecord({
+    required this.id,
+    required this.productId,
+    required this.productName,
+    required this.unit,
+    required this.inventoryTrackingMode,
+    required this.warehouseId,
+    required this.warehouseName,
+    required this.quantity,
+    required this.listUnitPriceCents,
+    required this.unitPriceCents,
+    required this.discountAmountCents,
+    required this.subtotalCents,
+    required this.isGift,
+    required this.priceOverrideReason,
+    required this.adjustmentReason,
+    required this.inventoryCondition,
+    required this.deliveryType,
+    required this.notes,
+    required this.logisticsCodes,
+  });
+
+  final String id;
+  final String productId;
+  final String productName;
+  final String unit;
+  final String inventoryTrackingMode;
+  final String? warehouseId;
+  final String? warehouseName;
+  final int quantity;
+  final int listUnitPriceCents;
+  final int unitPriceCents;
+  final int discountAmountCents;
+  final int subtotalCents;
+  final bool isGift;
+  final String? priceOverrideReason;
+  final String? adjustmentReason;
+  final String inventoryCondition;
+  final String deliveryType;
+  final String? notes;
+  final List<String> logisticsCodes;
+
+  factory SpecialOrderItemRecord.fromJson(Map<String, dynamic> json) {
+    final warehouse = _map(json['warehouse']);
+    return SpecialOrderItemRecord(
+      id: '${json['id'] ?? ''}',
+      productId: '${json['productId'] ?? ''}',
+      productName: '${json['productName'] ?? ''}',
+      unit: '${json['unit'] ?? ''}',
+      inventoryTrackingMode:
+          '${json['inventoryTrackingMode'] ?? 'none'}'.toLowerCase(),
+      warehouseId: _stringOrNull(json['warehouseId']),
+      warehouseName: _stringOrNull(warehouse['name']),
+      quantity: _intValue(json['quantity']),
+      listUnitPriceCents: _intValue(json['listUnitPriceCents']),
+      unitPriceCents: _intValue(json['unitPriceCents']),
+      discountAmountCents: _intValue(json['discountAmountCents']),
+      subtotalCents: _intValue(json['subtotalCents']),
+      isGift: _boolValue(json['isGift']),
+      priceOverrideReason: _stringOrNull(json['priceOverrideReason']),
+      adjustmentReason: _stringOrNull(json['adjustmentReason']),
+      inventoryCondition:
+          '${json['inventoryCondition'] ?? 'saleable'}'.toLowerCase(),
+      deliveryType: '${json['deliveryType'] ?? 'shipping'}'.toLowerCase(),
+      notes: _stringOrNull(json['notes']),
+      logisticsCodes: _stringList(json['logisticsCodes']),
+    );
+  }
+}
+
+class SpecialOrderWorkflowEventRecord {
+  const SpecialOrderWorkflowEventRecord({
+    required this.eventType,
+    required this.fromStatus,
+    required this.toStatus,
+    required this.workflowVersion,
+    required this.reason,
+    required this.actorName,
+    required this.createdAt,
+  });
+
+  final String eventType;
+  final String? fromStatus;
+  final String toStatus;
+  final int workflowVersion;
+  final String? reason;
+  final String? actorName;
+  final String? createdAt;
+
+  factory SpecialOrderWorkflowEventRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SpecialOrderWorkflowEventRecord(
+      eventType: '${json['eventType'] ?? ''}'.toLowerCase(),
+      fromStatus: _stringOrNull(json['fromStatus']),
+      toStatus: '${json['toStatus'] ?? ''}'.toLowerCase(),
+      workflowVersion: _intValue(json['workflowVersion']),
+      reason: _stringOrNull(json['reason']),
+      actorName: _stringOrNull(_map(json['actor'])['name']),
+      createdAt: _stringOrNull(json['createdAt']),
+    );
+  }
+}
+
+class SpecialOrderSettlementRecord {
+  const SpecialOrderSettlementRecord({
+    required this.direction,
+    required this.totalAmountCents,
+    required this.settledAmountCents,
+    required this.paymentStatus,
+    required this.payments,
+  });
+
+  final String direction;
+  final int totalAmountCents;
+  final int settledAmountCents;
+  final String paymentStatus;
+  final List<Map<String, dynamic>> payments;
+
+  factory SpecialOrderSettlementRecord.fromJson(Map<String, dynamic> json) {
+    return SpecialOrderSettlementRecord(
+      direction: '${json['direction'] ?? ''}'.toLowerCase(),
+      totalAmountCents: _intValue(json['totalAmountCents']),
+      settledAmountCents: _intValue(json['settledAmountCents']),
+      paymentStatus: '${json['paymentStatus'] ?? 'unpaid'}'.toLowerCase(),
+      payments: _list(json['payments']),
+    );
+  }
+}
+
+class SpecialOrderReferenceData {
+  const SpecialOrderReferenceData({
+    required this.employees,
+    required this.products,
+    required this.warehouses,
+    required this.defaultWarehouse,
+    required this.guides,
+    required this.travelAgencies,
+    required this.paymentMethods,
+    required this.customers,
+    required this.sourceSalesOrders,
+  });
+
+  final List<SpecialOrderReferenceOption> employees;
+  final List<SpecialOrderReferenceOption> products;
+  final List<SpecialOrderReferenceOption> warehouses;
+  final SpecialOrderReferenceOption? defaultWarehouse;
+  final List<SpecialOrderReferenceOption> guides;
+  final List<SpecialOrderReferenceOption> travelAgencies;
+  final List<SpecialOrderReferenceOption> paymentMethods;
+  final List<SpecialOrderReferenceOption> customers;
+  final List<SpecialOrderSourceSalesOrderOption> sourceSalesOrders;
+
+  factory SpecialOrderReferenceData.fromJson(Map<String, dynamic> json) {
+    List<SpecialOrderReferenceOption> options(String key) =>
+        _list(json[key]).map(SpecialOrderReferenceOption.fromJson).toList();
+    return SpecialOrderReferenceData(
+      employees: options('employees'),
+      products: options('products'),
+      warehouses: options('warehouses'),
+      defaultWarehouse: json['defaultWarehouse'] is Map
+          ? SpecialOrderReferenceOption.fromJson(
+              _map(json['defaultWarehouse']),
+            )
+          : null,
+      guides: options('guides'),
+      travelAgencies: options('travelAgencies'),
+      paymentMethods: options('paymentMethods'),
+      customers: options('customers'),
+      sourceSalesOrders: _list(json['sourceSalesOrders'])
+          .map(SpecialOrderSourceSalesOrderOption.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class SpecialOrderReferenceOption {
+  const SpecialOrderReferenceOption({
+    required this.id,
+    required this.name,
+    required this.code,
+    required this.unit,
+    required this.role,
+    required this.phone,
+    required this.inventoryTrackingMode,
+    required this.isDefault,
+  });
+
+  final String id;
+  final String name;
+  final String? code;
+  final String? unit;
+  final String? role;
+  final String? phone;
+  final String inventoryTrackingMode;
+  final bool isDefault;
+
+  factory SpecialOrderReferenceOption.fromJson(Map<String, dynamic> json) {
+    return SpecialOrderReferenceOption(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? json['username'] ?? ''}',
+      code: _stringOrNull(json['code']),
+      unit: _stringOrNull(json['unit']),
+      role: _stringOrNull(json['role']),
+      phone: _stringOrNull(json['phone'] ?? json['contactPhone']),
+      inventoryTrackingMode:
+          '${json['inventoryTrackingMode'] ?? 'none'}'.toLowerCase(),
+      isDefault: _boolValue(json['isDefault']),
+    );
+  }
+}
+
+class SpecialOrderSourceSalesOrderOption {
+  const SpecialOrderSourceSalesOrderOption({
+    required this.id,
+    required this.orderNo,
+    required this.orderDate,
+    required this.totalAmountCents,
+  });
+
+  final String id;
+  final String orderNo;
+  final String orderDate;
+  final int totalAmountCents;
+
+  factory SpecialOrderSourceSalesOrderOption.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SpecialOrderSourceSalesOrderOption(
+      id: '${json['id'] ?? ''}',
+      orderNo: '${json['orderNo'] ?? ''}',
+      orderDate: '${json['orderDate'] ?? ''}',
+      totalAmountCents: _intValue(json['totalAmountCents']),
+    );
+  }
+}
+
 class ReconciliationRecord {
   const ReconciliationRecord({
     required this.id,
@@ -7026,6 +8729,8 @@ class ReconciliationRecord {
     required this.afterSalesCents,
     required this.refundsCents,
     required this.receivableTotalCents,
+    required this.payableTotalCents,
+    required this.netCashFlowCents,
     required this.actualTotalCents,
     required this.differenceCents,
     required this.reviewStatus,
@@ -7049,6 +8754,8 @@ class ReconciliationRecord {
   final int afterSalesCents;
   final int refundsCents;
   final int receivableTotalCents;
+  final int payableTotalCents;
+  final int netCashFlowCents;
   final int actualTotalCents;
   final int differenceCents;
   final String reviewStatus;
@@ -7073,6 +8780,13 @@ class ReconciliationRecord {
       afterSalesCents: _intValue(json['afterSalesCents']),
       refundsCents: _intValue(json['refundsCents']),
       receivableTotalCents: _intValue(json['receivableTotalCents']),
+      payableTotalCents: json.containsKey('payableTotalCents')
+          ? _intValue(json['payableTotalCents'])
+          : _intValue(json['buybackCents']),
+      netCashFlowCents: json.containsKey('netCashFlowCents')
+          ? _intValue(json['netCashFlowCents'])
+          : _intValue(json['receivableTotalCents']) -
+              _intValue(json['buybackCents']),
       actualTotalCents: _intValue(json['actualTotalCents']),
       differenceCents: _intValue(json['differenceCents']),
       reviewStatus: '${json['reviewStatus'] ?? 'pending_review'}',
@@ -7086,26 +8800,6 @@ class ReconciliationRecord {
           .map((item) => PaymentMethodRecord.fromJson(item))
           .toList(),
       notes: _stringOrNull(json['notes']),
-    );
-  }
-}
-
-class PaymentMethodRecord {
-  const PaymentMethodRecord({
-    required this.name,
-    required this.amountCents,
-    required this.sortOrder,
-  });
-
-  final String name;
-  final int amountCents;
-  final int sortOrder;
-
-  factory PaymentMethodRecord.fromJson(Map<String, dynamic> json) {
-    return PaymentMethodRecord(
-      name: '${json['name'] ?? ''}',
-      amountCents: _intValue(json['amountCents']),
-      sortOrder: _intValue(json['sortOrder']),
     );
   }
 }
@@ -7628,9 +9322,35 @@ List<AiWarning> _aiWarnings(Object? value) {
   return const <AiWarning>[];
 }
 
+String _travelGroupEntryStatus(
+  Object? value, {
+  required String? arrivalTime,
+  required String? notEnteredConfirmedAt,
+}) {
+  if (notEnteredConfirmedAt != null) {
+    return 'not_entered';
+  }
+  if (arrivalTime != null) {
+    return 'entered';
+  }
+  final normalized = _stringOrNull(value)?.toLowerCase();
+  if (const {'pending_entry', 'entered', 'not_entered'}.contains(normalized)) {
+    return normalized!;
+  }
+  return 'pending_entry';
+}
+
 String? _stringOrNull(Object? value) {
   final text = value == null ? '' : '$value'.trim();
   return text.isEmpty ? null : text;
+}
+
+String _normalizePaymentMethodCategory(Object? value) {
+  final category = '${value ?? 'direct_receipt'}'.trim().toLowerCase();
+  if (category == 'agency_collection' || category == 'collect_on_delivery') {
+    return 'collect_on_delivery';
+  }
+  return category.isEmpty ? 'direct_receipt' : category;
 }
 
 int _intValue(Object? value) {
@@ -7641,6 +9361,17 @@ int _intValue(Object? value) {
     return value.toInt();
   }
   return int.tryParse('${value ?? 0}') ?? 0;
+}
+
+int? _nullableNewCentsField(
+  Map<String, dynamic> json,
+  String field,
+) {
+  if (!json.containsKey(field)) {
+    return 0;
+  }
+  final value = json[field];
+  return value == null ? null : _intValue(value);
 }
 
 double _doubleValue(Object? value) {

@@ -193,6 +193,11 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
       assert.equal(detail.body.data.customer.recentOrders[0].orderNo, 'SO-CUST-RELATED');
       assert.equal(detail.body.data.customer.recentOrders[0].packingStatus, 'pending');
       assert.equal(
+        detail.body.data.customer.recentOrders[0]
+          .cashOnDeliveryAmountCents,
+        2500,
+      );
+      assert.equal(
         detail.body.data.customer.recentOrders[0].tasterCommissionCents,
         4500,
       );
@@ -534,7 +539,19 @@ test('contract: customer APIs enforce permissions, scope, finance marks, and glo
             customerPhone: '13900000001',
             orderDate: '2026-06-24',
             totalAmountCents: 12000,
-            cashOnDeliveryAmountCents: 1000,
+            cashOnDeliveryAmountCents: 9999,
+            paymentDetails: [
+              {
+                paymentMethodId:
+                  '00000000-0000-4000-8000-000000000001',
+                amountCents: 9500,
+              },
+              {
+                paymentMethodId:
+                  '00000000-0000-4000-8000-000000000005',
+                amountCents: 2500,
+              },
+            ],
             packingStatus: 'PENDING',
             logisticsNo: 'TEST-LOGISTICS-001',
             salesUserId: 'usr_customer_sales',

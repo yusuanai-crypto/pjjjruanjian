@@ -134,6 +134,79 @@ export class SalesOrdersNestController {
     };
   }
 
+  @Patch(':id/payment-details')
+  async replacePaymentDetails(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder:
+        await this.businessDataService.replaceSalesOrderPaymentDetails(
+          actor,
+          id,
+          body,
+          { ipAddress: getRequestIp(request) },
+        ),
+    };
+  }
+
+  @Patch(':id/payment-details/:detailId/agency-confirmation')
+  async confirmAgencyCollection(
+    @Param('id') id: string,
+    @Param('detailId') detailId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder:
+        await this.businessDataService.confirmAgencyCollectionPayment(
+          actor,
+          id,
+          detailId,
+          body,
+          { ipAddress: getRequestIp(request) },
+        ),
+    };
+  }
+
+  @Patch(':id/completion')
+  async setCompletion(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder: await this.businessDataService.setSalesOrderCompletion(
+        actor,
+        id,
+        body,
+        { ipAddress: getRequestIp(request) },
+      ),
+    };
+  }
+
+  @Patch(':id/payment-details-lock')
+  async setPaymentDetailsLock(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      salesOrder:
+        await this.businessDataService.setSalesOrderPaymentDetailsLock(
+          actor,
+          id,
+          body,
+          { ipAddress: getRequestIp(request) },
+        ),
+    };
+  }
+
   @Patch(':id/points-destination')
   async updatePointsDestination(
     @Param('id') id: string,

@@ -1,4 +1,5 @@
 import { calculateProductProfitSummary } from '../products/product-profit.helper';
+import { calculateOrderProfitFees } from './profit-tax-service-fee.helper';
 
 const EFFECTIVE_ORDER_STATUSES = new Set(['VALID', 'PARTIAL_REFUND']);
 const EMPLOYEE_COMMISSION_TARGETS = new Set([
@@ -123,6 +124,54 @@ export function calculateTravelGroupProfit(
     travelGroup?.cigaretteFeeCents === null
       ? null
       : nonNegativeInteger(travelGroup.cigaretteFeeCents);
+  const orderTaxAndServiceFees = salesOrders.map((order: any) => {
+    const calculated = calculateOrderProfitFees(order);
+    return {
+      orderId: optionalString(order?.id) || '',
+      orderNo: optionalString(order?.orderNo) || '',
+      orderDate: dateOnly(order?.orderDate),
+      financeMarked: calculated.financeMarked,
+      effectiveAmountCents: calculated.effectiveAmountCents,
+      taxRateSnapshot: calculated.taxRateSnapshot,
+      taxFeeCents: calculated.taxCents,
+      paymentServiceFeeCents: calculated.paymentServiceFeeCents,
+      snapshotComplete: !calculated.missingSnapshots.hasMissingSnapshots,
+      missingSnapshotCodes: calculated.missingSnapshots.issues.map(
+        (issue) => issue.code,
+      ),
+      paymentDetails: calculated.paymentDetails,
+    };
+  });
+  const financeMarkedOrderFees = orderTaxAndServiceFees.filter(
+    (order: any) => order.financeMarked,
+  );
+  const taxFeeSnapshotMissing = financeMarkedOrderFees.some(
+    (order: any) => order.taxFeeCents === null,
+  );
+  const paymentServiceFeeSnapshotMissing = financeMarkedOrderFees.some(
+    (order: any) => order.paymentServiceFeeCents === null,
+  );
+  const profitFeeSnapshotMissing =
+    taxFeeSnapshotMissing || paymentServiceFeeSnapshotMissing;
+  const knownTaxFeeCents = sumBy(
+    financeMarkedOrderFees,
+    (order: any) =>
+      order.taxFeeCents === null ? 0 : Number(order.taxFeeCents),
+  );
+  const knownPaymentServiceFeeCents = sumBy(
+    financeMarkedOrderFees,
+    (order: any) =>
+      order.paymentServiceFeeCents === null
+        ? 0
+        : Number(order.paymentServiceFeeCents),
+  );
+  const taxFeeCents = taxFeeSnapshotMissing ? null : knownTaxFeeCents;
+  const paymentServiceFeeCents = paymentServiceFeeSnapshotMissing
+    ? null
+    : knownPaymentServiceFeeCents;
+  const paymentMethodFeeBreakdown = buildTravelGroupPaymentMethodFeeBreakdown(
+    financeMarkedOrderFees,
+  );
   const totalExpenseCents =
     actualProductCostCents +
     logisticsFeeCents +
@@ -131,7 +180,9 @@ export function calculateTravelGroupProfit(
     employeeCommissionCents +
     tasterCommissionCents +
     dailyAgencyRebateCents +
-    monthlyAgencyRebateCents;
+    monthlyAgencyRebateCents +
+    knownTaxFeeCents +
+    knownPaymentServiceFeeCents;
   const warnings = normalizeWarnings(productProfit.warnings);
 
   if (cigaretteFeeCents === null) {
@@ -153,12 +204,23 @@ export function calculateTravelGroupProfit(
       message: '旅行团财务汇总缺失，日返和月返使用提成记录积分兼容回退。',
     });
   }
+  if (profitFeeSnapshotMissing) {
+    addWarning(warnings, {
+      code: 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
+      message: '存在已财务标记订单缺少税率或付款手续费快照，不能按 0 估算利润。',
+      context: {
+        taxSnapshotMissing: taxFeeSnapshotMissing,
+        paymentServiceFeeSnapshotMissing,
+      },
+    });
+  }
 
   const calculationStatus = resolveCalculationStatus({
     effectiveSalesAmountCents,
     costCoverageStatus: productProfit.costCoverageStatus,
     warnings,
     cigaretteFeeMissing: cigaretteFeeCents === null,
+    profitFeeSnapshotMissing,
   });
   const estimatedProfitCents =
     calculationStatus === 'incomplete'
@@ -194,11 +256,15 @@ export function calculateTravelGroupProfit(
     tasterCommissionCents,
     dailyAgencyRebateCents,
     monthlyAgencyRebateCents,
+    taxFeeCents,
+    paymentServiceFeeCents,
+    paymentMethodFeeBreakdown,
     totalExpenseCents,
     estimatedProfitCents,
     estimatedProfitRate,
     calculationStatus,
     warnings,
+    orderTaxAndServiceFees,
   };
 }
 
@@ -207,8 +273,12 @@ function resolveCalculationStatus(input: {
   costCoverageStatus: string;
   warnings: TravelGroupProfitWarning[];
   cigaretteFeeMissing: boolean;
+  profitFeeSnapshotMissing: boolean;
 }): TravelGroupProfitCalculationStatus {
-  if (input.cigaretteFeeMissing) {
+  if (
+    input.cigaretteFeeMissing ||
+    input.profitFeeSnapshotMissing
+  ) {
     return 'incomplete';
   }
   if (input.effectiveSalesAmountCents <= 0) {
@@ -229,6 +299,83 @@ function resolveCalculationStatus(input: {
     return 'estimated';
   }
   return 'complete';
+}
+
+function buildTravelGroupPaymentMethodFeeBreakdown(
+  orderFees: any[],
+) {
+  const groups = new Map<string, any>();
+  for (const orderFee of orderFees) {
+    for (const detail of Array.isArray(orderFee?.paymentDetails)
+      ? orderFee.paymentDetails
+      : []) {
+      const paymentMethodId = optionalString(detail?.paymentMethodId);
+      const paymentMethodNameSnapshot =
+        optionalString(detail?.paymentMethodName) || '';
+      const serviceFeeRateSnapshot =
+        optionalString(detail?.serviceFeeRateSnapshot);
+      const key = JSON.stringify([
+        paymentMethodId,
+        paymentMethodNameSnapshot,
+        serviceFeeRateSnapshot,
+      ]);
+      const group = groups.get(key) || {
+        paymentMethodId,
+        paymentMethodNameSnapshot,
+        serviceFeeRateSnapshot,
+        originalPaymentAmountCents: 0,
+        sameDayRefundAmountCents: 0,
+        serviceFeeBaseAmountCents: 0,
+        serviceFeeCents: 0,
+        originalAmountMissing: false,
+        serviceFeeBaseMissing: false,
+        serviceFeeMissing: false,
+        orderIds: new Set<string>(),
+      };
+      group.orderIds.add(orderFee.orderId);
+      group.sameDayRefundAmountCents += nonNegativeInteger(
+        detail?.sameDayRefundAmountCents,
+      );
+      if (detail?.serviceFeeBaseAmountSnapshotCents === null) {
+        group.originalAmountMissing = true;
+      } else {
+        group.originalPaymentAmountCents += nonNegativeInteger(
+          detail?.serviceFeeBaseAmountSnapshotCents,
+        );
+      }
+      if (detail?.serviceFeeChargeableBaseAmountCents === null) {
+        group.serviceFeeBaseMissing = true;
+      } else {
+        group.serviceFeeBaseAmountCents += nonNegativeInteger(
+          detail?.serviceFeeChargeableBaseAmountCents,
+        );
+      }
+      if (detail?.serviceFeeCents === null) {
+        group.serviceFeeMissing = true;
+      } else {
+        group.serviceFeeCents += nonNegativeInteger(
+          detail?.serviceFeeCents,
+        );
+      }
+      groups.set(key, group);
+    }
+  }
+  return [...groups.values()].map((group) => ({
+    paymentMethodId: group.paymentMethodId,
+    paymentMethodNameSnapshot: group.paymentMethodNameSnapshot,
+    serviceFeeRateSnapshot: group.serviceFeeRateSnapshot,
+    originalPaymentAmountCents: group.originalAmountMissing
+      ? null
+      : group.originalPaymentAmountCents,
+    sameDayRefundAmountCents: group.sameDayRefundAmountCents,
+    serviceFeeBaseAmountCents: group.serviceFeeBaseMissing
+      ? null
+      : group.serviceFeeBaseAmountCents,
+    serviceFeeCents: group.serviceFeeMissing
+      ? null
+      : group.serviceFeeCents,
+    orderCount: group.orderIds.size,
+  }));
 }
 
 function filterRelevantCommissionRecords(

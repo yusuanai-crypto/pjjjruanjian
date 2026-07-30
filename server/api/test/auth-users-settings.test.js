@@ -5,6 +5,9 @@ const {
   UsersNestService,
 } = require('../src/modules/users/users.nest.service');
 const {
+  getRoleCatalog,
+} = require('../src/modules/auth/roles');
+const {
   canAssignRole,
   canManageTargetRole,
   isOrdinaryEmployeeRole,
@@ -23,6 +26,23 @@ const {
   requestJson,
   withPhase1Server,
 } = require('./helpers/phase1-api');
+
+test('unit: taster role metadata describes the travel group permission matrix', () => {
+  const tasterRole = getRoleCatalog().find((role) => role.role === 'taster');
+  assert.equal(
+    tasterRole.description,
+    '查看本人全部接待团、今天及未来对接团、今天未进店团和全部未来团；今天关联品鉴师可修改，未来仅对接品鉴师可修改，历史团只读。',
+  );
+  assert.deepEqual(tasterRole.dataScope, {
+    travelGroups:
+      'own_receptions_all_dates_or_own_liaisons_today_future_or_public_today_unarrived_and_future',
+    travelGroupUpdates:
+      'today_reception_or_liaison_future_liaison_only_history_read_only',
+    orders: 'today_and_future_reception_taster_only',
+    receptions: 'own_user_id',
+    commissions: 'own_user_id',
+  });
+});
 
 const INVENTORY_READ_PERMISSIONS = [
   'inventory:configuration:read',
@@ -55,6 +75,25 @@ const INVENTORY_QUANTITY_WRITE_PERMISSIONS = [
   'inventory:transfers:receive',
   'inventory:transfers:reverse',
   'inventory:unavailable:write',
+];
+const SPECIAL_ORDER_SELF_PERMISSIONS = [
+  'special_orders:list',
+  'special_orders:read',
+  'special_orders:create',
+  'special_orders:update_own',
+  'special_orders:cancel_own',
+  'special_orders:submit_own',
+  'special_orders:withdraw_own',
+];
+const SPECIAL_ORDER_REVIEW_PERMISSIONS = [
+  'special_orders:list',
+  'special_orders:read',
+  'special_orders:create',
+  'special_orders:review',
+  'special_orders:unapprove',
+  'special_orders:complete',
+  'special_orders:payments',
+  'special_orders:export',
 ];
 
 const EXPECTED_ROLE_PERMISSIONS = {
@@ -96,6 +135,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'pending_travel_groups:read',
     'pending_travel_groups:create',
     'pending_travel_groups:update',
+    'travel_groups:confirm_not_entered',
     'travel_groups:finance_mark',
     'guide_carried_groups:finance_mark',
     'pending_travel_groups:finance_mark',
@@ -107,6 +147,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:list',
     'sales_orders:read',
     'sales_orders:create',
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     'sales_orders:finance_mark',
     'guide_points_summaries:list',
     'guide_points_summaries:read',
@@ -158,6 +199,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'pending_travel_groups:read',
     'pending_travel_groups:create',
     'pending_travel_groups:update',
+    'travel_groups:confirm_not_entered',
     'travel_groups:finance_mark',
     'guide_carried_groups:finance_mark',
     'pending_travel_groups:finance_mark',
@@ -169,6 +211,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:list',
     'sales_orders:read',
     'sales_orders:create',
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     'sales_orders:finance_mark',
     'guide_points_summaries:list',
     'guide_points_summaries:read',
@@ -205,10 +248,12 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'pending_travel_groups:read',
     'pending_travel_groups:create',
     'pending_travel_groups:update',
+    'travel_groups:confirm_not_entered',
     'customers:list',
     'customers:read',
     'sales_orders:list',
     'sales_orders:read',
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     'guide_points_summaries:list',
     'guide_points_summaries:read',
     'sales_orders:update_points_destination',
@@ -238,6 +283,8 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'pending_travel_groups:read',
     'pending_travel_groups:create',
     'pending_travel_groups:update',
+    'travel_groups:confirm_not_entered',
+    'travel_groups:revoke_not_entered',
     'sales_orders:list',
     'sales_orders:read',
   ],
@@ -260,6 +307,8 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:list',
     'sales_orders:read',
     'sales_orders:create',
+    ...SPECIAL_ORDER_SELF_PERMISSIONS,
+    'sales_orders:update_shipping_date',
   ],
   finance: [
     'auth:me',
@@ -294,6 +343,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:read',
     'sales_orders:create',
     'sales_orders:finance_mark',
+    'sales_orders:update_shipping_date',
     'guide_points_summaries:list',
     'guide_points_summaries:read',
     'guide_points_summaries:update',
@@ -323,6 +373,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'travel_groups:read',
     'sales_orders:list',
     'sales_orders:read',
+    'sales_orders:update_shipping_date',
     ...INVENTORY_READ_PERMISSIONS,
     ...INVENTORY_INBOUND_WRITE_PERMISSIONS,
     ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
@@ -346,6 +397,8 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'customers:update',
     'sales_orders:list',
     'sales_orders:read',
+    ...SPECIAL_ORDER_SELF_PERMISSIONS,
+    'sales_orders:update_shipping_date',
   ],
   taster: [
     'auth:me',
@@ -366,6 +419,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'travel_groups:taster_update',
     'travel_groups:taster_summary',
     'travel_groups:taster_attachments',
+    'travel_groups:confirm_not_entered',
     'sales_orders:list',
     'sales_orders:read',
   ],
@@ -482,6 +536,18 @@ test('contract: protected auth endpoints require bearer token and return current
       assert.equal(roleMenus[role].includes('guide_management'), false);
     }
     assert.equal(roleMenus.admin.includes('product_management'), true);
+    for (const role of [
+      'super_admin',
+      'admin',
+      'boss',
+      'sales',
+      'after_sales',
+    ]) {
+      assert.equal(roleMenus[role].includes('special_orders'), true);
+    }
+    for (const role of ['front_desk', 'finance', 'warehouse', 'taster']) {
+      assert.equal(roleMenus[role].includes('special_orders'), false);
+    }
     assert.equal(roleMenus.after_sales.includes('after_sales_orders'), true);
     assert.equal(roleMenus.after_sales.includes('travel_group_query'), true);
     assert.equal(roleMenus.after_sales.includes('analytics'), true);
@@ -528,7 +594,7 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(tasterRole.title, '品鉴师');
     assert.equal(
       tasterRole.description,
-      '查看今天及未来旅行团，今天关联团可无限次修改，并查看接待品鉴师关系订单。',
+      '查看本人全部接待团、今天及未来对接团、今天未进店团和全部未来团；今天关联品鉴师可修改，未来仅对接品鉴师可修改，历史团只读。',
     );
     assert.equal(Array.isArray(tasterRole.permissions), true);
     assert.deepEqual(
@@ -543,9 +609,10 @@ test('contract: protected auth endpoints require bearer token and return current
       ],
     );
     assert.deepEqual(tasterRole.dataScope, {
-      travelGroups: 'today_and_future',
+      travelGroups:
+        'own_receptions_all_dates_or_own_liaisons_today_future_or_public_today_unarrived_and_future',
       travelGroupUpdates:
-        'today_assigned_taster_or_liaison_unlimited_edits',
+        'today_reception_or_liaison_future_liaison_only_history_read_only',
       orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',
@@ -1158,7 +1225,7 @@ test('contract: admin user management paths preserve request and response struct
   });
 });
 
-test('contract: non-admin users cannot manage users and taster data scopes expose all travel groups', async () => {
+test('contract: non-admin users cannot manage users and taster data scopes expose the travel permission matrix', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     await createUser(baseUrl, admin.token, {
@@ -1244,9 +1311,10 @@ test('contract: non-admin users cannot manage users and taster data scopes expos
     );
     assert.equal(taster.menus.some((menu) => menu.id === 'employee_accounts'), false);
     assert.deepEqual(taster.dataScope, {
-      travelGroups: 'today_and_future',
+      travelGroups:
+        'own_receptions_all_dates_or_own_liaisons_today_future_or_public_today_unarrived_and_future',
       travelGroupUpdates:
-        'today_assigned_taster_or_liaison_unlimited_edits',
+        'today_reception_or_liaison_future_liaison_only_history_read_only',
       orders: 'today_and_future_reception_taster_only',
       receptions: 'own_user_id',
       commissions: 'own_user_id',

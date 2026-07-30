@@ -32,6 +32,7 @@ void main() {
     expect(find.text('订单类型'), findsNothing);
     expect(find.text('销售单号（可选）'), findsNothing);
     expect(find.text('客户需要开票'), findsNothing);
+    expect(apiClient.getPaths, contains('/api/payment-methods'));
   });
 
   testWidgets('defaults to travel group order and saves travelGroupId',
@@ -79,8 +80,217 @@ void main() {
     expect(items.first['deliveryType'], 'shipping');
     expect(items.first['notes'], '礼盒装');
     expect(items.first['sortOrder'], 1);
+    expect(body['paymentDetails'], [
+      {
+        'paymentMethodId': 'payment-shouqianba',
+        'amountCents': 259800,
+      },
+    ]);
     expect(find.text('录入成功'), findsOneWidget);
     expect(find.textContaining('SO20260630001'), findsWidgets);
+  });
+
+  testWidgets('default payment follows total until the user edits it',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    expect(find.text('货到付款金额'), findsNothing);
+    expect(_paymentAmountText(tester, 0), '0');
+
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '100.25',
+    );
+    await tester.pump();
+    expect(_paymentAmountText(tester, 0), '100.25');
+
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      '80',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '120',
+    );
+    await tester.pump();
+
+    expect(_paymentAmountText(tester, 0), '80');
+    expect(
+      find.byKey(const ValueKey('payment-detail-difference')),
+      findsOneWidget,
+    );
+    expect(find.text('-¥40.00'), findsOneWidget);
+
+    await _selectExistingCustomer(tester);
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastSalesOrderBody, isNull);
+    expect(find.text('收款明细合计必须严格等于订单总额。'), findsWidgets);
+  });
+
+  testWidgets('saves repeated payment methods with zero and negative amounts',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '100',
+    );
+
+    final addButton = find.byKey(const ValueKey('payment-detail-add-button'));
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pump();
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      '110',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-1')),
+      '-10',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-2')),
+      '0',
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('payment-detail-remove-2')),
+      findsOneWidget,
+    );
+    final moveDown = find.byKey(const ValueKey('payment-detail-down-0'));
+    await tester.ensureVisible(moveDown);
+    await tester.tap(moveDown);
+    await tester.pump();
+    expect(_paymentAmountText(tester, 0), '-10');
+    expect(_paymentAmountText(tester, 1), '110');
+
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    final details =
+        apiClient.lastSalesOrderBody!['paymentDetails'] as List<dynamic>;
+    expect(details, hasLength(3));
+    expect(
+      details.map((detail) => detail['paymentMethodId']).toList(),
+      [
+        'payment-shouqianba',
+        'payment-shouqianba',
+        'payment-shouqianba',
+      ],
+    );
+    expect(
+      details.map((detail) => detail['amountCents']).toList(),
+      [-1000, 11000, 0],
+    );
+  });
+
+  testWidgets('local draft restores payment detail values and order',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '100',
+    );
+    final addButton = find.byKey(const ValueKey('payment-detail-add-button'));
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      '70',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-1')),
+      '30',
+    );
+
+    final draftButton = find.widgetWithText(OutlinedButton, '暂存本页');
+    await tester.ensureVisible(draftButton);
+    await tester.tap(draftButton);
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      '5',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-1')),
+      '95',
+    );
+    final moveDown = find.byKey(const ValueKey('payment-detail-down-0'));
+    await tester.ensureVisible(moveDown);
+    await tester.tap(moveDown);
+    await tester.pump();
+    expect(_paymentAmountText(tester, 0), '95');
+    expect(_paymentAmountText(tester, 1), '5');
+
+    final restoreButton = find.byKey(
+      const ValueKey('payment-details-restore-draft-button'),
+    );
+    await tester.ensureVisible(restoreButton);
+    await tester.tap(restoreButton);
+    await tester.pump();
+
+    expect(_paymentAmountText(tester, 0), '70');
+    expect(_paymentAmountText(tester, 1), '30');
+    expect(find.text('已恢复草稿中的收款明细。'), findsOneWidget);
+  });
+
+  testWidgets('payment method failure blocks save and offers retry',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient()..failPaymentMethods = true;
+    await _pumpOrderForm(tester, apiClient);
+
+    expect(
+      find.byKey(const ValueKey('payment-methods-error')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('payment-methods-retry-button')),
+      findsOneWidget,
+    );
+    final saveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '保存订单'),
+    );
+    expect(saveButton.onPressed, isNull);
+    expect(apiClient.lastSalesOrderBody, isNull);
+
+    apiClient.failPaymentMethods = false;
+    final retryButton =
+        find.byKey(const ValueKey('payment-methods-retry-button'));
+    await tester.ensureVisible(retryButton);
+    await tester.tap(retryButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.getPaths.where((path) => path == '/api/payment-methods'),
+      hasLength(2),
+    );
+    expect(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('creates a customer from picker and fills the order form',
@@ -157,7 +367,7 @@ void main() {
       label: '自带',
     );
 
-    expect(find.text('¥2898.00'), findsOneWidget);
+    expect(find.text('¥2898.00'), findsWidgets);
 
     await _selectExistingCustomer(tester);
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存订单'));
@@ -178,7 +388,7 @@ void main() {
   });
 
   testWidgets(
-      'serialized product picker shows production fields without cost and locks quantity',
+      'sales order never requests or exposes serialized inventory units',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpOrderForm(tester, apiClient);
@@ -187,32 +397,23 @@ void main() {
 
     expect(
       find.byKey(const ValueKey('order-select-serialized-units')),
-      findsOneWidget,
+      findsNothing,
     );
-    await tester.tap(
-      find.byKey(const ValueKey('order-select-serialized-units')),
+    expect(
+      apiClient.getPaths.where(
+        (path) => path.startsWith('/api/serialized-inventory/available'),
+      ),
+      isEmpty,
     );
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('出厂日期 2024-01-02'), findsOneWidget);
-    expect(find.textContaining('生产批次 00001'), findsOneWidget);
-    expect(find.textContaining('批次序号 00002'), findsOneWidget);
-    expect(find.textContaining('00000003'), findsOneWidget);
-    expect(find.textContaining('进货价'), findsNothing);
-    await tester.tap(
-      find.byKey(const ValueKey('serialized-unit-unit-moutai-1')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey('serialized-inventory-confirm')),
-    );
-    await tester.pumpAndSettle();
 
     final quantity = tester.widget<TextField>(
       find.byKey(const ValueKey('order-item-quantity-0')),
     );
-    expect(quantity.readOnly, true);
-    expect(quantity.controller?.text, '1');
+    expect(quantity.readOnly, false);
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-quantity-0')),
+      '2',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('order-item-subtotal-0')),
       '3000',
@@ -223,8 +424,8 @@ void main() {
 
     final item =
         (apiClient.lastSalesOrderBody!['items'] as List<dynamic>).first;
-    expect(item['quantity'], 1);
-    expect(item['serializedUnitIds'], ['unit-moutai-1']);
+    expect(item['quantity'], 2);
+    expect(item.containsKey('serializedUnitIds'), false);
     expect(item.containsKey('purchaseCostCents'), false);
   });
 
@@ -286,9 +487,25 @@ void main() {
       find.byKey(const ValueKey('choose-travel-group-for-order-button')),
     );
     await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-taster-field')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试品鉴师').last);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-search-button')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('TG20260630001').last);
     await tester.pumpAndSettle();
 
+    final searchUri = Uri.parse(apiClient.travelGroupListPaths.last);
+    expect(searchUri.queryParameters['tasterId'], 'taster-1');
+    expect(searchUri.queryParameters.containsKey('groupNo'), isFalse);
+    expect(searchUri.queryParameters.containsKey('keyword'), isFalse);
+    expect(searchUri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(searchUri.queryParameters.containsKey('dateTo'), isFalse);
     expect(find.byType(OrderFormPage), findsOneWidget);
     expect(find.widgetWithText(FilledButton, '保存订单'), findsOneWidget);
     expect(
@@ -352,6 +569,13 @@ Future<void> _pumpOrderForm(
   await tester.pumpAndSettle();
 }
 
+void _useLargeOrderFormViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(1400, 1200);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
 Future<void> _selectExistingCustomer(WidgetTester tester) async {
   final button = find.byKey(const ValueKey('select-customer-button'));
   await tester.ensureVisible(button);
@@ -391,16 +615,54 @@ Future<void> _selectDropdownValue(
   await tester.pumpAndSettle();
 }
 
+String _paymentAmountText(WidgetTester tester, int index) {
+  return tester
+          .widget<TextField>(
+            find.byKey(ValueKey('payment-detail-amount-$index')),
+          )
+          .controller
+          ?.text ??
+      '';
+}
+
 class _FakeApiClient extends ApiClient {
   _FakeApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
 
   Map<String, dynamic>? lastCustomerBody;
   Map<String, dynamic>? lastSalesOrderBody;
+  final List<String> travelGroupListPaths = <String>[];
+  final List<String> getPaths = <String>[];
   bool failSalesOrder = false;
   bool failIncompleteTravelGroup = false;
+  bool failPaymentMethods = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    getPaths.add(path);
+    if (path == '/api/payment-methods') {
+      if (failPaymentMethods) {
+        throw const ApiException(
+          statusCode: 503,
+          code: 'PAYMENT_METHODS_UNAVAILABLE',
+          message: '收款方式服务暂不可用。',
+        );
+      }
+      return {
+        'data': {
+          'paymentMethods': const [
+            {
+              'id': 'payment-shouqianba',
+              'code': 'shouqianba',
+              'name': '收钱吧',
+              'category': 'direct_receipt',
+              'isActive': true,
+              'sortOrder': 1,
+              'isDefault': true,
+            },
+          ],
+        },
+      };
+    }
     if (path == '/api/products/options') {
       return {
         'data': {
@@ -444,7 +706,21 @@ class _FakeApiClient extends ApiClient {
         },
       };
     }
+    if (path == '/api/users/tasters') {
+      return {
+        'data': {
+          'tasters': const [
+            {
+              'id': 'taster-1',
+              'name': '测试品鉴师',
+              'username': 'test-taster',
+            },
+          ],
+        },
+      };
+    }
     if (path.startsWith('/api/travel-groups')) {
+      travelGroupListPaths.add(path);
       return {
         'data': {
           'travelGroups': [_travelGroupJson()],
@@ -574,6 +850,9 @@ Map<String, dynamic> _travelGroupJson() {
     'visitDate': '2026-06-30',
     'travelAgency': '测试旅行社',
     'guideName': '李导',
+    'tastingRoomNo': '5',
+    'tasterId': 'taster-1',
+    'tasterName': '测试品鉴师',
     'guestCount': 20,
     'status': 'unmarked',
     'financeMark': false,

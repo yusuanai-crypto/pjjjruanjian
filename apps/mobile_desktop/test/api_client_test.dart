@@ -5,8 +5,26 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/file_security_policy.dart';
 
 void main() {
+  late Directory fileSecurityRoot;
+
+  setUp(() async {
+    fileSecurityRoot = await Directory.systemTemp.createTemp(
+      'jiangjiu-api-client-files-',
+    );
+    FileSecurityPolicy.temporaryRootProviderForTesting =
+        () async => fileSecurityRoot;
+  });
+
+  tearDown(() async {
+    FileSecurityPolicy.temporaryRootProviderForTesting = null;
+    if (await fileSecurityRoot.exists()) {
+      await fileSecurityRoot.delete(recursive: true);
+    }
+  });
+
   test('parses Content-Disposition filenames', () {
     expect(
       parseContentDispositionFileName(
@@ -280,6 +298,8 @@ void main() {
         (bytes, chunk) => bytes..addAll(chunk),
       ));
       expect(body, contains('name="files"'));
+      expect(body, contains('name="refundPaymentDetailId"'));
+      expect(body, contains('payment-detail-1'));
       expect(body, contains('filename="guest-list.csv"'));
       expect(body, contains("filename*=UTF-8''guest-list.csv"));
       expect(body, contains('Content-Type: text/csv'));
@@ -310,6 +330,9 @@ void main() {
       '/api/travel-groups/group-1/attachments/guest_info',
       token: 'test-token',
       maxFileSizeBytes: 20 * 1024 * 1024,
+      fields: const {
+        'refundPaymentDetailId': 'payment-detail-1',
+      },
       files: <ApiMultipartFile>[
         ApiMultipartFile.fromBytes(
           fileName: '../../private\\guest-list.csv',

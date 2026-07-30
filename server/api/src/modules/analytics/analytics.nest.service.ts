@@ -22,6 +22,7 @@ import {
   isUnassignedSalesUserParam,
   SalesPerformanceDataset,
 } from './analytics-sales-performance.helper';
+import { buildDailyLossProfitResult } from './daily-loss-profit.helper';
 import { calculateTravelGroupProfit } from './travel-group-profit.helper';
 
 const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
@@ -274,6 +275,95 @@ export class AnalyticsNestService {
 
   async listTravelGroupProfits(actor: any, query: any = {}) {
     requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildTravelGroupProfitReadResult(query);
+    const page = normalizePositivePage(query?.page);
+    const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
+    const total = result.rows.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+
+    return {
+      range: result.range,
+      summary: buildTravelGroupProfitSummary(result.rows),
+      items: result.rows
+        .slice(start, start + pageSize)
+        .map(toTravelGroupProfitDto),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+      },
+    };
+  }
+
+  async exportTravelGroupProfitsXlsx(
+    actor: any,
+    query: any = {},
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildTravelGroupProfitReadResult(query);
+    const groupRowCount = result.rows.length;
+    const orderRowCount = result.rows.reduce(
+      (total: number, row: any) =>
+        total +
+        (Array.isArray(row.orderTaxAndServiceFees)
+          ? row.orderTaxAndServiceFees.length
+          : 0),
+      0,
+    );
+    const paymentMethodRowCount = result.rows.reduce(
+      (total: number, row: any) =>
+        total +
+        (Array.isArray(row.paymentMethodFeeBreakdown)
+          ? row.paymentMethodFeeBreakdown.length
+          : 0),
+      0,
+    );
+    const rowCount =
+      groupRowCount + orderRowCount + paymentMethodRowCount;
+    assertExportRowLimit(rowCount);
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'analytics.travel_group_profit.export',
+      entityType: 'analytics_travel_group_profit',
+      entityId: 'analytics.travel_group_profit.export',
+      beforeData: null,
+      afterData: {
+        filters: summarizeTravelGroupProfitExportFilters(
+          query,
+          result.range,
+        ),
+        rowCount,
+        rowCounts: {
+          travelGroups: groupRowCount,
+          orders: orderRowCount,
+          paymentMethods: paymentMethodRowCount,
+        },
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+
+    const workbook = buildTravelGroupProfitExportWorkbook({
+      ...result,
+      summary: buildTravelGroupProfitSummary(result.rows),
+    });
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildTravelGroupProfitExportFileName(result.range),
+      buffer: Buffer.from(xlsxData as any),
+      rowCount,
+      rowCounts: {
+        travelGroups: groupRowCount,
+        orders: orderRowCount,
+        paymentMethods: paymentMethodRowCount,
+      },
+    };
+  }
+
+  private async buildTravelGroupProfitReadResult(query: any = {}) {
     const range = normalizeAnalyticsDateRange({
       preset: query?.preset,
       dateFrom: query?.dateFrom,
@@ -384,11 +474,6 @@ export class AnalyticsNestService {
       normalizeTravelGroupProfitSortBy(query?.sortBy),
       normalizeSortDirection(query?.sortDirection),
     );
-    const page = normalizePositivePage(query?.page);
-    const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
-    const total = rows.length;
-    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
-    const start = (page - 1) * pageSize;
 
     return {
       range: {
@@ -396,14 +481,64 @@ export class AnalyticsNestService {
         dateFrom: range.dateFrom,
         dateTo: range.dateTo,
       },
-      summary: buildTravelGroupProfitSummary(rows),
-      items: rows.slice(start, start + pageSize).map(toTravelGroupProfitDto),
+      rows,
+    };
+  }
+
+  async listDailyLossProfits(actor: any, query: any = {}) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildDailyLossProfitReadResult(query);
+    const page = normalizePositivePage(query?.page);
+    const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
+    const total = result.items.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+    return {
+      range: result.range,
+      summary: result.summary,
+      items: result.items.slice(start, start + pageSize),
       pagination: {
         page,
         pageSize,
         total,
         totalPages,
       },
+    };
+  }
+
+  async exportDailyLossProfitsXlsx(
+    actor: any,
+    query: any = {},
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'boss']);
+    const result = await this.buildDailyLossProfitReadResult(query);
+    const rowCount = result.items.length;
+    assertExportRowLimit(rowCount);
+
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'analytics.daily_loss_profit.export',
+      entityType: 'analytics_daily_loss_profit',
+      entityId: 'analytics.daily_loss_profit.export',
+      beforeData: null,
+      afterData: {
+        filters: {
+          preset: result.range.preset,
+          dateFrom: result.range.dateFrom,
+          dateTo: result.range.dateTo,
+        },
+        rowCount,
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+
+    const workbook = buildDailyLossProfitExportWorkbook(result);
+    const xlsxData = await workbook.xlsx.writeBuffer();
+    return {
+      fileName: buildDailyLossProfitExportFileName(),
+      buffer: Buffer.from(xlsxData as any),
+      rowCount,
     };
   }
 
@@ -902,6 +1037,99 @@ export class AnalyticsNestService {
     };
   }
 
+  private async buildDailyLossProfitReadResult(query: any = {}) {
+    const hasExplicitRange =
+      normalizeOptionalString(query?.preset) ||
+      normalizeOptionalString(query?.dateFrom) ||
+      normalizeOptionalString(query?.dateTo);
+    const range = normalizeAnalyticsDateRange({
+      preset: hasExplicitRange ? query?.preset : 'today',
+      dateFrom: query?.dateFrom,
+      dateTo: query?.dateTo,
+    });
+    const { onlyShowMarkedRecords } =
+      await this.settingsService.getGlobalMarkQuery();
+    const travelGroups = await this.prisma.travelGroup.findMany({
+      where: buildAnalyticsTravelGroupWhere({
+        onlyShowMarkedRecords,
+        dateRange: {
+          dateFrom: range.dateFrom,
+          dateTo: range.dateTo,
+        },
+        baseWhere: {
+          lossStatus: 'RECORDED',
+        },
+      }),
+      include: {
+        tastingItems: {
+          orderBy: {
+            sortOrder: 'asc',
+          },
+        },
+        lossConfirmedBy: true,
+      },
+      orderBy: {
+        visitDate: 'desc',
+      },
+    });
+    const productIds = [
+      ...new Set(
+        travelGroups
+          .flatMap((group: any) =>
+            Array.isArray(group?.tastingItems)
+              ? group.tastingItems
+              : [],
+          )
+          .map((item: any) => normalizeOptionalString(item?.productId))
+          .filter(Boolean),
+      ),
+    ];
+    const productActualCosts = productIds.length
+      ? await this.prisma.productActualCost.findMany({
+          where: {
+            productId: {
+              in: productIds,
+            },
+            isActive: true,
+            effectiveFrom: {
+              lte: new Date(`${range.dateTo}T00:00:00.000Z`),
+            },
+            OR: [
+              {
+                effectiveTo: null,
+              },
+              {
+                effectiveTo: {
+                  gte: new Date(`${range.dateFrom}T00:00:00.000Z`),
+                },
+              },
+            ],
+          },
+          orderBy: [
+            {
+              productId: 'asc',
+            },
+            {
+              effectiveFrom: 'desc',
+            },
+          ],
+        })
+      : [];
+    const calculated = buildDailyLossProfitResult({
+      travelGroups,
+      productActualCosts,
+    });
+    return {
+      range: {
+        preset: range.preset,
+        dateFrom: range.dateFrom,
+        dateTo: range.dateTo,
+      },
+      summary: calculated.summary,
+      items: calculated.items,
+    };
+  }
+
   private async buildSalesPerformanceReadResult(query: any = {}) {
     const range = normalizeAnalyticsDateRange({
       preset: query?.preset,
@@ -1110,7 +1338,26 @@ function getSalesPerformanceAfterSalesInclude() {
 function getSalesOrderProfitAnalyticsInclude() {
   return {
     items: true,
-    afterSalesOrders: true,
+    paymentDetails: {
+      select: {
+        id: true,
+        paymentMethodId: true,
+        paymentMethodNameSnapshot: true,
+        amountCents: true,
+        serviceFeeRateSnapshot: true,
+        serviceFeeBaseAmountSnapshotCents: true,
+      },
+    },
+    afterSalesOrders: {
+      select: {
+        id: true,
+        refundAmountCents: true,
+        financeConfirmed: true,
+        refundPaymentDetailId: true,
+        refundOccurredAt: true,
+        deductsPaymentServiceFee: true,
+      },
+    },
     commissionRecords: true,
   };
 }
@@ -1287,6 +1534,12 @@ function buildTravelGroupProfitSummary(rows: any[]) {
   );
   const estimatedProfitCents =
     incompleteGroupCount > 0 ? null : knownEstimatedProfitCents;
+  const taxFeeCents = sumNullableTravelGroupProfitCents(
+    rows.map((row) => row.taxFeeCents),
+  );
+  const paymentServiceFeeCents = sumNullableTravelGroupProfitCents(
+    rows.map((row) => row.paymentServiceFeeCents),
+  );
   return {
     groupCount: rows.length,
     completeGroupCount: rows.filter(
@@ -1304,6 +1557,8 @@ function buildTravelGroupProfitSummary(rows: any[]) {
       rows,
       (row) => Number(row.actualProductCostCents || 0),
     ),
+    taxFeeCents,
+    paymentServiceFeeCents,
     totalExpenseCents: sumBy(
       rows,
       (row) => Number(row.totalExpenseCents || 0),
@@ -1315,6 +1570,18 @@ function buildTravelGroupProfitSummary(rows: any[]) {
         ? null
         : estimatedProfitCents / effectiveSalesAmountCents,
   };
+}
+
+function sumNullableTravelGroupProfitCents(
+  values: Array<number | null | undefined>,
+) {
+  if (values.some((value) => value === null || value === undefined)) {
+    return null;
+  }
+  return values.reduce(
+    (total, value) => total + Number(value || 0),
+    0,
+  );
 }
 
 function toTravelGroupProfitDto(row: any) {
@@ -1344,6 +1611,20 @@ function toTravelGroupProfitDto(row: any) {
     tasterCommissionCents: Number(row.tasterCommissionCents || 0),
     dailyAgencyRebateCents: Number(row.dailyAgencyRebateCents || 0),
     monthlyAgencyRebateCents: Number(row.monthlyAgencyRebateCents || 0),
+    taxFeeCents:
+      row.taxFeeCents === null || row.taxFeeCents === undefined
+        ? null
+        : Number(row.taxFeeCents),
+    paymentServiceFeeCents:
+      row.paymentServiceFeeCents === null ||
+      row.paymentServiceFeeCents === undefined
+        ? null
+        : Number(row.paymentServiceFeeCents),
+    paymentMethodFeeBreakdown: (
+      Array.isArray(row.paymentMethodFeeBreakdown)
+        ? row.paymentMethodFeeBreakdown
+        : []
+    ).map(toTravelGroupPaymentMethodFeeBreakdownDto),
     totalExpenseCents: Number(row.totalExpenseCents || 0),
     estimatedProfitCents:
       row.estimatedProfitCents === null
@@ -1360,6 +1641,35 @@ function toTravelGroupProfitDto(row: any) {
         message: String(warning?.message || warning?.code || ''),
       }),
     ),
+  };
+}
+
+function toTravelGroupPaymentMethodFeeBreakdownDto(row: any) {
+  return {
+    paymentMethodId: normalizeOptionalString(row?.paymentMethodId),
+    paymentMethodNameSnapshot:
+      normalizeOptionalString(row?.paymentMethodNameSnapshot) || '',
+    serviceFeeRateSnapshot:
+      normalizeOptionalString(row?.serviceFeeRateSnapshot),
+    originalPaymentAmountCents:
+      row?.originalPaymentAmountCents === null ||
+      row?.originalPaymentAmountCents === undefined
+        ? null
+        : Number(row.originalPaymentAmountCents),
+    sameDayRefundAmountCents: Number(
+      row?.sameDayRefundAmountCents || 0,
+    ),
+    serviceFeeBaseAmountCents:
+      row?.serviceFeeBaseAmountCents === null ||
+      row?.serviceFeeBaseAmountCents === undefined
+        ? null
+        : Number(row.serviceFeeBaseAmountCents),
+    serviceFeeCents:
+      row?.serviceFeeCents === null ||
+      row?.serviceFeeCents === undefined
+        ? null
+        : Number(row.serviceFeeCents),
+    orderCount: Number(row?.orderCount || 0),
   };
 }
 
@@ -1886,6 +2196,303 @@ function buildSalesPerformanceExportWorkbook(
     })),
   );
   return workbook;
+}
+
+function buildDailyLossProfitExportWorkbook(result: any) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'jiangjiu-api';
+  workbook.created = new Date();
+
+  const summarySheet = addWorksheet(
+    workbook,
+    '损耗汇总',
+    [
+      { header: '项目', key: 'metric', width: 24 },
+      { header: '值', key: 'value', width: 32 },
+    ],
+    [
+      {
+        metric: '日期范围',
+        value: `${result.range.dateFrom} 至 ${result.range.dateTo}`,
+      },
+      {
+        metric: '损耗总数量',
+        value: result.summary.totalLossQuantity,
+      },
+      {
+        metric: '可核算数量',
+        value: result.summary.calculableLossQuantity,
+      },
+      {
+        metric: '未核算数量',
+        value: result.summary.unpricedLossQuantity,
+      },
+      {
+        metric: '已知预计利润损失',
+        value:
+          result.summary.knownEstimatedProfitLossCents / 100,
+      },
+      {
+        metric: '成本完整性状态',
+        value:
+          result.summary.costCoverageStatus === 'complete'
+            ? '成本完整'
+            : '成本不完整',
+      },
+    ],
+  );
+  summarySheet.getCell(6, 2).numFmt = '¥#,##0.00';
+
+  const detailSheet = addWorksheet(
+    workbook,
+    '每日损耗汇总',
+    [
+      { header: '日期', key: 'date', width: 14 },
+      { header: '商品', key: 'productName', width: 24 },
+      { header: '品鉴馆号', key: 'tastingRoomNo', width: 16 },
+      { header: '操作员', key: 'operatorName', width: 18 },
+      { header: '损耗数量', key: 'lossQuantity', width: 14 },
+      { header: '单位', key: 'unit', width: 10 },
+      {
+        header: '预计利润损失',
+        key: 'estimatedProfitLossYuan',
+        width: 20,
+      },
+      { header: '核算状态', key: 'coverageLabel', width: 16 },
+    ],
+    result.items.map((item: any) => ({
+      date: item.date,
+      productName: item.productName,
+      tastingRoomNo: item.tastingRoomNo,
+      operatorName: item.operatorName,
+      lossQuantity: item.lossQuantity,
+      unit: item.unit,
+      estimatedProfitLossYuan:
+        item.estimatedProfitLossCents === null
+          ? ''
+          : item.estimatedProfitLossCents / 100,
+      coverageLabel:
+        item.costCoverageStatus === 'available'
+          ? '已核算'
+          : '成本未配置',
+    })),
+  );
+  detailSheet.getColumn(7).numFmt = '¥#,##0.00';
+  return workbook;
+}
+
+function buildTravelGroupProfitExportWorkbook(result: any) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'jiangjiu-api';
+  workbook.created = new Date();
+
+  const groupSheet = addWorksheet(
+    workbook,
+    '旅行团利润',
+    [
+      { header: '团号', key: 'groupNo', width: 22 },
+      { header: '到店日期', key: 'visitDate', width: 14 },
+      { header: '旅行社', key: 'travelAgency', width: 24 },
+      { header: '导游', key: 'guideName', width: 18 },
+      { header: '品鉴师', key: 'tasterName', width: 18 },
+      { header: '人数', key: 'guestCount', width: 10 },
+      { header: '订单数', key: 'orderCount', width: 10 },
+      { header: '有效销售额（元）', key: 'effectiveSalesAmountYuan', width: 18 },
+      { header: '商品成本（元）', key: 'actualProductCostYuan', width: 18 },
+      { header: '物流费（元）', key: 'logisticsFeeYuan', width: 16 },
+      { header: '停车费（元）', key: 'parkingFeeYuan', width: 16 },
+      { header: '香烟费（元）', key: 'cigaretteFeeYuan', width: 16 },
+      { header: '销售提成（元）', key: 'salesCommissionYuan', width: 16 },
+      { header: '组长提成（元）', key: 'leaderCommissionYuan', width: 16 },
+      { header: '外联提成（元）', key: 'outreachCommissionYuan', width: 16 },
+      { header: '品鉴提成（元）', key: 'tasterCommissionYuan', width: 16 },
+      { header: '旅行社日返（元）', key: 'dailyAgencyRebateYuan', width: 18 },
+      { header: '旅行社月返（元）', key: 'monthlyAgencyRebateYuan', width: 18 },
+      { header: '税费（元）', key: 'taxFeeYuan', width: 14 },
+      { header: '付款手续费（元）', key: 'paymentServiceFeeYuan', width: 18 },
+      { header: '总费用（元）', key: 'totalExpenseYuan', width: 16 },
+      { header: '预估利润（元）', key: 'estimatedProfitYuan', width: 18 },
+      { header: '利润率', key: 'estimatedProfitRate', width: 14 },
+      { header: '核算状态', key: 'calculationStatus', width: 14 },
+      { header: '风险提示', key: 'warnings', width: 36 },
+    ],
+    result.rows.map((row: any) => ({
+      groupNo: row.groupNo,
+      visitDate: row.visitDate,
+      travelAgency: row.travelAgency,
+      guideName: row.guideName,
+      tasterName: row.tasterName,
+      guestCount: row.guestCount,
+      orderCount: row.orderCount,
+      effectiveSalesAmountYuan: centsToExportYuan(
+        row.effectiveSalesAmountCents,
+      ),
+      actualProductCostYuan: centsToExportYuan(
+        row.actualProductCostCents,
+      ),
+      logisticsFeeYuan: centsToExportYuan(row.logisticsFeeCents),
+      parkingFeeYuan: centsToExportYuan(row.parkingFeeCents),
+      cigaretteFeeYuan: centsToExportYuan(row.cigaretteFeeCents),
+      salesCommissionYuan: centsToExportYuan(
+        row.salesCommissionCents,
+      ),
+      leaderCommissionYuan: centsToExportYuan(
+        row.leaderCommissionCents,
+      ),
+      outreachCommissionYuan: centsToExportYuan(
+        row.outreachCommissionCents,
+      ),
+      tasterCommissionYuan: centsToExportYuan(
+        row.tasterCommissionCents,
+      ),
+      dailyAgencyRebateYuan: centsToExportYuan(
+        row.dailyAgencyRebateCents,
+      ),
+      monthlyAgencyRebateYuan: centsToExportYuan(
+        row.monthlyAgencyRebateCents,
+      ),
+      taxFeeYuan: centsToExportYuan(row.taxFeeCents),
+      paymentServiceFeeYuan: centsToExportYuan(
+        row.paymentServiceFeeCents,
+      ),
+      totalExpenseYuan: centsToExportYuan(row.totalExpenseCents),
+      estimatedProfitYuan: centsToExportYuan(
+        row.estimatedProfitCents,
+      ),
+      estimatedProfitRate:
+        row.estimatedProfitRate === null ? '' : row.estimatedProfitRate,
+      calculationStatus: row.calculationStatus,
+      warnings: formatWarningCodes(row.warnings),
+    })),
+  );
+  for (let column = 8; column <= 22; column += 1) {
+    if (column !== 23) {
+      groupSheet.getColumn(column).numFmt = '¥#,##0.00';
+    }
+  }
+  groupSheet.getColumn(23).numFmt = '0.00%';
+
+  const orderRows = result.rows.flatMap((row: any) =>
+    (Array.isArray(row.orderTaxAndServiceFees)
+      ? row.orderTaxAndServiceFees
+      : []
+    ).map((order: any) => ({
+      groupNo: row.groupNo,
+      visitDate: row.visitDate,
+      orderNo: order.orderNo,
+      orderDate: order.orderDate,
+      financeMarked: markLabel(order.financeMarked),
+      effectiveAmountYuan: centsToExportYuan(order.effectiveAmountCents),
+      taxRateSnapshot: order.taxRateSnapshot || '',
+      taxFeeYuan: centsToExportYuan(order.taxFeeCents),
+      paymentServiceFeeYuan: centsToExportYuan(
+        order.paymentServiceFeeCents,
+      ),
+      snapshotStatus: order.snapshotComplete ? '完整' : '缺失',
+      warnings: (order.missingSnapshotCodes || []).join(', '),
+    })),
+  );
+  const orderSheet = addWorksheet(
+    workbook,
+    '订单税费手续费',
+    [
+      { header: '团号', key: 'groupNo', width: 22 },
+      { header: '到店日期', key: 'visitDate', width: 14 },
+      { header: '订单号', key: 'orderNo', width: 22 },
+      { header: '订单日期', key: 'orderDate', width: 14 },
+      { header: '订单财务标记', key: 'financeMarked', width: 16 },
+      { header: '有效金额（元）', key: 'effectiveAmountYuan', width: 18 },
+      { header: '税率快照', key: 'taxRateSnapshot', width: 16 },
+      { header: '税费（元）', key: 'taxFeeYuan', width: 14 },
+      {
+        header: '付款手续费（元）',
+        key: 'paymentServiceFeeYuan',
+        width: 18,
+      },
+      { header: '快照状态', key: 'snapshotStatus', width: 14 },
+      { header: '缺失快照', key: 'warnings', width: 42 },
+    ],
+    orderRows,
+  );
+  for (const column of [6, 8, 9]) {
+    orderSheet.getColumn(column).numFmt = '¥#,##0.00';
+  }
+
+  const paymentMethodRows = result.rows.flatMap((row: any) =>
+    (Array.isArray(row.paymentMethodFeeBreakdown)
+      ? row.paymentMethodFeeBreakdown
+      : []
+    ).map((breakdown: any) => ({
+      groupNo: row.groupNo,
+      visitDate: row.visitDate,
+      paymentMethodId: breakdown.paymentMethodId || '',
+      paymentMethodNameSnapshot:
+        breakdown.paymentMethodNameSnapshot || '',
+      serviceFeeRateSnapshot:
+        breakdown.serviceFeeRateSnapshot || '',
+      originalPaymentAmountYuan: centsToExportYuan(
+        breakdown.originalPaymentAmountCents,
+      ),
+      sameDayRefundAmountYuan: centsToExportYuan(
+        breakdown.sameDayRefundAmountCents,
+      ),
+      serviceFeeBaseAmountYuan: centsToExportYuan(
+        breakdown.serviceFeeBaseAmountCents,
+      ),
+      serviceFeeYuan: centsToExportYuan(
+        breakdown.serviceFeeCents,
+      ),
+      orderCount: breakdown.orderCount,
+    })),
+  );
+  const paymentMethodSheet = addWorksheet(
+    workbook,
+    '付款方式手续费明细',
+    [
+      { header: '团号', key: 'groupNo', width: 22 },
+      { header: '到店日期', key: 'visitDate', width: 14 },
+      { header: '付款方式ID', key: 'paymentMethodId', width: 24 },
+      {
+        header: '付款方式名称快照',
+        key: 'paymentMethodNameSnapshot',
+        width: 22,
+      },
+      {
+        header: '手续费率快照',
+        key: 'serviceFeeRateSnapshot',
+        width: 18,
+      },
+      {
+        header: '原付款金额（元）',
+        key: 'originalPaymentAmountYuan',
+        width: 18,
+      },
+      {
+        header: '当天退款（元）',
+        key: 'sameDayRefundAmountYuan',
+        width: 18,
+      },
+      {
+        header: '手续费基数（元）',
+        key: 'serviceFeeBaseAmountYuan',
+        width: 18,
+      },
+      { header: '手续费（元）', key: 'serviceFeeYuan', width: 16 },
+      { header: '订单数', key: 'orderCount', width: 12 },
+    ],
+    paymentMethodRows,
+  );
+  for (const column of [6, 7, 8, 9]) {
+    paymentMethodSheet.getColumn(column).numFmt = '¥#,##0.00';
+  }
+
+  return workbook;
+}
+
+function centsToExportYuan(value: unknown) {
+  return value === null || value === undefined
+    ? ''
+    : Number(value) / 100;
 }
 
 function addWorksheet(
@@ -2638,6 +3245,31 @@ function buildAnalyticsTasterRankingsExportFileName(date = new Date()) {
 
 function buildSalesPerformanceExportFileName(date = new Date()) {
   return `analytics-sales-performance-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function buildDailyLossProfitExportFileName(date = new Date()) {
+  return `daily-loss-profit-${formatFileNameTimestamp(date)}.xlsx`;
+}
+
+function buildTravelGroupProfitExportFileName(range: any) {
+  const dateFrom = String(range?.dateFrom || 'unknown');
+  const dateTo = String(range?.dateTo || 'unknown');
+  return `travel-group-profits-${dateFrom}-${dateTo}.xlsx`;
+}
+
+function summarizeTravelGroupProfitExportFilters(
+  query: any,
+  range: any,
+) {
+  return summarizeExportFilters({
+    preset: range?.preset,
+    dateFrom: range?.dateFrom,
+    dateTo: range?.dateTo,
+    query: query?.query,
+    status: query?.status,
+    sortBy: query?.sortBy,
+    sortDirection: query?.sortDirection,
+  });
 }
 
 function formatFileNameTimestamp(date: Date) {

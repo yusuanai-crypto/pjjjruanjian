@@ -10,6 +10,8 @@ import {
   buildGlobalSalesOrderMarkScope as buildSharedGlobalSalesOrderMarkScope,
   buildGlobalTravelGroupMarkScope as buildSharedGlobalTravelGroupMarkScope,
 } from '../analytics/analytics-scope.helper';
+import { PROFIT_TAX_RATE } from '../analytics/profit-tax-service-fee.helper';
+import { resolveSalesOrderPersonalAmountCents } from '../commissions/commission-calculation.helper';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
 import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
 import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
@@ -395,7 +397,6 @@ const AFTER_SALES_ACTION_TYPE_FROM_PRISMA: any = {
 const SALES_ORDER_EXPORT_MAX_ROWS = 5000;
 const TASTER_COMMISSION_TARGET_TYPE = 'TASTER_COMMISSION';
 const TRAVEL_GROUP_EXPORT_MAX_ROWS = 5000;
-
 const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '系统单号', key: 'orderNo', width: 18 },
   { header: '销售单号', key: 'salesFormNo', width: 18 },
@@ -410,7 +411,19 @@ const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '酒品明细', key: 'itemsSummary', width: 36 },
   { header: '配送摘要', key: 'deliverySummary', width: 14 },
   { header: '订单总额', key: 'totalAmountYuan', width: 14 },
-  { header: '货到付款金额', key: 'cashOnDeliveryAmountYuan', width: 16 },
+  { header: '是否走个人', key: 'hasPersonalAmount', width: 14 },
+  { header: '走个人金额', key: 'personalAmountYuan', width: 14 },
+  { header: '正常金额', key: 'normalAmountYuan', width: 14 },
+  { header: '收款方式', key: 'paymentMethodName', width: 16 },
+  { header: '收款金额', key: 'paymentAmountYuan', width: 14 },
+  { header: '收款属性', key: 'paymentMethodCategory', width: 16 },
+  {
+    header: '确认状态',
+    key: 'agencyCollectionConfirmationStatus',
+    width: 18,
+  },
+  { header: '确认人', key: 'agencyCollectionConfirmedBy', width: 18 },
+  { header: '确认时间', key: 'agencyCollectionConfirmedAt', width: 24 },
   { header: '订单状态', key: 'status', width: 14 },
   { header: '客户标记', key: 'customerMark', width: 12 },
   { header: '订单标记', key: 'orderMark', width: 12 },
@@ -426,7 +439,9 @@ const SALES_ORDER_EXPORT_COLUMNS = [
 
 const SALES_ORDER_EXPORT_AMOUNT_KEYS = new Set([
   'totalAmountYuan',
-  'cashOnDeliveryAmountYuan',
+  'personalAmountYuan',
+  'normalAmountYuan',
+  'paymentAmountYuan',
   'logisticsFeeYuan',
 ]);
 
@@ -505,6 +520,7 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'customer',
     'travelGroupId',
     'cashOnDeliveryAmountCents',
+    'paymentDetails',
     'invoiceRequired',
     'remark',
     'items',
@@ -520,6 +536,7 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'customer',
     'travelGroupId',
     'cashOnDeliveryAmountCents',
+    'paymentDetails',
     'invoiceRequired',
     'remark',
     'items',
@@ -535,6 +552,7 @@ const SALES_ORDER_PATCH_ALLOWED_FIELDS_BY_ROLE: any = {
     'customer',
     'travelGroupId',
     'cashOnDeliveryAmountCents',
+    'paymentDetails',
     'invoiceRequired',
     'remark',
     'items',
@@ -571,6 +589,7 @@ const SALES_ORDER_SALES_EDIT_FIELDS = new Set([
   'customer',
   'travelGroupId',
   'cashOnDeliveryAmountCents',
+  'paymentDetails',
   'invoiceRequired',
   'remark',
   'items',
@@ -748,7 +767,7 @@ export class BusinessDataNestService {
     const storedAttachments: any[] = [];
     try {
       for (const file of files) {
-        const validated = validateTravelGroupAttachmentFile(file);
+        const validated = await validateTravelGroupAttachmentFile(file);
         const storageKey = createAttachmentStorageKey();
         await writeTravelGroupAttachmentFile(storageKey, validated);
         storedAttachments.push({
@@ -846,7 +865,6 @@ export class BusinessDataNestService {
     ]);
     const current = await this.findGroupOrThrow('travel', id, true);
     await this.assertCanReadGroup('travel', actor, current);
-    await this.assertPassesGlobalGroupMarkScope(actor, current);
     const located = findTravelGroupAttachment(current, attachmentId);
     if (!located || !isSafeAttachmentStorageKey(located.attachment.storageKey)) {
       throw attachmentNotFoundError();
@@ -1037,7 +1055,6 @@ export class BusinessDataNestService {
     requireAnyRole(actor, readRoles);
     const group = await this.findGroupOrThrow(kind, id, true);
     await this.assertCanReadGroup(kind, actor, group);
-    await this.assertPassesGlobalGroupMarkScope(actor, group);
     return toGroupDto(
       group,
       kind,
@@ -1246,9 +1263,22 @@ export class BusinessDataNestService {
     assertTasterCanEditTravelGroup(actor, current);
     assertSalesCanEditTravelGroup(actor, current);
     assertTravelGroupPatchAllowedFields(actor, payload, current);
+    assertNotEnteredAllowsArrivalTime(current, payload);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      const data = buildTravelGroupUpdateData(payload, actor, current);
+      const latestCurrent = await tx.travelGroup.findUnique({
+        where: { id },
+        include: getGroupInclude('travel', 'detail'),
+      });
+      if (!latestCurrent) {
+        throw createHttpError(
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+          'Travel group does not exist.',
+        );
+      }
+      assertNotEnteredAllowsArrivalTime(latestCurrent, payload);
+      const data = buildTravelGroupUpdateData(payload, actor, latestCurrent);
 
       if (data.groupNo && data.groupNo !== current.groupNo) {
         const duplicate = await tx.travelGroup.findUnique({
@@ -1312,7 +1342,7 @@ export class BusinessDataNestService {
           data,
           actor,
           payload,
-          current,
+          latestCurrent,
           tastingItems,
         );
         data.tastingItems = {
@@ -1324,7 +1354,7 @@ export class BusinessDataNestService {
           data,
           actor,
           payload,
-          current,
+          latestCurrent,
           null,
         );
       }
@@ -1348,7 +1378,7 @@ export class BusinessDataNestService {
           action: 'travel_groups.update',
           entityType: 'travel_group',
           entityId: updatedGroup.id,
-          beforeData: toGroupDto(current, 'travel'),
+          beforeData: toGroupDto(latestCurrent, 'travel'),
           afterData: toGroupDto(updatedGroup, 'travel'),
           ipAddress: metadata.ipAddress || null,
         },
@@ -1361,6 +1391,97 @@ export class BusinessDataNestService {
       { sourceType: 'TRAVEL_GROUP', sourceId: updated.id },
     ]);
     return toGroupDto(updated, 'travel', actor);
+  }
+
+  async setTravelGroupNotEntered(
+    actor: any,
+    id: string,
+    payload: unknown,
+    metadata: any = {},
+  ) {
+    const confirmed = parseTravelGroupNotEnteredPayload(payload);
+    requireAnyRole(
+      actor,
+      confirmed
+        ? ['admin', 'boss', 'front_desk', 'taster']
+        : ['front_desk'],
+    );
+
+    const visibleGroup = await this.findGroupOrThrow('travel', id, true);
+    await this.assertCanReadGroup('travel', actor, visibleGroup);
+
+    const result = await this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.travelGroup.findUnique({
+        where: { id },
+        include: getGroupInclude('travel', 'detail'),
+      });
+      if (!current) {
+        throw createHttpError(
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+          'Travel group does not exist.',
+        );
+      }
+      if (
+        actor.role === 'taster' &&
+        current.liaisonTasterId !== actor.id
+      ) {
+        throw createHttpError(
+          403,
+          'TRAVEL_GROUP_NOT_ENTERED_LIAISON_REQUIRED',
+          'Only the liaison taster may confirm that this travel group did not enter.',
+        );
+      }
+
+      if (confirmed) {
+        if (current.notEnteredConfirmedAt) {
+          return current;
+        }
+        if (hasText(current.arrivalTime)) {
+          throw createHttpError(
+            409,
+            'TRAVEL_GROUP_ALREADY_ENTERED',
+            'A travel group with an arrival time cannot be confirmed as not entered.',
+          );
+        }
+      } else if (!current.notEnteredConfirmedAt) {
+        return current;
+      }
+
+      const updated = await tx.travelGroup.update({
+        where: { id },
+        data: confirmed
+          ? {
+              notEnteredConfirmedAt: new Date(),
+              notEnteredConfirmedById: actor.id,
+            }
+          : {
+              notEnteredConfirmedAt: null,
+              notEnteredConfirmedById: null,
+            },
+        include: getGroupInclude('travel', 'detail'),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: confirmed
+            ? 'travel_groups.not_entered.confirm'
+            : 'travel_groups.not_entered.revoke',
+          entityType: 'travel_group',
+          entityId: updated.id,
+          beforeData: toGroupDto(current, 'travel'),
+          afterData: toGroupDto(updated, 'travel'),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updated;
+    });
+
+    await this.reconcileTodoSources([
+      { sourceType: 'TRAVEL_GROUP', sourceId: result.id },
+    ]);
+    return toGroupDto(result, 'travel', actor);
   }
 
   async setGroupFinanceMark(
@@ -1488,7 +1609,7 @@ export class BusinessDataNestService {
   }
 
   async exportSalesOrdersXlsx(actor: any, filters: any = {}) {
-    requireAnyRole(actor, ['admin', 'finance']);
+    requireAnyRole(actor, ['admin', 'finance', 'boss', 'after_sales']);
     const orders = await this.prisma.salesOrder.findMany({
       where: await this.buildScopedSalesOrderWhere(
         actor,
@@ -1499,11 +1620,12 @@ export class BusinessDataNestService {
       take: SALES_ORDER_EXPORT_MAX_ROWS + 1,
     });
 
-    if (orders.length > SALES_ORDER_EXPORT_MAX_ROWS) {
+    const expandedRowCount = countSalesOrderExportRows(orders);
+    if (expandedRowCount > SALES_ORDER_EXPORT_MAX_ROWS) {
       throw createHttpError(
         400,
         'EXPORT_LIMIT_EXCEEDED',
-        `Sales order export exceeds ${SALES_ORDER_EXPORT_MAX_ROWS} rows. Please narrow filters.`,
+        `Sales order export exceeds ${SALES_ORDER_EXPORT_MAX_ROWS} rows after expanding payment details. Please narrow filters.`,
       );
     }
 
@@ -1518,6 +1640,356 @@ export class BusinessDataNestService {
   async getSalesOrder(actor: any, id: string) {
     const order = await this.findReadableSalesOrderOrThrow(actor, id);
     return toSalesOrderDtoForActor(order, actor);
+  }
+
+  async replaceSalesOrderPaymentDetails(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    assertPayloadOnlyFields(payload, ['paymentDetails'], 'payment details');
+    if (!hasOwn(payload, 'paymentDetails')) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'paymentDetails is required.',
+      );
+    }
+    const current = await this.prisma.salesOrder.findUnique({
+      where: { id },
+      include: getSalesOrderInclude(),
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    assertCanReadSalesOrder(actor, current);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
+    assertFinanceMarkAllowsPaymentDetailsMutation(current);
+    assertPaymentDetailsUnlocked(current);
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const latestCurrent = await tx.salesOrder.findUnique({
+        where: { id },
+        include: getSalesOrderInclude(),
+      });
+      if (!latestCurrent) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          'Sales order does not exist.',
+        );
+      }
+      assertFinanceMarkAllowsPaymentDetailsMutation(latestCurrent);
+      assertPaymentDetailsUnlocked(latestCurrent);
+      const paymentDetails = await resolveSalesOrderPaymentDetails(
+        tx,
+        payload.paymentDetails,
+        Number(latestCurrent.totalAmountCents || 0),
+        latestCurrent.paymentDetails || [],
+        { useDefaultWhenMissing: false },
+      );
+      await this.appendPaymentConfirmationResetLogs(
+        tx,
+        actor,
+        latestCurrent.paymentDetails || [],
+        paymentDetails,
+        metadata,
+      );
+      const updatedOrder = await tx.salesOrder.update({
+        where: { id },
+        data: buildPaymentDetailsReplacementData(paymentDetails, actor),
+        include: getSalesOrderInclude(),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.payment_details.replace',
+          entityType: 'sales_order',
+          entityId: id,
+          beforeData: toSalesOrderDto(latestCurrent),
+          afterData: toSalesOrderDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
+    return toSalesOrderDtoForActor(updated, actor);
+  }
+
+  async setSalesOrderCompletion(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance', 'sales']);
+    assertPayloadOnlyFields(payload, ['completed'], 'order completion');
+    const completed = normalizeStrictBoolean(payload?.completed, 'completed');
+    const current = await this.prisma.salesOrder.findUnique({
+      where: { id },
+      include: getSalesOrderInclude(),
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    assertCanCompleteSalesOrder(actor, current);
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
+    if (completed) {
+      assertPaymentDetailsMatchOrderTotal(
+        current.paymentDetails || [],
+        Number(current.totalAmountCents || 0),
+      );
+    }
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: { id },
+        data: completed
+          ? {
+              completedAt: current.completedAt || now,
+              completedById: current.completedById || actor.id,
+              paymentDetailsLocked: true,
+              paymentDetailsLockedAt:
+                isPaymentDetailsLocked(current) &&
+                current.paymentDetailsLockedAt
+                  ? current.paymentDetailsLockedAt
+                  : now,
+              paymentDetailsLockedById:
+                isPaymentDetailsLocked(current) &&
+                current.paymentDetailsLockedById
+                  ? current.paymentDetailsLockedById
+                  : actor.id,
+              paymentDetailsUnlockedAt: null,
+              paymentDetailsUnlockedById: null,
+              updatedById: actor.id,
+              updatedAt: now,
+            }
+          : {
+              completedAt: null,
+              completedById: null,
+              updatedById: actor.id,
+              updatedAt: now,
+            },
+        include: getSalesOrderInclude(),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: `sales_orders.completion.${completed ? 'complete' : 'reopen'}`,
+          entityType: 'sales_order',
+          entityId: id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    });
+    return toSalesOrderDtoForActor(updated, actor);
+  }
+
+  async setSalesOrderPaymentDetailsLock(
+    actor: any,
+    id: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin']);
+    assertPayloadOnlyFields(payload, ['locked'], 'payment details lock');
+    const locked = normalizeStrictBoolean(payload?.locked, 'locked');
+    const current = await this.prisma.salesOrder.findUnique({
+      where: { id },
+      include: getSalesOrderInclude(),
+    });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
+    if (locked) {
+      assertPaymentDetailsMatchOrderTotal(
+        current.paymentDetails || [],
+        Number(current.totalAmountCents || 0),
+      );
+    }
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const updatedOrder = await tx.salesOrder.update({
+        where: { id },
+        data: locked
+          ? {
+              paymentDetailsLocked: true,
+              paymentDetailsLockedAt: now,
+              paymentDetailsLockedById: actor.id,
+              paymentDetailsUnlockedAt: null,
+              paymentDetailsUnlockedById: null,
+              updatedById: actor.id,
+              updatedAt: now,
+            }
+          : {
+              paymentDetailsLocked: false,
+              paymentDetailsUnlockedAt: now,
+              paymentDetailsUnlockedById: actor.id,
+              updatedById: actor.id,
+              updatedAt: now,
+            },
+        include: getSalesOrderInclude(),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: `sales_orders.payment_details.${locked ? 'lock' : 'unlock'}`,
+          entityType: 'sales_order',
+          entityId: id,
+          beforeData: toSalesOrderDto(current),
+          afterData: toSalesOrderDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    });
+    return toSalesOrderDtoForActor(updated, actor);
+  }
+
+  async confirmAgencyCollectionPayment(
+    actor: any,
+    orderId: string,
+    detailId: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    assertPayloadOnlyFields(
+      payload,
+      ['confirmed'],
+      'agency collection confirmation',
+    );
+    const confirmed = normalizeStrictBoolean(payload?.confirmed, 'confirmed');
+    const order = await this.prisma.salesOrder.findUnique({
+      where: { id: orderId },
+      include: getSalesOrderInclude(),
+    });
+    if (!order) {
+      throw createHttpError(
+        404,
+        'SALES_ORDER_NOT_FOUND',
+        'Sales order does not exist.',
+      );
+    }
+    await this.assertPassesGlobalSalesOrderMarkScope(actor, order);
+    const detail: any = (order.paymentDetails || []).find(
+      (item: any) => item.id === detailId,
+    );
+    if (!detail) {
+      throw createHttpError(
+        404,
+        'PAYMENT_DETAIL_NOT_FOUND',
+        'Payment detail does not exist.',
+      );
+    }
+    if (
+      !isCollectOnDeliveryCategory(
+        detail.paymentMethodCategorySnapshot,
+      )
+    ) {
+      throw createHttpError(
+        400,
+        'PAYMENT_DETAIL_NOT_AGENCY_COLLECTION',
+        'Only agency collection payment details require finance confirmation.',
+      );
+    }
+    const wasConfirmed = isPaymentDetailCollectionConfirmed(detail);
+    if (wasConfirmed === confirmed) {
+      return toSalesOrderDtoForActor(order, actor);
+    }
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      await tx.salesOrderPaymentDetail.update({
+        where: { id: detail.id },
+        data: {
+          collectionConfirmed: confirmed,
+          collectionConfirmedAt: confirmed ? now : null,
+          collectionConfirmedById: confirmed ? actor.id : null,
+          updatedAt: now,
+        },
+      });
+      const updatedOrder = await tx.salesOrder.findUnique({
+        where: { id: orderId },
+        include: getSalesOrderInclude(),
+      });
+      const updatedDetail = updatedOrder?.paymentDetails.find(
+        (item: any) => item.id === detail.id,
+      );
+      if (updatedDetail) {
+        updatedDetail.collectionConfirmedBy = confirmed
+          ? {
+              id: actor.id,
+              name: actor.name,
+              username: actor.username,
+            }
+          : null;
+      }
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: `sales_orders.agency_collection.${confirmed ? 'confirm' : 'unconfirm'}`,
+          entityType: 'sales_order_payment_detail',
+          entityId: detail.id,
+          beforeData: toSalesOrderPaymentDetailDto(detail),
+          afterData: updatedDetail
+            ? toSalesOrderPaymentDetailDto(updatedDetail)
+            : null,
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return updatedOrder;
+    });
+    return toSalesOrderDtoForActor(updated || order, actor);
+  }
+
+  private async appendPaymentConfirmationResetLogs(
+    tx: any,
+    actor: any,
+    beforeDetails: any[],
+    afterDetails: any[],
+    metadata: any,
+  ) {
+    for (const reset of getPaymentConfirmationResets(
+      beforeDetails,
+      afterDetails,
+    )) {
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'sales_orders.agency_collection.confirmation_reset',
+          entityType: 'sales_order_payment_detail',
+          entityId: reset.before.id,
+          beforeData: toSalesOrderPaymentDetailDto(reset.before),
+          afterData: reset.after
+            ? toSalesOrderPaymentDetailDto(reset.after)
+            : null,
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+    }
   }
 
   async getSalesOrderSalesSheet(actor: any, id: string) {
@@ -1790,6 +2262,18 @@ export class BusinessDataNestService {
       data.items = {
         create: orderItems.map(toSalesOrderItemCreateData),
       };
+      const paymentDetails =
+        await resolveSubmittedOrLegacySalesOrderPaymentDetails(
+        tx,
+        payload,
+        data.totalAmountCents,
+        [],
+      );
+      data.cashOnDeliveryAmountCents =
+        getCollectOnDeliveryAmountCents(paymentDetails);
+      data.paymentDetails = {
+        create: paymentDetails,
+      };
 
       return withGeneratedSalesOrderNo(
         tx.salesOrder,
@@ -1847,7 +2331,7 @@ export class BusinessDataNestService {
                   Number(createdOrder.totalAmountCents || 0),
                 cashOnDeliveryCents:
                   Number(travelGroup.cashOnDeliveryCents || 0) +
-                  Number(createdOrder.cashOnDeliveryAmountCents || 0),
+                  getSalesOrderCollectOnDeliveryAmountCents(createdOrder),
                 updatedById: actor.id,
                 updatedAt: new Date(),
               },
@@ -2041,6 +2525,15 @@ export class BusinessDataNestService {
           create: resolvedOrderItems.map(toSalesOrderItemCreateData),
         };
       }
+      await applyPaymentDetailsToSalesOrderUpdate(
+        tx,
+        data,
+        payload,
+        current,
+        actor,
+        metadata,
+        this.appendPaymentConfirmationResetLogs.bind(this),
+      );
 
       if (
         hasOwn(payload, 'logisticsNo') &&
@@ -2303,6 +2796,15 @@ export class BusinessDataNestService {
           create: orderItems.map(toSalesOrderItemCreateData),
         };
       }
+      await applyPaymentDetailsToSalesOrderUpdate(
+        tx,
+        data,
+        payload,
+        current,
+        actor,
+        metadata,
+        this.appendPaymentConfirmationResetLogs.bind(this),
+      );
 
       const updatedOrder = await tx.salesOrder.update({
         where: {
@@ -2774,46 +3276,134 @@ export class BusinessDataNestService {
     metadata: any = {},
   ) {
     requireAnyRole(actor, ['admin', 'finance']);
-    const current = await this.prisma.salesOrder.findUnique({
-      where: {
-        id,
-      },
-      include: getSalesOrderInclude(),
-    });
-    if (!current) {
-      throw createHttpError(
-        404,
-        'SALES_ORDER_NOT_FOUND',
-        'Sales order does not exist.',
-      );
-    }
-
     const marked = normalizeBoolean(
       payload?.financeMark ?? payload?.marked,
       'financeMark',
     );
-    const updated = await this.prisma.salesOrder.update({
-      where: {
-        id,
-      },
-      data: buildFinanceMarkData(marked, actor),
-      include: getSalesOrderInclude(),
-    });
+    const result = await this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.salesOrder.findUnique({
+        where: {
+          id,
+        },
+        include: getSalesOrderInclude(),
+      });
+      if (!current) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          'Sales order does not exist.',
+        );
+      }
+      if (Boolean(current.financeMark) === marked) {
+        return {
+          changed: false,
+          order: current,
+        };
+      }
 
-    await this.operationLogsService.appendLog({
-      userId: actor.id,
-      action: `sales_orders.finance_mark.${marked ? 'enable' : 'disable'}`,
-      entityType: 'sales_order',
-      entityId: updated.id,
-      beforeData: toSalesOrderDto(current),
-      afterData: toSalesOrderDto(updated),
-      ipAddress: metadata.ipAddress || null,
-    });
-    await this.reconcileTodoSources([
-      { sourceType: 'SALES_ORDER', sourceId: updated.id },
-      { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
-    ]);
-    return toSalesOrderDtoForActor(updated, actor);
+      const markedAt = new Date();
+      if (marked) {
+        const paymentDetails = Array.isArray(current.paymentDetails)
+          ? current.paymentDetails
+          : [];
+        const paymentMethodIds = [
+          ...new Set(
+            paymentDetails.map((detail: any) => detail.paymentMethodId),
+          ),
+        ];
+        const paymentMethods =
+          paymentMethodIds.length === 0
+            ? []
+            : await tx.paymentMethod.findMany({
+                where: {
+                  id: {
+                    in: paymentMethodIds,
+                  },
+                },
+              });
+        const paymentMethodsById = new Map<string, any>(
+          paymentMethods.map((method: any) => [method.id, method]),
+        );
+        const missingRateDetails = paymentDetails.filter((detail: any) => {
+          const rate = paymentMethodsById.get(
+            detail.paymentMethodId,
+          )?.serviceFeeRate;
+          return rate === null || rate === undefined;
+        });
+        if (missingRateDetails.length > 0) {
+          throw createHttpError(
+            409,
+            'PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED',
+            'Configure a service fee rate for every payment method before marking the sales order.',
+          );
+        }
+
+        for (const detail of paymentDetails) {
+          const paymentMethod: any = paymentMethodsById.get(
+            detail.paymentMethodId,
+          );
+          await tx.salesOrderPaymentDetail.update({
+            where: {
+              id: detail.id,
+            },
+            data: {
+              serviceFeeRateSnapshot: paymentMethod.serviceFeeRate,
+              serviceFeeBaseAmountSnapshotCents: Number(
+                detail.amountCents,
+              ),
+              updatedAt: markedAt,
+            },
+          });
+        }
+      }
+
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id,
+        },
+        data: {
+          financeMark: marked,
+          markedById: actor.id,
+          markedAt,
+          updatedById: actor.id,
+          updatedAt: markedAt,
+          ...(marked
+            ? {
+                taxRateSnapshot: PROFIT_TAX_RATE,
+                profitFeeSnapshottedAt: markedAt,
+                profitFeeSnapshottedById: actor.id,
+              }
+            : {}),
+        },
+        include: getSalesOrderInclude(),
+      });
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: `sales_orders.finance_mark.${marked ? 'enable' : 'disable'}`,
+          entityType: 'sales_order',
+          entityId: updatedOrder.id,
+          beforeData: toSalesOrderAuditDto(current),
+          afterData: toSalesOrderAuditDto(updatedOrder),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return {
+        changed: true,
+        order: updatedOrder,
+      };
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
+    if (result.changed) {
+      await this.reconcileTodoSources([
+        { sourceType: 'SALES_ORDER', sourceId: result.order.id },
+        {
+          sourceType: 'TRAVEL_GROUP',
+          sourceId: result.order.travelGroupId,
+        },
+      ]);
+    }
+    return toSalesOrderDtoForActor(result.order, actor);
   }
 
   async listAfterSalesOrders(actor: any, filters: any = {}) {
@@ -2853,11 +3443,26 @@ export class BusinessDataNestService {
       actor,
       salesOrderId,
     );
-    if (readableSalesOrder.orderType === 'AFTER_SALES') {
+    if (
+      readableSalesOrder.orderType === 'AFTER_SALES' ||
+      readableSalesOrder.orderType === 'BUYBACK'
+    ) {
       throw createHttpError(
         400,
         'AFTER_SALES_SOURCE_ORDER_INVALID',
-        'After-sales orders must reference an original sales order.',
+        'After-sales orders must reference a sales order; buyback orders are not sales.',
+      );
+    }
+    if (
+      readableSalesOrder.workflowStatus &&
+      !['APPROVED', 'COMPLETED'].includes(
+        String(readableSalesOrder.workflowStatus),
+      )
+    ) {
+      throw createHttpError(
+        409,
+        'AFTER_SALES_SOURCE_ORDER_NOT_EFFECTIVE',
+        'A workflow-backed source order must be approved or completed.',
       );
     }
 
@@ -2875,6 +3480,11 @@ export class BusinessDataNestService {
             },
             customer: true,
             travelGroup: true,
+            paymentDetails: {
+              orderBy: {
+                sortOrder: 'asc',
+              },
+            },
             afterSalesOrders: {
               include: {
                 items: true,
@@ -2889,11 +3499,26 @@ export class BusinessDataNestService {
             'Sales order does not exist.',
           );
         }
-        if (salesOrder.orderType === 'AFTER_SALES') {
+        if (
+          salesOrder.orderType === 'AFTER_SALES' ||
+          salesOrder.orderType === 'BUYBACK'
+        ) {
           throw createHttpError(
             400,
             'AFTER_SALES_SOURCE_ORDER_INVALID',
-            'After-sales orders must reference an original sales order.',
+            'After-sales orders must reference a sales order; buyback orders are not sales.',
+          );
+        }
+        if (
+          salesOrder.workflowStatus &&
+          !['APPROVED', 'COMPLETED'].includes(
+            String(salesOrder.workflowStatus),
+          )
+        ) {
+          throw createHttpError(
+            409,
+            'AFTER_SALES_SOURCE_ORDER_NOT_EFFECTIVE',
+            'A workflow-backed source order must be approved or completed.',
           );
         }
 
@@ -2908,16 +3533,37 @@ export class BusinessDataNestService {
           actionType,
         );
         validateAfterSalesAvailableQuantity(items, salesOrder.afterSalesOrders);
-        const refundAmountCents = items.reduce(
-          (sum: number, item: any) => sum + item.subtotalCents,
-          0,
-        );
+        const refundAmountCents =
+          body.items === undefined || body.items === null
+            ? normalizeNonNegativeInt(
+                body.refundAmountCents ?? 0,
+                'refundAmountCents',
+              )
+            : items.reduce(
+                (sum: number, item: any) => sum + item.subtotalCents,
+                0,
+              );
         validateAfterSalesRefundAmount(
           body,
           salesOrder,
           salesOrder.afterSalesOrders,
           actionType,
           refundAmountCents,
+        );
+        const refundPaymentDetail = resolveRefundPaymentDetail(
+          body.refundPaymentDetailId,
+          salesOrder.paymentDetails,
+        );
+        const personalPointsRefundAmountCents =
+          normalizePersonalPointsRefundAmountCents(
+            body.personalPointsRefundAmountCents,
+            refundAmountCents,
+          );
+        validateAfterSalesPointsRefundAllocation(
+          salesOrder,
+          salesOrder.afterSalesOrders,
+          refundAmountCents,
+          personalPointsRefundAmountCents,
         );
         const calculationSnapshot =
           await this.resolveAfterSalesCalculationSnapshot(
@@ -2933,17 +3579,33 @@ export class BusinessDataNestService {
           now,
           async (afterSalesNo) => {
             const afterSalesSalesOrderId = crypto.randomUUID();
-            const generatedSalesOrder = await tx.salesOrder.create({
-              data: buildAfterSalesSalesOrderCreateData({
+            const generatedPaymentDetails =
+              await resolveSalesOrderPaymentDetails(
+                tx,
+                undefined,
+                refundAmountCents,
+                [],
+                { useDefaultWhenMissing: true },
+              );
+            const generatedSalesOrderData: any =
+              buildAfterSalesSalesOrderCreateData({
                 id: afterSalesSalesOrderId,
                 afterSalesNo,
                 sourceSalesOrder: salesOrder,
                 items,
                 refundAmountCents,
+                personalPointsRefundAmountCents,
                 orderDate: calculationDate,
                 actor,
                 now,
-              }),
+              });
+            generatedSalesOrderData.cashOnDeliveryAmountCents =
+              getCollectOnDeliveryAmountCents(generatedPaymentDetails);
+            generatedSalesOrderData.paymentDetails = {
+              create: generatedPaymentDetails,
+            };
+            const generatedSalesOrder = await tx.salesOrder.create({
+              data: generatedSalesOrderData,
               include: getSalesOrderInclude(),
             });
 
@@ -2955,9 +3617,11 @@ export class BusinessDataNestService {
                 id: afterSalesOrderId,
                 afterSalesSalesOrderId,
                 refundAmountCents,
+                personalPointsRefundAmountCents,
                 actionType,
                 calculationDate,
                 calculationSnapshot,
+                refundPaymentDetail,
                 items,
                 now,
               },
@@ -3028,7 +3692,7 @@ export class BusinessDataNestService {
         sourceId: created.afterSalesSalesOrderId,
       },
     ]);
-    return toAfterSalesOrderMutationResult(created);
+    return toAfterSalesOrderMutationResult(created, actor);
   }
 
   async getAfterSalesOrder(actor: any, id: string) {
@@ -3121,7 +3785,7 @@ export class BusinessDataNestService {
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
     ]);
-    return toAfterSalesOrderMutationResult(updated);
+    return toAfterSalesOrderMutationResult(updated, actor);
   }
 
   async updateAfterSalesOrderStatus(
@@ -3252,7 +3916,7 @@ export class BusinessDataNestService {
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
     ]);
-    return toAfterSalesOrderMutationResult(updated);
+    return toAfterSalesOrderMutationResult(updated, actor);
   }
 
   async confirmAfterSalesOrderWarehouse(
@@ -3327,16 +3991,19 @@ export class BusinessDataNestService {
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
     ]);
-    return toAfterSalesOrderMutationResult(updated);
+    return toAfterSalesOrderMutationResult(updated, actor);
   }
 
   async confirmAfterSalesOrderFinanceRefund(
     actor: any,
     id: string,
     files: any[],
+    payload: any,
     metadata: any = {},
   ) {
     requireAnyRole(actor, ['admin', 'finance']);
+    const body = normalizeOptionalObjectPayload(payload);
+    const confirmationTime = new Date();
     const current = await this.prisma.afterSalesOrder.findUnique({
       where: {
         id,
@@ -3351,21 +4018,10 @@ export class BusinessDataNestService {
       );
     }
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
-    if (current.status !== 'WAITING_REFUND') {
-      throw createHttpError(
-        400,
-        'AFTER_SALES_REFUND_STATUS_INVALID',
-        'Finance refund confirmation requires waiting_refund status.',
-      );
+    if (current.financeConfirmed === true) {
+      return toAfterSalesOrderMutationResult(current, actor);
     }
-    if (Number(current.refundAmountCents || 0) <= 0) {
-      throw createHttpError(
-        400,
-        'AFTER_SALES_REFUND_NOT_REQUIRED',
-        'After-sales order has no refund amount to confirm.',
-      );
-    }
-    assertAfterSalesAgencyDeductionReadyForConfirmation(current);
+    assertAfterSalesRefundConfirmationReady(current);
     if (!Array.isArray(files) || files.length === 0) {
       throw createHttpError(
         400,
@@ -3381,12 +4037,22 @@ export class BusinessDataNestService {
       );
     }
     assertAttachmentAggregateSize(files);
+    const validatedFiles = await Promise.all(
+      files.map((file: any) =>
+        validateRefundProofAttachmentFile(file),
+      ),
+    );
+    await resolveAfterSalesRefundPaymentAllocation(
+      this.prisma,
+      current,
+      body.refundPaymentDetailId,
+      confirmationTime,
+    );
 
-    const uploadedAt = new Date().toISOString();
+    const uploadedAt = confirmationTime.toISOString();
     const storedAttachments: any[] = [];
     try {
-      for (const file of files) {
-        const validated = validateRefundProofAttachmentFile(file);
+      for (const validated of validatedFiles) {
         const storageKey = createAttachmentStorageKey();
         await writeTravelGroupAttachmentFile(storageKey, validated);
         storedAttachments.push({
@@ -3405,11 +4071,41 @@ export class BusinessDataNestService {
       throw normalizeAttachmentStorageError(error, 'write');
     }
 
-    const beforeProofs = getAfterSalesRefundProofAttachments(current);
-    const nextProofs = [...beforeProofs, ...storedAttachments];
     let updated: any;
     try {
       updated = await this.prisma.$transaction(async (tx: any) => {
+        const latestCurrent = await tx.afterSalesOrder.findUnique({
+          where: {
+            id,
+          },
+          include: getAfterSalesOrderInclude(),
+        });
+        if (!latestCurrent) {
+          throw createHttpError(
+            404,
+            'AFTER_SALES_ORDER_NOT_FOUND',
+            'After-sales order does not exist.',
+          );
+        }
+        if (latestCurrent.financeConfirmed === true) {
+          throw createHttpError(
+            409,
+            'AFTER_SALES_REFUND_ALREADY_CONFIRMED',
+            'The after-sales refund has already been confirmed.',
+          );
+        }
+        assertAfterSalesRefundConfirmationReady(latestCurrent);
+        const allocation =
+          await resolveAfterSalesRefundPaymentAllocation(
+            tx,
+            latestCurrent,
+            body.refundPaymentDetailId,
+            confirmationTime,
+          );
+        const nextProofs = [
+          ...getAfterSalesRefundProofAttachments(latestCurrent),
+          ...storedAttachments,
+        ];
         const updatedOrder = await tx.afterSalesOrder.update({
           where: {
             id,
@@ -3417,7 +4113,8 @@ export class BusinessDataNestService {
           data: buildAfterSalesOrderFinanceRefundConfirmData(
             actor,
             nextProofs,
-            current,
+            allocation,
+            confirmationTime,
           ),
           include: getAfterSalesOrderInclude(),
         });
@@ -3427,7 +4124,7 @@ export class BusinessDataNestService {
             action: 'after_sales_orders.finance_refund_confirm',
             entityType: 'after_sales_order',
             entityId: updatedOrder.id,
-            beforeData: toAfterSalesOrderDto(current),
+            beforeData: toAfterSalesOrderDto(latestCurrent),
             afterData: toAfterSalesOrderDto(updatedOrder),
             ipAddress: metadata.ipAddress || null,
           },
@@ -3435,11 +4132,11 @@ export class BusinessDataNestService {
         );
         const impact =
           await this.refreshAfterSalesAdjustmentRecords(
-          tx,
-          updatedOrder,
-          current.salesOrder,
-          actor,
-          metadata,
+            tx,
+            updatedOrder,
+            latestCurrent.salesOrder,
+            actor,
+            metadata,
         );
         const orderForReturn =
           (await tx.afterSalesOrder.findUnique({
@@ -3452,7 +4149,7 @@ export class BusinessDataNestService {
           orderForReturn,
           impact,
         );
-      });
+      }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
     } catch (error) {
       await cleanupStoredTravelGroupAttachments(storedAttachments);
       throw error;
@@ -3461,7 +4158,7 @@ export class BusinessDataNestService {
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
     ]);
-    return toAfterSalesOrderMutationResult(updated);
+    return toAfterSalesOrderMutationResult(updated, actor);
   }
 
   async downloadAfterSalesRefundProof(
@@ -3641,7 +4338,7 @@ export class BusinessDataNestService {
       );
     });
     return {
-      afterSalesOrder: toAfterSalesOrderDto(updated),
+      afterSalesOrder: toAfterSalesOrderDto(updated, actor),
     };
   }
 
@@ -3694,6 +4391,8 @@ export class BusinessDataNestService {
         'Refund proof must be uploaded with finance refund confirmation.',
       );
     }
+    const refundProofsToRemove =
+      getAfterSalesRefundProofAttachments(current);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const updatedOrder = await tx.afterSalesOrder.update({
@@ -3737,12 +4436,13 @@ export class BusinessDataNestService {
           include: getAfterSalesOrderInclude(),
         })) || updatedOrder;
       return attachAfterSalesCommissionAndPointsImpact(orderForReturn, impact);
-    });
+    }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
 
+    await cleanupStoredTravelGroupAttachments(refundProofsToRemove);
     await this.reconcileTodoSources([
       { sourceType: 'AFTER_SALES_ORDER', sourceId: updated.id },
     ]);
-    return toAfterSalesOrderMutationResult(updated);
+    return toAfterSalesOrderMutationResult(updated, actor);
   }
 
   async getFinanceOverview(actor: any, filters: any = {}) {
@@ -3750,11 +4450,7 @@ export class BusinessDataNestService {
     // Finance overview uses orderDate for order-side metrics and after-sales createdAt for refund metrics.
     const orderWhere = await this.buildScopedSalesOrderWhere(
       actor,
-      andWhere(buildSalesOrderWhere(filters), {
-        orderType: {
-          not: 'AFTER_SALES',
-        },
-      }),
+      buildFinanceEligibleSalesOrderWhere(filters),
     );
     const afterSalesWhere = await this.buildScopedAfterSalesOrderWhere(
       actor,
@@ -3845,9 +4541,10 @@ export class BusinessDataNestService {
     const pendingInvoiceCount = orders.filter(
       (order: any) => order.invoiceRequired && !order.invoiceIssued,
     ).length;
-    const cashOnDeliveryAmountCents = sumAmountCents(
-      effectiveOrders,
-      'cashOnDeliveryAmountCents',
+    const cashOnDeliveryAmountCents = effectiveOrders.reduce(
+      (sum: number, order: any) =>
+        sum + getSalesOrderCollectOnDeliveryAmountCents(order),
+      0,
     );
     return {
       metrics: {
@@ -3882,11 +4579,7 @@ export class BusinessDataNestService {
     const orders = await this.prisma.salesOrder.findMany({
       where: await this.buildScopedSalesOrderWhere(
         actor,
-        andWhere(buildSalesOrderWhere(filters), {
-          orderType: {
-            not: 'AFTER_SALES',
-          },
-        }),
+        buildFinanceEligibleSalesOrderWhere(filters),
       ),
       include: getSalesOrderProfitInclude(),
       orderBy: { orderDate: 'desc' },
@@ -3898,10 +4591,8 @@ export class BusinessDataNestService {
     requireAnyRole(actor, ['admin', 'finance']);
     const orders = await this.prisma.salesOrder.findMany({
       where: await this.buildScopedSalesOrderWhere(actor, {
+        ...buildFinanceEligibleSalesOrderWhere(),
         id: normalizeRequiredString(id, 'id'),
-        orderType: {
-          not: 'AFTER_SALES',
-        },
       }),
       include: getSalesOrderProfitInclude(),
       take: 1,
@@ -3923,7 +4614,7 @@ export class BusinessDataNestService {
     const overview = await this.getFinanceOverview(actor, filters);
     const orderWhere = await this.buildScopedSalesOrderWhere(
       actor,
-      buildSalesOrderWhere(filters),
+      buildFinanceEligibleSalesOrderWhere(filters),
     );
     const pendingAfterSalesWhere = await this.buildScopedAfterSalesOrderWhere(
       actor,
@@ -4201,7 +4892,6 @@ export class BusinessDataNestService {
       this.prisma.salesOrder.findMany({
         where: {
           orderDate: { gte: orderDateFrom, lte: orderDateTo },
-          orderType: { not: 'AFTER_SALES' },
           status: { in: [...RECONCILIATION_INCLUDED_ORDER_STATUSES] },
         },
       }),
@@ -4284,6 +4974,9 @@ export class BusinessDataNestService {
           in: ['VALID', 'PARTIAL_REFUND'],
         },
       },
+      include: {
+        paymentDetails: true,
+      },
     });
     const salesAmountCents = orders.reduce(
       (sum: number, order: any) => sum + Number(order.totalAmountCents || 0),
@@ -4291,7 +4984,7 @@ export class BusinessDataNestService {
     );
     const cashOnDeliveryCents = orders.reduce(
       (sum: number, order: any) =>
-        sum + Number(order.cashOnDeliveryAmountCents || 0),
+        sum + getSalesOrderCollectOnDeliveryAmountCents(order),
       0,
     );
     await tx.travelGroup.update({
@@ -4506,6 +5199,31 @@ export class BusinessDataNestService {
       });
     }
 
+    const summaryResults: any[] = [];
+    if (sourceSalesOrder.travelGroupId) {
+      summaryResults.push(
+        await this.travelGroupFinanceSummaryService.refreshTravelGroupFinanceSummary(
+          sourceSalesOrder.travelGroupId,
+          {
+            prisma: tx,
+            actor,
+            ipAddress: metadata.ipAddress || null,
+            syncCompatibilityFields: false,
+          },
+        ),
+      );
+      summaryResults.push(
+        await this.guidePointsSummaryService.refreshGuidePointsSummariesForTravelGroup(
+          sourceSalesOrder.travelGroupId,
+          {
+            prisma: tx,
+            actor,
+            ipAddress: metadata.ipAddress || null,
+          },
+        ),
+      );
+    }
+
     return {
       recalculation: {
         calculation: {
@@ -4516,7 +5234,7 @@ export class BusinessDataNestService {
           },
         },
       },
-      summaryResults: [],
+      summaryResults,
       adjustmentRecordIds: touchedRecordIds,
       warnings: [],
       metadata: {
@@ -4675,6 +5393,21 @@ export class BusinessDataNestService {
         'Sales order does not exist.',
       );
     }
+    if (order.workflowStatus) {
+      const role = String(actor?.role || '').toLowerCase();
+      const reviewer = ['boss', 'admin', 'super_admin'].includes(role);
+      const selfScoped = ['sales', 'after_sales'].includes(role);
+      if (
+        !reviewer &&
+        (!selfScoped || String(order.createdById || '') !== String(actor?.id))
+      ) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          'Sales order does not exist.',
+        );
+      }
+    }
     assertCanReadSalesOrder(actor, order);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, order);
     return order;
@@ -4727,12 +5460,7 @@ export class BusinessDataNestService {
   private async buildGroupDataScope(kind: string, actor: any) {
     if (actor?.role === 'taster') {
       return kind === 'travel'
-        ? {
-            OR: [
-              { tasterId: actor.id },
-              { liaisonTasterId: actor.id },
-            ],
-          }
+        ? buildTasterTravelGroupReadScope(actor)
         : { tasterId: actor.id };
     }
 
@@ -4752,12 +5480,7 @@ export class BusinessDataNestService {
 
   private async buildPendingTravelGroupDataScope(actor: any) {
     if (actor?.role === 'taster') {
-      return {
-        OR: [
-          { tasterId: actor.id },
-          { liaisonTasterId: actor.id },
-        ],
-      };
+      return buildTasterTravelGroupReadScope(actor);
     }
     if (actor?.role === 'front_desk') {
       return null;
@@ -4787,48 +5510,27 @@ export class BusinessDataNestService {
   }
 
   private async assertCanReadGroup(kind: string, actor: any, group: any) {
+    let canRead = true;
     if (actor?.role === 'taster') {
-      if (
-        kind === 'travel' &&
-        (group.tasterId === actor.id ||
-          group.liaisonTasterId === actor.id)
-      ) {
-        return;
-      }
-      if (kind !== 'travel' && group.tasterId === actor.id) {
-        return;
-      }
-      throw createHttpError(
-        404,
-        'TRAVEL_GROUP_NOT_FOUND',
-        'Travel group does not exist.',
-      );
-    }
-
-    if (actor?.role === 'front_desk' && kind === 'travel') {
-      return;
-    }
-
-    if (actor?.role === 'sales') {
+      canRead =
+        kind === 'travel'
+          ? canTasterReadTravelGroup(group, actor)
+          : group.tasterId === actor.id;
+    } else if (actor?.role === 'sales') {
       if (kind === 'travel') {
-        if (canSalesHandleTravelGroup(group)) {
-          return;
-        }
-        throw createHttpError(
-          404,
-          'TRAVEL_GROUP_NOT_FOUND',
-          'Travel group does not exist.',
-        );
+        canRead = canSalesHandleTravelGroup(group);
+      } else {
+        canRead = group.createdById === actor.id;
       }
-      if (group.createdById === actor.id) {
-        return;
-      }
+    }
+    if (!canRead) {
       throw createHttpError(
         404,
         'TRAVEL_GROUP_NOT_FOUND',
         'Travel group does not exist.',
       );
     }
+    await this.assertPassesGlobalGroupMarkScope(actor, group);
   }
 
   private async buildGlobalGroupMarkScope(_actor: any) {
@@ -4948,10 +5650,16 @@ function getGroupInclude(kind: string, mode = 'list') {
       },
       taster: true,
       liaisonTaster: true,
+      notEnteredConfirmedBy: true,
       lossConfirmedBy: true,
       salesOrders: {
         orderBy: {
           createdAt: 'desc',
+        },
+        include: {
+          paymentDetails: {
+            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+          },
         },
       },
     };
@@ -4963,10 +5671,16 @@ function getGroupInclude(kind: string, mode = 'list') {
       },
     },
     taster: true,
+    notEnteredConfirmedBy: true,
     lossConfirmedBy: true,
     salesOrders: {
       orderBy: {
         createdAt: 'desc',
+      },
+      include: {
+        paymentDetails: {
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
       },
     },
   };
@@ -4985,6 +5699,7 @@ function buildGroupWhere(filters: any = {}, kind = '') {
       { tasterName: { contains: query } },
       ...(kind === 'travel'
         ? [
+            { licensePlate: { contains: query } },
             { sourceRegion: { contains: query } },
             { previousStopOrderStatus: { contains: query } },
             { keyCustomerInfo: { contains: query } },
@@ -5011,6 +5726,10 @@ function buildGroupWhere(filters: any = {}, kind = '') {
   const tasterId = normalizeOptionalString(filters.tasterId);
   if (tasterId) {
     where.tasterId = tasterId;
+  }
+  const tastingRoomNo = normalizeOptionalString(filters.tastingRoomNo);
+  if (tastingRoomNo && kind === 'travel') {
+    where.tastingRoomNo = tastingRoomNo;
   }
   const liaisonTasterId = normalizeOptionalString(filters.liaisonTasterId);
   if (liaisonTasterId && kind === 'travel') {
@@ -5192,11 +5911,23 @@ function buildSalesOrderOrderBy(
 }
 
 function buildReadableSalesOrderWhere(actor: any, filters: any = {}) {
-  return buildSalesOrderWhere(
+  const baseWhere = buildSalesOrderWhere(
     actor?.role === 'taster'
       ? omitTasterSensitiveSalesOrderFilters(filters)
       : filters,
   );
+  const role = String(actor?.role || '').toLowerCase();
+  if (
+    !['sales', 'after_sales', 'boss', 'admin', 'super_admin'].includes(role)
+  ) {
+    return andWhere(baseWhere, { workflowStatus: null });
+  }
+  return andWhere(baseWhere, {
+    OR: [
+      { workflowStatus: null },
+      { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+    ],
+  });
 }
 
 function omitTasterSensitiveSalesOrderFilters(filters: any = {}) {
@@ -5691,6 +6422,30 @@ function assertCanUpdateSalesOrder(actor: any, order: any) {
   );
 }
 
+function buildFinanceEligibleSalesOrderWhere(filters: any = {}) {
+  return andWhere(
+    andWhere(buildSalesOrderWhere(filters), {
+      orderType: {
+        notIn: ['AFTER_SALES', 'BUYBACK'],
+      },
+    }),
+    {
+      OR: [
+        { workflowStatus: null },
+        { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+      ],
+    },
+  );
+}
+
+function assertCanCompleteSalesOrder(actor: any, order: any) {
+  if (actor?.role === 'sales') {
+    assertCanReadSalesOrder(actor, order);
+    return;
+  }
+  assertCanUpdateSalesOrder(actor, order);
+}
+
 function assertCanReadSalesOrder(actor: any, order: any) {
   if (actor?.role === 'sales') {
     if (
@@ -5773,8 +6528,8 @@ function getSalesOrderSummaryAffectedTravelGroupIds(current: any, updated: any) 
     current.status !== updated.status ||
     Number(current.totalAmountCents || 0) !==
       Number(updated.totalAmountCents || 0) ||
-    Number(current.cashOnDeliveryAmountCents || 0) !==
-      Number(updated.cashOnDeliveryAmountCents || 0);
+    getSalesOrderCollectOnDeliveryAmountCents(current) !==
+      getSalesOrderCollectOnDeliveryAmountCents(updated);
   if (!summaryChanged) {
     return [];
   }
@@ -6458,11 +7213,7 @@ function buildSalesOrderData(
     shippingDateBackfillBatchId: null,
     salesFormNo: normalizeOptionalString(payload?.salesFormNo),
     totalAmountCents,
-    cashOnDeliveryAmountCents: normalizeInt(
-      payload?.cashOnDeliveryAmountCents,
-      'cashOnDeliveryAmountCents',
-      0,
-    ),
+    cashOnDeliveryAmountCents: 0,
     logisticsMethod: null,
     logisticsProviderCode: null,
     packingStatus: items.some((item: any) => item.deliveryType === 'SHIPPING')
@@ -6522,12 +7273,6 @@ function buildSalesOrderUpdateData(payload: any, actor: any) {
   }
   if (hasOwn(payload, 'travelGroupId')) {
     data.travelGroupId = normalizeOptionalString(payload.travelGroupId);
-  }
-  if (hasOwn(payload, 'cashOnDeliveryAmountCents')) {
-    data.cashOnDeliveryAmountCents = normalizeNonNegativeInt(
-      payload.cashOnDeliveryAmountCents,
-      'cashOnDeliveryAmountCents',
-    );
   }
   if (hasOwn(payload, 'invoiceRequired')) {
     data.invoiceRequired = normalizeBoolean(
@@ -6841,6 +7586,13 @@ function buildAfterSalesOrderCreateData(
     description: normalizeRequiredString(payload?.description, 'description'),
     resolution: normalizeOptionalString(payload?.resolution),
     refundAmountCents: options.refundAmountCents,
+    refundPaymentDetailId: options.refundPaymentDetail?.id || null,
+    refundPaymentMethodNameSnapshot:
+      options.refundPaymentDetail?.paymentMethodNameSnapshot || null,
+    refundOccurredAt: null,
+    deductsPaymentServiceFee: false,
+    personalPointsRefundAmountCents:
+      options.personalPointsRefundAmountCents,
     deductionCalculationMode: calculation.deductionCalculationMode,
     sourceAgencyDeductionCents: calculation.sourceAgencyDeductionCents,
     agencyDeductionRate: calculation.agencyDeductionRate,
@@ -6894,6 +7646,10 @@ function buildAfterSalesOrderCreateData(
 function buildAfterSalesSalesOrderCreateData(options: any) {
   const source = options.sourceSalesOrder;
   const shippingDate = defaultBackfillShippingDate(options.now);
+  const personalAmountCents = Number(
+    options.personalPointsRefundAmountCents || 0,
+  );
+  const isPersonal = personalAmountCents > 0;
   return {
     id: options.id,
     orderNo: options.afterSalesNo,
@@ -6913,6 +7669,7 @@ function buildAfterSalesSalesOrderCreateData(options: any) {
     shippingDateBackfillBatchId: null,
     salesFormNo: options.afterSalesNo,
     totalAmountCents: options.refundAmountCents,
+    personalAmountCents,
     cashOnDeliveryAmountCents: 0,
     logisticsMethod: null,
     logisticsProviderCode: null,
@@ -6933,11 +7690,19 @@ function buildAfterSalesSalesOrderCreateData(options: any) {
     markedAt: source.financeMark ? source.markedAt || null : null,
     salesUserId: source.salesUserId || null,
     outreachUserId: source.outreachUserId || null,
-    pointsDestination: source.pointsDestination || 'TRAVEL_AGENCY',
-    personalPointsGuideId: source.personalPointsGuideId || null,
-    personalGuideNameSnapshot: source.personalGuideNameSnapshot || null,
-    personalDailyRebateRate: source.personalDailyRebateRate || null,
-    personalMonthlyRebateRate: source.personalMonthlyRebateRate || null,
+    pointsDestination: isPersonal ? 'GUIDE_PERSONAL' : 'TRAVEL_AGENCY',
+    personalPointsGuideId: isPersonal
+      ? source.personalPointsGuideId || null
+      : null,
+    personalGuideNameSnapshot: isPersonal
+      ? source.personalGuideNameSnapshot || null
+      : null,
+    personalDailyRebateRate: isPersonal
+      ? source.personalDailyRebateRate || null
+      : null,
+    personalMonthlyRebateRate: isPersonal
+      ? source.personalMonthlyRebateRate || null
+      : null,
     items: {
       create: options.items.map((item: any, index: number) => ({
         id: crypto.randomUUID(),
@@ -6967,14 +7732,9 @@ function resolveAfterSalesOrderItems(
 ) {
   const requiresItems = actionType !== 'RECORD_ONLY';
   if (value === undefined || value === null) {
-    if (!requiresItems) {
-      return [];
-    }
-    throw createHttpError(
-      400,
-      'AFTER_SALES_ITEMS_REQUIRED',
-      'items is required for this after-sales action.',
-    );
+    // Keep the historical after-sales contract: older clients did not send
+    // line items and recorded the adjustment only at order level.
+    return [];
   }
   if (!Array.isArray(value)) {
     throw createHttpError(
@@ -7218,6 +7978,138 @@ function validateAfterSalesRefundAmount(
       'Cumulative after-sales refunds exceed the source sales order total.',
     );
   }
+}
+
+function resolveRefundPaymentDetail(
+  value: unknown,
+  paymentDetails: any[],
+) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const refundPaymentDetailId = normalizeRequiredString(
+    value,
+    'refundPaymentDetailId',
+  );
+  const detail = (Array.isArray(paymentDetails) ? paymentDetails : []).find(
+    (candidate: any) => candidate.id === refundPaymentDetailId,
+  );
+  if (!detail) {
+    throw createHttpError(
+      400,
+      'REFUND_PAYMENT_DETAIL_NOT_FOUND',
+      'refundPaymentDetailId must belong to the source sales order.',
+    );
+  }
+  return detail;
+}
+
+async function resolveAfterSalesRefundPaymentAllocation(
+  prisma: any,
+  current: any,
+  refundPaymentDetailIdValue: unknown,
+  confirmationTime: Date,
+) {
+  const sourceOrder = current?.salesOrder;
+  const sameDay = isSameShanghaiNaturalDay(
+    sourceOrder?.orderDate,
+    confirmationTime,
+  );
+  if (!sameDay) {
+    return {
+      sameDay: false,
+      refundPaymentDetail: null,
+      confirmedSameDayRefundAmountCents: 0,
+      remainingRefundableAmountCents: null,
+      financialEffectStatus: current.financialEffectStatus,
+    };
+  }
+
+  if (
+    refundPaymentDetailIdValue === undefined ||
+    refundPaymentDetailIdValue === null ||
+    String(refundPaymentDetailIdValue).trim() === ''
+  ) {
+    throw createHttpError(
+      409,
+      'SAME_DAY_REFUND_PAYMENT_DETAIL_REQUIRED',
+      'A source payment detail is required for a same-day refund.',
+    );
+  }
+  const refundPaymentDetailId = normalizeRequiredString(
+    refundPaymentDetailIdValue,
+    'refundPaymentDetailId',
+  );
+  const refundPaymentDetail = (
+    Array.isArray(sourceOrder?.paymentDetails)
+      ? sourceOrder.paymentDetails
+      : []
+  ).find((detail: any) => detail.id === refundPaymentDetailId);
+  if (!refundPaymentDetail) {
+    throw createHttpError(
+      409,
+      'REFUND_PAYMENT_DETAIL_INVALID',
+      'The selected payment detail does not belong to the source sales order.',
+    );
+  }
+
+  const confirmedRefunds = await prisma.afterSalesOrder.findMany({
+    where: {
+      salesOrderId: current.salesOrderId,
+      financeConfirmed: true,
+    },
+    select: {
+      id: true,
+      refundAmountCents: true,
+      refundPaymentDetailId: true,
+      refundOccurredAt: true,
+    },
+  });
+  const confirmedSameDayRefundAmountCents = confirmedRefunds.reduce(
+    (sum: number, refund: any) => {
+      if (
+        refund.id === current.id ||
+        refund.refundPaymentDetailId !== refundPaymentDetailId ||
+        !refund.refundOccurredAt ||
+        !isSameShanghaiNaturalDay(
+          sourceOrder.orderDate,
+          refund.refundOccurredAt,
+        )
+      ) {
+        return sum;
+      }
+      return (
+        sum + Math.max(0, Number(refund.refundAmountCents || 0))
+      );
+    },
+    0,
+  );
+  const originalAmountCents = Math.max(
+    0,
+    Number(refundPaymentDetail.amountCents || 0),
+  );
+  const remainingRefundableAmountCents = Math.max(
+    0,
+    originalAmountCents - confirmedSameDayRefundAmountCents,
+  );
+  if (
+    Number(current.refundAmountCents || 0) >
+    remainingRefundableAmountCents
+  ) {
+    throw createHttpError(
+      409,
+      'REFUND_AMOUNT_EXCEEDS_PAYMENT_DETAIL_BALANCE',
+      'The refund amount exceeds the remaining balance of the selected payment detail.',
+    );
+  }
+
+  return {
+    sameDay: true,
+    refundPaymentDetail,
+    confirmedSameDayRefundAmountCents,
+    remainingRefundableAmountCents,
+    financialEffectStatus: current.financialEffectStatus,
+  };
 }
 
 function resolveAgencyDeductionModeFromRecords(records: any[]) {
@@ -7595,20 +8487,27 @@ function buildAfterSalesOrderWarehouseConfirmData(payload: any, actor: any) {
 function buildAfterSalesOrderFinanceRefundConfirmData(
   actor: any,
   refundProofAttachments: any[],
-  current: any,
+  allocation: any,
+  confirmationTime: Date,
 ) {
-  const now = new Date();
   return {
     financeConfirmed: true,
     financeConfirmedById: actor.id,
-    financeConfirmedAt: now,
+    financeConfirmedAt: confirmationTime,
+    refundPaymentDetailId:
+      allocation.refundPaymentDetail?.id || null,
+    refundPaymentMethodNameSnapshot:
+      allocation.refundPaymentDetail
+        ?.paymentMethodNameSnapshot || null,
+    refundOccurredAt: confirmationTime,
+    deductsPaymentServiceFee: allocation.sameDay === true,
     financialEffectStatus:
-      current.financialEffectStatus === 'PENDING_RECOVERY'
+      allocation.financialEffectStatus === 'PENDING_RECOVERY'
         ? 'PENDING_RECOVERY'
         : 'CONFIRMED',
     refundProofAttachments,
     updatedById: actor.id,
-    updatedAt: now,
+    updatedAt: confirmationTime,
   };
 }
 
@@ -7622,6 +8521,15 @@ function buildAfterSalesOrderFinanceConfirmData(
     financeConfirmed,
     financeConfirmedById: financeConfirmed ? actor.id : null,
     financeConfirmedAt: financeConfirmed ? now : null,
+    refundOccurredAt: financeConfirmed ? now : null,
+    deductsPaymentServiceFee: Boolean(
+      financeConfirmed &&
+        current.refundPaymentDetailId &&
+        isSameShanghaiNaturalDay(
+          current.salesOrder?.orderDate,
+          now,
+        ),
+    ),
     financialEffectStatus:
       current.financialEffectStatus === 'NO_FINANCIAL_EFFECT'
         ? 'NO_FINANCIAL_EFFECT'
@@ -7635,8 +8543,28 @@ function buildAfterSalesOrderFinanceConfirmData(
   };
   if (!financeConfirmed) {
     data.refundProofAttachments = [];
+    data.refundPaymentDetailId = null;
+    data.refundPaymentMethodNameSnapshot = null;
   }
   return data;
+}
+
+function assertAfterSalesRefundConfirmationReady(order: any) {
+  if (order.status !== 'WAITING_REFUND') {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_REFUND_STATUS_INVALID',
+      'Finance refund confirmation requires waiting_refund status.',
+    );
+  }
+  if (Number(order.refundAmountCents || 0) <= 0) {
+    throw createHttpError(
+      400,
+      'AFTER_SALES_REFUND_NOT_REQUIRED',
+      'After-sales order has no refund amount to confirm.',
+    );
+  }
+  assertAfterSalesAgencyDeductionReadyForConfirmation(order);
 }
 
 function assertAfterSalesAgencyDeductionReadyForConfirmation(order: any) {
@@ -8269,6 +9197,18 @@ function toGroupDto(
     liaisonTaster: buildLiaisonTasterSnapshotDto(group),
     expectedArrivalTime: group.expectedArrivalTime || null,
     arrivalTime: group.arrivalTime || null,
+    entryStatus: calculateTravelGroupEntryStatus(group),
+    notEnteredConfirmedAt: group.notEnteredConfirmedAt
+      ? toIsoString(group.notEnteredConfirmedAt)
+      : null,
+    notEnteredConfirmedById: group.notEnteredConfirmedById || null,
+    notEnteredConfirmedBy: group.notEnteredConfirmedBy
+      ? {
+          id: group.notEnteredConfirmedBy.id,
+          name: group.notEnteredConfirmedBy.name,
+          username: group.notEnteredConfirmedBy.username,
+        }
+      : null,
     groupType: group.groupType || null,
     wineDetails: group.wineDetails || null,
     departureTime: group.departureTime || null,
@@ -8371,11 +9311,7 @@ function filterGroupSalesOrdersForActor(
 
 function canEditTravelGroupForActor(group: any, actor: any) {
   if (actor?.role === 'taster') {
-    return (
-      formatDate(group?.visitDate) === getShanghaiTodayBusinessDate() &&
-      (group?.tasterId === actor.id ||
-        group?.liaisonTasterId === actor.id)
-    );
+    return canTasterEditTravelGroup(group, actor);
   }
   return [
     'super_admin',
@@ -8602,7 +9538,8 @@ function toTravelGroupOrderSummaryDto(order: any) {
     customerName: order.customerName || null,
     customerPhone: order.customerPhone || null,
     totalAmountCents: Number(order.totalAmountCents || 0),
-    cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
+    cashOnDeliveryAmountCents:
+      getSalesOrderCollectOnDeliveryAmountCents(order),
     status: ORDER_STATUS_FROM_PRISMA[order.status] || order.status,
     financeMark: Boolean(order.financeMark),
     markedById: order.markedById || null,
@@ -8620,7 +9557,8 @@ function buildTravelGroupOrderSummaryDto(salesOrders: any[]) {
       0,
     ),
     cashOnDeliveryAmountCents: salesOrders.reduce(
-      (sum, order) => sum + Number(order.cashOnDeliveryAmountCents || 0),
+      (sum, order) =>
+        sum + getSalesOrderCollectOnDeliveryAmountCents(order),
       0,
     ),
   };
@@ -8628,12 +9566,26 @@ function buildTravelGroupOrderSummaryDto(salesOrders: any[]) {
 
 function getEffectiveSalesOrders(salesOrders: any[]) {
   return (Array.isArray(salesOrders) ? salesOrders : []).filter(
-    (order: any) =>
-      ['VALID', 'PARTIAL_REFUND', 'valid', 'partial_refund'].includes(
-        order?.status,
-      ) ||
-      (Array.isArray(order?.afterSalesOrders) &&
-        order.afterSalesOrders.length > 0),
+    (order: any) => {
+      const orderType = String(order?.orderType || '').toUpperCase();
+      const workflowStatus = String(order?.workflowStatus || '').toUpperCase();
+      if (['AFTER_SALES', 'BUYBACK'].includes(orderType)) {
+        return false;
+      }
+      if (
+        workflowStatus &&
+        !['APPROVED', 'COMPLETED'].includes(workflowStatus)
+      ) {
+        return false;
+      }
+      return (
+        ['VALID', 'PARTIAL_REFUND', 'valid', 'partial_refund'].includes(
+          order?.status,
+        ) ||
+        (Array.isArray(order?.afterSalesOrders) &&
+          order.afterSalesOrders.length > 0)
+      );
+    },
   );
 }
 
@@ -8716,12 +9668,28 @@ function hasShippingDelivery(order: any) {
   });
 }
 
+export function calculateTravelGroupEntryStatus(group: any) {
+  if (group?.notEnteredConfirmedAt) {
+    return 'not_entered';
+  }
+  if (hasText(group?.arrivalTime)) {
+    return 'entered';
+  }
+  return 'pending_entry';
+}
+
 export function calculateGroupPendingState(
   group: any,
   kind: string,
   now = new Date(),
 ) {
   if (kind !== 'travel') {
+    return {
+      status: null,
+      reasons: [],
+    };
+  }
+  if (calculateTravelGroupEntryStatus(group) === 'not_entered') {
     return {
       status: null,
       reasons: [],
@@ -8879,6 +9847,18 @@ function toTravelGroupTastingItemDto(item: any) {
 
 function getSalesOrderInclude(options: any = {}): any {
   return {
+    paymentDetails: {
+      include: {
+        collectionConfirmedBy: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+          },
+        },
+      },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    },
     items: {
       include: {
         serializedInventoryUnits: {
@@ -8941,7 +9921,19 @@ function getSalesOrderTasterCommissionInclude(): any {
 function getAfterSalesOrderInclude(): any {
   return {
     salesOrder: {
-      include: getSalesOrderInclude(),
+      include: {
+        ...getSalesOrderInclude(),
+        afterSalesOrders: {
+          select: {
+            id: true,
+            refundAmountCents: true,
+            refundPaymentDetailId: true,
+            refundOccurredAt: true,
+            deductsPaymentServiceFee: true,
+            financeConfirmed: true,
+          },
+        },
+      },
     },
     afterSalesSalesOrder: {
       include: getSalesOrderInclude(),
@@ -8956,17 +9948,27 @@ function getAfterSalesOrderInclude(): any {
 }
 
 function toAfterSalesOrderDto(order: any, actor?: any) {
-  return {
+  const sourceSalesOrder = order.salesOrder
+    ? actor
+      ? toSalesOrderDtoForActor(order.salesOrder, actor)
+      : toSalesOrderDto(order.salesOrder)
+    : null;
+  const afterSalesSalesOrder = order.afterSalesSalesOrder
+    ? actor
+      ? toSalesOrderDtoForActor(order.afterSalesSalesOrder, actor)
+      : toSalesOrderDto(order.afterSalesSalesOrder)
+    : null;
+  const refundAmountCents = Number(order.refundAmountCents || 0);
+  const personalPointsRefundAmountCents = Number(
+    order.personalPointsRefundAmountCents || 0,
+  );
+  const dto: any = {
     id: order.id,
     afterSalesNo: order.afterSalesNo,
     sourceSalesOrderId: order.salesOrderId,
-    sourceSalesOrder: order.salesOrder
-      ? toSalesOrderDto(order.salesOrder)
-      : null,
+    sourceSalesOrder,
     afterSalesSalesOrderId: order.afterSalesSalesOrderId || null,
-    afterSalesSalesOrder: order.afterSalesSalesOrder
-      ? toSalesOrderDto(order.afterSalesSalesOrder)
-      : null,
+    afterSalesSalesOrder,
     items: (order.items || []).map(toAfterSalesOrderItemDto),
     deductionCalculationMode:
       order.deductionCalculationMode || 'manual_product_reference',
@@ -8992,7 +9994,7 @@ function toAfterSalesOrderDto(order: any, actor?: any) {
       order.financialEffectStatus || 'PENDING_CONFIRMATION',
     ).toLowerCase(),
     salesOrderId: order.salesOrderId,
-    salesOrder: order.salesOrder ? toSalesOrderDto(order.salesOrder) : null,
+    salesOrder: sourceSalesOrder,
     customerId: order.customerId || null,
     customer: order.customer ? toSalesOrderCustomerDto(order.customer) : null,
     issueType:
@@ -9002,7 +10004,19 @@ function toAfterSalesOrderDto(order: any, actor?: any) {
       order.actionType,
     description: order.description,
     resolution: order.resolution || null,
-    refundAmountCents: Number(order.refundAmountCents || 0),
+    refundAmountCents,
+    refundPaymentDetailId: order.refundPaymentDetailId || null,
+    refundPaymentMethodNameSnapshot:
+      order.refundPaymentMethodNameSnapshot || null,
+    refundOccurredAt: order.refundOccurredAt
+      ? toIsoString(order.refundOccurredAt)
+      : null,
+    deductsPaymentServiceFee: Boolean(
+      order.deductsPaymentServiceFee,
+    ),
+    personalPointsRefundAmountCents,
+    normalPointsRefundAmountCents:
+      refundAmountCents - personalPointsRefundAmountCents,
     status: AFTER_SALES_STATUS_FROM_PRISMA[order.status] || order.status,
     financeConfirmed: Boolean(order.financeConfirmed),
     financeConfirmedById: order.financeConfirmedById || null,
@@ -9025,6 +10039,89 @@ function toAfterSalesOrderDto(order: any, actor?: any) {
     updatedById: order.updatedById || null,
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
+  };
+  if (canViewAfterSalesRefundPaymentSelection(actor)) {
+    Object.assign(dto, buildAfterSalesRefundPaymentSelectionDto(order));
+  }
+  if (!actor || canViewOrderPersonalSplit(actor)) {
+    return dto;
+  }
+  delete dto.personalPointsRefundAmountCents;
+  delete dto.normalPointsRefundAmountCents;
+  return dto;
+}
+
+function canViewAfterSalesRefundPaymentSelection(actor: any) {
+  return ['super_admin', 'admin', 'finance'].includes(
+    String(actor?.role || '').trim().toLowerCase(),
+  );
+}
+
+function buildAfterSalesRefundPaymentSelectionDto(
+  order: any,
+  now = new Date(),
+) {
+  const sourceOrder = order?.salesOrder;
+  const timingReference =
+    order?.financeConfirmed === true && order?.refundOccurredAt
+      ? order.refundOccurredAt
+      : now;
+  const isSameDayRefund = isSameShanghaiNaturalDay(
+    sourceOrder?.orderDate,
+    timingReference,
+  );
+  const confirmedRefunds = Array.isArray(sourceOrder?.afterSalesOrders)
+    ? sourceOrder.afterSalesOrders
+    : [];
+  const refundPaymentDetailOptions = isSameDayRefund
+    ? (Array.isArray(sourceOrder?.paymentDetails)
+        ? sourceOrder.paymentDetails
+        : []
+      ).map((detail: any) => {
+        const confirmedSameDayRefundAmountCents =
+          confirmedRefunds.reduce((sum: number, refund: any) => {
+            if (
+              refund?.financeConfirmed !== true ||
+              refund?.refundPaymentDetailId !== detail.id ||
+              !refund?.refundOccurredAt ||
+              !isSameShanghaiNaturalDay(
+                sourceOrder.orderDate,
+                refund.refundOccurredAt,
+              )
+            ) {
+              return sum;
+            }
+            return (
+              sum +
+              Math.max(0, Number(refund.refundAmountCents || 0))
+            );
+          }, 0);
+        const originalAmountCents = Math.max(
+          0,
+          Number(detail.amountCents || 0),
+        );
+        return {
+          id: detail.id,
+          paymentMethodNameSnapshot:
+            detail.paymentMethodNameSnapshot || '',
+          originalAmountCents,
+          confirmedSameDayRefundAmountCents,
+          remainingRefundableAmountCents: Math.max(
+            0,
+            originalAmountCents -
+              confirmedSameDayRefundAmountCents,
+          ),
+        };
+      })
+    : [];
+  return {
+    refundTimingStatus: isSameDayRefund
+      ? 'same_day'
+      : 'cross_day',
+    isSameDayRefund,
+    requiresRefundPaymentDetail:
+      isSameDayRefund && order?.financeConfirmed !== true,
+    refundPaymentDetailOptions,
   };
 }
 
@@ -9071,8 +10168,8 @@ function attachAfterSalesCommissionAndPointsImpact(
   };
 }
 
-function toAfterSalesOrderMutationResult(order: any) {
-  const dto = toAfterSalesOrderDto(order);
+function toAfterSalesOrderMutationResult(order: any, actor?: any) {
+  const dto = toAfterSalesOrderDto(order, actor);
   const impact = order?.__commissionAndPointsImpact || null;
   const warnings = Array.isArray(impact?.warnings) ? impact.warnings : [];
   const travelGroupIds = normalizeIdList(
@@ -9106,6 +10203,10 @@ function toAfterSalesOrderMutationResult(order: any) {
 function toSalesOrderDto(order: any) {
   const tasterCommission = toSalesOrderTasterCommissionDto(order);
   const tasterCommissionCents = tasterCommission?.amountCents ?? 0;
+  const paymentSummary = buildPaymentSummary(order.paymentDetails);
+  const totalAmountCents = Number(order.totalAmountCents || 0);
+  const personalAmountCents =
+    resolveSalesOrderPersonalAmountCents(order);
   return {
     id: order.id,
     orderNo: order.orderNo,
@@ -9128,7 +10229,9 @@ function toSalesOrderDto(order: any) {
     shippingRiskWarnings: buildSalesOrderShippingRiskWarnings(order),
     canEditShippingDate: false,
     salesFormNo: order.salesFormNo || null,
-    totalAmountCents: Number(order.totalAmountCents || 0),
+    totalAmountCents,
+    personalAmountCents,
+    normalAmountCents: totalAmountCents - personalAmountCents,
     entryAmountCents: Number(
       order.entryAmountCents ?? order.totalAmountCents ?? 0,
     ),
@@ -9136,7 +10239,33 @@ function toSalesOrderDto(order: any) {
     tasterCommission,
     tasterId: order.travelGroup?.tasterId || null,
     tasterName: order.travelGroup?.tasterName || null,
-    cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
+    cashOnDeliveryAmountCents:
+      getSalesOrderCollectOnDeliveryAmountCents(order),
+    paymentDetails: Array.isArray(order.paymentDetails)
+      ? order.paymentDetails.map(toSalesOrderPaymentDetailDto)
+      : [],
+    paymentDetailsSummary: buildPaymentDetailsSummary(order.paymentDetails),
+    paymentSummary,
+    paymentStatus: paymentSummary.hasPendingCollectOnDelivery
+      ? 'collect_on_delivery'
+      : 'received',
+    paymentStatusLabel: paymentSummary.hasPendingCollectOnDelivery
+      ? '代收款'
+      : '已到账',
+    completedAt: order.completedAt ? toIsoString(order.completedAt) : null,
+    completedById: order.completedById || null,
+    isCompleted: Boolean(order.completedAt),
+    paymentDetailsLockedAt: order.paymentDetailsLockedAt
+      ? toIsoString(order.paymentDetailsLockedAt)
+      : null,
+    paymentDetailsLockedById:
+      order.paymentDetailsLockedById || null,
+    paymentDetailsUnlockedAt: order.paymentDetailsUnlockedAt
+      ? toIsoString(order.paymentDetailsUnlockedAt)
+      : null,
+    paymentDetailsUnlockedById:
+      order.paymentDetailsUnlockedById || null,
+    paymentDetailsLocked: isPaymentDetailsLocked(order),
     deliverySummary: toSalesOrderDeliverySummary(order.items),
     logisticsMethod: order.logisticsMethod || null,
     logisticsProviderCode: normalizeLogisticsProviderCode(
@@ -9224,7 +10353,7 @@ function toSalesOrderDto(order: any) {
 }
 
 function toSalesOrderDtoForActor(order: any, actor: any) {
-  const dto = {
+  const dto: any = {
     ...toSalesOrderDto(order),
     travelGroup: order.travelGroup
       ? toGroupDto(order.travelGroup, 'travel', actor)
@@ -9240,6 +10369,34 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
         )
       : [],
   };
+  if (canViewSalesOrderProfitFeeSnapshots(actor)) {
+    Object.assign(dto, toSalesOrderProfitFeeSnapshotDto(order));
+    dto.paymentDetails = Array.isArray(order.paymentDetails)
+      ? order.paymentDetails.map((detail: any) =>
+          toSalesOrderPaymentDetailDto(detail, {
+            includeProfitFeeSnapshot: true,
+          }),
+        )
+      : [];
+  }
+  if (!canViewOrderPersonalSplit(actor)) {
+    for (const field of [
+      'pointsDestination',
+      'personalAmountCents',
+      'normalAmountCents',
+      'personalPointsGuideId',
+      'personalPointsGuide',
+      'personalGuideNameSnapshot',
+      'personalDailyRebateRate',
+      'personalMonthlyRebateRate',
+      'pointsDestinationChangedById',
+      'pointsDestinationChangedAt',
+      'personalRatesUpdatedById',
+      'personalRatesUpdatedAt',
+    ]) {
+      delete dto[field];
+    }
+  }
   if (actor?.role !== 'taster') {
     return dto;
   }
@@ -9261,6 +10418,43 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
         }
       : null,
   };
+}
+
+function canViewSalesOrderProfitFeeSnapshots(actor: any) {
+  return ['super_admin', 'admin', 'finance'].includes(
+    String(actor?.role || '').trim().toLowerCase(),
+  );
+}
+
+function toSalesOrderProfitFeeSnapshotDto(order: any) {
+  return {
+    taxRateSnapshot: nullableDecimalString(order.taxRateSnapshot),
+    profitFeeSnapshottedAt: order.profitFeeSnapshottedAt
+      ? toIsoString(order.profitFeeSnapshottedAt)
+      : null,
+    profitFeeSnapshottedById:
+      order.profitFeeSnapshottedById || null,
+  };
+}
+
+function toSalesOrderAuditDto(order: any) {
+  return {
+    ...toSalesOrderDto(order),
+    ...toSalesOrderProfitFeeSnapshotDto(order),
+    paymentDetails: Array.isArray(order.paymentDetails)
+      ? order.paymentDetails.map((detail: any) =>
+          toSalesOrderPaymentDetailDto(detail, {
+            includeProfitFeeSnapshot: true,
+          }),
+        )
+      : [],
+  };
+}
+
+function nullableDecimalString(value: any) {
+  return value === null || value === undefined
+    ? null
+    : String(value);
 }
 
 function canEditSalesOrderForActor(order: any, actor: any) {
@@ -9493,10 +10687,31 @@ function buildSalesOrdersExportWorkbook(orders: any[]) {
   };
 
   for (const order of orders) {
-    worksheet.addRow(toSalesOrderExportRow(order));
+    const paymentDetails =
+      Array.isArray(order.paymentDetails) &&
+      order.paymentDetails.length > 0
+        ? order.paymentDetails
+        : [null];
+    for (const paymentDetail of paymentDetails) {
+      worksheet.addRow(toSalesOrderExportRow(order, paymentDetail));
+    }
   }
 
   return workbook;
+}
+
+function countSalesOrderExportRows(orders: any[]) {
+  return (Array.isArray(orders) ? orders : []).reduce(
+    (total: number, order: any) =>
+      total +
+      Math.max(
+        1,
+        Array.isArray(order?.paymentDetails)
+          ? order.paymentDetails.length
+          : 0,
+      ),
+    0,
+  );
 }
 
 function buildTravelGroupsExportWorkbook(groups: any[]) {
@@ -9587,9 +10802,22 @@ function buildTravelGroupTastingSummary(group: any) {
   return group.wineDetails || '';
 }
 
-function toSalesOrderExportRow(order: any) {
+function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
   const deliverySummary = toSalesOrderDeliverySummary(order.items);
   const status = ORDER_STATUS_FROM_PRISMA[order.status] || order.status;
+  const totalAmountCents = Number(order.totalAmountCents || 0);
+  const personalAmountCents =
+    resolveSalesOrderPersonalAmountCents(order);
+  const isAgencyCollection = isCollectOnDeliveryCategory(
+    paymentDetail?.paymentMethodCategorySnapshot,
+  );
+  const agencyCollectionConfirmed =
+    isAgencyCollection &&
+    Boolean(
+      paymentDetail?.collectionConfirmed ??
+        paymentDetail?.collectionConfirmedAt ??
+        paymentDetail?.agencyCollectionConfirmedAt,
+    );
   const packingStatus = order.packingStatus
     ? String(order.packingStatus).toLowerCase()
     : null;
@@ -9609,10 +10837,42 @@ function toSalesOrderExportRow(order: any) {
       DELIVERY_SUMMARY_EXPORT_LABELS[deliverySummary || ''] ||
       deliverySummary ||
       '',
-    totalAmountYuan: centsToYuanNumber(order.totalAmountCents),
-    cashOnDeliveryAmountYuan: centsToYuanNumber(
-      order.cashOnDeliveryAmountCents,
+    totalAmountYuan: centsToYuanNumber(totalAmountCents),
+    hasPersonalAmount: personalAmountCents > 0 ? '是' : '否',
+    personalAmountYuan: centsToYuanNumber(personalAmountCents),
+    normalAmountYuan: centsToYuanNumber(
+      totalAmountCents - personalAmountCents,
     ),
+    paymentMethodName:
+      paymentDetail?.paymentMethodNameSnapshot || '',
+    paymentMethodCategory: isAgencyCollection
+        ? '代收营业款'
+        : paymentDetail
+          ? '即时收款'
+          : '',
+    paymentAmountYuan: paymentDetail
+      ? centsToYuanNumber(paymentDetail.amountCents)
+      : null,
+    agencyCollectionConfirmationStatus: paymentDetail
+      ? isAgencyCollection
+        ? agencyCollectionConfirmed
+          ? '已确认到账'
+          : '代收款（待确认）'
+        : '无需确认'
+      : '',
+    agencyCollectionConfirmedBy: agencyCollectionConfirmed
+      ? paymentDetail?.collectionConfirmedBy?.name ||
+        paymentDetail?.agencyCollectionConfirmedBy?.name ||
+        paymentDetail?.collectionConfirmedById ||
+        paymentDetail?.agencyCollectionConfirmedById ||
+        ''
+      : '',
+    agencyCollectionConfirmedAt: agencyCollectionConfirmed
+      ? toIsoString(
+          paymentDetail?.collectionConfirmedAt ||
+            paymentDetail?.agencyCollectionConfirmedAt,
+        ) || ''
+      : '',
     status: ORDER_STATUS_EXPORT_LABELS[status] || status || '',
     customerMark: markLabel(order.customer?.financeMark ?? false),
     orderMark: markLabel(order.financeMark),
@@ -9798,6 +11058,8 @@ function buildAggregatedReconciliationDto(
     afterSalesCents: calculation.afterSalesCents,
     refundsCents: calculation.refundsCents,
     receivableTotalCents: calculation.receivableTotalCents,
+    payableTotalCents: calculation.payableTotalCents,
+    netCashFlowCents: calculation.netCashFlowCents,
     actualTotalCents: calculation.actualTotalCents,
     differenceCents: calculation.differenceCents,
     reviewStatus,
@@ -9895,6 +11157,774 @@ function toStrikeBonusAwardDto(row: any) {
   };
 }
 
+function canViewOrderPersonalSplit(actor: any) {
+  return [
+    'super_admin',
+    'admin',
+    'finance',
+    'boss',
+    'after_sales',
+  ].includes(String(actor?.role || ''));
+}
+
+function assertPayloadOnlyFields(
+  payload: any,
+  allowedFields: string[],
+  resourceLabel: string,
+) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const allowed = new Set(allowedFields);
+  const denied = Object.keys(payload).filter((field) => !allowed.has(field));
+  if (denied.length > 0) {
+    throw createHttpError(
+      403,
+      'FIELD_PERMISSION_DENIED',
+      `Fields are not allowed for ${resourceLabel}: ${denied.join(', ')}.`,
+    );
+  }
+}
+
+function normalizePersonalPointsRefundAmountCents(
+  value: unknown,
+  refundAmountCents: number,
+) {
+  if (value === undefined || value === null || value === '') {
+    return 0;
+  }
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value)
+  ) {
+    throw createHttpError(
+      400,
+      'PERSONAL_REFUND_AMOUNT_INVALID',
+      '个人退款金额必须使用整数分。',
+    );
+  }
+  if (value < 0 || value > refundAmountCents) {
+    throw createHttpError(
+      400,
+      'PERSONAL_REFUND_AMOUNT_OUT_OF_RANGE',
+      '个人退款金额必须在 0 和本次退款总额之间。',
+    );
+  }
+  return value;
+}
+
+function validateAfterSalesPointsRefundAllocation(
+  salesOrder: any,
+  existingOrders: any[],
+  refundAmountCents: number,
+  personalPointsRefundAmountCents: number,
+) {
+  const totalAmountCents = Number(salesOrder.totalAmountCents || 0);
+  const personalAmountCents =
+    resolveSalesOrderPersonalAmountCents(salesOrder);
+  const normalAmountCents = totalAmountCents - personalAmountCents;
+  const existingPersonalRefundAmountCents = (
+    existingOrders || []
+  ).reduce(
+    (sum: number, order: any) =>
+      sum +
+      Math.max(
+        0,
+        Number(order.personalPointsRefundAmountCents || 0),
+      ),
+    0,
+  );
+  const existingNormalRefundAmountCents = (
+    existingOrders || []
+  ).reduce(
+    (sum: number, order: any) =>
+      sum +
+      Math.max(
+        0,
+        Number(order.refundAmountCents || 0) -
+          Number(order.personalPointsRefundAmountCents || 0),
+      ),
+    0,
+  );
+  const normalPointsRefundAmountCents =
+    refundAmountCents - personalPointsRefundAmountCents;
+  if (
+    existingPersonalRefundAmountCents +
+      personalPointsRefundAmountCents >
+    personalAmountCents
+  ) {
+    throw createHttpError(
+      400,
+      'PERSONAL_REFUND_AMOUNT_EXCEEDS_PERSONAL_TOTAL',
+      '累计个人退款金额不能超过订单走个人金额。',
+    );
+  }
+  if (
+    existingNormalRefundAmountCents +
+      normalPointsRefundAmountCents >
+    normalAmountCents
+  ) {
+    throw createHttpError(
+      400,
+      'NORMAL_REFUND_AMOUNT_EXCEEDS_NORMAL_TOTAL',
+      '累计正常退款金额不能超过订单正常金额。',
+    );
+  }
+}
+
+async function resolveSalesOrderPaymentDetails(
+  tx: any,
+  value: unknown,
+  totalAmountCents: number,
+  existingDetails: any[],
+  options: { useDefaultWhenMissing: boolean },
+) {
+  if (value === undefined) {
+    if (!options.useDefaultWhenMissing) {
+      throw createHttpError(
+        400,
+        'PAYMENT_DETAILS_REQUIRED',
+        'paymentDetails is required.',
+      );
+    }
+    const defaultMethod = await tx.paymentMethod.findFirst({
+      where: {
+        isDefault: true,
+        isActive: true,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!defaultMethod) {
+      throw createHttpError(
+        409,
+        'DEFAULT_PAYMENT_METHOD_NOT_CONFIGURED',
+        'No active default payment method is configured.',
+      );
+    }
+    return [
+      buildResolvedPaymentDetail(
+        {
+          id: crypto.randomUUID(),
+          paymentMethodId: defaultMethod.id,
+          amountCents: totalAmountCents,
+          sortOrder: 0,
+        },
+        defaultMethod,
+        null,
+      ),
+    ];
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw createHttpError(
+      400,
+      'PAYMENT_DETAILS_REQUIRED',
+      'paymentDetails must contain at least one item.',
+    );
+  }
+
+  const existingById = new Map(
+    (Array.isArray(existingDetails) ? existingDetails : []).map(
+      (detail: any) => [detail.id, detail],
+    ),
+  );
+  const submittedIds = new Set<string>();
+  const resolved: any[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const input = value[index];
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `paymentDetails[${index}] must be an object.`,
+      );
+    }
+    assertPayloadOnlyFields(
+      input,
+      ['id', 'paymentMethodId', 'amountCents'],
+      `paymentDetails[${index}]`,
+    );
+    const id = normalizeOptionalString(input.id);
+    if (id && submittedIds.has(id)) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `paymentDetails[${index}].id is duplicated.`,
+      );
+    }
+    if (id) {
+      submittedIds.add(id);
+    }
+    const paymentMethodId = normalizeRequiredString(
+      input.paymentMethodId,
+      `paymentDetails[${index}].paymentMethodId`,
+    );
+    const amountCents = normalizeSignedCents(
+      input.amountCents,
+      `paymentDetails[${index}].amountCents`,
+    );
+    const existing = id ? existingById.get(id) || null : null;
+    if (id && !existing) {
+      throw createHttpError(
+        400,
+        'PAYMENT_DETAIL_NOT_FOUND',
+        `paymentDetails[${index}].id does not belong to this order.`,
+      );
+    }
+    const preservesHistoricalMethod =
+      existing && existing.paymentMethodId === paymentMethodId;
+    const method = await tx.paymentMethod.findUnique({
+      where: { id: paymentMethodId },
+    });
+    if (!method) {
+      throw createHttpError(
+        400,
+        'PAYMENT_METHOD_NOT_FOUND',
+        `paymentDetails[${index}].paymentMethodId does not exist.`,
+      );
+    }
+    if (!method.isActive && !preservesHistoricalMethod) {
+      throw createHttpError(
+        409,
+        'PAYMENT_METHOD_INACTIVE',
+        `paymentDetails[${index}].paymentMethodId is inactive.`,
+      );
+    }
+    resolved.push(
+      buildResolvedPaymentDetail(
+        {
+          id: existing?.id || crypto.randomUUID(),
+          paymentMethodId,
+          amountCents,
+          sortOrder: index,
+        },
+        method,
+        preservesHistoricalMethod ? existing : null,
+      ),
+    );
+  }
+  assertPaymentDetailsMatchOrderTotal(resolved, totalAmountCents);
+  return resolved;
+}
+
+async function resolveSubmittedOrLegacySalesOrderPaymentDetails(
+  tx: any,
+  payload: any,
+  totalAmountCents: number,
+  existingDetails: any[],
+) {
+  if (hasOwn(payload, 'paymentDetails')) {
+    return resolveSalesOrderPaymentDetails(
+      tx,
+      payload.paymentDetails,
+      totalAmountCents,
+      existingDetails,
+      { useDefaultWhenMissing: false },
+    );
+  }
+  const cashOnDeliveryAmountCents = normalizeSignedCents(
+    hasOwn(payload, 'cashOnDeliveryAmountCents')
+      ? payload.cashOnDeliveryAmountCents
+      : 0,
+    'cashOnDeliveryAmountCents',
+  );
+  return resolveLegacySalesOrderPaymentDetails(
+    tx,
+    cashOnDeliveryAmountCents,
+    totalAmountCents,
+    existingDetails,
+  );
+}
+
+async function resolveLegacySalesOrderPaymentDetails(
+  tx: any,
+  cashOnDeliveryAmountCents: number,
+  totalAmountCents: number,
+  existingDetails: any[],
+) {
+  const existing = Array.isArray(existingDetails) ? existingDetails : [];
+  const existingDirect = existing.find(
+    (detail: any) =>
+      !isCollectOnDeliveryCategory(
+        detail.paymentMethodCategorySnapshot,
+      ),
+  );
+  const existingCollection = existing.find((detail: any) =>
+    isCollectOnDeliveryCategory(
+      detail.paymentMethodCategorySnapshot,
+    ),
+  );
+  const directMethod = existingDirect
+    ? await tx.paymentMethod.findUnique({
+        where: { id: existingDirect.paymentMethodId },
+      })
+    : await tx.paymentMethod.findFirst({
+        where: {
+          isDefault: true,
+          isActive: true,
+        },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      });
+  if (!directMethod) {
+    throw createHttpError(
+      409,
+      'DEFAULT_PAYMENT_METHOD_NOT_CONFIGURED',
+      'No active default payment method is configured.',
+    );
+  }
+
+  const submitted: any[] = [
+    {
+      ...(existingDirect ? { id: existingDirect.id } : {}),
+      paymentMethodId: directMethod.id,
+      amountCents:
+        totalAmountCents - cashOnDeliveryAmountCents,
+    },
+  ];
+  if (cashOnDeliveryAmountCents !== 0) {
+    const collectionMethod = existingCollection
+      ? await tx.paymentMethod.findUnique({
+          where: { id: existingCollection.paymentMethodId },
+        })
+      : await tx.paymentMethod.findUnique({
+          where: { code: 'cash_on_delivery' },
+        });
+    if (!collectionMethod) {
+      throw createHttpError(
+        409,
+        'COLLECT_ON_DELIVERY_PAYMENT_METHOD_NOT_CONFIGURED',
+        'The cash-on-delivery payment method is not configured.',
+      );
+    }
+    submitted.push({
+      ...(existingCollection ? { id: existingCollection.id } : {}),
+      paymentMethodId: collectionMethod.id,
+      amountCents: cashOnDeliveryAmountCents,
+    });
+  }
+  return resolveSalesOrderPaymentDetails(
+    tx,
+    submitted,
+    totalAmountCents,
+    existing,
+    { useDefaultWhenMissing: false },
+  );
+}
+
+function buildResolvedPaymentDetail(
+  input: any,
+  method: any,
+  existing: any,
+) {
+  const confirmationUnchanged = Boolean(
+    existing &&
+    existing.paymentMethodId === input.paymentMethodId &&
+    Number(existing.amountCents || 0) === Number(input.amountCents || 0),
+  );
+  return {
+    id: input.id,
+    paymentMethodId: input.paymentMethodId,
+    paymentMethodNameSnapshot:
+      existing?.paymentMethodNameSnapshot || method.name,
+    paymentMethodCategorySnapshot:
+      existing?.paymentMethodCategorySnapshot || method.category,
+    amountCents: input.amountCents,
+    serviceFeeRateSnapshot:
+      existing?.serviceFeeRateSnapshot ?? null,
+    serviceFeeBaseAmountSnapshotCents:
+      existing?.serviceFeeBaseAmountSnapshotCents ?? null,
+    collectionConfirmed:
+      confirmationUnchanged &&
+      isPaymentDetailCollectionConfirmed(existing),
+    collectionConfirmedAt: confirmationUnchanged
+      ? existing?.collectionConfirmedAt ||
+        existing?.agencyCollectionConfirmedAt ||
+        null
+      : null,
+    collectionConfirmedById: confirmationUnchanged
+      ? existing?.collectionConfirmedById ||
+        existing?.agencyCollectionConfirmedById ||
+        null
+      : null,
+    sortOrder: input.sortOrder,
+    createdAt: existing?.createdAt || new Date(),
+    updatedAt: new Date(),
+  };
+}
+
+function normalizeSignedCents(value: unknown, fieldName: string) {
+  const numberValue = Number(value);
+  if (
+    !Number.isSafeInteger(numberValue) ||
+    numberValue < -2_147_483_648 ||
+    numberValue > PRISMA_INT_MAX
+  ) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `${fieldName} must be an integer between -2147483648 and 2147483647.`,
+    );
+  }
+  return numberValue;
+}
+
+function assertPaymentDetailsMatchOrderTotal(
+  details: any[],
+  totalAmountCents: number,
+) {
+  if (!Array.isArray(details) || details.length === 0) {
+    throw createHttpError(
+      400,
+      'PAYMENT_DETAILS_REQUIRED',
+      'At least one payment detail is required.',
+    );
+  }
+  const sum = details.reduce(
+    (total: number, detail: any) =>
+      total + normalizeSignedCents(detail.amountCents, 'amountCents'),
+    0,
+  );
+  if (!Number.isSafeInteger(sum) || sum !== totalAmountCents) {
+    throw createHttpError(
+      400,
+      'PAYMENT_TOTAL_MISMATCH',
+      `Payment detail total ${sum} must equal server-calculated order total ${totalAmountCents}.`,
+    );
+  }
+}
+
+function assertPaymentDetailsUnlocked(order: any) {
+  if (isPaymentDetailsLocked(order)) {
+    throw createHttpError(
+      409,
+      'PAYMENT_DETAILS_LOCKED',
+      'Payment details are locked for this order.',
+    );
+  }
+}
+
+function assertFinanceMarkAllowsPaymentDetailsMutation(order: any) {
+  if (order?.financeMark === true) {
+    throw createHttpError(
+      409,
+      'PAYMENT_DETAILS_FINANCE_MARKED',
+      'Please unmark the sales order before changing payment methods or amounts.',
+    );
+  }
+}
+
+function isPaymentDetailsLocked(order: any) {
+  if (typeof order?.paymentDetailsLocked === 'boolean') {
+    return order.paymentDetailsLocked;
+  }
+  return Boolean(
+    order?.paymentDetailsLockedAt &&
+      !order?.paymentDetailsUnlockedAt,
+  );
+}
+
+async function applyPaymentDetailsToSalesOrderUpdate(
+  tx: any,
+  data: any,
+  payload: any,
+  current: any,
+  actor: any,
+  metadata: any,
+  appendConfirmationResetLogs: (
+    tx: any,
+    actor: any,
+    beforeDetails: any[],
+    afterDetails: any[],
+    metadata: any,
+  ) => Promise<void>,
+) {
+  const totalAmountCents = Number(
+    data.totalAmountCents ?? current.totalAmountCents ?? 0,
+  );
+  if (hasOwn(payload, 'paymentDetails')) {
+    await assertLatestFinanceMarkAllowsPaymentDetailsMutation(
+      tx,
+      current,
+    );
+    assertFinanceMarkAllowsPaymentDetailsMutation(current);
+    assertPaymentDetailsUnlocked(current);
+    const details = await resolveSalesOrderPaymentDetails(
+      tx,
+      payload.paymentDetails,
+      totalAmountCents,
+      current.paymentDetails || [],
+      { useDefaultWhenMissing: false },
+    );
+    await appendConfirmationResetLogs(
+      tx,
+      actor,
+      current.paymentDetails || [],
+      details,
+      metadata,
+    );
+    Object.assign(data, buildPaymentDetailsReplacementData(details, actor));
+    return;
+  }
+  if (hasOwn(payload, 'cashOnDeliveryAmountCents')) {
+    await assertLatestFinanceMarkAllowsPaymentDetailsMutation(
+      tx,
+      current,
+    );
+    assertFinanceMarkAllowsPaymentDetailsMutation(current);
+    assertPaymentDetailsUnlocked(current);
+    const details =
+      await resolveSubmittedOrLegacySalesOrderPaymentDetails(
+        tx,
+        payload,
+        totalAmountCents,
+        current.paymentDetails || [],
+      );
+    await appendConfirmationResetLogs(
+      tx,
+      actor,
+      current.paymentDetails || [],
+      details,
+      metadata,
+    );
+    Object.assign(data, buildPaymentDetailsReplacementData(details, actor));
+    return;
+  }
+  if (
+    hasOwn(data, 'totalAmountCents') &&
+    Number(current.totalAmountCents || 0) !== totalAmountCents
+  ) {
+    await assertLatestFinanceMarkAllowsPaymentDetailsMutation(
+      tx,
+      current,
+    );
+    assertFinanceMarkAllowsPaymentDetailsMutation(current);
+    assertPaymentDetailsUnlocked(current);
+    assertPaymentDetailsMatchOrderTotal(
+      current.paymentDetails || [],
+      totalAmountCents,
+    );
+  }
+  data.cashOnDeliveryAmountCents =
+    getSalesOrderCollectOnDeliveryAmountCents(current);
+}
+
+async function assertLatestFinanceMarkAllowsPaymentDetailsMutation(
+  tx: any,
+  current: any,
+) {
+  const latest = await tx.salesOrder.findUnique({
+    where: {
+      id: current.id,
+    },
+    select: {
+      financeMark: true,
+    },
+  });
+  if (!latest) {
+    throw createHttpError(
+      404,
+      'SALES_ORDER_NOT_FOUND',
+      'Sales order does not exist.',
+    );
+  }
+  assertFinanceMarkAllowsPaymentDetailsMutation(latest);
+}
+
+function buildPaymentDetailsReplacementData(details: any[], actor: any) {
+  return {
+    cashOnDeliveryAmountCents:
+      getCollectOnDeliveryAmountCents(details),
+    paymentDetails: {
+      deleteMany: {},
+      create: details,
+    },
+    updatedById: actor.id,
+    updatedAt: new Date(),
+  };
+}
+
+function getCollectOnDeliveryAmountCents(details: any[]) {
+  return (Array.isArray(details) ? details : [])
+    .filter((detail: any) =>
+      isCollectOnDeliveryCategory(
+        detail.paymentMethodCategorySnapshot,
+      ),
+    )
+    .reduce(
+      (sum: number, detail: any) => sum + Number(detail.amountCents || 0),
+      0,
+    );
+}
+
+function getSalesOrderCollectOnDeliveryAmountCents(order: any) {
+  if (Array.isArray(order?.paymentDetails) && order.paymentDetails.length > 0) {
+    return getCollectOnDeliveryAmountCents(order.paymentDetails);
+  }
+  return Number(order?.cashOnDeliveryAmountCents || 0);
+}
+
+function isCollectOnDeliveryCategory(value: unknown) {
+  const category = String(value || '').trim().toUpperCase();
+  return (
+    category === 'COLLECT_ON_DELIVERY' ||
+    category === 'AGENCY_COLLECTION'
+  );
+}
+
+function paymentMethodCategoryToDto(value: unknown) {
+  if (isCollectOnDeliveryCategory(value)) {
+    return 'collect_on_delivery';
+  }
+  const category = String(value || '').trim().toUpperCase();
+  if (category === 'DIRECT_RECEIPT') {
+    return 'direct_receipt';
+  }
+  return category.toLowerCase();
+}
+
+function isPaymentDetailCollectionConfirmed(detail: any) {
+  return Boolean(
+    detail?.collectionConfirmed ??
+      detail?.collectionConfirmedAt ??
+      detail?.agencyCollectionConfirmedAt,
+  );
+}
+
+function getPaymentConfirmationResets(
+  beforeDetails: any[],
+  afterDetails: any[],
+) {
+  const afterById = new Map(
+    (Array.isArray(afterDetails) ? afterDetails : []).map(
+      (detail: any) => [detail.id, detail],
+    ),
+  );
+  return (Array.isArray(beforeDetails) ? beforeDetails : [])
+    .filter(
+      (before: any) =>
+        isCollectOnDeliveryCategory(
+          before.paymentMethodCategorySnapshot,
+        ) && isPaymentDetailCollectionConfirmed(before),
+    )
+    .map((before: any) => {
+      const after: any = afterById.get(before.id) || null;
+      const changed =
+        !after ||
+        before.paymentMethodId !== after.paymentMethodId ||
+        Number(before.amountCents || 0) !== Number(after.amountCents || 0);
+      return changed ? { before, after } : null;
+    })
+    .filter(Boolean);
+}
+
+function toSalesOrderPaymentDetailDto(
+  detail: any,
+  options: any = {},
+) {
+  if (!detail) {
+    return null;
+  }
+  const category = paymentMethodCategoryToDto(
+    detail.paymentMethodCategorySnapshot,
+  );
+  const collectionConfirmedAt =
+    detail.collectionConfirmedAt ||
+    detail.agencyCollectionConfirmedAt ||
+    null;
+  const dto: any = {
+    id: detail.id,
+    paymentMethodId: detail.paymentMethodId,
+    paymentMethodNameSnapshot: detail.paymentMethodNameSnapshot,
+    paymentMethodCategorySnapshot: category,
+    amountCents: Number(detail.amountCents || 0),
+    sortOrder: Number(detail.sortOrder || 0),
+    requiresAgencyConfirmation:
+      category === 'collect_on_delivery',
+    agencyCollectionConfirmed:
+      isPaymentDetailCollectionConfirmed(detail),
+    agencyCollectionConfirmedAt: collectionConfirmedAt
+      ? toIsoString(collectionConfirmedAt)
+      : null,
+    agencyCollectionConfirmedById:
+      detail.collectionConfirmedById ||
+      detail.agencyCollectionConfirmedById ||
+      null,
+    agencyCollectionConfirmedByName:
+      detail.collectionConfirmedBy?.name || null,
+  };
+  if (options.includeProfitFeeSnapshot) {
+    dto.serviceFeeRateSnapshot = nullableDecimalString(
+      detail.serviceFeeRateSnapshot,
+    );
+    dto.serviceFeeBaseAmountSnapshotCents =
+      detail.serviceFeeBaseAmountSnapshotCents === null ||
+      detail.serviceFeeBaseAmountSnapshotCents === undefined
+        ? null
+        : Number(detail.serviceFeeBaseAmountSnapshotCents);
+  }
+  return dto;
+}
+
+function buildPaymentSummary(details: any[]) {
+  const normalized = Array.isArray(details) ? details : [];
+  let directReceiptAmountCents = 0;
+  let collectOnDeliveryAmountCents = 0;
+  let confirmedCollectOnDeliveryAmountCents = 0;
+  let pendingCollectOnDeliveryAmountCents = 0;
+  let hasPendingCollectOnDelivery = false;
+  for (const detail of normalized) {
+    const amountCents = Number(detail?.amountCents || 0);
+    if (
+      !isCollectOnDeliveryCategory(
+        detail?.paymentMethodCategorySnapshot,
+      )
+    ) {
+      directReceiptAmountCents += amountCents;
+      continue;
+    }
+    collectOnDeliveryAmountCents += amountCents;
+    if (isPaymentDetailCollectionConfirmed(detail)) {
+      confirmedCollectOnDeliveryAmountCents += amountCents;
+    } else {
+      pendingCollectOnDeliveryAmountCents += amountCents;
+      if (amountCents !== 0) {
+        hasPendingCollectOnDelivery = true;
+      }
+    }
+  }
+  return {
+    directReceiptAmountCents,
+    collectOnDeliveryAmountCents,
+    confirmedCollectOnDeliveryAmountCents,
+    pendingCollectOnDeliveryAmountCents,
+    hasPendingCollectOnDelivery,
+  };
+}
+
+function buildPaymentDetailsSummary(details: any[]) {
+  return (Array.isArray(details) ? details : [])
+    .map(
+      (detail: any) =>
+        `${detail.paymentMethodNameSnapshot} ${formatSignedYuanForSummary(
+          Number(detail.amountCents || 0),
+        )}`,
+    )
+    .join('；');
+}
+
+function formatSignedYuanForSummary(cents: number) {
+  const sign = cents < 0 ? '-' : '';
+  const absolute = Math.abs(cents);
+  const whole = Math.floor(absolute / 100);
+  const fraction = absolute % 100;
+  return `${sign}¥${whole}${fraction === 0
+    ? ''
+    : `.${String(fraction).padStart(2, '0')}`}`;
+}
+
 function requireAnyRole(actor: any, roles: string[]) {
   if (
     !actor ||
@@ -9915,6 +11945,101 @@ function getShanghaiTodayBusinessDate(now = new Date()) {
 
 function getShanghaiTodayDate(now = new Date()) {
   return new Date(`${getShanghaiTodayBusinessDate(now)}T00:00:00.000Z`);
+}
+
+function buildTasterTravelGroupReadScope(actor: any, now = new Date()) {
+  const today = getShanghaiTodayDate(now);
+  return {
+    OR: [
+      { tasterId: actor.id },
+      {
+        liaisonTasterId: actor.id,
+        visitDate: { gte: today },
+      },
+      {
+        visitDate: today,
+        OR: [
+          { arrivalTime: null },
+          { arrivalTime: '' },
+        ],
+      },
+      { visitDate: { gt: today } },
+    ],
+  };
+}
+
+function buildTasterTravelGroupEditScope(actor: any, now = new Date()) {
+  const today = getShanghaiTodayDate(now);
+  return {
+    OR: [
+      {
+        visitDate: today,
+        OR: [
+          { tasterId: actor.id },
+          { liaisonTasterId: actor.id },
+        ],
+      },
+      {
+        visitDate: { gt: today },
+        liaisonTasterId: actor.id,
+      },
+    ],
+  };
+}
+
+function getTravelGroupShanghaiDateRelation(
+  group: any,
+  now = new Date(),
+) {
+  const visitDate = formatDate(group?.visitDate);
+  const today = getShanghaiTodayBusinessDate(now);
+  if (!visitDate) {
+    return 'invalid';
+  }
+  if (visitDate < today) {
+    return 'past';
+  }
+  if (visitDate > today) {
+    return 'future';
+  }
+  return 'today';
+}
+
+function hasTravelGroupNotArrived(group: any) {
+  return group?.arrivalTime == null || group.arrivalTime === '';
+}
+
+function canTasterReadTravelGroup(
+  group: any,
+  actor: any,
+  now = new Date(),
+) {
+  const relation = getTravelGroupShanghaiDateRelation(group, now);
+  return (
+    group?.tasterId === actor?.id ||
+    (group?.liaisonTasterId === actor?.id &&
+      (relation === 'today' || relation === 'future')) ||
+    relation === 'future' ||
+    (relation === 'today' && hasTravelGroupNotArrived(group))
+  );
+}
+
+function canTasterEditTravelGroup(
+  group: any,
+  actor: any,
+  now = new Date(),
+) {
+  const relation = getTravelGroupShanghaiDateRelation(group, now);
+  if (relation === 'today') {
+    return (
+      group?.tasterId === actor?.id ||
+      group?.liaisonTasterId === actor?.id
+    );
+  }
+  return (
+    relation === 'future' &&
+    group?.liaisonTasterId === actor?.id
+  );
 }
 
 function getShanghaiTodayCreatedAtRange(now = new Date()) {
@@ -9999,14 +12124,10 @@ async function recordTravelGroupTasterEditActivity(
     return;
   }
   const result = await tx.travelGroup.updateMany({
-    where: {
-      id,
-      visitDate: getShanghaiTodayDate(now),
-      OR: [
-        { tasterId: actor.id },
-        { liaisonTasterId: actor.id },
-      ],
-    },
+    where: andWhere(
+      { id },
+      buildTasterTravelGroupEditScope(actor, now),
+    ),
     data: {
       tasterLastEditedAt: now,
       updatedById: actor.id,
@@ -10035,25 +12156,20 @@ function assertTasterCanEditTravelGroup(actor: any, current: any) {
   if (actor?.role !== 'taster') {
     return;
   }
-  if (
-    formatDate(current?.visitDate) !== getShanghaiTodayBusinessDate()
-  ) {
+  if (canTasterEditTravelGroup(current, actor)) {
+    return;
+  }
+  if (getTravelGroupShanghaiDateRelation(current) === 'past') {
     throw createHttpError(
       403,
       'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
-      'Tasters can only edit travel groups scheduled for today.',
+      'Historical travel groups are read-only for tasters.',
     );
-  }
-  if (
-    current?.tasterId === actor.id ||
-    current?.liaisonTasterId === actor.id
-  ) {
-    return;
   }
   throw createHttpError(
     403,
     'PERMISSION_DENIED',
-    'Taster is not assigned to this travel group.',
+    'Taster is not allowed to edit this travel group.',
   );
 }
 
@@ -10135,6 +12251,41 @@ function assertTravelGroupPatchAllowedFields(
       `Fields are not allowed for ${actor.role}: ${deniedFields.join(', ')}.`,
     );
   }
+}
+
+function assertNotEnteredAllowsArrivalTime(current: any, payload: any) {
+  if (
+    !current?.notEnteredConfirmedAt ||
+    !hasOwn(payload, 'arrivalTime') ||
+    payload.arrivalTime === null ||
+    String(payload.arrivalTime).trim() === ''
+  ) {
+    return;
+  }
+  throw createHttpError(
+    409,
+    'TRAVEL_GROUP_NOT_ENTERED_REVOKE_REQUIRED',
+    'Revoke the not-entered confirmation before setting arrivalTime.',
+  );
+}
+
+function parseTravelGroupNotEnteredPayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must be an object.',
+    );
+  }
+  const keys = Object.keys(payload);
+  if (keys.length !== 1 || keys[0] !== 'confirmed') {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      'Request body must contain only confirmed.',
+    );
+  }
+  return normalizeStrictBoolean((payload as any).confirmed, 'confirmed');
 }
 
 function assertSalesCanEditTravelGroup(actor: any, current: any) {

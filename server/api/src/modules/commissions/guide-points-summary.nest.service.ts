@@ -6,14 +6,18 @@ import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
-import { calculateStage7CommissionAndPoints } from './commission-calculation.helper';
+import {
+  allocateCentsByPersonalRatio,
+  calculateStage7CommissionAndPoints,
+  resolveSalesOrderPersonalAmountCents,
+} from './commission-calculation.helper';
 import { CommissionRecordsNestService } from './commission-records.nest.service';
 import { TravelGroupFinanceSummaryNestService } from './travel-group-finance-summary.nest.service';
 
 const READ_ROLES = ['admin', 'finance', 'boss'];
 const WRITE_ROLES = ['admin', 'finance'];
 const SWITCH_ROLES = ['admin', 'finance', 'boss'];
-const GUIDE_POINTS_CALCULATION_VERSION = 'guide_points_v1';
+const GUIDE_POINTS_CALCULATION_VERSION = 'guide_points_v2_personal_split';
 const DEFAULT_DAILY_RATE = '0.5000';
 const DEFAULT_MONTHLY_RATE = '0.0000';
 const EXPORT_MAX_ROWS = 5000;
@@ -105,9 +109,6 @@ export class GuidePointsSummaryNestService {
     metadata: any = {},
   ) {
     requireAnyRole(actor, SWITCH_ROLES);
-    const destination = normalizePointsDestination(
-      payload?.pointsDestination ?? payload?.destination,
-    );
     const id = normalizeRequiredString(orderId, 'orderId');
 
     return this.prisma.$transaction(async (tx: any) => {
@@ -116,6 +117,13 @@ export class GuidePointsSummaryNestService {
         include: {
           travelGroup: true,
           personalPointsGuide: true,
+          afterSalesOrders: {
+            select: {
+              refundAmountCents: true,
+              personalPointsRefundAmountCents: true,
+              financeConfirmed: true,
+            },
+          },
         },
       });
       if (!current) {
@@ -133,9 +141,18 @@ export class GuidePointsSummaryNestService {
         );
       }
 
+      const personalAmountCents = normalizePersonalAmountCents(
+        payload,
+        current,
+      );
+      const destination =
+        personalAmountCents > 0 ? 'GUIDE_PERSONAL' : 'TRAVEL_AGENCY';
+      assertPointsDestinationMatchesAmount(payload, destination);
       const currentDestination = normalizePointsDestination(
         current.pointsDestination || 'TRAVEL_AGENCY',
       );
+      const currentPersonalAmountCents =
+        resolveSalesOrderPersonalAmountCents(current);
       const target = await resolveTargetPointsDestination(
         tx,
         current,
@@ -143,6 +160,8 @@ export class GuidePointsSummaryNestService {
         payload,
       );
       const destinationChanged = currentDestination !== destination;
+      const personalAmountChanged =
+        currentPersonalAmountCents !== personalAmountCents;
       const guideChanged =
         normalizeOptionalString(current.personalPointsGuideId) !==
         target.personalPointsGuideId;
@@ -155,6 +174,7 @@ export class GuidePointsSummaryNestService {
 
       if (
         !destinationChanged &&
+        !personalAmountChanged &&
         !guideChanged &&
         !dailyRateChanged &&
         !monthlyRateChanged
@@ -166,34 +186,25 @@ export class GuidePointsSummaryNestService {
           guideId: current.personalPointsGuideId,
         };
       }
-      if (
-        actor.role === 'boss' &&
-        !destinationChanged
-      ) {
-        throw createHttpError(
-          403,
-          'PERMISSION_DENIED',
-          '老板角色只能执行走个人或转回旅行社，不能更换收款导游或修改个人比例。',
-        );
-      }
+      assertRefundAllocationsFitPersonalSplit(
+        current.afterSalesOrders,
+        Number(current.totalAmountCents || 0),
+        personalAmountCents,
+      );
 
       const ordinarySummary =
         await tx.travelGroupFinanceSummary.findUnique({
           where: { travelGroupId: current.travelGroupId },
         });
-      if (
-        destinationChanged &&
-        (currentDestination === 'TRAVEL_AGENCY' ||
-          destination === 'TRAVEL_AGENCY')
-      ) {
+      if (personalAmountChanged) {
         assertOrdinarySummaryCanChange(ordinarySummary);
       }
 
       const affectedGuideIds = uniqueStrings([
-        currentDestination === 'GUIDE_PERSONAL'
+        currentPersonalAmountCents > 0
           ? current.personalPointsGuideId
           : null,
-        destination === 'GUIDE_PERSONAL'
+        personalAmountCents > 0
           ? target.personalPointsGuideId
           : null,
       ]);
@@ -205,7 +216,7 @@ export class GuidePointsSummaryNestService {
             },
           })
         : [];
-      if (destinationChanged || guideChanged) {
+      if (personalAmountChanged || guideChanged) {
         for (const summary of affectedGuideSummaries) {
           assertGuideSummaryCanChange(summary);
         }
@@ -223,11 +234,12 @@ export class GuidePointsSummaryNestService {
         where: { id: current.id },
         data: {
           pointsDestination: destination,
+          personalAmountCents,
           personalPointsGuideId: target.personalPointsGuideId,
           personalGuideNameSnapshot: target.personalGuideNameSnapshot,
           personalDailyRebateRate: target.personalDailyRebateRate,
           personalMonthlyRebateRate: target.personalMonthlyRebateRate,
-          ...(destinationChanged || guideChanged
+          ...(personalAmountChanged || guideChanged
             ? {
                 pointsDestinationChangedById: actor.id,
                 pointsDestinationChangedAt: now,
@@ -291,6 +303,7 @@ export class GuidePointsSummaryNestService {
           afterData: summarizeOrderPointsDestination(updated),
           requestSummary: {
             destinationChanged,
+            personalAmountChanged,
             guideChanged,
             dailyRateChanged,
             monthlyRateChanged,
@@ -622,8 +635,12 @@ export class GuidePointsSummaryNestService {
       prisma.salesOrder.findMany({
         where: {
           travelGroupId: groupId,
-          pointsDestination: 'GUIDE_PERSONAL',
-          orderType: { not: 'AFTER_SALES' },
+          personalAmountCents: { gt: 0 },
+          orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] },
+          OR: [
+            { workflowStatus: null },
+            { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+          ],
         },
         include: guidePointsOrderCalculationInclude(),
         orderBy: [{ orderDate: 'asc' }, { orderNo: 'asc' }],
@@ -853,35 +870,44 @@ function buildGuideSummaryData(input: any) {
   const firstOrder = orders[0] || null;
   const totalSalesAmountCents = sumCalculation(
     calculations,
-    'grossAmountCents',
+    'personalAmountCents',
   );
   const confirmedRefundAmountCents = sumCalculation(
     calculations,
-    'confirmedRefundAmountCents',
+    'personalRefundAmountCents',
   );
   const effectiveSalesAmountCents = sumCalculation(
     calculations,
-    'effectiveAmountCents',
+    'personalEffectiveAmountCents',
   );
   const totalLiquorCostDeductionCents = sumCalculation(
     calculations,
-    'agencyDeductionAmountCents',
+    'personalAgencyDeductionAmountCents',
   );
   const totalNetAmountCents = sumCalculation(
     calculations,
-    'agencyBaseAmountCents',
+    'personalAgencyBaseAmountCents',
   );
   const totalDailyPointsCents = sumCalculation(
     calculations,
-    'dailyRebateCents',
+    'personalDailyRebateCents',
   );
   const totalMonthlyPointsCents = sumCalculation(
     calculations,
-    'monthlyRebateCents',
+    'personalMonthlyRebateCents',
   );
   const totalCashOnDeliveryCents = orders.reduce(
-    (sum: number, order: any) =>
-      sum + Math.max(0, toInteger(order.cashOnDeliveryAmountCents)),
+    (sum: number, order: any) => {
+      const personalAmountCents = toInteger(order.personalAmountCents);
+      return (
+        sum +
+        allocateCentsByPersonalRatio(
+          getSalesOrderCollectOnDeliveryAmountCents(order),
+          order.totalAmountCents,
+          personalAmountCents,
+        ).personalAmountCents
+      );
+    },
     0,
   );
   const paidFacts = readGuidePaidFacts(current);
@@ -935,10 +961,8 @@ function buildGuideSummaryData(input: any) {
     orderCount: orders.length,
     totalSalesAmountCents,
     totalCashOnDeliveryCents,
-    totalPaidDepositCents: Math.max(
-      0,
+    totalPaidDepositCents:
       totalSalesAmountCents - totalCashOnDeliveryCents,
-    ),
     confirmedRefundAmountCents,
     effectiveSalesAmountCents,
     totalLiquorCostDeductionCents,
@@ -968,22 +992,37 @@ function buildGuideSummaryData(input: any) {
 }
 
 function buildGuideOrderSnapshot(salesOrder: any, calculation: any) {
-  const amounts = calculation.amounts;
+  const amounts = calculation.pointsSplit;
   return {
     id: salesOrder.id,
     orderNo: salesOrder.orderNo || null,
     orderDate: dateString(salesOrder.orderDate),
     customerName: salesOrder.customerName || null,
     status: String(salesOrder.status || '').toLowerCase(),
-    grossAmountCents: toInteger(amounts.grossAmountCents),
+    totalAmountCents: toInteger(amounts.totalAmountCents),
+    personalAmountCents: toInteger(amounts.personalAmountCents),
+    normalAmountCents: toInteger(amounts.normalAmountCents),
+    grossAmountCents: toInteger(amounts.personalAmountCents),
     confirmedRefundAmountCents: toInteger(
-      amounts.confirmedRefundAmountCents,
+      amounts.personalRefundAmountCents,
     ),
-    effectiveAmountCents: toInteger(amounts.effectiveAmountCents),
+    personalRefundAmountCents: toInteger(
+      amounts.personalRefundAmountCents,
+    ),
+    normalRefundAmountCents: toInteger(amounts.normalRefundAmountCents),
+    personalEffectiveAmountCents: toInteger(
+      amounts.personalEffectiveAmountCents,
+    ),
+    normalEffectiveAmountCents: toInteger(
+      amounts.normalEffectiveAmountCents,
+    ),
+    effectiveAmountCents: toInteger(
+      amounts.personalEffectiveAmountCents,
+    ),
     liquorCostDeductionCents: toInteger(
-      amounts.agencyDeductionAmountCents,
+      amounts.personalAgencyDeductionAmountCents,
     ),
-    netAmountCents: toInteger(amounts.agencyBaseAmountCents),
+    netAmountCents: toInteger(amounts.personalAgencyBaseAmountCents),
     guideId: salesOrder.personalPointsGuideId || null,
     guideName:
       salesOrder.personalGuideNameSnapshot ||
@@ -992,11 +1031,11 @@ function buildGuideOrderSnapshot(salesOrder: any, calculation: any) {
     dailyRebateRate: normalizeRateText(
       salesOrder.personalDailyRebateRate,
     ),
-    dailyPointsCents: toInteger(amounts.dailyRebateCents),
+    dailyPointsCents: toInteger(amounts.personalDailyRebateCents),
     monthlyRebateRate: normalizeRateText(
       salesOrder.personalMonthlyRebateRate,
     ),
-    monthlyPointsCents: toInteger(amounts.monthlyRebateCents),
+    monthlyPointsCents: toInteger(amounts.personalMonthlyRebateCents),
     afterSalesOrders: (
       calculation.sourceSnapshot?.afterSalesOrders || []
     ).map((order: any) => ({
@@ -1004,6 +1043,12 @@ function buildGuideOrderSnapshot(salesOrder: any, calculation: any) {
       afterSalesNo: order.afterSalesNo || null,
       status: String(order.status || '').toLowerCase(),
       refundAmountCents: toInteger(order.refundAmountCents),
+      personalPointsRefundAmountCents: toInteger(
+        order.personalPointsRefundAmountCents,
+      ),
+      normalPointsRefundAmountCents:
+        toInteger(order.refundAmountCents) -
+        toInteger(order.personalPointsRefundAmountCents),
       financeConfirmed: Boolean(order.financeConfirmed),
       financeConfirmedAt: dateString(order.financeConfirmedAt),
       createdAt: dateString(order.createdAt),
@@ -1141,12 +1186,48 @@ function guidePointsSummaryInclude() {
 function guidePointsOrderCalculationInclude() {
   return {
     items: { orderBy: { sortOrder: 'asc' } },
+    paymentDetails: {
+      select: {
+        amountCents: true,
+        paymentMethodCategorySnapshot: true,
+      },
+      orderBy: { sortOrder: 'asc' },
+    },
     salesUser: { include: { leader: true } },
     outreachUser: true,
     travelGroup: true,
     personalPointsGuide: true,
     afterSalesOrders: { orderBy: { createdAt: 'asc' } },
   };
+}
+
+function getSalesOrderCollectOnDeliveryAmountCents(order: any) {
+  const paymentDetails = Array.isArray(order?.paymentDetails)
+    ? order.paymentDetails
+    : [];
+  if (paymentDetails.length === 0) {
+    return toInteger(order?.cashOnDeliveryAmountCents);
+  }
+  return paymentDetails
+    .filter((detail: any) =>
+      isCollectOnDeliveryPaymentCategory(
+        detail?.paymentMethodCategorySnapshot,
+      ),
+    )
+    .reduce(
+      (sum: number, detail: any) => sum + toInteger(detail?.amountCents),
+      0,
+    );
+}
+
+function isCollectOnDeliveryPaymentCategory(value: unknown) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  return (
+    normalized === 'collect_on_delivery' ||
+    normalized === 'agency_collection'
+  );
 }
 
 function toGuidePointsSummaryDto(summary: any, includeOrders: boolean) {
@@ -1233,6 +1314,9 @@ function toGuidePointsSummaryDto(summary: any, includeOrders: boolean) {
 }
 
 function summarizeOrderPointsDestination(order: any) {
+  const totalAmountCents = toInteger(order.totalAmountCents);
+  const personalAmountCents =
+    resolveSalesOrderPersonalAmountCents(order);
   return {
     id: order.id,
     orderNo: order.orderNo || null,
@@ -1240,6 +1324,9 @@ function summarizeOrderPointsDestination(order: any) {
     pointsDestination: normalizePointsDestination(
       order.pointsDestination || 'TRAVEL_AGENCY',
     ),
+    totalAmountCents,
+    personalAmountCents,
+    normalAmountCents: totalAmountCents - personalAmountCents,
     personalPointsGuideId: order.personalPointsGuideId || null,
     personalGuideNameSnapshot:
       order.personalGuideNameSnapshot || null,
@@ -1400,7 +1487,7 @@ function mergeGuidePaidFacts(sourceSnapshot: any, paidFacts: any) {
 function sumCalculation(calculations: any[], field: string) {
   return calculations.reduce(
     (sum: number, entry: any) =>
-      sum + toInteger(entry.calculation?.amounts?.[field]),
+      sum + toInteger(entry.calculation?.pointsSplit?.[field]),
     0,
   );
 }
@@ -1466,6 +1553,109 @@ function buildGuidePointsExportWorkbook(summaries: any[]) {
   return workbook;
 }
 
+function normalizePersonalAmountCents(payload: any, current: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createHttpError(
+      400,
+      'PERSONAL_AMOUNT_INVALID',
+      '请求体必须是对象。',
+    );
+  }
+  const totalAmountCents = Number(current?.totalAmountCents || 0);
+  if (Object.prototype.hasOwnProperty.call(payload, 'personalAmountCents')) {
+    const value = payload.personalAmountCents;
+    if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+      throw createHttpError(
+        400,
+        'PERSONAL_AMOUNT_INVALID',
+        '走个人金额必须使用整数分。',
+      );
+    }
+    if (value < 0 || value > totalAmountCents) {
+      throw createHttpError(
+        400,
+        'PERSONAL_AMOUNT_OUT_OF_RANGE',
+        '走个人金额必须在 0 到订单总额之间。',
+      );
+    }
+    return value;
+  }
+  const legacyDestination =
+    payload.pointsDestination ?? payload.destination;
+  if (legacyDestination === undefined || legacyDestination === null) {
+    throw createHttpError(
+      400,
+      'PERSONAL_AMOUNT_REQUIRED',
+      '新客户端必须提交调整后的走个人金额 personalAmountCents。',
+    );
+  }
+  return normalizePointsDestination(legacyDestination) === 'GUIDE_PERSONAL'
+    ? totalAmountCents
+    : 0;
+}
+
+function assertPointsDestinationMatchesAmount(
+  payload: any,
+  derivedDestination: string,
+) {
+  const provided = payload?.pointsDestination ?? payload?.destination;
+  if (provided === undefined || provided === null) {
+    return;
+  }
+  if (normalizePointsDestination(provided) !== derivedDestination) {
+    throw createHttpError(
+      400,
+      'POINTS_DESTINATION_AMOUNT_CONFLICT',
+      'pointsDestination 与 personalAmountCents 不一致。',
+    );
+  }
+}
+
+function assertRefundAllocationsFitPersonalSplit(
+  afterSalesOrders: any[],
+  totalAmountCents: number,
+  personalAmountCents: number,
+) {
+  let refundAmountCents = 0;
+  let personalRefundAmountCents = 0;
+  for (const order of Array.isArray(afterSalesOrders)
+    ? afterSalesOrders
+    : []) {
+    const refund = Number(order?.refundAmountCents || 0);
+    const personalRefund = Number(
+      order?.personalPointsRefundAmountCents || 0,
+    );
+    if (
+      !Number.isSafeInteger(refund) ||
+      !Number.isSafeInteger(personalRefund) ||
+      refund < 0 ||
+      personalRefund < 0 ||
+      personalRefund > refund
+    ) {
+      throw createHttpError(
+        409,
+        'PERSONAL_REFUND_ALLOCATION_INVALID',
+        '现有售后退款的积分归属分配无效，请先修正退款分配。',
+      );
+    }
+    refundAmountCents += refund;
+    personalRefundAmountCents += personalRefund;
+  }
+  const normalRefundAmountCents =
+    refundAmountCents - personalRefundAmountCents;
+  const normalAmountCents = totalAmountCents - personalAmountCents;
+  if (
+    personalRefundAmountCents > personalAmountCents ||
+    normalRefundAmountCents > normalAmountCents
+  ) {
+    throw createHttpError(
+      409,
+      'PERSONAL_REFUND_ALLOCATION_EXCEEDS_SPLIT',
+      '现有退款分配超过调整后的走个人或正常金额，不能保存本次调整。',
+    );
+  }
+}
+
 function normalizePointsDestination(value: unknown) {
   const normalized = String(value || '')
     .trim()
@@ -1475,8 +1665,8 @@ function normalizePointsDestination(value: unknown) {
   }
   throw createHttpError(
     400,
-    'VALIDATION_FAILED',
-    'pointsDestination must be TRAVEL_AGENCY or GUIDE_PERSONAL.',
+    'POINTS_DESTINATION_INVALID',
+    'pointsDestination 必须是 TRAVEL_AGENCY 或 GUIDE_PERSONAL。',
   );
 }
 
@@ -1660,7 +1850,11 @@ function requireAnyRole(actor: any, roles: string[]) {
     (!roles.includes(actor.role) &&
       !(actor.role === 'super_admin' && roles.includes('admin')))
   ) {
-    throw createHttpError(403, 'PERMISSION_DENIED', 'Permission denied.');
+    throw createHttpError(
+      403,
+      'PERMISSION_DENIED',
+      '当前角色无权修改订单走个人金额。',
+    );
   }
 }
 

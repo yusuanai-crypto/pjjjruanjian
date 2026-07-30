@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 
 import '../config/app_config.dart';
+import '../file_security_policy.dart';
 
 const _contentDispositionHeader = 'content-disposition';
 
@@ -117,14 +118,27 @@ class ApiClient {
       );
     }
 
+    var preparedFiles = const <PreparedSecureUpload>[];
     try {
+      preparedFiles = await FileSecurityPolicy.prepareUploads(
+        files
+            .map(
+              (file) => FileSecuritySource(
+                fileName: file.fileName,
+                declaredMimeType:
+                    file.contentType ?? _inferContentType(file.fileName),
+                openRead: file.openRead,
+              ),
+            )
+            .toList(growable: false),
+      );
       if (maxFileSizeBytes != null) {
-        for (final file in files) {
-          if (await file.length() > maxFileSizeBytes) {
-            throw ApiException(
+        for (final file in preparedFiles) {
+          if (file.size > maxFileSizeBytes) {
+            throw const ApiException(
               statusCode: 0,
               code: 'FILE_TOO_LARGE',
-              message: 'File ${file.fileName} exceeds the allowed upload size.',
+              message: 'The selected file exceeds the allowed upload size.',
             );
           }
         }
@@ -156,8 +170,8 @@ class ApiClient {
           ),
         );
       }
-      for (final file in files) {
-        final fileName = _safeMultipartFileName(file.fileName);
+      for (final file in preparedFiles) {
+        final fileName = file.fileName;
         final encodedFileName = Uri.encodeComponent(fileName);
         request.add(
           utf8.encode(
@@ -166,7 +180,7 @@ class ApiClient {
             'name="${_escapeMultipartHeaderValue(fieldName)}"; '
             'filename="${_escapeMultipartHeaderValue(fileName)}"; '
             "filename*=UTF-8''$encodedFileName\r\n"
-            'Content-Type: ${_multipartContentType(file)}\r\n\r\n',
+            'Content-Type: ${file.contentType}\r\n\r\n',
           ),
         );
         await request.addStream(file.openRead());
@@ -175,6 +189,12 @@ class ApiClient {
       request.add(utf8.encode('--$boundary--\r\n'));
 
       return await _decodeJsonResponse(await request.close());
+    } on FileSecurityViolation catch (error) {
+      throw ApiException(
+        statusCode: 0,
+        code: error.code,
+        message: error.userMessage,
+      );
     } on ApiException catch (error) {
       final refreshedToken = await _tokenForRetry(
         error,
@@ -218,6 +238,8 @@ class ApiClient {
         code: 'INVALID_SERVER_URL',
         message: '服务器地址格式不正确。',
       );
+    } finally {
+      await FileSecurityPolicy.cleanupPreparedUploads(preparedFiles);
     }
   }
 
@@ -780,8 +802,6 @@ class ApiMultipartFile {
 }
 
 final RegExp _multipartFieldNamePattern = RegExp(r'^[A-Za-z0-9_.-]+$');
-final RegExp _multipartContentTypePattern =
-    RegExp(r'^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$');
 
 String _createMultipartBoundary() {
   final random = Random.secure();
@@ -797,22 +817,6 @@ String _escapeMultipartHeaderValue(String value) {
       .replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), '_')
       .replaceAll('\\', '_')
       .replaceAll('"', '_');
-}
-
-String _safeMultipartFileName(String value) {
-  final segments = value.replaceAll('\\', '/').split('/');
-  final baseName = segments.isEmpty ? '' : segments.last;
-  final sanitized = _escapeMultipartHeaderValue(baseName).trim();
-  final fileName = sanitized.isEmpty ? 'attachment' : sanitized;
-  return fileName.length <= 255 ? fileName : fileName.substring(0, 255);
-}
-
-String _multipartContentType(ApiMultipartFile file) {
-  final provided = file.contentType?.split(';').first.trim().toLowerCase();
-  if (provided != null && _multipartContentTypePattern.hasMatch(provided)) {
-    return provided;
-  }
-  return _inferContentType(file.fileName);
 }
 
 String _inferContentType(String fileName) {

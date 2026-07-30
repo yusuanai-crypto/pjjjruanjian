@@ -313,6 +313,17 @@ function buildProfitWarnings(input: any) {
 }
 
 function isEffectiveOrder(order: any, effectiveSalesAmountCents: number) {
+  if (normalizeTargetType(order?.orderType) === 'BUYBACK') {
+    return false;
+  }
+  if (
+    order?.workflowStatus &&
+    !['APPROVED', 'COMPLETED'].includes(
+      normalizeTargetType(order.workflowStatus),
+    )
+  ) {
+    return false;
+  }
   return (
     (EFFECTIVE_ORDER_STATUSES.has(normalizeTargetType(order?.status)) ||
       (Array.isArray(order?.afterSalesOrders) &&

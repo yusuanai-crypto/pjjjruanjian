@@ -14,7 +14,17 @@ const {
 test('unit: analytics scope helper leaves queries open when global mark is disabled', () => {
   assert.deepEqual(
     buildAnalyticsSalesOrderWhere({ onlyShowMarkedRecords: false }),
-    { orderType: { not: 'AFTER_SALES' } },
+    {
+      AND: [
+        { orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] } },
+        {
+          OR: [
+            { workflowStatus: null },
+            { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+          ],
+        },
+      ],
+    },
   );
   assert.deepEqual(
     buildAnalyticsTravelGroupWhere({ onlyShowMarkedRecords: false }),
@@ -52,7 +62,13 @@ test('unit: analytics scope helper composes date ranges and base where clauses',
     {
       AND: [
         { status: { in: ['VALID', 'PARTIAL_REFUND'] } },
-        { orderType: { not: 'AFTER_SALES' } },
+        { orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] } },
+        {
+          OR: [
+            { workflowStatus: null },
+            { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+          ],
+        },
         {
           orderDate: {
             gte: instant('2026-07-01T00:00:00.000Z'),
@@ -164,6 +180,28 @@ test('unit: analytics sales order scope filters finance marks and excludes gener
     matchesWhere(
       {
         orderType: 'AFTER_SALES',
+        financeMark: true,
+      },
+      where,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesWhere(
+      {
+        orderType: 'BUYBACK',
+        workflowStatus: 'APPROVED',
+        financeMark: true,
+      },
+      where,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesWhere(
+      {
+        orderType: 'EXTERNAL',
+        workflowStatus: 'PENDING',
         financeMark: true,
       },
       where,
@@ -315,7 +353,11 @@ function matchesWhere(row, where) {
       }
       continue;
     }
-    if (row[key] !== expected) {
+    if (
+      expected === null
+        ? row[key] !== null && row[key] !== undefined
+        : row[key] !== expected
+    ) {
       return false;
     }
   }
@@ -331,12 +373,19 @@ function isScalarFilter(value) {
   return (
     value &&
     typeof value === 'object' &&
-    ('in' in value || 'not' in value || 'gte' in value || 'lte' in value)
+    ('in' in value ||
+      'notIn' in value ||
+      'not' in value ||
+      'gte' in value ||
+      'lte' in value)
   );
 }
 
 function matchesScalar(actual, filter) {
   if ('in' in filter && !filter.in.includes(actual)) {
+    return false;
+  }
+  if ('notIn' in filter && filter.notIn.includes(actual)) {
     return false;
   }
   if ('not' in filter && actual === filter.not) {

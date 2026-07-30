@@ -167,6 +167,25 @@ export class TravelGroupsNestController {
     };
   }
 
+  @Patch(':id/not-entered')
+  async setNotEntered(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelGroup: await this.businessDataService.setTravelGroupNotEntered(
+        actor,
+        id,
+        body,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      ),
+    };
+  }
+
   @Patch(':id')
   async update(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const JSZip = require('jszip');
 
 const {
   assertErrorContract,
@@ -28,28 +29,34 @@ const {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHANGHAI_TODAY = formatShanghaiBusinessDate(new Date());
+const SHANGHAI_TOMORROW = new Date(
+  Date.parse(`${SHANGHAI_TODAY}T00:00:00.000Z`) + 24 * 60 * 60 * 1000,
+)
+  .toISOString()
+  .slice(0, 10);
 
-test('travel group attachment type and path validation accepts supported documents and rejects unsafe input', () => {
+test('travel group attachment type and path validation accepts supported documents and rejects unsafe input', async () => {
   const supported = [
-    ['photo.jpg', 'image/jpeg'],
-    ['document.pdf', 'application/pdf'],
-    ['document.doc', 'application/msword'],
+    ['photo.jpg', 'image/jpeg', attachmentFixtureForType('image/jpeg')],
+    ['document.pdf', 'application/pdf', validPdfFixture()],
+    ['document.doc', 'application/msword', validOleFixture()],
     [
       'document.docx',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      await validOpenXmlFixture('docx'),
     ],
-    ['sheet.xls', 'application/vnd.ms-excel'],
+    ['sheet.xls', 'application/vnd.ms-excel', validOleFixture()],
     [
       'sheet.xlsx',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      await validOpenXmlFixture('xlsx'),
     ],
-    ['sheet.csv', 'text/csv'],
-    ['notes.txt', 'text/plain'],
+    ['sheet.csv', 'text/csv', Buffer.from('name,value\nsafe,1\n')],
+    ['notes.txt', 'text/plain', Buffer.from('safe notes')],
   ];
 
-  for (const [originalname, mimetype] of supported) {
-    const buffer = attachmentFixtureForType(mimetype);
-    const validated = validateTravelGroupAttachmentFile({
+  for (const [originalname, mimetype, buffer] of supported) {
+    const validated = await validateTravelGroupAttachmentFile({
       buffer,
       mimetype,
       originalname,
@@ -65,7 +72,7 @@ test('travel group attachment type and path validation accepts supported documen
   );
   assert.equal(isSafeAttachmentStorageKey('../escape.txt'), false);
   assert.equal(isSafeAttachmentStorageKey('C:\\private\\escape.txt'), false);
-  assert.throws(
+  await assert.rejects(
     () =>
       validateTravelGroupAttachmentFile({
         buffer: Buffer.from('malware'),
@@ -75,7 +82,7 @@ test('travel group attachment type and path validation accepts supported documen
       }),
     (error) => error?.code === 'UNSUPPORTED_ATTACHMENT_TYPE',
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       validateTravelGroupAttachmentFile({
         buffer: Buffer.from('not-a-real-png'),
@@ -87,8 +94,8 @@ test('travel group attachment type and path validation accepts supported documen
   );
 });
 
-test('attachment aggregate limit uses declared lengths without allocating large buffers', () => {
-  assert.throws(
+test('attachment aggregate limit uses declared lengths without allocating large buffers', async () => {
+  await assert.rejects(
     () =>
       validateTravelGroupAttachmentFile({
         buffer: attachmentFixtureForType('image/png'),
@@ -118,18 +125,34 @@ test('attachment aggregate limit uses declared lengths without allocating large 
 });
 
 test('attachment upload configuration rejects limits above the startup safety cap', () => {
-  const previous = process.env.ATTACHMENT_UPLOAD_MAX_FILES;
+  const previousFiles = process.env.ATTACHMENT_UPLOAD_MAX_FILES;
+  const previousRequestBytes =
+    process.env.ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES;
   process.env.ATTACHMENT_UPLOAD_MAX_FILES = '6';
   try {
     assert.throws(
       () => new AttachmentUploadConfigService(),
       (error) => error?.code === 'ATTACHMENT_UPLOAD_CONFIG_INVALID',
     );
+    delete process.env.ATTACHMENT_UPLOAD_MAX_FILES;
+    process.env.ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES = String(
+      ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE + 1,
+    );
+    assert.throws(
+      () => new AttachmentUploadConfigService(),
+      (error) => error?.code === 'ATTACHMENT_UPLOAD_CONFIG_INVALID',
+    );
   } finally {
-    if (previous === undefined) {
+    if (previousFiles === undefined) {
       delete process.env.ATTACHMENT_UPLOAD_MAX_FILES;
     } else {
-      process.env.ATTACHMENT_UPLOAD_MAX_FILES = previous;
+      process.env.ATTACHMENT_UPLOAD_MAX_FILES = previousFiles;
+    }
+    if (previousRequestBytes === undefined) {
+      delete process.env.ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES;
+    } else {
+      process.env.ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES =
+        previousRequestBytes;
     }
   }
 });
@@ -250,7 +273,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
               type: 'text/plain',
             },
             {
-              content: Buffer.from('%PDF-test'),
+              content: validPdfFixture(),
               name: 'vip-profile.pdf',
               type: 'application/pdf',
             },
@@ -360,7 +383,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           downloadable.id,
         );
         assert.equal(unrelatedTasterDownload.response.status, 200);
-        assert.deepEqual(unrelatedTasterDownload.buffer, Buffer.from('%PDF-test'));
+        assert.deepEqual(unrelatedTasterDownload.buffer, validPdfFixture());
         assert.equal(
           unrelatedTasterDownload.response.headers.get('content-type'),
           'application/pdf',
@@ -389,7 +412,7 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
           downloadable.id,
         );
         assert.equal(scopedSalesDownload.response.status, 200);
-        assert.deepEqual(scopedSalesDownload.buffer, Buffer.from('%PDF-test'));
+        assert.deepEqual(scopedSalesDownload.buffer, validPdfFixture());
 
         const unrelatedUpload = await uploadFiles(
           baseUrl,
@@ -672,6 +695,156 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
   });
 });
 
+test('future liaison can manage attachments while public reads and global mark filtering stay enforced', async () => {
+  await withTemporaryAttachmentStorage(async (storageRoot) => {
+    await withPhase1Server(
+      async (baseUrl) => {
+        const admin = await login(baseUrl);
+        const receptionUser = await createUser(baseUrl, admin.token, {
+          name: 'Future Reception Taster',
+          username: 'future-reception-taster',
+          password: 'Password123',
+          role: 'taster',
+        });
+        const liaisonUser = await createUser(baseUrl, admin.token, {
+          name: 'Future Liaison Taster',
+          username: 'future-liaison-taster',
+          password: 'Password123',
+          role: 'taster',
+        });
+        const publicReaderUser = await createUser(baseUrl, admin.token, {
+          name: 'Future Public Reader',
+          username: 'future-public-reader',
+          password: 'Password123',
+          role: 'taster',
+        });
+        const liaison = await login(
+          baseUrl,
+          liaisonUser.username,
+          'Password123',
+        );
+        const publicReader = await login(
+          baseUrl,
+          publicReaderUser.username,
+          'Password123',
+        );
+        const group = await createTravelGroup(baseUrl, admin.token, {
+          tasterId: receptionUser.id,
+          liaisonTasterId: liaisonUser.id,
+          visitDate: SHANGHAI_TOMORROW,
+        });
+
+        const uploaded = await uploadFiles(
+          baseUrl,
+          liaison.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('future guest attachment'),
+              name: 'future-guests.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assert.equal(uploaded.response.status, 201);
+        assert.equal(
+          uploaded.body.data.travelGroup.canEditByCurrentUser,
+          true,
+        );
+        const attachment = uploaded.body.data.attachments[0];
+
+        const publicDownload = await downloadFile(
+          baseUrl,
+          publicReader.token,
+          group.id,
+          attachment.id,
+        );
+        assert.equal(publicDownload.response.status, 200);
+        assert.deepEqual(
+          publicDownload.buffer,
+          Buffer.from('future guest attachment'),
+        );
+
+        await requestJson(
+          baseUrl,
+          '/api/settings/global-mark-query/enable',
+          {
+            method: 'POST',
+            token: admin.token,
+          },
+        );
+
+        const hiddenDetail = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}`,
+          { token: liaison.token },
+        );
+        assertErrorContract(
+          hiddenDetail,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+        const hiddenDownload = await downloadFile(
+          baseUrl,
+          liaison.token,
+          group.id,
+          attachment.id,
+        );
+        assert.equal(hiddenDownload.response.status, 404);
+        const hiddenUpload = await uploadFiles(
+          baseUrl,
+          liaison.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('must stay hidden'),
+              name: 'hidden.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assertErrorContract(
+          hiddenUpload,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+        const hiddenDelete = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}/attachments/${attachment.id}`,
+          { method: 'DELETE', token: liaison.token },
+        );
+        assertErrorContract(
+          hiddenDelete,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+
+        await requestJson(
+          baseUrl,
+          '/api/settings/global-mark-query/restore',
+          {
+            method: 'POST',
+            token: admin.token,
+          },
+        );
+        const deleted = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}/attachments/${attachment.id}`,
+          { method: 'DELETE', token: liaison.token },
+        );
+        assert.equal(deleted.response.status, 200);
+        assert.equal(
+          deleted.body.data.travelGroup.canEditByCurrentUser,
+          true,
+        );
+      },
+      { env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot } },
+    );
+  });
+});
+
 test('travel group attachment upload removes the physical file when metadata persistence fails', async () => {
   await withTemporaryAttachmentStorage(async (storageRoot) => {
     await withPhase1Server(
@@ -821,10 +994,44 @@ function attachmentFixtureForType(contentType) {
         0x00,
       ]);
     case 'application/pdf':
-      return Buffer.from('%PDF-test');
+      return validPdfFixture();
     default:
       return Buffer.from('test');
   }
+}
+
+function validPdfFixture() {
+  return Buffer.from(
+    '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n' +
+      'trailer\n<< /Root 1 0 R >>\nstartxref\n9\n%%EOF\n',
+  );
+}
+
+function validOleFixture() {
+  const buffer = Buffer.alloc(512);
+  Buffer.from([
+    0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
+  ]).copy(buffer);
+  return buffer;
+}
+
+async function validOpenXmlFixture(kind) {
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    kind === 'docx'
+      ? '<Types><Override PartName="/word/document.xml" /></Types>'
+      : '<Types><Override PartName="/xl/workbook.xml" /></Types>',
+  );
+  if (kind === 'docx') {
+    zip.file('word/document.xml', '<document />');
+  } else {
+    zip.file('xl/workbook.xml', '<workbook />');
+  }
+  return zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+  });
 }
 
 function assertSafeAttachmentDto(attachment, expectedCategory) {

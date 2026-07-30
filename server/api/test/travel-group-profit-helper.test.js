@@ -270,6 +270,219 @@ test('unit: travel group estimated profit preserves negative values', () => {
   assert.equal(result.estimatedProfitRate, -1.7);
 });
 
+test('unit: marked mixed payments add per-order tax and same-day adjusted service fees', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-fees'),
+    salesOrders: [
+      order('order-fees', {
+        financeMark: true,
+        taxRateSnapshot: '0.010000',
+        status: 'PARTIAL_REFUND',
+        totalAmountCents: 10000,
+        items: [item('fee-line', 10000, 3000)],
+        paymentDetails: [
+          paymentDetail('wallet-detail', 'wallet', '收钱吧', 6000, '0.006000'),
+          paymentDetail('card-detail', 'card', '银行卡', 4000, '0.010000'),
+        ],
+        afterSalesOrders: [
+          {
+            id: 'same-day-refund',
+            refundAmountCents: 1000,
+            financeConfirmed: true,
+            refundPaymentDetailId: 'wallet-detail',
+            refundOccurredAt: '2026-06-01T15:59:59.000Z',
+            deductsPaymentServiceFee: true,
+          },
+        ],
+      }),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.effectiveSalesAmountCents, 9000);
+  assert.equal(result.taxFeeCents, 90);
+  assert.equal(result.paymentServiceFeeCents, 70);
+  assert.equal(result.totalExpenseCents, 3860);
+  assert.equal(result.estimatedProfitCents, 5140);
+  assert.deepEqual(result.paymentMethodFeeBreakdown, [
+    {
+      paymentMethodId: 'wallet',
+      paymentMethodNameSnapshot: '收钱吧',
+      serviceFeeRateSnapshot: '0.006000',
+      originalPaymentAmountCents: 6000,
+      sameDayRefundAmountCents: 1000,
+      serviceFeeBaseAmountCents: 5000,
+      serviceFeeCents: 30,
+      orderCount: 1,
+    },
+    {
+      paymentMethodId: 'card',
+      paymentMethodNameSnapshot: '银行卡',
+      serviceFeeRateSnapshot: '0.010000',
+      originalPaymentAmountCents: 4000,
+      sameDayRefundAmountCents: 0,
+      serviceFeeBaseAmountCents: 4000,
+      serviceFeeCents: 40,
+      orderCount: 1,
+    },
+  ]);
+});
+
+test('unit: a full cross-day refund keeps the captured payment service fee', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-cross-day'),
+    salesOrders: [
+      order('order-cross-day', {
+        financeMark: true,
+        taxRateSnapshot: '0.01',
+        status: 'PARTIAL_REFUND',
+        totalAmountCents: 10000,
+        items: [item('cross-day-line', 10000, 3000)],
+        paymentDetails: [
+          paymentDetail(
+            'cross-day-detail',
+            'wallet',
+            '收钱吧',
+            10000,
+            '0.006',
+          ),
+        ],
+        afterSalesOrders: [
+          {
+            id: 'cross-day-refund',
+            refundAmountCents: 10000,
+            financeConfirmed: true,
+            refundPaymentDetailId: null,
+            refundOccurredAt: '2026-06-01T16:00:00.000Z',
+            deductsPaymentServiceFee: false,
+          },
+        ],
+      }),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.effectiveSalesAmountCents, 0);
+  assert.equal(result.taxFeeCents, 0);
+  assert.equal(result.paymentServiceFeeCents, 60);
+  assert.equal(
+    result.paymentMethodFeeBreakdown[0].sameDayRefundAmountCents,
+    0,
+  );
+  assert.equal(
+    result.paymentMethodFeeBreakdown[0].serviceFeeBaseAmountCents,
+    10000,
+  );
+});
+
+test('unit: missing marked-order fee snapshots stay null and make profit incomplete', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-missing-fee'),
+    salesOrders: [
+      order('order-missing-fee', {
+        financeMark: true,
+        taxRateSnapshot: null,
+        paymentDetails: [
+          paymentDetail(
+            'missing-fee-detail',
+            'wallet',
+            '收钱吧',
+            10000,
+            null,
+          ),
+        ],
+      }),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.taxFeeCents, null);
+  assert.equal(result.paymentServiceFeeCents, null);
+  assert.equal(result.calculationStatus, 'incomplete');
+  assert.equal(result.estimatedProfitCents, null);
+  assert.ok(
+    result.warnings.some(
+      (warning) =>
+        warning.code === 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
+    ),
+  );
+  assert.equal(
+    result.paymentMethodFeeBreakdown[0].serviceFeeCents,
+    null,
+  );
+});
+
+test('unit: payment fee breakdown groups by method id, name snapshot, and rate snapshot with distinct order counts', () => {
+  const makeOrder = (id, paymentMethodNameSnapshot, rate) =>
+    order(id, {
+      financeMark: true,
+      taxRateSnapshot: '0.01',
+      totalAmountCents: 1000,
+      items: [item(`${id}-line`, 1000, 100)],
+      paymentDetails: [
+        paymentDetail(
+          `${id}-payment`,
+          'shared-method',
+          paymentMethodNameSnapshot,
+          1000,
+          rate,
+        ),
+      ],
+    });
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-breakdown'),
+    salesOrders: [
+      makeOrder('order-a', '收钱吧', '0.006000'),
+      makeOrder('order-b', '收钱吧', '0.006000'),
+      makeOrder('order-c', '收钱吧（旧名称）', '0.006000'),
+      makeOrder('order-d', '收钱吧', '0.010000'),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.paymentMethodFeeBreakdown.length, 3);
+  assert.deepEqual(
+    result.paymentMethodFeeBreakdown.map((row) => ({
+      name: row.paymentMethodNameSnapshot,
+      rate: row.serviceFeeRateSnapshot,
+      original: row.originalPaymentAmountCents,
+      orderCount: row.orderCount,
+    })),
+    [
+      {
+        name: '收钱吧',
+        rate: '0.006000',
+        original: 2000,
+        orderCount: 2,
+      },
+      {
+        name: '收钱吧（旧名称）',
+        rate: '0.006000',
+        original: 1000,
+        orderCount: 1,
+      },
+      {
+        name: '收钱吧',
+        rate: '0.010000',
+        original: 1000,
+        orderCount: 1,
+      },
+    ],
+  );
+});
+
 function group(id, overrides = {}) {
   return {
     id,
@@ -322,5 +535,22 @@ function commission(salesOrderId, targetType, amountCents) {
     targetType,
     amountCents,
     pointsCents: 0,
+  };
+}
+
+function paymentDetail(
+  id,
+  paymentMethodId,
+  paymentMethodNameSnapshot,
+  amountCents,
+  serviceFeeRateSnapshot,
+) {
+  return {
+    id,
+    paymentMethodId,
+    paymentMethodNameSnapshot,
+    amountCents,
+    serviceFeeRateSnapshot,
+    serviceFeeBaseAmountSnapshotCents: amountCents,
   };
 }

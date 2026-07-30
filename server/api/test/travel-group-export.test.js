@@ -97,6 +97,117 @@ test('GET /api/travel-groups/export.xlsx allows admin and finance only and retur
   );
 });
 
+test('GET /api/travel-groups supports license plate keyword search without weakening filters or role scopes', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const taster = await login(
+        baseUrl,
+        'taster-group-search',
+        'Password123',
+      );
+
+      const fullMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent('贵A12345')}`,
+        { token: admin.token },
+      );
+      assert.equal(fullMatch.response.status, 200);
+      assert.deepEqual(
+        fullMatch.body.data.travelGroups.map((group) => group.groupNo),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const paddedMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent('  贵A12345  ')}`,
+        { token: admin.token },
+      );
+      assert.equal(paddedMatch.response.status, 200);
+      assert.deepEqual(
+        paddedMatch.body.data.travelGroups.map((group) => group.groupNo),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const partialMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent('A123')}`,
+        { token: admin.token },
+      );
+      assert.equal(partialMatch.response.status, 200);
+      assert.deepEqual(
+        partialMatch.body.data.travelGroups.map((group) => group.groupNo),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const noMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent('贵C00000')}`,
+        { token: admin.token },
+      );
+      assert.equal(noMatch.response.status, 200);
+      assert.deepEqual(noMatch.body.data.travelGroups, []);
+
+      const existingKeywordMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent(
+          'Alpha Travel Agency',
+        )}`,
+        { token: admin.token },
+      );
+      assert.equal(existingKeywordMatch.response.status, 200);
+      assert.deepEqual(
+        existingKeywordMatch.body.data.travelGroups.map(
+          (group) => group.groupNo,
+        ),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const combinedQuery =
+        `keyword=${encodeURIComponent('A123')}` +
+        '&travelAgency=Alpha%20Travel%20Agency' +
+        '&dateFrom=2026-07-01&dateTo=2026-07-01' +
+        '&groupType=vip&financeMark=true';
+      const combinedMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?${combinedQuery}`,
+        { token: admin.token },
+      );
+      assert.equal(combinedMatch.response.status, 200);
+      assert.deepEqual(
+        combinedMatch.body.data.travelGroups.map((group) => group.groupNo),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const scopedMatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups?keyword=${encodeURIComponent('12345')}`,
+        { token: taster.token },
+      );
+      assert.equal(scopedMatch.response.status, 200);
+      assert.deepEqual(
+        scopedMatch.body.data.travelGroups.map((group) => group.groupNo),
+        ['TG-EXPORT-ALPHA'],
+      );
+
+      const download = await requestBinary(
+        baseUrl,
+        `/api/travel-groups/export.xlsx?${combinedQuery}`,
+        { token: admin.token },
+      );
+      assert.equal(download.response.status, 200);
+      const worksheet = await loadTravelGroupsWorksheet(download.buffer);
+      assert.deepEqual(
+        readDataRows(worksheet).map((row) => row['团号']),
+        ['TG-EXPORT-ALPHA'],
+      );
+    },
+    {
+      prisma: buildTravelGroupSearchPrismaOptions(),
+    },
+  );
+});
+
 test('GET /api/travel-groups/export.xlsx reuses filters and exports documented core fields', async () => {
   await withPhase1Server(
     async (baseUrl) => {
@@ -445,4 +556,19 @@ function buildTravelGroupExportPrismaOptions() {
       },
     ],
   };
+}
+
+function buildTravelGroupSearchPrismaOptions() {
+  const options = buildTravelGroupExportPrismaOptions();
+  options.users.push({
+    id: 'usr_taster_group_search',
+    name: 'Group Search Taster',
+    username: 'taster-group-search',
+    password: 'Password123',
+    role: 'taster',
+  });
+  options.travelGroups[0].tasterId = 'usr_taster_group_search';
+  options.travelGroups[1].licensePlate = '贵B12345';
+  options.travelGroups[1].tasterId = 'usr_other_group_search_taster';
+  return options;
 }

@@ -98,6 +98,7 @@ test('contract: sales order items snapshot active products and date-effective ac
       method: 'PATCH',
       token: admin.token,
       body: {
+        cashOnDeliveryAmountCents: 0,
         items: [
           {
             id: order.items[0].id,
@@ -124,6 +125,7 @@ test('contract: sales order items snapshot active products and date-effective ac
         method: 'PATCH',
         token: admin.token,
         body: {
+          cashOnDeliveryAmountCents: 0,
           items: [
             {
               id: order.items[0].id,
@@ -285,6 +287,7 @@ test('contract: historical order and tasting rows with null product or cost rema
           method: 'PATCH',
           token: admin.token,
           body: {
+            cashOnDeliveryAmountCents: 0,
             items: [
               {
                 id: 'historical-item-null-cost',

@@ -239,6 +239,7 @@ test('quantity sales orders: all seven write paths share stable reservation/outb
           method: 'PATCH',
           token: sales.token,
           body: {
+            cashOnDeliveryAmountCents: order.cashOnDeliveryAmountCents,
             status: 'valid',
             financeRemark: 'combined finance field',
             warehouseRemark: 'combined packing field',
@@ -286,6 +287,7 @@ test('quantity sales orders: all seven write paths share stable reservation/outb
           method: 'PATCH',
           token: admin.token,
           body: {
+            cashOnDeliveryAmountCents: order.cashOnDeliveryAmountCents,
             items: order.items.map((item) => ({
               id: item.id,
               productId: item.productId,
@@ -445,6 +447,7 @@ test('quantity sales orders: all seven write paths share stable reservation/outb
           method: 'PATCH',
           token: admin.token,
           body: {
+            cashOnDeliveryAmountCents: order.cashOnDeliveryAmountCents,
             items: order.items.map((item) => ({
               id: item.id,
               productId: item.productId,

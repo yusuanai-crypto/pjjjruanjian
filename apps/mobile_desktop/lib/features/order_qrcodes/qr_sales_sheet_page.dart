@@ -200,8 +200,7 @@ class _QrSalesSheetPageState extends State<QrSalesSheetPage> {
       _sheetErrorMessage = null;
     });
     try {
-      final salesSheet =
-          await _businessApi.revokeSalesOrderQrCode(order.id);
+      final salesSheet = await _businessApi.revokeSalesOrderQrCode(order.id);
       if (!mounted) {
         return;
       }
@@ -624,9 +623,8 @@ class _QrActionSection extends StatelessWidget {
               ),
               FilledButton.icon(
                 key: const ValueKey('qr-sales-generate-button'),
-                onPressed: loadingSheet || generating || revoking
-                    ? null
-                    : onGenerate,
+                onPressed:
+                    loadingSheet || generating || revoking ? null : onGenerate,
                 icon: generating
                     ? const SizedBox.square(
                         dimension: 16,
@@ -847,14 +845,64 @@ class _SalesSheetCoreInfo extends StatelessWidget {
             MoneyText(cents: sheet.amounts.totalAmountCents, prominent: true),
           ],
         ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            const Expanded(child: Text('货到付款')),
-            MoneyText(cents: sheet.amounts.cashOnDeliveryAmountCents),
-          ],
-        ),
+        const SizedBox(height: 12),
+        const _SectionTitle('收款明细'),
+        if (sheet.paymentDetails.isEmpty)
+          const Text('暂无收款明细')
+        else
+          _SalesSheetPaymentDetailsTable(
+            details: sheet.paymentDetails,
+          ),
       ],
+    );
+  }
+}
+
+class _SalesSheetPaymentDetailsTable extends StatelessWidget {
+  const _SalesSheetPaymentDetailsTable({required this.details});
+
+  final List<SalesSheetPaymentDetailRecord> details;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        key: const ValueKey('qr-sales-payment-details-table'),
+        columnSpacing: 22,
+        dataRowMinHeight: 52,
+        dataRowMaxHeight: 92,
+        columns: const [
+          DataColumn(label: Text('收款方式')),
+          DataColumn(label: Text('金额'), numeric: true),
+          DataColumn(label: Text('收款属性')),
+          DataColumn(label: Text('确认状态')),
+        ],
+        rows: [
+          for (final detail in details)
+            DataRow(
+              key: ValueKey('qr-sales-payment-detail-${detail.id}'),
+              cells: [
+                DataCell(
+                  Text(
+                    detail.paymentMethodNameSnapshot,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                DataCell(MoneyText(cents: detail.amountCents)),
+                DataCell(Text(detail.paymentMethodCategoryLabel)),
+                DataCell(
+                  Text(
+                    _salesSheetPaymentConfirmationText(detail),
+                    key: ValueKey(
+                      'qr-sales-payment-confirmation-${detail.id}',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }
@@ -920,7 +968,8 @@ class _QrPanel extends StatelessWidget {
         if (localUrl) ...[
           const SizedBox(height: 10),
           const StatusTag(
-            label: '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
+            label:
+                '当前二维码链接为本机地址，手机无法直接打开，请配置 PUBLIC_SALES_SHEET_BASE_URL 为公网地址。',
             tone: StatusTone.warning,
           ),
         ],
@@ -1129,6 +1178,23 @@ String _invoiceLabel(SalesSheetInvoiceRecord invoice) {
   return '$required · $issued';
 }
 
+String _salesSheetPaymentConfirmationText(
+  SalesSheetPaymentDetailRecord detail,
+) {
+  if (!detail.agencyCollectionConfirmed) {
+    return detail.confirmationStatusLabel;
+  }
+  final confirmer = detail.agencyCollectionConfirmedByName ??
+      detail.agencyCollectionConfirmedById;
+  final parts = <String>[
+    detail.confirmationStatusLabel,
+    if (_hasText(confirmer)) '确认人：${confirmer!.trim()}',
+    if (_hasText(detail.agencyCollectionConfirmedAt))
+      '确认时间：${detail.agencyCollectionConfirmedAt!.trim()}',
+  ];
+  return parts.join('\n');
+}
+
 String _expiresLabel(SalesSheetQrCode? qrCode) {
   if (qrCode == null) {
     return '未生成';
@@ -1161,7 +1227,9 @@ bool _isLocalhostUrl(String value) {
       host.endsWith('.local')) {
     return true;
   }
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+  if (host.startsWith('fc') ||
+      host.startsWith('fd') ||
+      host.startsWith('fe80')) {
     return true;
   }
   final octets = host.split('.').map(int.tryParse).toList();

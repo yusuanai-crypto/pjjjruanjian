@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,11 +10,67 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
+import '../../core/crash_reporting/crash_reporter.dart';
+import '../../shared/image_export_memory_policy.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../travel_group_finance/travel_group_finance_supplement_page.dart';
 
 const guidePointsImageAlbumName = '贵州酱酒馆导游积分表';
+const guidePointsImageExportPageSize = 8;
+
+typedef GuidePointsImagePageRenderer = Future<Uint8List> Function(
+  GuidePointsImageExportPage page,
+);
+
+class GuidePointsImageExportPage {
+  const GuidePointsImageExportPage({
+    required this.records,
+    required this.pageNumber,
+    required this.totalPages,
+    required this.exportId,
+  });
+
+  final List<GuidePointsSummaryRecord> records;
+  final int pageNumber;
+  final int totalPages;
+  final int exportId;
+
+  String get fileName {
+    final baseName = '导游积分表-$exportId';
+    return totalPages == 1 ? '$baseName.png' : '$baseName-第$pageNumber页.png';
+  }
+}
+
+List<List<T>> paginateGuidePointsImageRecords<T>(List<T> records) {
+  return [
+    for (var start = 0;
+        start < records.length;
+        start += guidePointsImageExportPageSize)
+      records.sublist(
+        start,
+        (start + guidePointsImageExportPageSize)
+            .clamp(0, records.length)
+            .toInt(),
+      ),
+  ];
+}
+
+List<GuidePointsImageExportPage> buildGuidePointsImageExportPages(
+  List<GuidePointsSummaryRecord> records, {
+  required int exportId,
+}) {
+  final recordPages = paginateGuidePointsImageRecords(records);
+  return [
+    for (var index = 0; index < recordPages.length; index += 1)
+      GuidePointsImageExportPage(
+        records: recordPages[index],
+        pageNumber: index + 1,
+        totalPages: recordPages.length,
+        exportId: exportId,
+      ),
+  ];
+}
 
 class GuidePointsTablePage extends StatefulWidget {
   const GuidePointsTablePage({
@@ -23,6 +79,7 @@ class GuidePointsTablePage extends StatefulWidget {
     required this.token,
     required this.role,
     this.imageSaver = saveFinanceImage,
+    this.imagePageRenderer,
     this.documentsDirectoryProvider,
   });
 
@@ -30,6 +87,7 @@ class GuidePointsTablePage extends StatefulWidget {
   final String token;
   final UserRole role;
   final FinanceImageSaver imageSaver;
+  final GuidePointsImagePageRenderer? imagePageRenderer;
   final Future<Directory> Function()? documentsDirectoryProvider;
 
   @override
@@ -39,7 +97,7 @@ class GuidePointsTablePage extends StatefulWidget {
 class _GuidePointsTablePageState extends State<GuidePointsTablePage> {
   late BusinessApi _businessApi;
   late final TextEditingController _queryController;
-  final GlobalKey _imageBoundaryKey = GlobalKey();
+  final List<GlobalKey> _imageBoundaryKeys = [];
   final Map<String, GuidePointsSummaryRecord> _details = {};
   final Set<String> _loadingDetailIds = {};
   final Set<String> _busyKeys = {};
@@ -318,48 +376,137 @@ class _GuidePointsTablePageState extends State<GuidePointsTablePage> {
     setState(() {
       _exportingImage = true;
       _errorMessage = null;
+      _successMessage = null;
     });
-    try {
-      await WidgetsBinding.instance.endOfFrame;
-      final boundary = _imageBoundaryKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
-      if (boundary == null) {
-        throw const FinanceImageSaveException('导游积分表图片尚未准备完成。');
-      }
-      final image = await boundary.toImage(pixelRatio: 2);
+    final pages = buildGuidePointsImageExportPages(
+      _summaries,
+      exportId: DateTime.now().millisecondsSinceEpoch,
+    );
+    CrashReporting.setUserAction('export_guide_points_images');
+    CrashReporting.breadcrumb(
+      'guide_points_image_export.start',
+      data: {
+        'recordCount': _summaries.length,
+        'pageCount': pages.length,
+        'recordsPerPage': guidePointsImageExportPageSize,
+      },
+    );
+    var successCount = 0;
+    final failures = <String>[];
+    await WidgetsBinding.instance.endOfFrame;
+    for (var index = 0; index < pages.length; index += 1) {
+      final page = pages[index];
+      CrashReporting.breadcrumb(
+        'guide_points_image_export.page_start',
+        data: {
+          'pageNumber': page.pageNumber,
+          'pageCount': page.totalPages,
+          'recordCount': page.records.length,
+        },
+      );
       try {
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (bytes == null) {
+        final bytes = await (widget.imagePageRenderer?.call(page) ??
+            _renderGuidePointsPageBytes(index));
+        if (bytes.isEmpty) {
           throw const FinanceImageSaveException('导游积分表图片生成失败。');
         }
         await widget.imageSaver(
-          bytes.buffer.asUint8List(),
+          bytes,
           album: guidePointsImageAlbumName,
-          name: '导游积分表-${DateTime.now().millisecondsSinceEpoch}.png',
+          name: page.fileName,
         );
-      } finally {
-        image.dispose();
+        successCount += 1;
+        CrashReporting.breadcrumb(
+          'guide_points_image_export.page_success',
+          data: {
+            'pageNumber': page.pageNumber,
+            'pageCount': page.totalPages,
+            'encodedSizeBytes': bytes.length,
+          },
+        );
+      } catch (error, stackTrace) {
+        CrashReporting.breadcrumb(
+          'guide_points_image_export.page_failure',
+          data: {
+            'pageNumber': page.pageNumber,
+            'pageCount': page.totalPages,
+            'exceptionType': error.runtimeType.toString(),
+          },
+        );
+        unawaited(
+          CrashReporting.recordError(
+            error,
+            stackTrace,
+            source: 'guide_points.image_export',
+            context: {
+              'pageNumber': page.pageNumber,
+              'pageCount': page.totalPages,
+              'recordCount': page.records.length,
+            },
+          ),
+        );
+        failures.add(
+          '第${page.pageNumber}页：${_messageForGuidePointsError(error)}',
+        );
       }
-      if (!mounted) {
-        return;
+    }
+    CrashReporting.breadcrumb(
+      'guide_points_image_export.complete',
+      data: {
+        'pageCount': pages.length,
+        'successCount': successCount,
+        'failureCount': failures.length,
+      },
+    );
+    if (!mounted) {
+      return;
+    }
+    final message = failures.isEmpty
+        ? '导游积分表图片已生成，共 $successCount 页'
+        : '导游积分表导出完成：成功 $successCount 页，失败 '
+            '${failures.length} 页；${failures.join('；')}';
+    setState(() {
+      _exportingImage = false;
+      if (failures.isEmpty) {
+        _successMessage = message;
+      } else {
+        _errorMessage = message;
       }
-      setState(() {
-        _exportingImage = false;
-        _successMessage = '导游积分表图片已生成';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _exportingImage = false;
-        _errorMessage = _messageForGuidePointsError(error);
-      });
+    });
+  }
+
+  Future<Uint8List> _renderGuidePointsPageBytes(int pageIndex) async {
+    final boundary = pageIndex < _imageBoundaryKeys.length
+        ? _imageBoundaryKeys[pageIndex].currentContext?.findRenderObject()
+            as RenderRepaintBoundary?
+        : null;
+    if (boundary == null) {
+      throw const FinanceImageSaveException('导游积分表图片尚未准备完成。');
+    }
+    try {
+      return await renderRepaintBoundaryPngWithinPixelBudget(boundary);
+    } on ExportImagePixelBudgetException catch (error) {
+      throw FinanceImageSaveException(error.message);
+    } catch (_) {
+      throw const FinanceImageSaveException(
+        '导游积分表图片生成失败，请重试或减少单次导出记录。',
+      );
+    }
+  }
+
+  void _ensureImageBoundaryKeys(int pageCount) {
+    while (_imageBoundaryKeys.length < pageCount) {
+      _imageBoundaryKeys.add(GlobalKey());
+    }
+    if (_imageBoundaryKeys.length > pageCount) {
+      _imageBoundaryKeys.removeRange(pageCount, _imageBoundaryKeys.length);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final summaryPages = paginateGuidePointsImageRecords(_summaries);
+    _ensureImageBoundaryKeys(summaryPages.length);
     final totalNet = _summaries.fold<int>(
       0,
       (sum, summary) => sum + summary.totalNetAmountCents,
@@ -473,34 +620,43 @@ class _GuidePointsTablePageState extends State<GuidePointsTablePage> {
               child: Center(child: Text('当前筛选范围内暂无走个人订单')),
             )
           else
-            RepaintBoundary(
-              key: _imageBoundaryKey,
-              child: ColoredBox(
-                color: Theme.of(context).colorScheme.surface,
-                child: Column(
-                  children: [
-                    for (final summary in _summaries)
-                      _GuideSummaryCard(
-                        key: ValueKey(
-                          'guide-points-summary-${summary.travelGroupId}-'
-                          '${summary.guideId}',
-                        ),
-                        summary: _details[summary.id] ?? summary,
-                        canMaintain: _canMaintain,
-                        loadingDetail: _loadingDetailIds.contains(summary.id),
-                        busyKeys: _busyKeys,
-                        onExpanded: () => _loadDetail(summary.id),
-                        onSetDailyPaid: (value) =>
-                            _setPaid(summary, 'daily', value),
-                        onSetMonthlyPaid: (value) =>
-                            _setPaid(summary, 'monthly', value),
-                        onEditRates: (order) => _editOrderRates(
-                          _details[summary.id] ?? summary,
-                          order,
-                        ),
+            ColoredBox(
+              color: Theme.of(context).colorScheme.surface,
+              child: Column(
+                children: [
+                  for (var pageIndex = 0;
+                      pageIndex < summaryPages.length;
+                      pageIndex += 1)
+                    RepaintBoundary(
+                      key: _imageBoundaryKeys[pageIndex],
+                      child: Column(
+                        children: [
+                          for (final summary in summaryPages[pageIndex])
+                            _GuideSummaryCard(
+                              key: ValueKey(
+                                'guide-points-summary-'
+                                '${summary.travelGroupId}-'
+                                '${summary.guideId}',
+                              ),
+                              summary: _details[summary.id] ?? summary,
+                              canMaintain: _canMaintain,
+                              loadingDetail:
+                                  _loadingDetailIds.contains(summary.id),
+                              busyKeys: _busyKeys,
+                              onExpanded: () => _loadDetail(summary.id),
+                              onSetDailyPaid: (value) =>
+                                  _setPaid(summary, 'daily', value),
+                              onSetMonthlyPaid: (value) =>
+                                  _setPaid(summary, 'monthly', value),
+                              onEditRates: (order) => _editOrderRates(
+                                _details[summary.id] ?? summary,
+                                order,
+                              ),
+                            ),
+                        ],
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
             ),
         ],

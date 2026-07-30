@@ -14,12 +14,14 @@ import '../features/guide_points/guide_points_table_page.dart';
 import '../features/order_qrcodes/qr_sales_sheet_page.dart';
 import '../features/order_query/order_query_page.dart';
 import '../features/operation_logs/operation_logs_page.dart';
+import '../features/payment_methods/payment_method_management_page.dart';
 import '../features/moutai_inventory/moutai_inventory_page.dart';
 import '../features/product_management/product_management_page.dart';
 import '../features/profit_analysis/profit_analysis_page.dart';
 import '../features/reconciliation/reconciliation_table_page.dart';
 import '../features/role_menu/role_menu_page.dart';
 import '../features/sales_orders/order_form_entry_page.dart';
+import '../features/special_orders/special_orders_page.dart';
 import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
 import '../features/todo_reminders/todo_reminder_controller.dart';
@@ -118,6 +120,12 @@ Widget buildPageForDestination({
       return OrderFormEntryPage(apiClient: apiClient, token: token, role: role);
     case 'order_query':
       return OrderQueryPage(apiClient: apiClient, token: token, role: role);
+    case 'special_orders':
+      return SpecialOrdersPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
     case 'qr_sales_sheet':
       return QrSalesSheetPage(apiClient: apiClient, token: token);
     case 'taster_summary':
@@ -133,6 +141,12 @@ Widget buildPageForDestination({
       return FinanceQueryPage(apiClient: apiClient, token: token, role: role);
     case 'commission_rules':
       return CommissionRuleConfigPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+      );
+    case 'payment_method_management':
+      return PaymentMethodManagementPage(
         apiClient: apiClient,
         token: token,
         role: role,

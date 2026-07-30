@@ -45,6 +45,33 @@ test('smoke: migration defaults historical orders to agency and creates independ
   assert.match(migration, /`monthly_points_paid` BOOLEAN NOT NULL DEFAULT false/);
 });
 
+test('smoke: partial personal migration backfills historical whole-personal orders and adds refund bounds', () => {
+  const migration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '..',
+      'prisma',
+      'migrations',
+      '20260729000400_partial_personal_points_split',
+      'migration.sql',
+    ),
+    'utf8',
+  );
+  assert.match(
+    migration,
+    /WHEN `points_destination` = 'guide_personal'\s+THEN `total_amount_cents`/,
+  );
+  assert.match(migration, /sales_orders_personal_amount_bounds_chk/);
+  assert.match(
+    migration,
+    /after_sales_orders_personal_refund_bounds_chk/,
+  );
+  assert.match(
+    migration,
+    /WHEN `source_order`\.`personal_amount_cents` > 0\s+THEN `after_sales`\.`refund_amount_cents`/,
+  );
+});
+
 test('unit: guide points menu and permissions match the four-role matrix', () => {
   for (const role of ['super_admin', 'admin', 'finance', 'boss']) {
     assert.ok(
@@ -89,6 +116,8 @@ test('contract: guide personal points split ordinary and guide summaries by grou
 
     const initialOrder = await getOrder(baseUrl, admin.token, ORDER_A_ID);
     assert.equal(initialOrder.pointsDestination, 'TRAVEL_AGENCY');
+    assert.equal(initialOrder.personalAmountCents, 0);
+    assert.equal(initialOrder.normalAmountCents, 10000);
     assert.equal(initialOrder.personalPointsGuideId, null);
 
     const firstSwitch = await switchDestination(
@@ -96,7 +125,7 @@ test('contract: guide personal points split ordinary and guide summaries by grou
       admin.token,
       ORDER_A_ID,
       {
-        pointsDestination: 'GUIDE_PERSONAL',
+        personalAmountCents: 3000,
         guideId: GUIDE_A_ID,
       },
     );
@@ -104,6 +133,14 @@ test('contract: guide personal points split ordinary and guide summaries by grou
     assert.equal(
       firstSwitch.body.data.salesOrder.pointsDestination,
       'GUIDE_PERSONAL',
+    );
+    assert.equal(
+      firstSwitch.body.data.salesOrder.personalAmountCents,
+      3000,
+    );
+    assert.equal(
+      firstSwitch.body.data.salesOrder.normalAmountCents,
+      7000,
     );
     assert.equal(
       firstSwitch.body.data.salesOrder.personalDailyRebateRate,
@@ -115,20 +152,20 @@ test('contract: guide personal points split ordinary and guide summaries by grou
     );
 
     let ordinary = await getOrdinarySummary(baseUrl, admin.token);
-    assert.equal(ordinary.totalSalesAmountCents, 20000);
+    assert.equal(ordinary.totalSalesAmountCents, 27000);
     assert.equal(ordinary.confirmedRefundAmountCents, 2000);
-    assert.equal(ordinary.effectiveSalesAmountCents, 18000);
+    assert.equal(ordinary.effectiveSalesAmountCents, 25000);
 
     let guideSummaries = await listGuideSummaries(baseUrl, admin.token);
     assert.equal(guideSummaries.length, 1);
     assertGuideAmounts(guideSummaries[0], {
       guideId: GUIDE_A_ID,
       orderCount: 1,
-      sales: 10000,
+      sales: 3000,
       refund: 0,
-      effective: 10000,
-      net: 10000,
-      daily: 5000,
+      effective: 3000,
+      net: 3000,
+      daily: 1500,
       monthly: 0,
     });
 
@@ -137,7 +174,7 @@ test('contract: guide personal points split ordinary and guide summaries by grou
       admin.token,
       ORDER_B_ID,
       {
-        pointsDestination: 'GUIDE_PERSONAL',
+        personalAmountCents: 15000,
         guideId: GUIDE_B_ID,
         dailyRebateRate: '0.2500',
         monthlyRebateRate: '0.1000',
@@ -147,17 +184,9 @@ test('contract: guide personal points split ordinary and guide summaries by grou
 
     ordinary = await getOrdinarySummary(baseUrl, admin.token);
     assert.equal(ordinary.travelGroupId, GROUP_ID);
-    for (const field of [
-      'totalSalesAmountCents',
-      'confirmedRefundAmountCents',
-      'effectiveSalesAmountCents',
-      'totalAgencyDeductionCents',
-      'totalAgencyNetAmountCents',
-      'totalDailyRebateCents',
-      'totalMonthlyRebateCents',
-    ]) {
-      assert.equal(ordinary[field], 0, field);
-    }
+    assert.equal(ordinary.totalSalesAmountCents, 12000);
+    assert.equal(ordinary.confirmedRefundAmountCents, 2000);
+    assert.equal(ordinary.effectiveSalesAmountCents, 10000);
 
     guideSummaries = await listGuideSummaries(baseUrl, admin.token);
     assert.equal(guideSummaries.length, 2);
@@ -167,12 +196,12 @@ test('contract: guide personal points split ordinary and guide summaries by grou
     assertGuideAmounts(guideB, {
       guideId: GUIDE_B_ID,
       orderCount: 1,
-      sales: 20000,
-      refund: 2000,
-      effective: 18000,
-      net: 18000,
-      daily: 4500,
-      monthly: 1800,
+      sales: 15000,
+      refund: 0,
+      effective: 15000,
+      net: 15000,
+      daily: 3750,
+      monthly: 1500,
     });
 
     const guideBDetail = await getGuideSummary(
@@ -201,16 +230,16 @@ test('contract: guide personal points split ordinary and guide summaries by grou
         id: ORDER_B_ID,
         orderNo: 'SO-GUIDE-POINTS-B',
         customerName: '个人积分客户乙',
-        grossAmountCents: 20000,
-        confirmedRefundAmountCents: 2000,
-        effectiveAmountCents: 18000,
+        grossAmountCents: 15000,
+        confirmedRefundAmountCents: 0,
+        effectiveAmountCents: 15000,
         liquorCostDeductionCents: 0,
-        netAmountCents: 18000,
+        netAmountCents: 15000,
         guideId: GUIDE_B_ID,
         dailyRebateRate: '0.2500',
-        dailyPointsCents: 4500,
+        dailyPointsCents: 3750,
         monthlyRebateRate: '0.1000',
-        monthlyPointsCents: 1800,
+        monthlyPointsCents: 1500,
       },
     );
 
@@ -229,7 +258,7 @@ test('contract: guide personal points split ordinary and guide summaries by grou
     assert.equal(rateChange.response.status, 200, bodyText(rateChange));
     assert.equal(
       rateChange.body.data.guidePointsSummary.totalDailyPointsCents,
-      5999,
+      5000,
     );
     assert.equal(
       rateChange.body.data.guidePointsSummary.totalMonthlyPointsCents,
@@ -240,12 +269,12 @@ test('contract: guide personal points split ordinary and guide summaries by grou
       baseUrl,
       admin.token,
       ORDER_B_ID,
-      { pointsDestination: 'TRAVEL_AGENCY' },
+      { personalAmountCents: 0 },
     );
     assert.equal(back.response.status, 200, bodyText(back));
     ordinary = await getOrdinarySummary(baseUrl, admin.token);
-    assert.equal(ordinary.totalSalesAmountCents, 20000);
-    assert.equal(ordinary.effectiveSalesAmountCents, 18000);
+    assert.equal(ordinary.totalSalesAmountCents, 27000);
+    assert.equal(ordinary.effectiveSalesAmountCents, 25000);
 
     const switchedOrder = await getOrder(
       baseUrl,
@@ -253,6 +282,8 @@ test('contract: guide personal points split ordinary and guide summaries by grou
       ORDER_B_ID,
     );
     assert.equal(switchedOrder.pointsDestination, 'TRAVEL_AGENCY');
+    assert.equal(switchedOrder.personalAmountCents, 0);
+    assert.equal(switchedOrder.normalAmountCents, 20000);
     assert.equal(switchedOrder.personalPointsGuideId, null);
     assert.equal(switchedOrder.personalDailyRebateRate, null);
 
@@ -273,10 +304,182 @@ test('contract: guide personal points split ordinary and guide summaries by grou
       'GUIDE_PERSONAL',
     );
     assert.equal(switchLog.afterData.personalPointsGuideId, GUIDE_A_ID);
+    assert.equal(switchLog.beforeData.personalAmountCents, 0);
+    assert.equal(switchLog.afterData.personalAmountCents, 3000);
+    assert.equal(switchLog.afterData.normalAmountCents, 7000);
+    assert.equal(
+      switchLog.afterData.pointsDestinationChangedById,
+      switchLog.userId,
+    );
+    assert.ok(switchLog.afterData.pointsDestinationChangedAt);
     assert.equal(
       switchLog.afterData.personalDailyRebateRate,
       '0.5000',
     );
+  });
+});
+
+test('contract: final personal amount validates integer bounds and supports repeat changes, cancel, and legacy clients', async () => {
+  await withGuidePointsServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    for (const [personalAmountCents, code] of [
+      [-1, 'PERSONAL_AMOUNT_OUT_OF_RANGE'],
+      [10001, 'PERSONAL_AMOUNT_OUT_OF_RANGE'],
+      [1.5, 'PERSONAL_AMOUNT_INVALID'],
+      ['100', 'PERSONAL_AMOUNT_INVALID'],
+    ]) {
+      const invalid = await switchDestination(
+        baseUrl,
+        admin.token,
+        ORDER_A_ID,
+        { personalAmountCents, guideId: GUIDE_A_ID },
+      );
+      assertErrorContract(invalid, 400, code);
+    }
+
+    for (const personalAmountCents of [2500, 2500, 4000, 1000, 0]) {
+      const result = await switchDestination(
+        baseUrl,
+        admin.token,
+        ORDER_A_ID,
+        {
+          personalAmountCents,
+          ...(personalAmountCents > 0 ? { guideId: GUIDE_A_ID } : {}),
+        },
+      );
+      assert.equal(result.response.status, 200, bodyText(result));
+      assert.equal(
+        result.body.data.salesOrder.personalAmountCents,
+        personalAmountCents,
+      );
+      assert.equal(
+        result.body.data.salesOrder.normalAmountCents,
+        10000 - personalAmountCents,
+      );
+    }
+
+    const legacyPersonal = await switchDestination(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      {
+        pointsDestination: 'GUIDE_PERSONAL',
+        guideId: GUIDE_A_ID,
+      },
+    );
+    assert.equal(
+      legacyPersonal.body.data.salesOrder.personalAmountCents,
+      10000,
+    );
+    const legacyAgency = await switchDestination(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      { pointsDestination: 'TRAVEL_AGENCY' },
+    );
+    assert.equal(
+      legacyAgency.body.data.salesOrder.personalAmountCents,
+      0,
+    );
+
+    const logs = (await listLogs(baseUrl, admin.token)).filter(
+      (log) =>
+        log.entityId === ORDER_A_ID &&
+        String(log.action).startsWith(
+          'sales_orders.points_destination.',
+        ) &&
+        log.beforeData &&
+        log.afterData,
+    );
+    assert.ok(logs.length >= 6);
+    for (const log of logs) {
+      assert.equal(typeof log.beforeData.personalAmountCents, 'number');
+      assert.equal(typeof log.beforeData.normalAmountCents, 'number');
+      assert.equal(typeof log.afterData.personalAmountCents, 'number');
+      assert.equal(typeof log.afterData.normalAmountCents, 'number');
+    }
+  });
+});
+
+test('contract: after-sales may view split fields but sales is desensitized and cannot modify', async () => {
+  await withGuidePointsServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const afterSales = await login(
+      baseUrl,
+      'guide-points-after-sales',
+      'Password123',
+    );
+    const hiddenActors = await Promise.all(
+      [
+        'guide-points-sales',
+        'guide-points-front-desk',
+        'guide-points-warehouse',
+        'guide-points-taster',
+      ].map((username) =>
+        login(baseUrl, username, 'Password123'),
+      ),
+    );
+    const changed = await switchDestination(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      {
+        personalAmountCents: 3000,
+        guideId: GUIDE_A_ID,
+      },
+    );
+    assert.equal(changed.response.status, 200, bodyText(changed));
+
+    const afterSalesOrder = await getOrder(
+      baseUrl,
+      afterSales.token,
+      ORDER_A_ID,
+    );
+    assert.equal(afterSalesOrder.personalAmountCents, 3000);
+    assert.equal(afterSalesOrder.normalAmountCents, 7000);
+    assert.equal(afterSalesOrder.pointsDestination, 'GUIDE_PERSONAL');
+
+    for (const hiddenActor of hiddenActors) {
+      const hiddenResult = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${ORDER_A_ID}`,
+        { token: hiddenActor.token },
+      );
+      if ([403, 404].includes(hiddenResult.response.status)) {
+        continue;
+      }
+      assert.equal(
+        hiddenResult.response.status,
+        200,
+        bodyText(hiddenResult),
+      );
+      const hiddenOrder = hiddenResult.body.data.salesOrder;
+      for (const field of [
+        'pointsDestination',
+        'personalAmountCents',
+        'normalAmountCents',
+        'personalPointsGuideId',
+        'personalGuideNameSnapshot',
+        'personalDailyRebateRate',
+        'personalMonthlyRebateRate',
+        'pointsDestinationChangedById',
+        'pointsDestinationChangedAt',
+      ]) {
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(hiddenOrder, field),
+          false,
+          field,
+        );
+      }
+    }
+
+    const denied = await switchDestination(
+      baseUrl,
+      afterSales.token,
+      ORDER_A_ID,
+      { personalAmountCents: 0 },
+    );
+    assertErrorContract(denied, 403, 'PERMISSION_DENIED');
   });
 });
 
@@ -304,7 +507,7 @@ test('contract: paid states protect only the affected guide rate and boss remain
       boss.token,
       ORDER_A_ID,
       {
-        pointsDestination: 'GUIDE_PERSONAL',
+        personalAmountCents: 10000,
         guideId: GUIDE_A_ID,
       },
     );
@@ -330,7 +533,7 @@ test('contract: paid states protect only the affected guide rate and boss remain
       sales.token,
       ORDER_B_ID,
       {
-        pointsDestination: 'GUIDE_PERSONAL',
+        personalAmountCents: 20000,
         guideId: GUIDE_A_ID,
       },
     );
@@ -369,7 +572,7 @@ test('contract: paid states protect only the affected guide rate and boss remain
       baseUrl,
       boss.token,
       ORDER_A_ID,
-      { pointsDestination: 'TRAVEL_AGENCY' },
+      { personalAmountCents: 0 },
     );
     assertErrorContract(
       backDenied,
@@ -389,7 +592,7 @@ test('contract: paid states protect only the affected guide rate and boss remain
       baseUrl,
       boss.token,
       ORDER_A_ID,
-      { pointsDestination: 'TRAVEL_AGENCY' },
+      { personalAmountCents: 0 },
     );
     assert.equal(backAllowed.response.status, 200, bodyText(backAllowed));
   });
@@ -404,7 +607,7 @@ test('contract: ordinary paid summary blocks transfer and injected summary failu
         admin.token,
         ORDER_A_ID,
         {
-          pointsDestination: 'GUIDE_PERSONAL',
+          personalAmountCents: 10000,
           guideId: GUIDE_A_ID,
         },
       );
@@ -429,7 +632,7 @@ test('contract: ordinary paid summary blocks transfer and injected summary failu
         admin.token,
         ORDER_A_ID,
         {
-          pointsDestination: 'GUIDE_PERSONAL',
+          personalAmountCents: 10000,
           guideId: GUIDE_A_ID,
         },
       );
@@ -451,6 +654,26 @@ async function withGuidePointsServer(run, overrides = {}) {
       user('usr-guide-finance', 'guide-points-finance', 'finance'),
       user('usr-guide-boss', 'guide-points-boss', 'boss'),
       user('usr-guide-sales', 'guide-points-sales', 'sales'),
+      user(
+        'usr-guide-after-sales',
+        'guide-points-after-sales',
+        'after_sales',
+      ),
+      user(
+        'usr-guide-front-desk',
+        'guide-points-front-desk',
+        'front_desk',
+      ),
+      user(
+        'usr-guide-warehouse',
+        'guide-points-warehouse',
+        'warehouse',
+      ),
+      user(
+        'usr-guide-taster',
+        'guide-points-taster',
+        'taster',
+      ),
     ],
     guides: [
       guide(GUIDE_A_ID, '收款导游甲', '13900000001'),
@@ -472,6 +695,8 @@ async function withGuidePointsServer(run, overrides = {}) {
         guideId: GUIDE_A_ID,
         guideName: '收款导游甲',
         guidePhone: '13900000001',
+        tasterId: 'usr-guide-taster',
+        tasterName: 'guide-points-taster',
         financeMark: true,
       },
     ],
@@ -529,7 +754,9 @@ function order(id, orderNo, totalAmountCents, customerName) {
     status: 'VALID',
     totalAmountCents,
     cashOnDeliveryAmountCents: 0,
+    salesUserId: 'usr-guide-sales',
     pointsDestination: 'TRAVEL_AGENCY',
+    personalAmountCents: 0,
     items: [
       {
         id: `${id}-item`,

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/file_security_policy.dart';
 import 'package:jiangjiu_mobile_desktop/features/after_sales/after_sales_form_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -43,6 +44,14 @@ void main() {
     expect(find.text('售后历史'), findsOneWidget);
     expect(find.text('售后详情'), findsOneWidget);
     expect(find.text('smoke 已有售后记录'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('after-sales-receipt-progress-panel')),
+      findsOneWidget,
+    );
+    expect(
+      apiClient.receiptListPaths,
+      contains('/api/after-sales-orders/after-sales-1/receipts'),
+    );
     expect(
       apiClient.afterSalesListPaths
           .map(Uri.parse)
@@ -185,8 +194,51 @@ void main() {
       find.byKey(const ValueKey('after-sales-item-total-item-1')),
       '12',
     );
+    await tester.enterText(
+      find.byKey(
+        const ValueKey('after-sales-personal-refund-amount-field'),
+      ),
+      '3.21',
+    );
+    await tester.pump();
     expect(find.text('退款总额（由明细自动合计）'), findsOneWidget);
-    expect(find.text('元'), findsNWidgets(2));
+    expect(find.text('正常退款金额（自动计算）'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(
+              const ValueKey('after-sales-refund-amount-field'),
+            ),
+          )
+          .controller
+          ?.text,
+      '12.00',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(
+              const ValueKey(
+                'after-sales-personal-refund-amount-field',
+              ),
+            ),
+          )
+          .controller
+          ?.text,
+      '3.21',
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(
+              const ValueKey(
+                'after-sales-normal-refund-amount-value',
+              ),
+            ),
+          )
+          .data,
+      '¥8.79',
+    );
     expect(find.text('退款金额（分）'), findsNothing);
     await tester.ensureVisible(saveButton);
     await tester.tap(saveButton);
@@ -201,6 +253,10 @@ void main() {
     expect(apiClient.lastAfterSalesBody?['description'], 'smoke 售后退款测试');
     expect(apiClient.lastAfterSalesBody?['resolution'], 'smoke 先登记后退款');
     expect(apiClient.lastAfterSalesBody?['refundAmountCents'], 1200);
+    expect(
+      apiClient.lastAfterSalesBody?['personalPointsRefundAmountCents'],
+      321,
+    );
     expect(apiClient.lastAfterSalesBody?['items'], [
       {
         'sourceSalesOrderItemId': 'item-1',
@@ -213,6 +269,19 @@ void main() {
       tester
           .widget<TextFormField>(
             find.byKey(const ValueKey('after-sales-refund-amount-field')),
+          )
+          .controller
+          ?.text,
+      '0',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(
+              const ValueKey(
+                'after-sales-personal-refund-amount-field',
+              ),
+            ),
           )
           .controller
           ?.text,
@@ -407,34 +476,174 @@ void main() {
     await tester.tap(confirmButton);
     await tester.pumpAndSettle();
 
+    expect(find.text('确认退款'), findsOneWidget);
+    expect(find.text('请选择本次退款对应的原付款明细：'), findsOneWidget);
+    expect(find.text('收钱吧 · 原付款 ¥60.00'), findsOneWidget);
+    expect(find.text('收钱吧 · 原付款 ¥80.00'), findsOneWidget);
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-payment-detail-payment-detail-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-select-proof-button',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
     expect(
       apiClient.financeRefundConfirmPaths,
       contains('/api/after-sales-orders/after-sales-1/finance-refund-confirm'),
     );
     expect(apiClient.lastMultipartFiles?.single.fileName, 'refund-proof.png');
-    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+    expect(
+      apiClient.lastMultipartFields,
+      {'refundPaymentDetailId': 'payment-detail-1'},
+    );
+    expect(apiClient.lastMaxFileSizeBytes, fileSecurityMaxFileBytes);
   });
 
-  testWidgets('warehouse role sees after-sales warehouse confirm buttons',
+  testWidgets('finance sees cross-day notice without payment selector',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    apiClient._afterSalesOrders[0] = _afterSalesJson(
+      id: 'after-sales-1',
+      afterSalesNo: 'AS20260630001',
+      description: 'cross-day refund',
+      refundAmountCents: 500,
+      status: 'waiting_refund',
+      actionType: 'refund',
+      isSameDayRefund: false,
+    );
+    await _pumpAfterSalesForm(
+      tester,
+      apiClient,
+      role: UserRole.finance,
+      filePicker: () async => [
+        ApiMultipartFile.fromBytes(
+          fileName: 'cross-day-proof.png',
+          bytes: Uint8List.fromList([1, 2, 3]),
+          contentType: 'image/png',
+        ),
+      ],
+    );
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-finance-refund-confirm-after-sales-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('跨日退款，本次不调整手续费'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-payment-detail-payment-detail-1',
+        ),
+      ),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-select-proof-button',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(apiClient.lastMultipartFields, isEmpty);
+  });
+
+  testWidgets('finance refund allocation errors are shown in clear Chinese',
+      (tester) async {
+    final apiClient = _FakeApiClient()
+      ..nextMultipartError = const ApiException(
+        statusCode: 409,
+        code: 'REFUND_AMOUNT_EXCEEDS_PAYMENT_DETAIL_BALANCE',
+        message: 'server message',
+      );
+    await _pumpAfterSalesForm(
+      tester,
+      apiClient,
+      role: UserRole.finance,
+      filePicker: () async => [
+        ApiMultipartFile.fromBytes(
+          fileName: 'overdrawn.png',
+          bytes: Uint8List.fromList([1, 2, 3]),
+          contentType: 'image/png',
+        ),
+      ],
+    );
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-finance-refund-confirm-after-sales-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-payment-detail-payment-detail-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'after-sales-refund-select-proof-button',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('退款金额超过该付款明细的剩余可退金额，请选择其他明细或核对退款金额。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('warehouse role separates actual receipt from legacy confirm',
       (tester) async {
     final apiClient = _FakeApiClient();
     await _pumpAfterSalesForm(tester, apiClient, role: UserRole.warehouse);
 
     expect(find.text('仓库售后待办'), findsOneWidget);
     expect(find.text('AS20260630002'), findsOneWidget);
-    final confirmButton = find.byKey(
-        const ValueKey('after-sales-warehouse-confirm-after-sales-warehouse'));
-    expect(confirmButton, findsOneWidget);
-    expect(find.widgetWithText(FilledButton, '已补发'), findsOneWidget);
-
-    await tester.tap(confirmButton);
+    await tester.tap(find.text('AS20260630002'));
     await tester.pumpAndSettle();
 
     expect(
-      apiClient.warehouseConfirmPaths,
-      contains(
-          '/api/after-sales-orders/after-sales-warehouse/warehouse-confirm'),
+      find.byKey(
+        const ValueKey(
+          'after-sales-warehouse-progress-after-sales-warehouse',
+        ),
+      ),
+      findsOneWidget,
     );
+    expect(find.textContaining('不再使用旧“库管确认”'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'after-sales-warehouse-confirm-after-sales-warehouse',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(apiClient.warehouseConfirmPaths, isEmpty);
+    expect(apiClient.receiptListPaths, isEmpty);
   });
 
   testWidgets('after-sales can complete after finance refund confirmation',
@@ -526,10 +735,13 @@ class _FakeApiClient extends ApiClient {
   final List<String> afterSalesCreatePaths = <String>[];
   final List<String> statusPatchPaths = <String>[];
   final List<String> warehouseConfirmPaths = <String>[];
+  final List<String> receiptListPaths = <String>[];
   final List<String> financeRefundConfirmPaths = <String>[];
   Map<String, dynamic>? lastAfterSalesBody;
   Map<String, dynamic>? lastStatusBody;
   List<ApiMultipartFile>? lastMultipartFiles;
+  Map<String, String>? lastMultipartFields;
+  ApiException? nextMultipartError;
   int? lastMaxFileSizeBytes;
   String _orderStatus = 'valid';
   final List<Map<String, dynamic>> _afterSalesOrders = [
@@ -565,6 +777,15 @@ class _FakeApiClient extends ApiClient {
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     final uri = Uri.parse(path);
+    if (uri.path.startsWith('/api/after-sales-orders/') &&
+        uri.path.endsWith('/receipts')) {
+      receiptListPaths.add(path);
+      return {
+        'data': {
+          'afterSalesReceipts': const <Map<String, dynamic>>[],
+        },
+      };
+    }
     if (uri.path == '/api/after-sales-orders') {
       afterSalesListPaths.add(path);
       var records = List<Map<String, dynamic>>.from(_afterSalesOrders);
@@ -639,6 +860,10 @@ class _FakeApiClient extends ApiClient {
         refundAmountCents: body?['refundAmountCents'] is int
             ? body!['refundAmountCents'] as int
             : 0,
+        personalPointsRefundAmountCents:
+            body?['personalPointsRefundAmountCents'] is int
+                ? body!['personalPointsRefundAmountCents'] as int
+                : 0,
         resolution: '${body?['resolution'] ?? ''}',
         notes: '${body?['notes'] ?? ''}',
         status: '${body?['status'] ?? 'negotiating'}',
@@ -720,7 +945,13 @@ class _FakeApiClient extends ApiClient {
         '/api/after-sales-orders/after-sales-1/finance-refund-confirm') {
       financeRefundConfirmPaths.add(path);
       lastMultipartFiles = files;
+      lastMultipartFields = Map<String, String>.from(fields);
       lastMaxFileSizeBytes = maxFileSizeBytes;
+      final multipartError = nextMultipartError;
+      nextMultipartError = null;
+      if (multipartError != null) {
+        throw multipartError;
+      }
       final index =
           _afterSalesOrders.indexWhere((item) => item['id'] == 'after-sales-1');
       final updated = <String, dynamic>{
@@ -837,11 +1068,13 @@ Map<String, dynamic> _afterSalesJson({
   required String afterSalesNo,
   required String description,
   required int refundAmountCents,
+  int personalPointsRefundAmountCents = 0,
   String? resolution,
   String? notes,
   String status = 'negotiating',
   String actionType = 'record_only',
   bool financeConfirmed = false,
+  bool isSameDayRefund = true,
   List<Map<String, dynamic>> refundProofAttachments =
       const <Map<String, dynamic>>[],
 }) {
@@ -857,8 +1090,32 @@ Map<String, dynamic> _afterSalesJson({
     'description': description,
     'resolution': resolution,
     'refundAmountCents': refundAmountCents,
+    'personalPointsRefundAmountCents': personalPointsRefundAmountCents,
+    'normalPointsRefundAmountCents':
+        refundAmountCents - personalPointsRefundAmountCents,
     'status': status,
     'financeConfirmed': financeConfirmed,
+    'refundTimingStatus': isSameDayRefund ? 'same_day' : 'cross_day',
+    'isSameDayRefund': isSameDayRefund,
+    'requiresRefundPaymentDetail': isSameDayRefund && !financeConfirmed,
+    'refundPaymentDetailOptions': isSameDayRefund
+        ? [
+            {
+              'id': 'payment-detail-1',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'originalAmountCents': 6000,
+              'confirmedSameDayRefundAmountCents': 1000,
+              'remainingRefundableAmountCents': 5000,
+            },
+            {
+              'id': 'payment-detail-2',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'originalAmountCents': 8000,
+              'confirmedSameDayRefundAmountCents': 2000,
+              'remainingRefundableAmountCents': 6000,
+            },
+          ]
+        : const <Map<String, dynamic>>[],
     'financeConfirmedById': financeConfirmed ? 'finance-user' : null,
     'financeConfirmedAt': financeConfirmed ? '2026-07-02T09:00:00.000Z' : null,
     'warehouseConfirmedById': null,

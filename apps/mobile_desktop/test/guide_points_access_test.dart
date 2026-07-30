@@ -19,6 +19,8 @@ void main() {
         reason: role.name,
       );
       expect(canChangeOrderPointsDestination(role), isTrue);
+      expect(canViewOrderPersonalSplit(role), isTrue);
+      expect(canManageOrderPersonalSplit(role), isTrue);
     }
 
     for (final role in [
@@ -29,12 +31,13 @@ void main() {
       expect(canMaintainGuidePointsTable(role), isTrue);
     }
     expect(canMaintainGuidePointsTable(UserRole.boss), isFalse);
+    expect(canViewOrderPersonalSplit(UserRole.afterSales), isTrue);
+    expect(canManageOrderPersonalSplit(UserRole.afterSales), isFalse);
 
     for (final role in [
       UserRole.frontDesk,
       UserRole.sales,
       UserRole.warehouse,
-      UserRole.afterSales,
       UserRole.taster,
     ]) {
       expect(canViewGuidePointsTable(role), isFalse, reason: role.name);
@@ -45,6 +48,12 @@ void main() {
         reason: role.name,
       );
       expect(canChangeOrderPointsDestination(role), isFalse);
+      expect(canViewOrderPersonalSplit(role), isFalse);
+      expect(canManageOrderPersonalSplit(role), isFalse);
     }
+    expect(
+      canChangeOrderPointsDestination(UserRole.afterSales),
+      isFalse,
+    );
   });
 }

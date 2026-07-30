@@ -13,6 +13,14 @@ const {
   withNestApiServer,
 } = require('./helpers/phase1-api');
 const { getRoleMenus } = require('../src/modules/auth/roles');
+const {
+  formatShanghaiDate,
+  parseDateOnly,
+} = require('../src/modules/business-data/sales-order-shipping-date.helper');
+const {
+  calculateOrderProfitFees,
+  isSameShanghaiNaturalDay,
+} = require('../src/modules/analytics/profit-tax-service-fee.helper');
 
 const TEST_PASSWORD = 'Password123';
 
@@ -21,16 +29,40 @@ test('unit: finance role menu includes after-sales orders', () => {
   assert.equal(financeMenuIds.includes('after_sales_orders'), true);
 });
 
+test('unit: refund confirmation uses the Asia/Shanghai midnight boundary', () => {
+  const orderDate = '2026-07-30T00:00:00.000Z';
+  assert.equal(
+    isSameShanghaiNaturalDay(
+      orderDate,
+      '2026-07-30T15:59:59.000Z',
+    ),
+    true,
+  );
+  assert.equal(
+    isSameShanghaiNaturalDay(
+      orderDate,
+      '2026-07-30T16:00:00.000Z',
+    ),
+    false,
+  );
+});
+
 test('contract: after-sales order creation validates payload and writes an operation log', async () => {
   await withNestApiServer(async (baseUrl, { prisma }) => {
     const admin = await login(baseUrl, 'admin');
     const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
+    const [sourcePaymentDetail] =
+      await prisma.salesOrderPaymentDetail.findMany({
+        where: { salesOrderId: 'so_after_sales_owner' },
+      });
+    assert.ok(sourcePaymentDetail);
 
     const created = await requestJson(baseUrl, '/api/after-sales-orders', {
       method: 'POST',
       token: afterSales.token,
       body: {
         sourceSalesOrderId: 'so_after_sales_owner',
+        refundPaymentDetailId: sourcePaymentDetail.id,
         issueType: 'logistics_damage',
         actionType: 'refund',
         description: 'smoke test customer reports logistics damage',
@@ -60,6 +92,13 @@ test('contract: after-sales order creation validates payload and writes an opera
     assert.equal(order.actionType, 'refund');
     assert.equal(order.status, 'waiting_refund');
     assert.equal(order.refundAmountCents, 1200);
+    assert.equal(order.refundPaymentDetailId, sourcePaymentDetail.id);
+    assert.equal(
+      order.refundPaymentMethodNameSnapshot,
+      sourcePaymentDetail.paymentMethodNameSnapshot,
+    );
+    assert.equal(order.refundOccurredAt, null);
+    assert.equal(order.deductsPaymentServiceFee, false);
     assert.equal(order.financeConfirmed, false);
     assert.equal(order.salesOrder.orderNo, 'SO-AFTER-SALES-OWNER');
     assert.equal(order.salesOrder.status, 'valid');
@@ -68,6 +107,23 @@ test('contract: after-sales order creation validates payload and writes an opera
     assert.equal(order.afterSalesSalesOrder.orderNo, order.afterSalesNo);
     assert.equal(order.afterSalesSalesOrder.sourceSalesOrderId, order.salesOrderId);
     assert.equal(order.afterSalesSalesOrder.totalAmountCents, 1200);
+    assert.equal(order.afterSalesSalesOrder.paymentDetails.length, 1);
+    assert.equal(
+      order.afterSalesSalesOrder.paymentDetails[0].amountCents,
+      1200,
+    );
+    assert.equal(
+      order.afterSalesSalesOrder.paymentDetails[0]
+        .paymentMethodCategorySnapshot,
+      'direct_receipt',
+    );
+    assert.deepEqual(order.afterSalesSalesOrder.paymentSummary, {
+      directReceiptAmountCents: 1200,
+      collectOnDeliveryAmountCents: 0,
+      confirmedCollectOnDeliveryAmountCents: 0,
+      pendingCollectOnDeliveryAmountCents: 0,
+      hasPendingCollectOnDelivery: false,
+    });
     assert.equal(order.items.length, 1);
     assert.equal(
       order.items[0].sourceSalesOrderItemId,
@@ -127,6 +183,80 @@ test('contract: after-sales order creation validates payload and writes an opera
   }, createAfterSalesTestOptions());
 });
 
+test('contract: after-sales refund allocation validates integer and cumulative personal/normal bounds', async () => {
+  await withNestApiServer(async (baseUrl) => {
+    const afterSales = await login(
+      baseUrl,
+      'after_sales_user',
+      TEST_PASSWORD,
+    );
+    const create = (refundAmountCents, personalPointsRefundAmountCents) =>
+      requestJson(baseUrl, '/api/after-sales-orders', {
+        method: 'POST',
+        token: afterSales.token,
+        body: {
+          sourceSalesOrderId: 'so_after_sales_personal',
+          issueType: 'quality_issue',
+          actionType: 'refund',
+          description: 'personal refund allocation contract',
+          refundAmountCents,
+          personalPointsRefundAmountCents,
+          status: 'waiting_refund',
+        },
+      });
+
+    const created = await create(2500, 1000);
+    assert.equal(
+      created.response.status,
+      201,
+      JSON.stringify(created.body),
+    );
+    assert.equal(
+      created.body.data.afterSalesOrder
+        .personalPointsRefundAmountCents,
+      1000,
+    );
+    assert.equal(
+      created.body.data.afterSalesOrder.normalPointsRefundAmountCents,
+      1500,
+    );
+    assert.equal(
+      created.body.data.afterSalesOrder.afterSalesSalesOrder
+        .personalAmountCents,
+      1000,
+    );
+
+    assertErrorContract(
+      await create(1000, -1),
+      400,
+      'PERSONAL_REFUND_AMOUNT_OUT_OF_RANGE',
+    );
+    for (const value of [1.5, '100']) {
+      const invalid = await create(1000, value);
+      assertErrorContract(
+        invalid,
+        400,
+        'PERSONAL_REFUND_AMOUNT_INVALID',
+      );
+    }
+    assertErrorContract(
+      await create(1000, 1001),
+      400,
+      'PERSONAL_REFUND_AMOUNT_OUT_OF_RANGE',
+    );
+    assertErrorContract(
+      await create(2500, 2500),
+      400,
+      'PERSONAL_REFUND_AMOUNT_EXCEEDS_PERSONAL_TOTAL',
+    );
+    assertErrorContract(
+      await create(6000, 0),
+      400,
+      'NORMAL_REFUND_AMOUNT_EXCEEDS_NORMAL_TOTAL',
+    );
+  }, createAfterSalesTestOptions());
+});
+
 test('contract: after-sales order creation rejects missing orders and invalid required fields', async () => {
   await withNestApiServer(async (baseUrl) => {
     const afterSales = await login(baseUrl, 'after_sales_user', TEST_PASSWORD);
@@ -142,6 +272,26 @@ test('contract: after-sales order creation rejects missing orders and invalid re
       },
     });
     assertErrorContract(missingOrder, 404, 'SALES_ORDER_NOT_FOUND');
+
+    const buybackSource = await requestJson(
+      baseUrl,
+      '/api/after-sales-orders',
+      {
+        method: 'POST',
+        token: afterSales.token,
+        body: {
+          salesOrderId: 'so_after_sales_buyback',
+          issueType: 'quality_issue',
+          actionType: 'record_only',
+          description: 'buyback cannot be used as a sales source',
+        },
+      },
+    );
+    assertErrorContract(
+      buybackSource,
+      400,
+      'AFTER_SALES_SOURCE_ORDER_INVALID',
+    );
 
     const missingRequired = await requestJson(
       baseUrl,
@@ -1205,12 +1355,208 @@ test('contract: after-sales creation rejects cumulative refund above source orde
   }, createAfterSalesTestOptions());
 });
 
+test('contract: same-day refund confirmation exposes safe payment options and rejects missing, forged, or overdrawn allocations before storage', async () => {
+  await withTemporaryRefundProofStorage(async (storageRoot) => {
+    await withNestApiServer(
+      async (baseUrl, { prisma, stores }) => {
+        const finance = await login(
+          baseUrl,
+          'finance_user',
+          TEST_PASSWORD,
+        );
+        const afterSales = await login(
+          baseUrl,
+          'after_sales_user',
+          TEST_PASSWORD,
+        );
+        const [sourcePaymentDetail] =
+          await prisma.salesOrderPaymentDetail.findMany({
+            where: { salesOrderId: 'so_after_sales_owner' },
+          });
+        assert.ok(sourcePaymentDetail);
+        const today = parseDateOnly(formatShanghaiDate(new Date()));
+        const confirmationTime = new Date();
+        await prisma.salesOrder.update({
+          where: { id: 'so_after_sales_owner' },
+          data: {
+            orderDate: today,
+          },
+        });
+        await prisma.salesOrderPaymentDetail.update({
+          where: { id: sourcePaymentDetail.id },
+          data: {
+            amountCents: 5000,
+          },
+        });
+        await prisma.afterSalesOrder.update({
+          where: { id: 'as_owner_completed' },
+          data: {
+            refundPaymentDetailId: sourcePaymentDetail.id,
+            refundPaymentMethodNameSnapshot:
+              sourcePaymentDetail.paymentMethodNameSnapshot,
+            refundOccurredAt: confirmationTime,
+            deductsPaymentServiceFee: true,
+          },
+        });
+        const sourceWithRefunds = await prisma.salesOrder.findUnique({
+          where: { id: 'so_after_sales_owner' },
+          include: {
+            afterSalesOrders: true,
+          },
+        });
+        const allocatedSibling =
+          sourceWithRefunds.afterSalesOrders.find(
+            (order) => order.id === 'as_owner_completed',
+          );
+        assert.equal(allocatedSibling.financeConfirmed, true);
+        assert.equal(
+          allocatedSibling.refundPaymentDetailId,
+          sourcePaymentDetail.id,
+        );
+        assert.equal(
+          isSameShanghaiNaturalDay(
+            sourceWithRefunds.orderDate,
+            allocatedSibling.refundOccurredAt,
+          ),
+          true,
+        );
+
+        const financeDetail = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund',
+          { token: finance.token },
+        );
+        assert.equal(financeDetail.response.status, 200);
+        const financeOrder =
+          financeDetail.body.data.afterSalesOrder;
+        assert.equal(financeOrder.refundTimingStatus, 'same_day');
+        assert.equal(financeOrder.isSameDayRefund, true);
+        assert.equal(
+          financeOrder.requiresRefundPaymentDetail,
+          true,
+        );
+        const paymentOption =
+          financeOrder.refundPaymentDetailOptions.find(
+            (option) => option.id === sourcePaymentDetail.id,
+          );
+        assert.deepEqual(paymentOption, {
+          id: sourcePaymentDetail.id,
+          paymentMethodNameSnapshot:
+            sourcePaymentDetail.paymentMethodNameSnapshot,
+          originalAmountCents: 5000,
+          confirmedSameDayRefundAmountCents: 2000,
+          remainingRefundableAmountCents: 3000,
+        });
+        assert.equal(
+          Object.keys(paymentOption).some((key) =>
+            /customer|phone|address/i.test(key),
+          ),
+          false,
+        );
+
+        const nonFinanceDetail = await requestJson(
+          baseUrl,
+          '/api/after-sales-orders/as_owner_refund',
+          { token: afterSales.token },
+        );
+        assert.equal(nonFinanceDetail.response.status, 200);
+        assert.equal(
+          Object.hasOwn(
+            nonFinanceDetail.body.data.afterSalesOrder,
+            'refundPaymentDetailOptions',
+          ),
+          false,
+        );
+
+        const missing = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('missing-selection.png')],
+        );
+        assertErrorContract(
+          missing,
+          409,
+          'SAME_DAY_REFUND_PAYMENT_DETAIL_REQUIRED',
+        );
+
+        const forged = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('forged-selection.png')],
+          { refundPaymentDetailId: 'forged-payment-detail' },
+        );
+        assertErrorContract(
+          forged,
+          409,
+          'REFUND_PAYMENT_DETAIL_INVALID',
+        );
+
+        await prisma.afterSalesOrder.update({
+          where: { id: 'as_owner_refund' },
+          data: {
+            refundAmountCents: 3001,
+          },
+        });
+        const excessive = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('overdrawn.png')],
+          { refundPaymentDetailId: sourcePaymentDetail.id },
+        );
+        assertErrorContract(
+          excessive,
+          409,
+          'REFUND_AMOUNT_EXCEEDS_PAYMENT_DETAIL_BALANCE',
+        );
+
+        const stored = await prisma.afterSalesOrder.findUnique({
+          where: { id: 'as_owner_refund' },
+        });
+        assert.equal(stored.financeConfirmed, false);
+        assert.equal(stored.refundOccurredAt ?? null, null);
+        assert.equal(stored.deductsPaymentServiceFee, false);
+        assert.deepEqual(await fs.readdir(storageRoot), []);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
+      },
+      {
+        ...createAfterSalesTestOptions(),
+        env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
+      },
+    );
+  });
+});
+
 test('contract: finance refund confirmation requires and stores proof attachments', async () => {
   await withTemporaryRefundProofStorage(async (storageRoot) => {
     await withNestApiServer(
-      async (baseUrl) => {
+      async (baseUrl, { prisma }) => {
         const admin = await login(baseUrl, 'admin');
         const finance = await login(baseUrl, 'finance_user', TEST_PASSWORD);
+        const [sourcePaymentDetail] =
+          await prisma.salesOrderPaymentDetail.findMany({
+            where: { salesOrderId: 'so_after_sales_owner' },
+          });
+        assert.ok(sourcePaymentDetail);
+        await prisma.salesOrder.update({
+          where: { id: 'so_after_sales_owner' },
+          data: {
+            orderDate: parseDateOnly(formatShanghaiDate(new Date())),
+          },
+        });
+        await prisma.afterSalesOrder.update({
+          where: { id: 'as_owner_refund' },
+          data: {
+            refundPaymentDetailId: sourcePaymentDetail.id,
+            refundPaymentMethodNameSnapshot:
+              sourcePaymentDetail.paymentMethodNameSnapshot,
+          },
+        });
 
         const legacyNoProof = await requestJson(
           baseUrl,
@@ -1230,6 +1576,7 @@ test('contract: finance refund confirmation requires and stores proof attachment
           finance.token,
           'as_owner_refund',
           [],
+          { refundPaymentDetailId: sourcePaymentDetail.id },
         );
         assertErrorContract(noProof, 400, 'REFUND_PROOF_FILE_REQUIRED');
 
@@ -1253,6 +1600,7 @@ test('contract: finance refund confirmation requires and stores proof attachment
               type: 'image/png',
             },
           ],
+          { refundPaymentDetailId: sourcePaymentDetail.id },
         );
         assert.equal(confirmed.response.status, 201);
         const confirmedOrder = confirmed.body.data.afterSalesOrder;
@@ -1260,6 +1608,12 @@ test('contract: finance refund confirmation requires and stores proof attachment
         assert.equal(confirmedOrder.financeConfirmed, true);
         assert.equal(confirmedOrder.financeConfirmedById, 'usr_finance');
         assert.ok(Date.parse(confirmedOrder.financeConfirmedAt));
+        assert.ok(Date.parse(confirmedOrder.refundOccurredAt));
+        assert.equal(
+          confirmedOrder.refundPaymentDetailId,
+          sourcePaymentDetail.id,
+        );
+        assert.equal(confirmedOrder.deductsPaymentServiceFee, true);
         assert.equal(confirmedOrder.updatedById, 'usr_finance');
         assert.equal(confirmedOrder.refundProofAttachments.length, 1);
         assert.equal(
@@ -1271,6 +1625,30 @@ test('contract: finance refund confirmation requires and stores proof attachment
           'image/png',
         );
         assertNoStorageLocation(confirmedOrder);
+        const firstRefundOccurredAt =
+          confirmedOrder.refundOccurredAt;
+        const firstProofId =
+          confirmedOrder.refundProofAttachments[0].id;
+
+        const repeated = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('duplicate-proof.png')],
+          { refundPaymentDetailId: sourcePaymentDetail.id },
+        );
+        assert.equal(repeated.response.status, 201);
+        assert.equal(
+          repeated.body.data.afterSalesOrder.refundOccurredAt,
+          firstRefundOccurredAt,
+        );
+        assert.deepEqual(
+          repeated.body.data.afterSalesOrder.refundProofAttachments.map(
+            (attachment) => attachment.id,
+          ),
+          [firstProofId],
+        );
+        assert.equal((await fs.readdir(storageRoot)).length, 1);
 
         const downloaded = await downloadRefundProof(
           baseUrl,
@@ -1301,8 +1679,91 @@ test('contract: finance refund confirmation requires and stores proof attachment
         assert.equal(cancelledOrder.financeConfirmed, false);
         assert.equal(cancelledOrder.financeConfirmedById, null);
         assert.equal(cancelledOrder.financeConfirmedAt, null);
+        assert.equal(cancelledOrder.refundOccurredAt, null);
+        assert.equal(cancelledOrder.refundPaymentDetailId, null);
+        assert.equal(
+          cancelledOrder.refundPaymentMethodNameSnapshot,
+          null,
+        );
+        assert.equal(
+          cancelledOrder.deductsPaymentServiceFee,
+          false,
+        );
         assert.equal(cancelledOrder.refundProofAttachments.length, 0);
         assert.equal(cancelledOrder.updatedById, 'usr_admin');
+        assert.deepEqual(await fs.readdir(storageRoot), []);
+
+        const ignoredAfterCancellation = calculateOrderProfitFees({
+          financeMark: true,
+          status: 'VALID',
+          orderDate: parseDateOnly(formatShanghaiDate(new Date())),
+          totalAmountCents: 5000,
+          taxRateSnapshot: '0.01',
+          paymentDetails: [
+            {
+              id: sourcePaymentDetail.id,
+              paymentMethodId: sourcePaymentDetail.paymentMethodId,
+              paymentMethodNameSnapshot:
+                sourcePaymentDetail.paymentMethodNameSnapshot,
+              serviceFeeRateSnapshot: '0.01',
+              serviceFeeBaseAmountSnapshotCents: 5000,
+            },
+          ],
+          afterSalesOrders: [
+            await prisma.afterSalesOrder.findUnique({
+              where: { id: 'as_owner_refund' },
+            }),
+          ],
+        });
+        assert.equal(
+          ignoredAfterCancellation.paymentDetails[0]
+            .sameDayRefundAmountCents,
+          0,
+        );
+        assert.equal(
+          ignoredAfterCancellation.paymentServiceFeeCents,
+          50,
+        );
+
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        await prisma.salesOrder.update({
+          where: { id: 'so_after_sales_owner' },
+          data: {
+            orderDate: parseDateOnly(
+              formatShanghaiDate(yesterday),
+            ),
+          },
+        });
+        const reconfirmed = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('cross-day-proof.png')],
+        );
+        assert.equal(reconfirmed.response.status, 201);
+        assert.equal(
+          reconfirmed.body.data.afterSalesOrder.refundTimingStatus,
+          'cross_day',
+        );
+        assert.equal(
+          reconfirmed.body.data.afterSalesOrder.refundPaymentDetailId,
+          null,
+        );
+        assert.equal(
+          reconfirmed.body.data.afterSalesOrder
+            .refundPaymentMethodNameSnapshot,
+          null,
+        );
+        assert.equal(
+          reconfirmed.body.data.afterSalesOrder
+            .deductsPaymentServiceFee,
+          false,
+        );
+        assert.ok(
+          Date.parse(
+            reconfirmed.body.data.afterSalesOrder.refundOccurredAt,
+          ),
+        );
 
         const logs = await requestJson(
           baseUrl,
@@ -1349,6 +1810,46 @@ test('contract: finance refund confirmation requires and stores proof attachment
       },
       {
         ...createAfterSalesTestOptions(),
+        env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
+      },
+    );
+  });
+});
+
+test('contract: finance refund confirmation cleans temporary and permanent proof files when the database transaction fails', async () => {
+  await withTemporaryRefundProofStorage(async (storageRoot) => {
+    await withNestApiServer(
+      async (baseUrl, { prisma, stores }) => {
+        const finance = await login(
+          baseUrl,
+          'finance_user',
+          TEST_PASSWORD,
+        );
+        const failed = await uploadRefundProofs(
+          baseUrl,
+          finance.token,
+          'as_owner_refund',
+          [validRefundProofFile('transaction-failure.png')],
+        );
+        assertErrorContract(failed, 500, 'INTERNAL_ERROR');
+        assert.deepEqual(await fs.readdir(storageRoot), []);
+        assert.deepEqual(
+          await fs.readdir(stores.attachmentTempDir),
+          [],
+        );
+        const persisted = await prisma.afterSalesOrder.findUnique({
+          where: { id: 'as_owner_refund' },
+        });
+        assert.equal(persisted.financeConfirmed, false);
+        assert.deepEqual(persisted.refundProofAttachments, []);
+        assert.equal(persisted.refundOccurredAt ?? null, null);
+      },
+      {
+        ...createAfterSalesTestOptions(),
+        prisma: {
+          ...createAfterSalesTestOptions().prisma,
+          failAfterSalesOrderUpdateOnce: true,
+        },
         env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot },
       },
     );
@@ -1577,7 +2078,10 @@ test('contract: completed status requires warehouse and finance proof prerequisi
           'as_owner_refund',
           [
             {
-              content: Buffer.from('%PDF-smoke'),
+              content: Buffer.from(
+                '%PDF-1.4\n1 0 obj\n<<>>\nendobj\n' +
+                  'trailer\n<<>>\nstartxref\n9\n%%EOF\n',
+              ),
               name: 'refund-proof.pdf',
               type: 'application/pdf',
             },
@@ -1863,6 +2367,28 @@ function createAfterSalesTestOptions() {
           salesUserId: 'usr_sales_other',
           createdById: 'usr_sales_other',
         }),
+        createSalesOrderSeed({
+          id: 'so_after_sales_personal',
+          orderNo: 'SO-AFTER-SALES-PERSONAL',
+          customerId: 'cust_after_sales_other',
+          customerName: 'After Sales Personal Split Customer',
+          customerPhone: '13800007002',
+          totalAmountCents: 10000,
+          personalAmountCents: 3000,
+          pointsDestination: 'GUIDE_PERSONAL',
+          salesUserId: 'usr_sales_other',
+          createdById: 'usr_sales_other',
+        }),
+        createSalesOrderSeed({
+          id: 'so_after_sales_buyback',
+          orderNo: 'SO-AFTER-SALES-BUYBACK',
+          orderType: 'BUYBACK',
+          customerId: 'cust_after_sales_link',
+          customerName: 'After Sales Smoke Link Customer',
+          totalAmountCents: 5000,
+          salesUserId: 'usr_sales_owner',
+          createdById: 'usr_sales_owner',
+        }),
       ],
       afterSalesOrders: [
         createAfterSalesSeed({
@@ -2133,8 +2659,36 @@ async function withTemporaryRefundProofStorage(run) {
   }
 }
 
-async function uploadRefundProofs(baseUrl, token, afterSalesOrderId, files) {
+function validRefundProofFile(name = 'refund-proof.png') {
+  return {
+    content: Buffer.from([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+    ]),
+    name,
+    type: 'image/png',
+  };
+}
+
+async function uploadRefundProofs(
+  baseUrl,
+  token,
+  afterSalesOrderId,
+  files,
+  fields = {},
+) {
   const form = new FormData();
+  for (const [name, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null) {
+      form.append(name, String(value));
+    }
+  }
   for (const file of files) {
     form.append(
       'files',
@@ -2277,7 +2831,7 @@ function assertNoShippedFields(value) {
 }
 
 function assertAfterSalesOrderContract(order) {
-  assert.deepEqual(Object.keys(order).sort(), [
+  const expectedKeys = [
     'actionType',
     'afterSalesNo',
     'afterSalesSalesOrder',
@@ -2294,6 +2848,7 @@ function assertAfterSalesOrderContract(order) {
     'customerId',
     'dailyRebateRate',
     'deductionCalculationMode',
+    'deductsPaymentServiceFee',
     'description',
     'financeConfirmed',
     'financeConfirmedAt',
@@ -2305,8 +2860,13 @@ function assertAfterSalesOrderContract(order) {
     'issueType',
     'items',
     'monthlyRebateRate',
+    'normalPointsRefundAmountCents',
     'notes',
+    'personalPointsRefundAmountCents',
     'refundAmountCents',
+    'refundOccurredAt',
+    'refundPaymentDetailId',
+    'refundPaymentMethodNameSnapshot',
     'refundProofAttachments',
     'resolution',
     'salesOrder',
@@ -2320,7 +2880,16 @@ function assertAfterSalesOrderContract(order) {
     'warehouseConfirmNote',
     'warehouseConfirmedAt',
     'warehouseConfirmedById',
-  ]);
+  ];
+  if (Object.hasOwn(order, 'refundTimingStatus')) {
+    expectedKeys.push(
+      'isSameDayRefund',
+      'refundPaymentDetailOptions',
+      'refundTimingStatus',
+      'requiresRefundPaymentDetail',
+    );
+  }
+  assert.deepEqual(Object.keys(order).sort(), expectedKeys.sort());
   assert.equal(typeof order.id, 'string');
   assert.equal(typeof order.afterSalesNo, 'string');
   assert.equal(typeof order.salesOrderId, 'string');
@@ -2329,6 +2898,12 @@ function assertAfterSalesOrderContract(order) {
   assert.equal(typeof order.actionType, 'string');
   assert.equal(typeof order.description, 'string');
   assert.equal(typeof order.refundAmountCents, 'number');
+  assert.equal(typeof order.deductsPaymentServiceFee, 'boolean');
+  if (Object.hasOwn(order, 'refundTimingStatus')) {
+    assert.equal(typeof order.isSameDayRefund, 'boolean');
+    assert.equal(typeof order.requiresRefundPaymentDetail, 'boolean');
+    assert.equal(Array.isArray(order.refundPaymentDetailOptions), true);
+  }
   assert.equal(typeof order.status, 'string');
   assert.equal(typeof order.financeConfirmed, 'boolean');
   assert.equal(Array.isArray(order.refundProofAttachments), true);

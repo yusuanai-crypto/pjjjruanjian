@@ -12,8 +12,10 @@ import 'package:jiangjiu_mobile_desktop/features/commission_rules/commission_rul
 import 'package:jiangjiu_mobile_desktop/features/dashboard/dashboard_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/finance/finance_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/guide_management/guide_management_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/moutai_inventory/moutai_inventory_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/order_query/order_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/operation_logs/operation_logs_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/payment_methods/payment_method_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/profit_analysis/profit_analysis_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/reconciliation/reconciliation_table_page.dart';
@@ -25,6 +27,7 @@ import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel
 import 'package:jiangjiu_mobile_desktop/features/travel_group_query/travel_group_query_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/travel_group_form_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/warehouse_management/warehouse_management_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -557,6 +560,36 @@ void main() {
     }
   });
 
+  testWidgets(
+      'payment method management is visible only to finance and administrators',
+      (_) async {
+    for (final role in [
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.finance,
+    ]) {
+      expect(_roleIds(role), contains('payment_method_management'));
+      expect(
+        _destinationIds(['payment_method_management'], role),
+        contains('payment_method_management'),
+      );
+    }
+    for (final role in [
+      UserRole.boss,
+      UserRole.sales,
+      UserRole.warehouse,
+      UserRole.afterSales,
+      UserRole.frontDesk,
+      UserRole.taster,
+    ]) {
+      expect(_roleIds(role), isNot(contains('payment_method_management')));
+      expect(
+        _destinationIds(['payment_method_management'], role),
+        isNot(contains('payment_method_management')),
+      );
+    }
+  });
+
   test('falls back to role destinations when backend menus are unknown', () {
     final fallback = destinationsForBackendMenus(
       [_menu('unknown_backend_menu')],
@@ -568,6 +601,53 @@ void main() {
       destinationsForRole(UserRole.finance)
           .map((destination) => destination.id),
     );
+  });
+
+  test('inventory and compatibility destinations obey every role', () {
+    const inventoryRoles = {
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.finance,
+      UserRole.boss,
+      UserRole.warehouse,
+    };
+    const serializedRoles = {
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.finance,
+      UserRole.warehouse,
+    };
+    const packingRoles = {
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.warehouse,
+    };
+
+    for (final role in UserRole.values) {
+      final ids = _destinationIds(
+        [
+          'warehouse_management',
+          'warehouse_workspace',
+          'serialized_inventory',
+        ],
+        role,
+      );
+      expect(
+        ids.contains('warehouse_management'),
+        inventoryRoles.contains(role),
+        reason: '${role.value} warehouse_management',
+      );
+      expect(
+        ids.contains('moutai_inventory'),
+        serializedRoles.contains(role),
+        reason: '${role.value} moutai_inventory',
+      );
+      expect(
+        ids.contains('warehouse_packing'),
+        packingRoles.contains(role),
+        reason: '${role.value} warehouse_packing',
+      );
+    }
   });
 
   test('builds core pages for routed destination ids', () {
@@ -583,11 +663,17 @@ void main() {
     expect(_page('finance_query'), isA<FinanceQueryPage>());
     expect(_page('commission_rules'), isA<CommissionRuleConfigPage>());
     expect(
+      _page('payment_method_management'),
+      isA<PaymentMethodManagementPage>(),
+    );
+    expect(
         _page('travel_agency_management'), isA<TravelAgencyManagementPage>());
     expect(_page('product_management'), isA<ProductManagementPage>());
     expect(_page('taster_commissions'), isA<TasterCommissionPage>());
     expect(_page('reconciliation_table'), isA<ReconciliationTablePage>());
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
+    expect(_page('warehouse_management'), isA<WarehouseManagementPage>());
+    expect(_page('moutai_inventory'), isA<MoutaiInventoryPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());
     expect(_page('analytics'), isA<AnalyticsPage>());
     expect(_page('profit_analysis'), isA<ProfitAnalysisPage>());

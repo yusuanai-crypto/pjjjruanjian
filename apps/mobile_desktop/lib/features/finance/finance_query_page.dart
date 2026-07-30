@@ -77,6 +77,8 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance;
 
+  bool get _canManagePaymentMethods => _canEditFinanceOrders;
+
   bool get _canManageTasterCommission =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
@@ -297,6 +299,15 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
                   icon: const Icon(Icons.search_rounded),
                   label: const Text('查询'),
                 ),
+                if (_canManagePaymentMethods) ...[
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    key: const ValueKey('finance-payment-methods-button'),
+                    onPressed: _openPaymentMethodManagement,
+                    icon: const Icon(Icons.account_balance_wallet_rounded),
+                    label: const Text('收款方式管理'),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -1266,6 +1277,15 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
     );
   }
 
+  Future<void> _openPaymentMethodManagement() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _PaymentMethodManagementDialog(
+        businessApi: _businessApi,
+      ),
+    );
+  }
+
   Future<void> _exportCommissionRecords() async {
     if (!_canExportStage7 || _exportingCommissionRecords) {
       return;
@@ -1687,6 +1707,307 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
   }
 }
 
+class _PaymentMethodManagementDialog extends StatefulWidget {
+  const _PaymentMethodManagementDialog({required this.businessApi});
+
+  final BusinessApi businessApi;
+
+  @override
+  State<_PaymentMethodManagementDialog> createState() =>
+      _PaymentMethodManagementDialogState();
+}
+
+class _PaymentMethodManagementDialogState
+    extends State<_PaymentMethodManagementDialog> {
+  List<SalesPaymentMethodRecord> _methods = const [];
+  bool _loading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+    try {
+      final methods = await widget.businessApi.listPaymentMethods(
+        includeInactive: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _methods = methods;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _edit([SalesPaymentMethodRecord? method]) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _PaymentMethodEditDialog(
+        businessApi: widget.businessApi,
+        method: method,
+      ),
+    );
+    if (saved == true && mounted) {
+      await _load();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('收款方式管理'),
+      content: SizedBox(
+        width: 680,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('支持新增、改名、分类、启停、排序及设置默认；历史订单保留原快照。'),
+              if (_loading) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(),
+              ],
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 12),
+                _InlineNotice(
+                  message: _errorMessage!,
+                  tone: StatusTone.danger,
+                ),
+              ],
+              if (!_loading)
+                for (final method in _methods)
+                  ListTile(
+                    key: ValueKey('payment-method-${method.id}'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      method.name,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      '${method.isAgencyCollection ? '代收营业款' : '直接收款'}'
+                      ' · 排序 ${method.sortOrder}'
+                      '${method.isActive ? '' : ' · 已停用'}',
+                    ),
+                    trailing: Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (method.isDefault)
+                          const StatusTag(
+                            label: '默认',
+                            tone: StatusTone.success,
+                          ),
+                        IconButton(
+                          tooltip: '编辑',
+                          onPressed: () => _edit(method),
+                          icon: const Icon(Icons.edit_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('payment-method-add-button'),
+          onPressed: _loading ? null : () => _edit(),
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('新增收款方式'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PaymentMethodEditDialog extends StatefulWidget {
+  const _PaymentMethodEditDialog({
+    required this.businessApi,
+    this.method,
+  });
+
+  final BusinessApi businessApi;
+  final SalesPaymentMethodRecord? method;
+
+  @override
+  State<_PaymentMethodEditDialog> createState() =>
+      _PaymentMethodEditDialogState();
+}
+
+class _PaymentMethodEditDialogState extends State<_PaymentMethodEditDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _sortController;
+  late String _category;
+  late bool _isActive;
+  late bool _isDefault;
+  bool _saving = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    final method = widget.method;
+    _nameController = TextEditingController(text: method?.name ?? '');
+    _sortController = TextEditingController(text: '${method?.sortOrder ?? 0}');
+    _category = method?.category ?? 'direct_receipt';
+    _isActive = method?.isActive ?? true;
+    _isDefault = method?.isDefault ?? false;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _sortController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    final sortOrder = int.tryParse(_sortController.text.trim());
+    if (name.isEmpty || sortOrder == null || sortOrder < 0) {
+      setState(() => _errorMessage = '请填写名称，排序须为非负整数');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+    final body = <String, dynamic>{
+      'name': name,
+      'category': _category,
+      'isActive': _isDefault ? true : _isActive,
+      'sortOrder': sortOrder,
+      'isDefault': _isDefault,
+    };
+    try {
+      final method = widget.method;
+      if (method == null) {
+        await widget.businessApi.createPaymentMethod(body);
+      } else {
+        await widget.businessApi.updatePaymentMethod(method.id, body);
+      }
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.method == null ? '新增收款方式' : '编辑收款方式'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const ValueKey('payment-method-name-field'),
+              controller: _nameController,
+              decoration: const InputDecoration(labelText: '名称'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: const ValueKey('payment-method-category-field'),
+              initialValue: _category,
+              decoration: const InputDecoration(labelText: '分类'),
+              items: const [
+                DropdownMenuItem(
+                  value: 'direct_receipt',
+                  child: Text('直接收款'),
+                ),
+                DropdownMenuItem(
+                  value: 'agency_collection',
+                  child: Text('代收营业款'),
+                ),
+              ],
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(
+                        () => _category = value ?? 'direct_receipt',
+                      ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('payment-method-sort-field'),
+              controller: _sortController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(labelText: '排序'),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用'),
+              value: _isDefault ? true : _isActive,
+              onChanged: _saving || _isDefault
+                  ? null
+                  : (value) => setState(() => _isActive = value),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('设为默认'),
+              subtitle: const Text('默认方式会自动启用'),
+              value: _isDefault,
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() {
+                        _isDefault = value;
+                        if (value) _isActive = true;
+                      }),
+            ),
+            if (_errorMessage != null)
+              _InlineNotice(
+                message: _errorMessage!,
+                tone: StatusTone.danger,
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('payment-method-save-button'),
+          onPressed: _saving ? null : _save,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save_rounded),
+          label: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
 class _FinanceOrderInlineEditor extends StatefulWidget {
   const _FinanceOrderInlineEditor({
     super.key,
@@ -1715,6 +2036,7 @@ class _FinanceOrderInlineEditorState extends State<_FinanceOrderInlineEditor> {
   bool _commissionDirty = false;
   bool _saving = false;
   bool _confirming = false;
+  final Set<String> _confirmingPaymentDetailIds = <String>{};
   String? _errorMessage;
 
   bool get _hasTaster =>
@@ -1856,6 +2178,31 @@ class _FinanceOrderInlineEditorState extends State<_FinanceOrderInlineEditor> {
     }
   }
 
+  Future<void> _setAgencyCollectionConfirmed(
+    SalesOrderPaymentDetailRecord detail,
+  ) async {
+    setState(() {
+      _confirmingPaymentDetailIds.add(detail.id);
+      _errorMessage = null;
+    });
+    try {
+      final updated = await widget.businessApi.confirmAgencyCollectionPayment(
+        widget.order.id,
+        detail.id,
+        !detail.agencyCollectionConfirmed,
+      );
+      if (!mounted) return;
+      setState(() => _confirmingPaymentDetailIds.remove(detail.id));
+      widget.onSaved(updated);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _confirmingPaymentDetailIds.remove(detail.id);
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final commission = widget.order.tasterCommission;
@@ -1904,6 +2251,55 @@ class _FinanceOrderInlineEditorState extends State<_FinanceOrderInlineEditor> {
                 MoneyText(cents: widget.order.totalAmountCents),
               ],
             ),
+            if (widget.order.paymentDetails.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  for (final detail in widget.order.paymentDetails) ...[
+                    Text(
+                      '${detail.paymentMethodNameSnapshot} '
+                      '${formatMoneyCents(detail.amountCents)}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    if (detail.isAgencyCollection)
+                      OutlinedButton.icon(
+                        key: ValueKey(
+                          'finance-agency-confirm-${widget.order.id}-${detail.id}',
+                        ),
+                        onPressed: !widget.canEdit ||
+                                _confirmingPaymentDetailIds.contains(detail.id)
+                            ? null
+                            : () => _setAgencyCollectionConfirmed(detail),
+                        icon: _confirmingPaymentDetailIds.contains(detail.id)
+                            ? const SizedBox.square(
+                                dimension: 14,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Icon(
+                                detail.agencyCollectionConfirmed
+                                    ? Icons.undo_rounded
+                                    : Icons.verified_rounded,
+                              ),
+                        label: Text(
+                          detail.agencyCollectionConfirmed
+                              ? '撤销代收到账'
+                              : '确认代收到账',
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ] else if (widget.order.paymentDetailsSummary.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                widget.order.paymentDetailsSummary,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ],
             const SizedBox(height: 12),
             LayoutBuilder(
               builder: (context, constraints) {

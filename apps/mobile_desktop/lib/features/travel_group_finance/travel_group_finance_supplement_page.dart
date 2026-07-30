@@ -1,16 +1,16 @@
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:gal/gal.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
+import '../../shared/image_export_memory_policy.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -23,10 +23,9 @@ typedef FinanceImageSaver = Future<FinanceImageSaveResult> Function(
   required String name,
 });
 typedef FinanceFolderOpener = Future<void> Function(String directoryPath);
-typedef FinanceGalleryWriter = Future<void> Function(
+typedef FinanceSystemFileSaver = Future<String?> Function(
   Uint8List bytes, {
-  required String album,
-  required String name,
+  required String suggestedName,
 });
 typedef FinanceTableImageRenderer = Future<Uint8List> Function(
   FinanceExportTablePage page,
@@ -108,7 +107,7 @@ class FinanceExportTablePage {
 
 enum FinanceImageSaveTarget {
   windowsFolder,
-  systemGallery,
+  userSelectedLocation,
 }
 
 class FinanceImageSaveResult {
@@ -126,7 +125,7 @@ class FinanceImageSaveResult {
 
   String get successMessage => switch (target) {
         FinanceImageSaveTarget.windowsFolder => '已保存到：$filePath',
-        FinanceImageSaveTarget.systemGallery => '已保存到系统相册：$album',
+        FinanceImageSaveTarget.userSelectedLocation => '已保存到员工选择的位置',
       };
 }
 
@@ -143,14 +142,14 @@ class FinanceImageSaveService {
   FinanceImageSaveService({
     bool? isWindows,
     String? windowsUserProfile,
-    FinanceGalleryWriter? galleryWriter,
+    FinanceSystemFileSaver? systemFileSaver,
   })  : _isWindows = isWindows ?? Platform.isWindows,
         _windowsUserProfile = windowsUserProfile,
-        _galleryWriter = galleryWriter ?? _saveFinanceImageToGallery;
+        _systemFileSaver = systemFileSaver ?? _saveFinanceImageWithSystemPicker;
 
   final bool _isWindows;
   final String? _windowsUserProfile;
-  final FinanceGalleryWriter _galleryWriter;
+  final FinanceSystemFileSaver _systemFileSaver;
 
   Future<FinanceImageSaveResult> save(
     Uint8List bytes, {
@@ -160,11 +159,17 @@ class FinanceImageSaveService {
     if (_isWindows) {
       return _saveToWindowsPictures(bytes, album: album, name: name);
     }
-    await _galleryWriter(bytes, album: album, name: name);
+    final savedPath = await _systemFileSaver(
+      bytes,
+      suggestedName: name,
+    );
+    if (savedPath == null) {
+      throw const FinanceImageSaveException('已取消图片保存。');
+    }
     return FinanceImageSaveResult(
-      target: FinanceImageSaveTarget.systemGallery,
+      target: FinanceImageSaveTarget.userSelectedLocation,
       album: album,
-      filePath: null,
+      filePath: savedPath,
       directoryPath: null,
     );
   }
@@ -245,33 +250,23 @@ Future<void> openFinanceImageFolder(String directoryPath) async {
   }
 }
 
-Future<void> _saveFinanceImageToGallery(
+Future<String?> _saveFinanceImageWithSystemPicker(
   Uint8List bytes, {
-  required String album,
-  required String name,
+  required String suggestedName,
 }) async {
+  final safeName = _safeExportFileName(suggestedName);
+  final fileName =
+      safeName.toLowerCase().endsWith('.png') ? safeName : '$safeName.png';
   try {
-    final hasAccess = await Gal.hasAccess(toAlbum: true);
-    final accessGranted = hasAccess || await Gal.requestAccess(toAlbum: true);
-    if (!accessGranted) {
-      throw const FinanceImageSaveException(
-        '相册权限被拒绝，请在系统设置中允许照片写入权限。',
-      );
-    }
-    await Gal.putImageBytes(bytes, album: album, name: name);
-  } on FinanceImageSaveException {
-    rethrow;
-  } on GalException catch (error) {
-    throw FinanceImageSaveException(
-      switch (error.type) {
-        GalExceptionType.accessDenied => '相册权限被拒绝，请在系统设置中允许照片写入权限。',
-        GalExceptionType.notEnoughSpace => '设备存储空间不足，无法保存到相册。',
-        GalExceptionType.notSupportedFormat => '图片格式不受支持，无法保存到相册。',
-        GalExceptionType.unexpected => '保存到相册失败，请稍后重试。',
-      },
+    return FilePicker.saveFile(
+      dialogTitle: '导出积分表图片',
+      fileName: fileName,
+      type: FileType.custom,
+      allowedExtensions: const ['png'],
+      bytes: bytes,
     );
-  } catch (_) {
-    throw const FinanceImageSaveException('保存到相册失败，请稍后重试。');
+  } catch (error) {
+    throw FinanceImageSaveException('保存图片失败：$error');
   }
 }
 
@@ -892,7 +887,7 @@ class _TravelGroupFinanceSupplementPageState
     }
     final failureCount = pages.length - successCount;
     final destination = _lastWindowsSaveDirectory == null
-        ? '系统相册：$financeImageAlbumName'
+        ? '员工通过系统文件保存器选择的位置'
         : _lastWindowsSaveDirectory!;
     final message =
         '批量导出完成：成功 $successCount 张表格，失败 $failureCount 张；保存位置：$destination';
@@ -1039,18 +1034,16 @@ class _TravelGroupFinanceSupplementPageState
       final boundary = repaintKey.currentContext?.findRenderObject()
           as RenderRepaintBoundary?;
       if (boundary == null) {
-        throw StateError('无法生成图片。');
+        throw const FinanceImageSaveException('图片尚未准备完成，请稍后重试。');
       }
-      final image = await boundary.toImage(pixelRatio: 2);
       try {
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-        final bytes = byteData?.buffer.asUint8List();
-        if (bytes == null || bytes.isEmpty) {
-          throw StateError('无法生成图片。');
-        }
-        return bytes;
-      } finally {
-        image.dispose();
+        return await renderRepaintBoundaryPngWithinPixelBudget(boundary);
+      } on ExportImagePixelBudgetException catch (error) {
+        throw FinanceImageSaveException(error.message);
+      } catch (_) {
+        throw const FinanceImageSaveException(
+          '图片生成失败，请重试或减少单次导出记录。',
+        );
       }
     } finally {
       entry.remove();

@@ -8,6 +8,28 @@ const {
   OperationLogsNestService,
 } = require('../src/modules/operation-logs/operation-log.nest.service');
 
+test('unit: buyback never generates sales commission, points, or rebates', async () => {
+  const prisma = createCommissionPrisma({
+    salesOrder: {
+      orderType: 'BUYBACK',
+      workflowStatus: 'APPROVED',
+    },
+  });
+  const service = createService(prisma);
+
+  const result = await service.recalculateSalesOrderRecords('order-stage7');
+
+  assert.equal(result.records.length, 0);
+  assert.equal(result.generatedRecords.length, 0);
+  assert.equal(prisma.__store.commissionRecords.length, 0);
+  assert.equal(
+    result.warnings.some(
+      (warning) => warning.code === 'sales_order_not_commission_eligible',
+    ),
+    true,
+  );
+});
+
 test('unit: stage7 commission record service generates order-level records', async () => {
   const prisma = createCommissionPrisma();
   const service = createService(prisma);
@@ -411,14 +433,14 @@ test('unit: agency-only recalculation uses confirmed refunds and never rewrites 
   assertRecord(prisma, 'AGENCY_DAILY_REBATE', {
     grossAmountCents: 1000000,
     confirmedRefundAmountCents: 100000,
-    deductionAmountCents: 270000,
-    baseAmountCents: 630000,
-    pointsCents: 18900,
+    deductionAmountCents: 300000,
+    baseAmountCents: 600000,
+    pointsCents: 18000,
   });
   assertRecord(prisma, 'AGENCY_MONTHLY_REBATE', {
-    deductionAmountCents: 270000,
-    baseAmountCents: 630000,
-    pointsCents: 12600,
+    deductionAmountCents: 300000,
+    baseAmountCents: 600000,
+    pointsCents: 12000,
   });
   for (const before of employeeBefore) {
     const after = prisma.__store.commissionRecords.find(

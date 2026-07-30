@@ -50,8 +50,14 @@ export function buildAnalyticsSalesOrderWhere(
     options.baseWhere,
     {
       orderType: {
-        not: 'AFTER_SALES',
+        notIn: ['AFTER_SALES', 'BUYBACK'],
       },
+    },
+    {
+      OR: [
+        { workflowStatus: null },
+        { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+      ],
     },
     buildDateFieldWhere('orderDate', options.dateRange, false),
     buildGlobalSalesOrderMarkScope(options.onlyShowMarkedRecords),

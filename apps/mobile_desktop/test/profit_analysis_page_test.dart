@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -113,9 +114,15 @@ void main() {
 
     expect(find.text('旅行团数'), findsOneWidget);
     expect(find.text('有效销售额'), findsWidgets);
+    expect(find.text('税费合计'), findsOneWidget);
+    expect(find.text('手续费合计'), findsOneWidget);
     expect(find.text('可核算团数'), findsOneWidget);
     expect(find.text('预估利润率'), findsWidgets);
     expect(find.text('成本不完整团数'), findsOneWidget);
+    expect(find.text(formatMoneyCents(260)), findsOneWidget);
+    expect(find.text(formatMoneyCents(180)), findsOneWidget);
+    expect(find.text('税费'), findsOneWidget);
+    expect(find.text('手续费'), findsOneWidget);
     expect(find.text(formatMoneyCents(26000)), findsWidgets);
     expect(find.text('完整'), findsNWidgets(2));
     expect(find.text('估算'), findsOneWidget);
@@ -145,6 +152,29 @@ void main() {
     expect(find.text('外联提成'), findsOneWidget);
     expect(find.text('员工提成（汇总）'), findsNothing);
     expect(find.text('品鉴师提成（汇总）'), findsOneWidget);
+    expect(find.text('付款手续费'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('profit-analysis-payment-fee-breakdown'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('付款方式手续费明细'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('profit-analysis-payment-fee-row-0')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('profit-analysis-payment-fee-row-1')),
+      findsOneWidget,
+    );
+    expect(find.text('收钱吧'), findsNWidgets(2));
+    expect(find.text('0.6%'), findsOneWidget);
+    expect(find.text('1%'), findsOneWidget);
+    expect(find.text('原付款金额'), findsNWidgets(2));
+    expect(find.text('当天退款扣减'), findsNWidgets(2));
+    expect(find.text('手续费基数'), findsNWidgets(2));
     expect(find.text('商品单位成本'), findsNothing);
     expect(find.text('个人提成明细'), findsNothing);
 
@@ -161,12 +191,33 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.byKey(
+        const ValueKey(
+          'profit-analysis-warning-PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('手续费快照缺失，请财务补齐费率并重新标记订单'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('sends preset, search, status, sort, direction, and page filters',
       (tester) async {
     final client = _FakeProfitApiClient();
-    await tester.pumpWidget(_page(client));
+    DownloadedFile? savedFile;
+    await tester.pumpWidget(
+      _page(
+        client,
+        fileSaver: (file) async {
+          savedFile = file;
+          return 'D:/exports/travel-group-profits.xlsx';
+        },
+      ),
+    );
     await tester.pumpAndSettle();
 
     var uri = Uri.parse(client.paths.last);
@@ -215,14 +266,29 @@ void main() {
     uri = Uri.parse(client.paths.last);
     expect(uri.queryParameters['sortDirection'], 'asc');
 
-    final nextPage =
-        find.byKey(const ValueKey('profit-analysis-next-page'));
+    final nextPage = find.byKey(const ValueKey('profit-analysis-next-page'));
     await tester.ensureVisible(nextPage);
     await tester.pump();
     await tester.tap(nextPage);
     await tester.pumpAndSettle();
     uri = Uri.parse(client.paths.last);
     expect(uri.queryParameters['page'], '2');
+
+    final exportButton =
+        find.byKey(const ValueKey('profit-analysis-export-button'));
+    await tester.ensureVisible(exportButton);
+    await tester.tap(exportButton);
+    await tester.pumpAndSettle();
+    uri = Uri.parse(client.downloadPaths.single);
+    expect(uri.path, '/api/analytics/travel-group-profits/export');
+    expect(uri.queryParameters['preset'], 'today');
+    expect(uri.queryParameters['query'], 'Agency A');
+    expect(uri.queryParameters['status'], 'estimated');
+    expect(uri.queryParameters['sortBy'], 'estimatedProfitCents');
+    expect(uri.queryParameters['sortDirection'], 'asc');
+    expect(uri.queryParameters.containsKey('page'), isFalse);
+    expect(uri.queryParameters.containsKey('pageSize'), isFalse);
+    expect(savedFile?.fileName, 'travel-group-profits-test.xlsx');
   });
 
   testWidgets('narrow layout uses cards without overflow', (tester) async {
@@ -243,7 +309,79 @@ void main() {
       find.byKey(const ValueKey('profit-analysis-table')),
       findsNothing,
     );
+    expect(find.text('税费'), findsWidgets);
+    expect(find.text('手续费'), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('export disables duplicate clicks and reports saved path',
+      (tester) async {
+    final pending = Completer<ApiDownloadedFile>();
+    final client = _FakeProfitApiClient(downloadPending: pending);
+    var saverCalls = 0;
+    await tester.pumpWidget(
+      _page(
+        client,
+        fileSaver: (file) async {
+          saverCalls += 1;
+          return 'D:/exports/${file.fileName}';
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final exportButton =
+        find.byKey(const ValueKey('profit-analysis-export-button'));
+    await tester.tap(exportButton);
+    await tester.pump();
+    expect(find.text('导出中'), findsOneWidget);
+    expect(
+      tester.widget<FilledButton>(exportButton).onPressed,
+      isNull,
+    );
+    expect(client.downloadPaths, hasLength(1));
+
+    pending.complete(
+      ApiDownloadedFile(
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'travel-group-profits-pending.xlsx',
+        contentType:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(saverCalls, 1);
+    expect(find.text('导出 Excel'), findsOneWidget);
+    expect(
+      find.text(
+        '旅行团利润已导出：'
+        'D:/exports/travel-group-profits-pending.xlsx',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('export errors restore the button and show a clear message',
+      (tester) async {
+    final client = _FakeProfitApiClient(downloadFailuresRemaining: 1);
+    await tester.pumpWidget(
+      _page(
+        client,
+        fileSaver: (_) async => 'unused',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final exportButton =
+        find.byKey(const ValueKey('profit-analysis-export-button'));
+    await tester.tap(exportButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('测试利润导出失败'), findsWidgets);
+    expect(
+      tester.widget<FilledButton>(exportButton).onPressed,
+      isNotNull,
+    );
   });
 
   test('profit DTO tolerates missing optional fields', () {
@@ -274,6 +412,8 @@ void main() {
 
     expect(response.summary.estimatedProfitCents, isNull);
     expect(response.summary.estimatedProfitRate, isNull);
+    expect(response.summary.taxFeeCents, 0);
+    expect(response.summary.paymentServiceFeeCents, 0);
     expect(response.items.single.estimatedProfitCents, isNull);
     expect(response.items.single.estimatedProfitRate, isNull);
     expect(response.items.single.warnings, isEmpty);
@@ -283,12 +423,16 @@ void main() {
     expect(response.items.single.salesCommissionCents, 0);
     expect(response.items.single.leaderCommissionCents, 0);
     expect(response.items.single.outreachCommissionCents, 0);
+    expect(response.items.single.taxFeeCents, 0);
+    expect(response.items.single.paymentServiceFeeCents, 0);
+    expect(response.items.single.paymentMethodFeeBreakdown, isEmpty);
   });
 }
 
 Widget _page(
   ApiClient client, {
   UserRole role = UserRole.admin,
+  TravelGroupProfitFileSaver? fileSaver,
 }) {
   return MaterialApp(
     locale: const Locale('zh', 'CN'),
@@ -297,6 +441,7 @@ Widget _page(
         apiClient: client,
         token: 'test-token',
         role: role,
+        travelGroupProfitFileSaver: fileSaver,
       ),
     ),
   );
@@ -305,12 +450,17 @@ Widget _page(
 class _FakeProfitApiClient extends ApiClient {
   _FakeProfitApiClient({
     this.pending,
+    this.downloadPending,
     this.failuresRemaining = 0,
+    this.downloadFailuresRemaining = 0,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final Completer<Map<String, dynamic>>? pending;
+  final Completer<ApiDownloadedFile>? downloadPending;
   int failuresRemaining;
+  int downloadFailuresRemaining;
   final List<String> paths = [];
+  final List<String> downloadPaths = [];
 
   @override
   Future<Map<String, dynamic>> getJson(
@@ -333,6 +483,38 @@ class _FakeProfitApiClient extends ApiClient {
     }
     return {'data': _responseJson()};
   }
+
+  @override
+  Future<ApiDownloadedFile> getBytes(
+    String path, {
+    required String defaultFileName,
+    String? token,
+  }) async {
+    downloadPaths.add(path);
+    expect(token, 'test-token');
+    expect(defaultFileName, 'travel-group-profits.xlsx');
+    expect(
+      Uri.parse(path).path,
+      '/api/analytics/travel-group-profits/export',
+    );
+    if (downloadFailuresRemaining > 0) {
+      downloadFailuresRemaining -= 1;
+      throw const ApiException(
+        statusCode: 500,
+        code: 'TEST_EXPORT_FAILURE',
+        message: '测试利润导出失败',
+      );
+    }
+    if (downloadPending != null && downloadPaths.length == 1) {
+      return downloadPending!.future;
+    }
+    return ApiDownloadedFile(
+      bytes: Uint8List.fromList([1, 2, 3]),
+      fileName: 'travel-group-profits-test.xlsx',
+      contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  }
 }
 
 Map<String, dynamic> _responseJson({
@@ -353,6 +535,8 @@ Map<String, dynamic> _responseJson({
       'noSalesGroupCount': 1,
       'effectiveSalesAmountCents': 26000,
       'actualProductCostCents': 9000,
+      'taxFeeCents': 260,
+      'paymentServiceFeeCents': 180,
       'totalExpenseCents': 17000,
       'estimatedProfitCents': null,
       'knownEstimatedProfitCents': 6000,
@@ -411,6 +595,10 @@ List<Map<String, dynamic>> _itemsJson() {
           'code': 'CIGARETTE_FEE_MISSING',
           'message': '香烟费用未填写，请前台补录后再核算利润。',
         },
+        {
+          'code': 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
+          'message': 'Snapshot is missing.',
+        },
       ],
     ),
     _item(
@@ -467,6 +655,32 @@ Map<String, dynamic> _item({
     'tasterCommissionCents': expenses ~/ 10,
     'dailyAgencyRebateCents': expenses ~/ 10,
     'monthlyAgencyRebateCents': expenses ~/ 10,
+    'taxFeeCents': id == 'incomplete' ? null : sales ~/ 100,
+    'paymentServiceFeeCents': id == 'incomplete' ? null : expenses ~/ 50,
+    'paymentMethodFeeBreakdown': id == 'complete'
+        ? [
+            {
+              'paymentMethodId': 'wallet',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'serviceFeeRateSnapshot': '0.006000',
+              'originalPaymentAmountCents': 6000,
+              'sameDayRefundAmountCents': 1000,
+              'serviceFeeBaseAmountCents': 5000,
+              'serviceFeeCents': 30,
+              'orderCount': 1,
+            },
+            {
+              'paymentMethodId': 'wallet',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'serviceFeeRateSnapshot': '0.010000',
+              'originalPaymentAmountCents': 4000,
+              'sameDayRefundAmountCents': 0,
+              'serviceFeeBaseAmountCents': 4000,
+              'serviceFeeCents': 40,
+              'orderCount': 1,
+            },
+          ]
+        : const [],
     'totalExpenseCents': expenses,
     'estimatedProfitCents': profit,
     'estimatedProfitRate': rate,

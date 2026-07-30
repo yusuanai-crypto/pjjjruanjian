@@ -1249,6 +1249,21 @@ test('unit: AI customer order lookup supports order number and returns compact o
         fulfillmentWarehouseId: 'warehouse-internal-secret',
         inventoryAppliedAt: '2026-07-04T00:00:00.000Z',
         inventoryVersion: 99,
+        cashOnDeliveryAmountCents: 99999,
+        paymentDetails: [
+          {
+            paymentMethodCategorySnapshot: 'direct_receipt',
+            amountCents: 80000,
+          },
+          {
+            paymentMethodCategorySnapshot: 'collect_on_delivery',
+            amountCents: 25000,
+          },
+          {
+            paymentMethodCategorySnapshot: 'collect_on_delivery',
+            amountCents: -5000,
+          },
+        ],
         warehouseProductStock: {
           onHandQty: 999,
           availableQty: 998,
@@ -1317,6 +1332,8 @@ test('unit: AI customer order lookup supports order number and returns compact o
   assert.equal(result.data.orders[0].products.itemCount, 1);
   assert.equal(result.data.orders[0].products.items[0].productName, '酱香酒');
   assert.equal(result.data.orders[0].afterSalesSummary.afterSalesCount, 1);
+  assert.equal(result.data.orders[0].cashOnDeliveryAmountCents, 20000);
+  assert.equal(result.data.summary.cashOnDeliveryAmountCents, 20000);
   assert.equal(Object.hasOwn(result.data.orders[0], 'address'), false);
   assert.equal(Object.hasOwn(result.data.orders[0].customer, 'phone'), false);
   assert.equal(Object.hasOwn(result.data.orders[0].products.items[0], 'notes'), false);

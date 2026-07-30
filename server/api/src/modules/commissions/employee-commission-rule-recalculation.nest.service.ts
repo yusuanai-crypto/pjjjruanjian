@@ -141,13 +141,23 @@ export class EmployeeCommissionRuleRecalculationNestService {
     }
     const orders = await this.prisma.salesOrder.findMany({
       where: {
-        orderType: { not: 'AFTER_SALES' },
-        OR: descriptors.map((descriptor) => ({
-          orderDate: {
-            gte: descriptor.dateFrom,
-            ...(descriptor.dateTo ? { lte: descriptor.dateTo } : {}),
+        orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] },
+        AND: [
+          {
+            OR: descriptors.map((descriptor) => ({
+              orderDate: {
+                gte: descriptor.dateFrom,
+                ...(descriptor.dateTo ? { lte: descriptor.dateTo } : {}),
+              },
+            })),
           },
-        })),
+          {
+            OR: [
+              { workflowStatus: null },
+              { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+            ],
+          },
+        ],
       },
       select: {
         id: true,

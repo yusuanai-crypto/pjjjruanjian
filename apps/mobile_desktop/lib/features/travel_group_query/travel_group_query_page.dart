@@ -92,6 +92,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
   List<TasterOption> _tasters = const <TasterOption>[];
   final Set<String> _markingIds = <String>{};
   final Set<String> _summarizingIds = <String>{};
+  final Set<String> _notEnteredUpdatingIds = <String>{};
   String? _activeDetailGroupId;
   bool _handlingIncomingAttachments = false;
 
@@ -170,7 +171,7 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
       final results = await Future.wait<Object>([
         _businessApi.listTravelGroups(
           limit: 200,
-          start: _dateRangeAll ? null : _start,
+          start: _travelGroupQueryStart(),
           end: _dateRangeAll ? null : _end,
           keyword: _keyword,
           groupType: _optionalFilter(_groupTypeFilter),
@@ -279,6 +280,16 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
             widget.currentUserId.isNotEmpty
         ? widget.currentUserId
         : null;
+  }
+
+  DateTime? _travelGroupQueryStart() {
+    if (widget.role == UserRole.taster && _tasterScope == _tasterScopeLiaison) {
+      final today = _shanghaiToday();
+      if (_dateRangeAll || _start.isBefore(today)) {
+        return today;
+      }
+    }
+    return _dateRangeAll ? null : _start;
   }
 
   TravelGroupRecord? _recordById(String id) {
@@ -482,6 +493,12 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
           return StatefulBuilder(
             builder: (context, setDialogState) {
               final selected = _recordById(group.id) ?? group;
+              void refreshDetail() {
+                if (context.mounted && _activeDetailGroupId == selected.id) {
+                  setDialogState(() {});
+                }
+              }
+
               Future<void> runAction(Future<void> Function() action) async {
                 await action();
                 if (mounted) {
@@ -519,6 +536,8 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                           role: widget.role,
                           marking: _markingIds.contains(selected.id),
                           summarizing: _summarizingIds.contains(selected.id),
+                          updatingNotEntered:
+                              _notEnteredUpdatingIds.contains(selected.id),
                           onCreateOrder: _canCreateOrder(widget.role)
                               ? () => _openOrderForm(selected)
                               : null,
@@ -535,6 +554,30 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
                                       selected.canEditByCurrentUser)
                               ? () => runAction(() => _submitSummary(selected))
                               : null,
+                          onConfirmNotEntered: selected.entryStatus ==
+                                      'pending_entry' &&
+                                  canConfirmTravelGroupNotEntered(
+                                    widget.role,
+                                    liaisonTasterId: selected.liaisonTasterId,
+                                    currentUserId: widget.currentUserId,
+                                  )
+                              ? () => _setTravelGroupNotEntered(
+                                    selected,
+                                    true,
+                                    refreshDetail,
+                                  )
+                              : null,
+                          onRevokeNotEntered:
+                              selected.entryStatus == 'not_entered' &&
+                                      canRevokeTravelGroupNotEntered(
+                                        widget.role,
+                                      )
+                                  ? () => _setTravelGroupNotEntered(
+                                        selected,
+                                        false,
+                                        refreshDetail,
+                                      )
+                                  : null,
                           onPreviewAttachment: (attachment) =>
                               _previewAttachment(selected, attachment),
                           onDownloadAttachment: (attachment) =>
@@ -660,6 +703,85 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     }
   }
 
+  Future<void> _setTravelGroupNotEntered(
+    TravelGroupRecord group,
+    bool confirmed,
+    VoidCallback refreshDetail,
+  ) async {
+    if (_notEnteredUpdatingIds.contains(group.id)) {
+      return;
+    }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(confirmed ? '确认未进店' : '撤销未进店'),
+        content: Text(
+          confirmed
+              ? '确定将旅行团 ${group.groupNo} 标记为未进店吗？'
+                  '系统将记录本次操作者和确认时间。'
+              : '确定撤销旅行团 ${group.groupNo} 的未进店确认吗？'
+                  '撤销后将恢复为待进店并重新计算待处理事项。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: ValueKey(
+              confirmed
+                  ? 'confirm-travel-group-not-entered-dialog-submit'
+                  : 'revoke-travel-group-not-entered-dialog-submit',
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(confirmed ? '确认未进店' : '撤销未进店'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _notEnteredUpdatingIds.add(group.id);
+      _errorMessage = null;
+    });
+    refreshDetail();
+    try {
+      final updated = await _businessApi.setTravelGroupNotEntered(
+        group.id,
+        confirmed,
+      );
+      if (!mounted) {
+        return;
+      }
+      _replaceGroup(updated);
+      setState(() {
+        _notEnteredUpdatingIds.remove(group.id);
+      });
+      refreshDetail();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(confirmed ? '已确认未进店。' : '已撤销未进店。'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _messageForError(error);
+      setState(() {
+        _notEnteredUpdatingIds.remove(group.id);
+        _errorMessage = message;
+      });
+      refreshDetail();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
+
   void _replaceGroup(TravelGroupRecord updated) {
     setState(() {
       _groups = [
@@ -691,12 +813,6 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     );
   }
 
-  bool _isAssociatedTaster(TravelGroupRecord group) {
-    return widget.currentUserId.isNotEmpty &&
-        (group.tasterId == widget.currentUserId ||
-            group.liaisonTasterId == widget.currentUserId);
-  }
-
   bool _canEditGroup(TravelGroupRecord group) {
     if (widget.role == UserRole.taster) {
       return group.canEditByCurrentUser;
@@ -715,11 +831,20 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     if (widget.role != UserRole.taster || group.canEditByCurrentUser) {
       return null;
     }
-    if (group.visitDate != formatDate(_shanghaiToday())) {
-      return '未来旅行团仅可查看，品鉴师只能修改今天的旅行团。';
+    final today = formatDate(_shanghaiToday());
+    final visitDate = group.visitDate;
+    if (visitDate.compareTo(today) < 0) {
+      return '历史旅行团仅可查看。';
     }
-    if (!_isAssociatedTaster(group)) {
-      return '仅接待品鉴师或对接品鉴师可修改今天的旅行团。';
+    if (visitDate.compareTo(today) > 0 &&
+        group.liaisonTasterId != widget.currentUserId) {
+      return '未来旅行团仅对接品鉴师可以修改，其他品鉴师仅可查看。';
+    }
+    if (visitDate == today &&
+        (group.arrivalTime == null || group.arrivalTime!.isEmpty) &&
+        group.tasterId != widget.currentUserId &&
+        group.liaisonTasterId != widget.currentUserId) {
+      return '该旅行团尚未进店，所有品鉴师均可查看；只有关联品鉴师可以修改。';
     }
     return '当前旅行团为只读。';
   }
@@ -878,7 +1003,10 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('附件已下载'),
           content: openError == null
-              ? const Text('附件已保存到本地，可以选择其他应用打开。')
+              ? const Text(
+                  '附件来自外部来源。其他应用可能解析文件中的活动内容；'
+                  '请仅在确认文件来源可信时选择打开。',
+                )
               : Text(openError!),
           actions: [
             TextButton(
@@ -1235,7 +1363,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
           children: [
             AppSearchField(
               controller: keywordController,
-              hintText: '搜索团号、旅行社、导游、品鉴师、客源地和重点客户',
+              hintText: '搜索团号、车牌号、旅行社、导游、品鉴师、客源地和重点客户',
               onChanged: onKeywordChanged,
             ),
             AppDateRangeButton(
@@ -1284,7 +1412,7 @@ class _TravelGroupQueryFilters extends StatelessWidget {
             segments: const [
               ButtonSegment(
                 value: _tasterScopeAll,
-                label: Text('全部旅行团'),
+                label: Text('可查看旅行团'),
                 icon: Icon(Icons.groups_rounded),
               ),
               ButtonSegment(
@@ -1843,10 +1971,9 @@ class _TravelGroupEditDialogState extends State<_TravelGroupEditDialog> {
       payload['childCount'] = _intFromText(_childCountController.text);
     }
     if (_canEditCigaretteFee) {
-      payload['cigaretteFeeCents'] =
-          _cigaretteFeeController.text.trim().isEmpty
-              ? null
-              : _centsFromMoneyText(_cigaretteFeeController.text);
+      payload['cigaretteFeeCents'] = _cigaretteFeeController.text.trim().isEmpty
+          ? null
+          : _centsFromMoneyText(_cigaretteFeeController.text);
     }
     if (_canEditDepartureTime) {
       payload['departureTime'] =

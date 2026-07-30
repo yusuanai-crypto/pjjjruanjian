@@ -251,15 +251,24 @@ function createFixture(overrides = {}) {
     salesOrder: {
       findMany: async ({ where, take }) =>
         orders
-          .filter((candidate) =>
-            where.OR.some(({ orderDate }) => {
+          .filter((candidate) => {
+            if (
+              ['AFTER_SALES', 'BUYBACK'].includes(candidate.orderType) ||
+              (candidate.workflowStatus &&
+                !['APPROVED', 'COMPLETED'].includes(
+                  candidate.workflowStatus,
+                ))
+            ) {
+              return false;
+            }
+            return where.AND[0].OR.some(({ orderDate }) => {
               const timestamp = candidate.orderDate.getTime();
               return (
                 timestamp >= orderDate.gte.getTime() &&
                 (!orderDate.lte || timestamp <= orderDate.lte.getTime())
               );
-            }),
-          )
+            });
+          })
           .slice(0, take),
     },
   };

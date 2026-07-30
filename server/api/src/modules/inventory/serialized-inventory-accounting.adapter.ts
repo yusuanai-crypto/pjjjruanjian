@@ -628,6 +628,43 @@ export class SerializedInventoryAccountingAdapter {
 
   async createUnits(actor: any, input: any, metadata: any = {}) {
     requireRole(actor, SERIALIZED_WRITE_ROLES);
+    const rows = Array.isArray(input?.units) ? input.units : [];
+    const envelope = serializedEnvelope(
+      'SERIALIZED_INBOUND',
+      input,
+      {
+        warehouseId: input?.warehouseId,
+        productId: input?.productId,
+        condition: input?.condition,
+        units: rows.map(serializedUnitHashSnapshot),
+      },
+    );
+    const result = await this.runStandaloneSerializedCommand(
+      envelope,
+      async (transaction) =>
+        await this.createUnitsInTransaction(
+          transaction,
+          actor,
+          input,
+          metadata,
+        ),
+    );
+    await this.dispatchReceipt(result.commandReceiptId);
+    return result;
+  }
+
+  /**
+   * Automatic domain workflows use this entry point so the serialized receipt,
+   * business fact and their own state transition commit atomically. Public
+   * inventory entry continues to use createUnits(), which enforces inventory
+   * operator roles before opening its transaction.
+   */
+  async createUnitsInTransaction(
+    transaction: any,
+    actor: any,
+    input: any,
+    metadata: any = {},
+  ) {
     const repository = this.requiredRepository();
     const rows = Array.isArray(input?.units) ? input.units : [];
     if (rows.length === 0) {
@@ -639,148 +676,165 @@ export class SerializedInventoryAccountingAdapter {
       {
         warehouseId: input.warehouseId,
         productId: input.productId,
+        condition: input.condition,
         units: rows.map(serializedUnitHashSnapshot),
       },
     );
-    const result = await this.runStandaloneSerializedCommand(
+    return this.executeSerializedCommandInTransaction(
+      transaction,
+      'SERIALIZED_INBOUND',
+      actor,
       envelope,
-      async (transaction) =>
-        await this.executeSerializedCommandInTransaction(
+      metadata,
+      async (receipt) => {
+        const warehouse = await this.loadActiveWarehouse(
           transaction,
-          'SERIALIZED_INBOUND',
-          actor,
+          requiredString(input.warehouseId, 'warehouseId'),
+        );
+        const product = await this.loadSerializedProduct(
+          transaction,
+          requiredString(input.productId, 'productId'),
+        );
+        const now = new Date();
+        const sourceType =
+          optionalString(input.sourceType) || 'SERIALIZED_INBOUND';
+        const reason =
+          optionalString(input.reason) || 'Serialized inventory batch entry.';
+        const document = await this.createDocument(
+          transaction,
+          receipt,
           envelope,
-          metadata,
-          async (receipt) => {
-            const warehouse = await this.loadActiveWarehouse(
-              transaction,
-              requiredString(input.warehouseId, 'warehouseId'),
-            );
-            const product = await this.loadSerializedProduct(
-              transaction,
-              requiredString(input.productId, 'productId'),
-            );
-            const now = new Date();
-            const document = await this.createDocument(
-              transaction,
-              receipt,
-              envelope,
-              actor,
-              {
-                type: 'OTHER_IN',
-                warehouseId: warehouse.id,
-                sourceType: 'SERIALIZED_INBOUND',
-                sourceId: product.id,
-                businessAt: now,
-                reason: 'Serialized inventory batch entry.',
-              },
-            );
-            const line = await repository.createDocumentLine(transaction, {
-              documentId: document.id,
-              lineNo: 1,
-              productId: product.id,
-              batchId: null,
-              quantity: rows.length,
-              condition: rows.every(
-                (row: any) => row.purchaseCostCents !== null,
-              )
-                ? 'SALEABLE'
-                : 'UNAVAILABLE',
-              productNameSnapshot: product.name,
-              unitSnapshot: product.unit,
-              purchaseUnitCostCents: null,
-              notes: null,
-            });
-            const created = [];
-            const movements = [];
-            let unavailableDelta = 0;
-            for (const [index, row] of rows.entries()) {
-              const pendingCost =
-                row.purchaseCostCents === null ||
-                row.purchaseCostCents === undefined;
-              const unit = await transaction.serializedInventoryUnit.create({
-                data: {
-                  id: crypto.randomUUID(),
-                  productId: product.id,
-                  warehouseId: warehouse.id,
-                  inventoryBatchId: row.inventoryBatchId ?? null,
-                  moutaiName: row.moutaiName,
-                  normalizedMoutaiName: row.normalizedMoutaiName,
-                  factoryDate: row.factoryDate,
-                  productionBatch: row.productionBatch,
-                  batchSerialNo: row.batchSerialNo,
-                  logisticsCode: row.logisticsCode,
-                  normalizedLogisticsCode: row.normalizedLogisticsCode,
-                  purchaseCostCents: row.purchaseCostCents ?? null,
-                  status: pendingCost ? 'PENDING_COST' : 'AVAILABLE',
-                  version: 0,
-                  createdById: actorId(actor),
-                  updatedById: actorId(actor),
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              });
-              unavailableDelta += pendingCost ? 1 : 0;
-              const movement = await repository.createMovement(
-                transaction,
-                {
-                  sourceKey: childSourceKey(
-                    envelope.sourceKey,
-                    `unit-${index + 1}-${unit.id}`,
-                  ),
-                  documentLineId: line.id,
-                  warehouseId: warehouse.id,
-                  productId: product.id,
-                  batchId: unit.inventoryBatchId,
-                  serializedUnitId: unit.id,
-                  reservationId: null,
-                  movementType: 'OTHER_IN',
-                  onHandDelta: 1,
-                  reservedDelta: 0,
-                  unavailableDelta: pendingCost ? 1 : 0,
-                  inTransitDelta: 0,
-                  businessAt: now,
-                  operatorUserId: actorId(actor),
-                  operatorNameSnapshot: actorName(actor),
-                  operatorRoleSnapshot: actorRole(actor),
-                  productNameSnapshot: product.name,
-                  unitSnapshot: product.unit,
-                  purchaseUnitCostCents: row.purchaseCostCents ?? null,
-                  reason: 'Serialized inventory batch entry.',
-                },
-              );
-              created.push(unit);
-              movements.push(movement);
-            }
-            const stockChange = await this.applyStockDelta(
-              transaction,
-              warehouse.id,
-              product.id,
-              {
-                ...ZERO_DELTA,
-                onHandDelta: rows.length,
-                unavailableDelta,
-              },
-              movements[movements.length - 1].id,
-            );
-            return {
-              document,
-              movementIds: movements.map((movement) => movement.id),
-              stockChanges: [stockChange],
-              unitIds: created.map((unit) => unit.id),
-              auditBefore: null,
-              auditAfter: {
-                warehouseId: warehouse.id,
-                productId: product.id,
-                createdCount: created.length,
-                pendingCostCount: unavailableDelta,
-              },
-            };
+          actor,
+          {
+            type: 'OTHER_IN',
+            warehouseId: warehouse.id,
+            sourceType,
+            sourceId: optionalString(input.sourceId) || product.id,
+            businessAt: now,
+            reason,
           },
-        ),
+        );
+        const forcedUnavailable =
+          String(input?.condition || '').trim().toUpperCase() ===
+          'UNAVAILABLE';
+        const line = await repository.createDocumentLine(transaction, {
+          documentId: document.id,
+          lineNo: 1,
+          productId: product.id,
+          batchId: null,
+          quantity: rows.length,
+          condition: !forcedUnavailable && rows.every(
+            (row: any) =>
+              row.purchaseCostCents !== null &&
+              row.purchaseCostCents !== undefined,
+          )
+            ? 'SALEABLE'
+            : 'UNAVAILABLE',
+          productNameSnapshot: product.name,
+          unitSnapshot: product.unit,
+          purchaseUnitCostCents: null,
+          notes: reason,
+        });
+        const created = [];
+        const movements = [];
+        let unavailableDelta = 0;
+        for (const [index, row] of rows.entries()) {
+          const pendingCost =
+            row.purchaseCostCents === null ||
+            row.purchaseCostCents === undefined;
+          const unavailable = pendingCost || forcedUnavailable;
+          const unit = await transaction.serializedInventoryUnit.create({
+            data: {
+              id: crypto.randomUUID(),
+              productId: product.id,
+              warehouseId: warehouse.id,
+              inventoryBatchId: row.inventoryBatchId ?? null,
+              moutaiName: row.moutaiName ?? product.name,
+              normalizedMoutaiName:
+                row.normalizedMoutaiName ??
+                String(row.moutaiName ?? product.name)
+                  .normalize('NFKC')
+                  .trim()
+                  .toLocaleLowerCase('zh-CN'),
+              factoryDate: row.factoryDate ?? null,
+              productionBatch: row.productionBatch ?? null,
+              batchSerialNo: row.batchSerialNo ?? null,
+              logisticsCode: requiredString(
+                row.logisticsCode,
+                `units[${index}].logisticsCode`,
+              ),
+              normalizedLogisticsCode: requiredString(
+                row.normalizedLogisticsCode,
+                `units[${index}].normalizedLogisticsCode`,
+              ),
+              purchaseCostCents: row.purchaseCostCents ?? null,
+              status: pendingCost
+                ? 'PENDING_COST'
+                : forcedUnavailable
+                  ? 'UNAVAILABLE'
+                  : 'AVAILABLE',
+              version: 0,
+              createdById: actorId(actor),
+              updatedById: actorId(actor),
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+          unavailableDelta += unavailable ? 1 : 0;
+          const movement = await repository.createMovement(transaction, {
+            sourceKey: childSourceKey(
+              envelope.sourceKey,
+              `unit-${index + 1}-${unit.id}`,
+            ),
+            documentLineId: line.id,
+            warehouseId: warehouse.id,
+            productId: product.id,
+            batchId: unit.inventoryBatchId,
+            serializedUnitId: unit.id,
+            reservationId: null,
+            movementType: 'PURCHASE_IN',
+            onHandDelta: 1,
+            reservedDelta: 0,
+            unavailableDelta: unavailable ? 1 : 0,
+            inTransitDelta: 0,
+            businessAt: now,
+            operatorUserId: actorId(actor),
+            operatorNameSnapshot: actorName(actor),
+            operatorRoleSnapshot: actorRole(actor),
+            productNameSnapshot: product.name,
+            unitSnapshot: product.unit,
+            purchaseUnitCostCents: row.purchaseCostCents ?? null,
+            reason,
+          });
+          created.push(unit);
+          movements.push(movement);
+        }
+        const stockChange = await this.applyStockDelta(
+          transaction,
+          warehouse.id,
+          product.id,
+          {
+            ...ZERO_DELTA,
+            onHandDelta: rows.length,
+            unavailableDelta,
+          },
+          movements[movements.length - 1].id,
+        );
+        return {
+          document,
+          movementIds: movements.map((movement) => movement.id),
+          stockChanges: [stockChange],
+          unitIds: created.map((unit) => unit.id),
+          auditBefore: null,
+          auditAfter: {
+            warehouseId: warehouse.id,
+            productId: product.id,
+            createdCount: created.length,
+            pendingCostCount: unavailableDelta,
+          },
+        };
+      },
     );
-    await this.dispatchReceipt(result.commandReceiptId);
-    return result;
   }
 
   async completeUnitCost(
@@ -2670,6 +2724,12 @@ function boundedTraceId(value: unknown) {
   const normalized =
     typeof value === 'string' ? value.trim() : '';
   return normalized ? normalized.slice(0, 64) : null;
+}
+
+function optionalString(value: unknown) {
+  return typeof value === 'string' && value.trim()
+    ? value.normalize('NFKC').trim()
+    : null;
 }
 
 function validationError(message: string) {

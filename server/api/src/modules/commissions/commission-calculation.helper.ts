@@ -1,4 +1,4 @@
-const CALCULATION_VERSION = 'stage7_v1';
+const CALCULATION_VERSION = 'stage7_v2_personal_split';
 
 const SALES_COMMISSION = 'SALES_COMMISSION';
 const OUTREACH_COMMISSION = 'OUTREACH_COMMISSION';
@@ -36,6 +36,26 @@ export interface CalculateStage7CommissionInput {
   travelAgencies?: any[];
   calculationVersion?: string;
   allowLatestAgencyRebateRuleFallback?: boolean;
+}
+
+export interface CentsAllocation {
+  normalAmountCents: number;
+  personalAmountCents: number;
+}
+
+export interface SalesOrderPointsSplit {
+  totalAmountCents: number;
+  personalAmountCents: number;
+  normalAmountCents: number;
+  confirmedRefundAmountCents: number;
+  personalRefundAmountCents: number;
+  normalRefundAmountCents: number;
+  personalEffectiveAmountCents: number;
+  normalEffectiveAmountCents: number;
+  personalAgencyDeductionAmountCents: number;
+  normalAgencyDeductionAmountCents: number;
+  personalAgencyBaseAmountCents: number;
+  normalAgencyBaseAmountCents: number;
 }
 
 export function calculateStage7CommissionAndPoints(
@@ -82,6 +102,10 @@ export function calculateStage7CommissionAndPoints(
     effectiveAmountCents,
     warnings,
   );
+  const pointsSplit = calculateSalesOrderPointsSplit(
+    salesOrder,
+    agencyDeduction.totalAmountCents,
+  );
   const employeeBaseAmountCents = Math.max(
     0,
     effectiveAmountCents - salesDeduction.totalAmountCents,
@@ -107,57 +131,65 @@ export function calculateStage7CommissionAndPoints(
     warnings,
   });
 
-  const guidePersonal =
-    normalizePointsDestination(salesOrder.pointsDestination) ===
-    'GUIDE_PERSONAL';
-  const agencyRebateRule = guidePersonal
-    ? { rule: null, matchMode: 'guide_personal_order_snapshot' }
-    : matchAgencyRule(
-        input?.agencyRebateRules || [],
-        agencyMatch,
-        null,
-        calculationDate,
-        {
-          allowLatestActiveFallback:
-            input?.allowLatestAgencyRebateRuleFallback === true,
-          warnings,
-          salesOrder,
-        },
-      );
-  if (!guidePersonal && !agencyRebateRule.rule) {
+  const guidePersonal = pointsSplit.personalAmountCents > 0;
+  const agencyRebateRule = matchAgencyRule(
+    input?.agencyRebateRules || [],
+    agencyMatch,
+    null,
+    calculationDate,
+    {
+      allowLatestActiveFallback:
+        input?.allowLatestAgencyRebateRuleFallback === true,
+      warnings,
+      salesOrder,
+    },
+  );
+  if (pointsSplit.normalAmountCents > 0 && !agencyRebateRule.rule) {
     addWarning(warnings, 'missing_agency_rebate_rule', 'Missing agency rebate rule.', {
       agencyId: agencyMatch.agencyId,
       agencyName: agencyMatch.agencyName,
       date: toDateOnly(calculationDate),
     });
   }
-  const dailyRebateRate = guidePersonal
-    ? normalizeRate(salesOrder.personalDailyRebateRate)
-    : agencyRebateRule.rule
-      ? normalizeRate(agencyRebateRule.rule.dailyRebateRate)
-      : '0.0000';
-  const monthlyRebateRate = guidePersonal
-    ? normalizeRate(salesOrder.personalMonthlyRebateRate)
-    : agencyRebateRule.rule
-      ? normalizeRate(agencyRebateRule.rule.monthlyRebateRate)
-      : '0.0000';
+  const dailyRebateRate = agencyRebateRule.rule
+    ? normalizeRate(agencyRebateRule.rule.dailyRebateRate)
+    : '0.0000';
+  const monthlyRebateRate = agencyRebateRule.rule
+    ? normalizeRate(agencyRebateRule.rule.monthlyRebateRate)
+    : '0.0000';
   const dailyRebateCents = multiplyCentsByRate(
-    agencyBaseAmountCents,
+    pointsSplit.normalAgencyBaseAmountCents,
     dailyRebateRate,
   );
   const monthlyRebateCents = multiplyCentsByRate(
-    agencyBaseAmountCents,
+    pointsSplit.normalAgencyBaseAmountCents,
     monthlyRebateRate,
   );
-  const agencyRebateLines = guidePersonal
-    ? []
-    : buildAgencyRebateLines({
+  const personalDailyRebateRate = guidePersonal
+    ? normalizeRate(salesOrder.personalDailyRebateRate)
+    : '0.0000';
+  const personalMonthlyRebateRate = guidePersonal
+    ? normalizeRate(salesOrder.personalMonthlyRebateRate)
+    : '0.0000';
+  const personalDailyRebateCents = multiplyCentsByRate(
+    pointsSplit.personalAgencyBaseAmountCents,
+    personalDailyRebateRate,
+  );
+  const personalMonthlyRebateCents = multiplyCentsByRate(
+    pointsSplit.personalAgencyBaseAmountCents,
+    personalMonthlyRebateRate,
+  );
+  const agencyRebateLines =
+    pointsSplit.normalAmountCents === 0 || !agencyRebateRule.rule
+      ? []
+      : buildAgencyRebateLines({
         salesOrder,
         agencyMatch,
-        agencyBaseAmountCents,
-        agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
-        grossAmountCents,
-        confirmedRefundAmountCents,
+        agencyBaseAmountCents: pointsSplit.normalAgencyBaseAmountCents,
+        agencyDeductionAmountCents:
+          pointsSplit.normalAgencyDeductionAmountCents,
+        grossAmountCents: pointsSplit.normalAmountCents,
+        confirmedRefundAmountCents: pointsSplit.normalRefundAmountCents,
         agencyRebateRule: agencyRebateRule.rule,
         dailyRebateRate,
         monthlyRebateRate,
@@ -176,14 +208,29 @@ export function calculateStage7CommissionAndPoints(
   };
   const sourceSnapshot = {
     pointsDestination: guidePersonal ? 'GUIDE_PERSONAL' : 'TRAVEL_AGENCY',
+    personalAmountCents: pointsSplit.personalAmountCents,
+    normalAmountCents: pointsSplit.normalAmountCents,
     personalPointsGuideId: guidePersonal
       ? normalizeOptionalString(salesOrder.personalPointsGuideId)
       : null,
     personalGuideNameSnapshot: guidePersonal
       ? normalizeOptionalString(salesOrder.personalGuideNameSnapshot)
       : null,
-    personalDailyRebateRate: guidePersonal ? dailyRebateRate : null,
-    personalMonthlyRebateRate: guidePersonal ? monthlyRebateRate : null,
+    personalDailyRebateRate: guidePersonal ? personalDailyRebateRate : null,
+    personalMonthlyRebateRate: guidePersonal
+      ? personalMonthlyRebateRate
+      : null,
+    pointsSplit: {
+      ...pointsSplit,
+      normalDailyRebateRate: dailyRebateRate,
+      normalMonthlyRebateRate: monthlyRebateRate,
+      normalDailyRebateCents: dailyRebateCents,
+      normalMonthlyRebateCents: monthlyRebateCents,
+      personalDailyRebateRate,
+      personalMonthlyRebateRate,
+      personalDailyRebateCents,
+      personalMonthlyRebateCents,
+    },
     salesOrder: snapshotSalesOrder(salesOrder, orderStatus, calculationDate),
     items,
     afterSalesOrderIds: afterSalesOrders
@@ -215,6 +262,13 @@ export function calculateStage7CommissionAndPoints(
     agencyBaseAmountCents,
     dailyRebateCents,
     monthlyRebateCents,
+    personalAmountCents: pointsSplit.personalAmountCents,
+    normalAmountCents: pointsSplit.normalAmountCents,
+    personalRefundAmountCents: pointsSplit.personalRefundAmountCents,
+    normalRefundAmountCents: pointsSplit.normalRefundAmountCents,
+    personalEffectiveAmountCents:
+      pointsSplit.personalEffectiveAmountCents,
+    normalEffectiveAmountCents: pointsSplit.normalEffectiveAmountCents,
     warningCodes: warnings.map((warning) => warning.code),
   };
 
@@ -233,6 +287,17 @@ export function calculateStage7CommissionAndPoints(
       dailyRebateCents,
       monthlyRebateCents,
     },
+    pointsSplit: {
+      ...pointsSplit,
+      normalDailyRebateRate: dailyRebateRate,
+      normalMonthlyRebateRate: monthlyRebateRate,
+      normalDailyRebateCents: dailyRebateCents,
+      normalMonthlyRebateCents: monthlyRebateCents,
+      personalDailyRebateRate,
+      personalMonthlyRebateRate,
+      personalDailyRebateCents,
+      personalMonthlyRebateCents,
+    },
     salesDeduction,
     agencyDeduction,
     commissionLines,
@@ -241,6 +306,122 @@ export function calculateStage7CommissionAndPoints(
     sourceSnapshot,
     calculationNoteData,
     calculationNote: buildCalculationNote(calculationNoteData),
+  };
+}
+
+export function resolveSalesOrderPersonalAmountCents(salesOrder: any) {
+  const totalAmountCents = Math.max(
+    0,
+    toCents(salesOrder?.totalAmountCents),
+  );
+  const rawAmount = salesOrder?.personalAmountCents;
+  if (
+    rawAmount !== null &&
+    rawAmount !== undefined &&
+    Number.isSafeInteger(Number(rawAmount))
+  ) {
+    return Math.min(
+      totalAmountCents,
+      Math.max(0, Number(rawAmount)),
+    );
+  }
+  return normalizePointsDestination(salesOrder?.pointsDestination) ===
+    'GUIDE_PERSONAL'
+    ? totalAmountCents
+    : 0;
+}
+
+export function allocateCentsByPersonalRatio(
+  amountCents: unknown,
+  totalAmountCents: unknown,
+  personalAmountCents: unknown,
+): CentsAllocation {
+  const amount = Math.max(0, toCents(amountCents));
+  const total = Math.max(0, toCents(totalAmountCents));
+  const personal = Math.min(
+    total,
+    Math.max(0, toCents(personalAmountCents)),
+  );
+  if (amount === 0 || total === 0 || personal === 0) {
+    return {
+      normalAmountCents: amount,
+      personalAmountCents: 0,
+    };
+  }
+  if (personal === total) {
+    return {
+      normalAmountCents: 0,
+      personalAmountCents: amount,
+    };
+  }
+  const personalAllocated = Number(
+    (BigInt(amount) * BigInt(personal)) / BigInt(total),
+  );
+  return {
+    normalAmountCents: amount - personalAllocated,
+    personalAmountCents: personalAllocated,
+  };
+}
+
+export function calculateSalesOrderPointsSplit(
+  salesOrder: any,
+  agencyDeductionAmountCents: unknown = 0,
+): SalesOrderPointsSplit {
+  const totalAmountCents = Math.max(
+    0,
+    toCents(salesOrder?.totalAmountCents),
+  );
+  const personalAmountCents =
+    resolveSalesOrderPersonalAmountCents(salesOrder);
+  const normalAmountCents = totalAmountCents - personalAmountCents;
+  const confirmedAfterSalesOrders = normalizeAfterSalesOrders(
+    salesOrder?.afterSalesOrders,
+  ).filter((order: any) => order.financeConfirmed);
+  const confirmedRefundAmountCents = sumBy(
+    confirmedAfterSalesOrders,
+    (order: any) => order.refundAmountCents,
+  );
+  const personalRefundAmountCents = sumBy(
+    confirmedAfterSalesOrders,
+    (order: any) => order.personalPointsRefundAmountCents,
+  );
+  const normalRefundAmountCents =
+    confirmedRefundAmountCents - personalRefundAmountCents;
+  const personalEffectiveAmountCents = Math.max(
+    0,
+    personalAmountCents - personalRefundAmountCents,
+  );
+  const normalEffectiveAmountCents = Math.max(
+    0,
+    normalAmountCents - normalRefundAmountCents,
+  );
+  const deductionAllocation = allocateCentsByPersonalRatio(
+    agencyDeductionAmountCents,
+    totalAmountCents,
+    personalAmountCents,
+  );
+  return {
+    totalAmountCents,
+    personalAmountCents,
+    normalAmountCents,
+    confirmedRefundAmountCents,
+    personalRefundAmountCents,
+    normalRefundAmountCents,
+    personalEffectiveAmountCents,
+    normalEffectiveAmountCents,
+    personalAgencyDeductionAmountCents:
+      deductionAllocation.personalAmountCents,
+    normalAgencyDeductionAmountCents:
+      deductionAllocation.normalAmountCents,
+    personalAgencyBaseAmountCents: Math.max(
+      0,
+      personalEffectiveAmountCents -
+        deductionAllocation.personalAmountCents,
+    ),
+    normalAgencyBaseAmountCents: Math.max(
+      0,
+      normalEffectiveAmountCents - deductionAllocation.normalAmountCents,
+    ),
   };
 }
 
@@ -958,6 +1139,13 @@ function normalizeAfterSalesOrders(afterSalesOrders: any[]) {
       status: normalizeOptionalString(order?.status),
       actionType: normalizeOptionalString(order?.actionType),
       refundAmountCents: Math.max(0, toCents(order?.refundAmountCents)),
+      personalPointsRefundAmountCents: Math.min(
+        Math.max(0, toCents(order?.refundAmountCents)),
+        Math.max(
+          0,
+          toCents(order?.personalPointsRefundAmountCents),
+        ),
+      ),
       financeConfirmed: Boolean(order?.financeConfirmed),
       financeConfirmedAt: toIsoString(order?.financeConfirmedAt),
       createdAt: toIsoString(order?.createdAt),
@@ -1002,6 +1190,8 @@ function snapshotAfterSalesOrder(order: any) {
     status: order.status,
     actionType: order.actionType,
     refundAmountCents: order.refundAmountCents,
+    personalPointsRefundAmountCents:
+      order.personalPointsRefundAmountCents,
     financeConfirmed: order.financeConfirmed,
     financeConfirmedAt: order.financeConfirmedAt,
     createdAt: order.createdAt,

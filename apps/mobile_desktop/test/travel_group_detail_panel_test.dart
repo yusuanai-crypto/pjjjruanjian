@@ -82,6 +82,122 @@ void main() {
     expect(find.text('超过当日未标记'), findsNothing);
     expect(find.text('超过当日待处理'), findsOneWidget);
   });
+
+  testWidgets('read-only taster keeps attachment preview and download only',
+      (tester) async {
+    await _pumpPanel(
+      tester,
+      role: UserRole.taster,
+      group: _sampleGroup(financeMark: false),
+      onPreviewAttachment: (_) {},
+      onDownloadAttachment: (_) {},
+    );
+
+    expect(find.text('品鉴师只读'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '预览'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '下载'), findsNWidgets(2));
+    expect(find.widgetWithText(TextButton, '上传'), findsNothing);
+    expect(find.widgetWithText(TextButton, '删除'), findsNothing);
+  });
+
+  testWidgets('editable taster receives edit summary and attachment management',
+      (tester) async {
+    await _pumpPanel(
+      tester,
+      role: UserRole.taster,
+      group: _sampleGroup(financeMark: false),
+      onEdit: () {},
+      onSummary: () {},
+      onPreviewAttachment: (_) {},
+      onDownloadAttachment: (_) {},
+      onDeleteAttachment: (_) {},
+      onUploadKeyCustomerPhotos: () {},
+      onUploadGuestInfoAttachments: () {},
+    );
+
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '总结'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '上传'), findsNWidgets(2));
+    expect(find.widgetWithText(TextButton, '删除'), findsNWidgets(2));
+  });
+
+  testWidgets('pending entry exposes confirm action and loading guard',
+      (tester) async {
+    var confirmCalls = 0;
+    await _pumpPanel(
+      tester,
+      role: UserRole.admin,
+      group: _sampleGroup(
+        financeMark: false,
+        arrivalTime: null,
+        entryStatus: 'pending_entry',
+      ),
+      updatingNotEntered: true,
+      onConfirmNotEntered: () => confirmCalls += 1,
+    );
+
+    expect(find.text('待进店'), findsOneWidget);
+    final buttonFinder = find.byKey(
+      const ValueKey('confirm-travel-group-not-entered-button'),
+    );
+    expect(buttonFinder, findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(buttonFinder).onPressed, isNull);
+    await tester.tap(buttonFinder);
+    expect(confirmCalls, 0);
+  });
+
+  testWidgets('not entered exposes revoke action and confirmation metadata',
+      (tester) async {
+    await _pumpPanel(
+      tester,
+      role: UserRole.frontDesk,
+      group: _sampleGroup(
+        financeMark: false,
+        arrivalTime: null,
+        entryStatus: 'not_entered',
+        notEnteredConfirmedAt: '2026-07-29T02:30:00.000Z',
+        notEnteredConfirmedBy: const {
+          'id': 'front-1',
+          'name': '前台甲',
+          'username': 'front.one',
+        },
+      ),
+      onRevokeNotEntered: () {},
+    );
+
+    expect(find.text('未进店'), findsOneWidget);
+    expect(find.text('前台甲'), findsOneWidget);
+    expect(find.text('2026-07-29T02:30:00.000Z'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('revoke-travel-group-not-entered-button')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('entered group never exposes confirm action', (tester) async {
+    await _pumpPanel(
+      tester,
+      role: UserRole.admin,
+      group: _sampleGroup(
+        financeMark: false,
+        arrivalTime: '09:30',
+        entryStatus: 'entered',
+      ),
+      onConfirmNotEntered: () {},
+    );
+
+    expect(find.text('已进店'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsNothing,
+    );
+  });
+
   testWidgets('shows tasting item empty state', (tester) async {
     await _pumpPanel(
       tester,
@@ -103,6 +219,11 @@ Future<void> _pumpPanel(
   TravelGroupAttachmentAction? onPreviewAttachment,
   TravelGroupAttachmentAction? onDownloadAttachment,
   TravelGroupAttachmentAction? onDeleteAttachment,
+  VoidCallback? onUploadKeyCustomerPhotos,
+  VoidCallback? onUploadGuestInfoAttachments,
+  bool updatingNotEntered = false,
+  VoidCallback? onConfirmNotEntered,
+  VoidCallback? onRevokeNotEntered,
 }) {
   return tester.pumpWidget(
     MaterialApp(
@@ -117,6 +238,11 @@ Future<void> _pumpPanel(
             onPreviewAttachment: onPreviewAttachment,
             onDownloadAttachment: onDownloadAttachment,
             onDeleteAttachment: onDeleteAttachment,
+            onUploadKeyCustomerPhotos: onUploadKeyCustomerPhotos,
+            onUploadGuestInfoAttachments: onUploadGuestInfoAttachments,
+            updatingNotEntered: updatingNotEntered,
+            onConfirmNotEntered: onConfirmNotEntered,
+            onRevokeNotEntered: onRevokeNotEntered,
           ),
         ),
       ),
@@ -124,7 +250,13 @@ Future<void> _pumpPanel(
   );
 }
 
-TravelGroupRecord _sampleGroup({required bool financeMark}) {
+TravelGroupRecord _sampleGroup({
+  required bool financeMark,
+  String? arrivalTime = '09:30',
+  String? entryStatus,
+  String? notEnteredConfirmedAt,
+  Map<String, dynamic>? notEnteredConfirmedBy,
+}) {
   return TravelGroupRecord.fromJson({
     'id': 'group-1',
     'kind': 'travel',
@@ -165,7 +297,11 @@ TravelGroupRecord _sampleGroup({required bool financeMark}) {
       },
     ],
     'expectedArrivalTime': '09:00',
-    'arrivalTime': '09:30',
+    'arrivalTime': arrivalTime,
+    if (entryStatus != null) 'entryStatus': entryStatus,
+    'notEnteredConfirmedAt': notEnteredConfirmedAt,
+    'notEnteredConfirmedById': notEnteredConfirmedBy?['id'],
+    'notEnteredConfirmedBy': notEnteredConfirmedBy,
     'groupType': 'KB团',
     'wineDetails': '偏好酱香',
     'departureTime': '11:30',

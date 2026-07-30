@@ -1161,6 +1161,30 @@ function createFinanceOverviewPrismaOptions() {
         logisticsFeeCents: 90,
         invoiceRequired: true,
       }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_buyback_approved',
+        orderNo: 'SO-FIN-BUYBACK-APPROVED',
+        orderType: 'BUYBACK',
+        workflowStatus: 'APPROVED',
+        workflowVersion: 2,
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        totalAmountCents: 999000,
+        logisticsFeeCents: 99900,
+        invoiceRequired: true,
+      }),
+      createFinanceOverviewOrderSeed({
+        id: 'so_fin_internal_pending',
+        orderNo: 'SO-FIN-INTERNAL-PENDING',
+        orderType: 'INTERNAL',
+        workflowStatus: 'PENDING',
+        workflowVersion: 1,
+        customerId: 'cust_fin_marked',
+        customerName: 'Finance Overview Smoke Marked Customer',
+        totalAmountCents: 888000,
+        logisticsFeeCents: 88800,
+        invoiceRequired: true,
+      }),
     ],
     afterSalesOrders: [
       createFinanceOverviewAfterSalesSeed({
@@ -1320,6 +1344,30 @@ test('contract: sales order creation uses existing customer snapshots and sales 
           salesFormNo: 'FORM-TEST-001',
           totalAmountCents: 999999,
           cashOnDeliveryAmountCents: 600,
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 2400,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 600,
+            },
+          ],
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 2400,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 600,
+            },
+          ],
           invoiceRequired: true,
           items: [
             {
@@ -1805,6 +1853,10 @@ test('contract: sales order DTO keeps legacy snapshots without customer relation
 test('contract: sales order list supports phase 4 filters and role scopes', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    await configureDefaultPaymentMethodServiceFeeRate(
+      baseUrl,
+      admin.token,
+    );
     const salesUser = await createUser(baseUrl, admin.token, {
       name: 'Order Filter Sales',
       username: 'order-filter-sales',
@@ -2223,6 +2275,30 @@ test('contract: sales order patch enforces field permissions, replaces items, up
         salesUserId: salesAlphaUser.id,
         orderDate: '2026-06-29',
         cashOnDeliveryAmountCents: 1000,
+        paymentDetails: [
+          {
+            paymentMethodId:
+              '00000000-0000-4000-8000-000000000001',
+            amountCents: 9000,
+          },
+          {
+            paymentMethodId:
+              '00000000-0000-4000-8000-000000000005',
+            amountCents: 1000,
+          },
+        ],
+        paymentDetails: [
+          {
+            paymentMethodId:
+              '00000000-0000-4000-8000-000000000001',
+            amountCents: 9000,
+          },
+          {
+            paymentMethodId:
+              '00000000-0000-4000-8000-000000000005',
+            amountCents: 1000,
+          },
+        ],
         items: [
           {
             productName: 'Patch Initial Product',
@@ -2275,6 +2351,30 @@ test('contract: sales order patch enforces field permissions, replaces items, up
             notes: 'patch note',
           },
           cashOnDeliveryAmountCents: 2500,
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 14500,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 2500,
+            },
+          ],
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 14500,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 2500,
+            },
+          ],
           invoiceRequired: true,
           remark: 'sales patch remark',
           status: 'partial_refund',
@@ -2518,6 +2618,18 @@ test('contract: sales order patch enforces field permissions, replaces items, up
           travelGroupId: groupB.id,
           salesUserId: salesBetaUser.id,
           cashOnDeliveryAmountCents: 3500,
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 7500,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 3500,
+            },
+          ],
           remark: 'finance moved order',
           items: [
             {
@@ -2551,6 +2663,18 @@ test('contract: sales order patch enforces field permissions, replaces items, up
           status: 'partial_refund',
           salesUserId: salesBetaUser.id,
           cashOnDeliveryAmountCents: 4000,
+          paymentDetails: [
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000001',
+              amountCents: 14000,
+            },
+            {
+              paymentMethodId:
+                '00000000-0000-4000-8000-000000000005',
+              amountCents: 4000,
+            },
+          ],
           remark: 'admin moved order',
           items: [
             {
@@ -4828,7 +4952,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
   });
 });
 
-test('contract: associated tasters can edit today groups without a shared limit', async () => {
+test('contract: associated tasters can edit today groups while all tasters can read future groups', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const primaryUser = await createUser(baseUrl, admin.token, {
@@ -4902,9 +5026,9 @@ test('contract: associated tasters can edit today groups without a shared limit'
     const unassignedGroup = unassignedResult.body.data.travelGroup;
 
     for (const [session, expectedGroups] of [
-      [primary, [associatedGroup]],
-      [liaison, [associatedGroup]],
-      [unrelated, [otherGroup]],
+      [primary, [associatedGroup, otherGroup, unassignedGroup]],
+      [liaison, [associatedGroup, otherGroup, unassignedGroup]],
+      [unrelated, [otherGroup, unassignedGroup]],
     ]) {
       const list = await requestJson(baseUrl, '/api/travel-groups', {
         token: session.token,
@@ -5720,7 +5844,11 @@ test('contract: pending travel groups are computed from travel group rules and p
           adminPending.body.data.pendingTravelGroups.filter(
             (group) =>
               group.tasterId === taster.user.id ||
-              group.liaisonTasterId === taster.user.id,
+              (group.liaisonTasterId === taster.user.id &&
+                group.visitDate >= SHANGHAI_TODAY) ||
+              group.visitDate > SHANGHAI_TODAY ||
+              (group.visitDate === SHANGHAI_TODAY &&
+                (group.arrivalTime === null || group.arrivalTime === '')),
           ),
         ),
       );
@@ -5734,7 +5862,7 @@ test('contract: pending travel groups are computed from travel group rules and p
         tasterPending.body.data.pendingTravelGroups.some(
           (group) => group.groupNo === otherTasterGroup.groupNo,
         ),
-        false,
+        true,
       );
 
       const salesPending = await requestJson(
@@ -5928,6 +6056,7 @@ test('contract: travel group list supports filters and computed pending status p
       travelAgency: 'Filter Agency Alpha',
       groupType: 'KB团',
       guestCount: 8,
+      tastingRoomNo: '5',
       sourceRegion: '华东唯一客源地',
     });
     const groupBeta = await createScopedTravelGroup(baseUrl, admin.token, {
@@ -5937,6 +6066,7 @@ test('contract: travel group list supports filters and computed pending status p
       travelAgency: 'Filter Agency Beta',
       groupType: 'AB团',
       guestCount: 18,
+      tastingRoomNo: '15',
       previousStopOrderStatus: '熊猫',
     });
     const groupGamma = await createScopedTravelGroup(baseUrl, admin.token, {
@@ -5945,6 +6075,7 @@ test('contract: travel group list supports filters and computed pending status p
       travelAgency: 'Filter Agency Alpha',
       groupType: 'KB团',
       guestCount: 28,
+      tastingRoomNo: '50',
       keyCustomerInfo: '董事长重点接待',
     });
     await setTravelGroupFinanceMark(baseUrl, admin.token, groupBeta.id, true);
@@ -6029,6 +6160,21 @@ test('contract: travel group list supports filters and computed pending status p
       groupNos([groupAlpha, groupGamma]),
     );
 
+    for (const rawTastingRoomNo of ['5', '  5  ']) {
+      const tastingRoomFiltered = await requestJson(
+        baseUrl,
+        `/api/travel-groups?tastingRoomNo=${encodeURIComponent(rawTastingRoomNo)}`,
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(tastingRoomFiltered.response.status, 200);
+      assert.deepEqual(
+        groupNos(tastingRoomFiltered.body.data.travelGroups),
+        [groupAlpha.groupNo],
+      );
+    }
+
     const liaisonTasterFiltered = await requestJson(
       baseUrl,
       `/api/travel-groups?liaisonTasterId=${tasterAlpha.id}`,
@@ -6109,6 +6255,68 @@ test('contract: travel group list supports filters and computed pending status p
     });
     assert.equal(limited.response.status, 200);
     assert.equal(limited.body.data.travelGroups.length, 2);
+  });
+});
+
+test('contract: picker filters remain inside the taster travel group data scope', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const allowedTasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Picker Scope Allowed Taster',
+      username: 'picker-scope-allowed-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const restrictedTasterUser = await createUser(baseUrl, admin.token, {
+      name: 'Picker Scope Restricted Taster',
+      username: 'picker-scope-restricted-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
+    const allowedTaster = await login(
+      baseUrl,
+      allowedTasterUser.username,
+      'Password123',
+    );
+    const allowedGroup = await createScopedTravelGroup(baseUrl, admin.token, {
+      groupNo: 'GZ-PICKER-SCOPE-ALLOWED',
+      visitDate: SHANGHAI_TODAY,
+      arrivalTime: '09:00',
+      tasterId: allowedTasterUser.id,
+      tastingRoomNo: 'PICKER-SCOPE-ROOM',
+    });
+    await createScopedTravelGroup(baseUrl, admin.token, {
+      groupNo: 'GZ-PICKER-SCOPE-RESTRICTED',
+      visitDate: SHANGHAI_TODAY,
+      arrivalTime: '09:00',
+      tasterId: restrictedTasterUser.id,
+      tastingRoomNo: 'PICKER-SCOPE-ROOM',
+    });
+
+    const roomFiltered = await requestJson(
+      baseUrl,
+      '/api/travel-groups?tastingRoomNo=PICKER-SCOPE-ROOM',
+      {
+        token: allowedTaster.token,
+      },
+    );
+    assert.equal(roomFiltered.response.status, 200);
+    assert.deepEqual(groupNos(roomFiltered.body.data.travelGroups), [
+      allowedGroup.groupNo,
+    ]);
+
+    const restrictedTasterFiltered = await requestJson(
+      baseUrl,
+      `/api/travel-groups?tasterId=${restrictedTasterUser.id}`,
+      {
+        token: allowedTaster.token,
+      },
+    );
+    assert.equal(restrictedTasterFiltered.response.status, 200);
+    assert.deepEqual(
+      groupNos(restrictedTasterFiltered.body.data.travelGroups),
+      [],
+    );
   });
 });
 
@@ -6757,12 +6965,26 @@ test('contract: sales order creation rolls back when travel group summary update
 test('contract: global mark query filters business lists and details until admin restore', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    await configureDefaultPaymentMethodServiceFeeRate(
+      baseUrl,
+      admin.token,
+    );
+    const sharedTaster = await createUser(baseUrl, admin.token, {
+      name: 'Global Mark Shared Taster',
+      username: 'global-mark-shared-taster',
+      password: 'Password123',
+      role: 'taster',
+    });
 
     const markedGroup = await createScopedTravelGroup(baseUrl, admin.token, {
       groupNo: 'GZ-MARK-YES',
+      tasterId: sharedTaster.id,
+      tastingRoomNo: 'GLOBAL-MARK-ROOM',
     });
     const unmarkedGroup = await createScopedTravelGroup(baseUrl, admin.token, {
       groupNo: 'GZ-MARK-NO',
+      tasterId: sharedTaster.id,
+      tastingRoomNo: 'GLOBAL-MARK-ROOM',
     });
 
     const markedOrder = await createScopedSalesOrder(baseUrl, admin.token, {
@@ -6860,6 +7082,24 @@ test('contract: global mark query filters business lists and details until admin
     assert.deepEqual(groupNos(markedGroupsOnly.body.data.travelGroups), [
       markedGroup.groupNo,
     ]);
+
+    for (const filter of [
+      `tasterId=${encodeURIComponent(sharedTaster.id)}`,
+      'tastingRoomNo=GLOBAL-MARK-ROOM',
+    ]) {
+      const markedFilteredGroups = await requestJson(
+        baseUrl,
+        `/api/travel-groups?${filter}`,
+        {
+          token: admin.token,
+        },
+      );
+      assert.equal(markedFilteredGroups.response.status, 200);
+      assert.deepEqual(
+        groupNos(markedFilteredGroups.body.data.travelGroups),
+        [markedGroup.groupNo],
+      );
+    }
 
     const hiddenGroupDetail = await requestJson(
       baseUrl,
@@ -7214,6 +7454,24 @@ async function setSalesOrderFinanceMark(baseUrl, token, id, financeMark) {
   assert.equal(result.response.status, 200);
   assert.equal(result.body.data.salesOrder.financeMark, financeMark);
   return result.body.data.salesOrder;
+}
+
+async function configureDefaultPaymentMethodServiceFeeRate(
+  baseUrl,
+  token,
+) {
+  const result = await requestJson(
+    baseUrl,
+    '/api/payment-methods/00000000-0000-4000-8000-000000000001',
+    {
+      method: 'PATCH',
+      token,
+      body: {
+        serviceFeeRate: '0.000000',
+      },
+    },
+  );
+  assert.equal(result.response.status, 200);
 }
 
 function assertBusinessOperationLog(log, expected) {

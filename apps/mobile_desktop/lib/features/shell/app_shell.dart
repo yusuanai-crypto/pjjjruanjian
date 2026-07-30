@@ -7,11 +7,13 @@ import '../../app/destinations.dart';
 import '../../app/page_factory.dart';
 import '../../core/api/api_client.dart';
 import '../../core/auth/auth_models.dart';
-import '../travel_group_attachments/attachment_picker_service.dart';
-import '../travel_group_attachments/incoming_attachment_service.dart';
-import '../todo_reminders/todo_reminder_controller.dart';
+import '../../core/sensitive_screen_protection_service.dart';
 import '../../shared/widgets/brand_logo.dart';
 import '../../shared/widgets/responsive.dart';
+import '../../shared/widgets/sensitive_screen_guard.dart';
+import '../todo_reminders/todo_reminder_controller.dart';
+import '../travel_group_attachments/attachment_picker_service.dart';
+import '../travel_group_attachments/incoming_attachment_service.dart';
 import 'global_mark_query_controller.dart';
 
 class AppShell extends StatefulWidget {
@@ -25,6 +27,7 @@ class AppShell extends StatefulWidget {
     required this.selectedDestinationId,
     required this.onDestinationChanged,
     required this.onLogout,
+    this.todoReminderController,
   });
 
   final ApiClient apiClient;
@@ -35,6 +38,7 @@ class AppShell extends StatefulWidget {
   final String selectedDestinationId;
   final ValueChanged<String> onDestinationChanged;
   final VoidCallback onLogout;
+  final TodoReminderController? todoReminderController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -61,11 +65,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _todoReminderController = TodoReminderController(
-      apiClient: widget.apiClient,
-      token: widget.token,
-      userId: widget.user.id,
-    );
+    _todoReminderController = widget.todoReminderController ??
+        TodoReminderController(
+          apiClient: widget.apiClient,
+          token: widget.token,
+          userId: widget.user.id,
+        );
     _attachmentPickerService = AttachmentPickerService();
     _incomingAttachmentService = IncomingAttachmentService.instance;
     _incomingAttachmentService.addListener(_onIncomingAttachmentsChanged);
@@ -113,9 +118,21 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   Future<void> _initializeIncomingAttachments() async {
     await _incomingAttachmentService.initialize();
+    if (!mounted) {
+      return;
+    }
     try {
       final recovered =
           await _attachmentPickerService.retrieveLostPhotoSelection();
+      if (!mounted) {
+        for (final attachment in recovered.files) {
+          await attachment.deleteTemporaryCopy();
+          if (!mounted) {
+            continue;
+          }
+        }
+        return;
+      }
       if (recovered.files.isNotEmpty) {
         _incomingAttachmentService.addRecoveredPhotos(
           recovered.files,
@@ -136,26 +153,59 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   Future<void> _initializeTodoReminders() async {
     try {
       await _todoReminderController.initialize((_) {
+        if (!mounted) {
+          return;
+        }
         widget.onDestinationChanged('todo_reminders');
+        if (!mounted) {
+          return;
+        }
         unawaited(_todoReminderController.sync(silent: true));
       });
+      if (!mounted) {
+        return;
+      }
     } catch (_) {
+      if (!mounted) {
+        return;
+      }
       await _todoReminderController.sync(silent: true);
+      if (!mounted) {
+        return;
+      }
     }
   }
 
   Future<void> _logout() async {
     await _globalMarkQueryController.stop();
+    if (!mounted) {
+      return;
+    }
     await _todoReminderController.cancelAllForUser();
+    if (!mounted) {
+      return;
+    }
     widget.onLogout();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_todoReminderController.onResumed());
-      unawaited(_incomingAttachmentService.refresh());
-      unawaited(_globalMarkQueryController.onResumed());
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(_resumeAsyncServices());
+    }
+  }
+
+  Future<void> _resumeAsyncServices() async {
+    if (!mounted) {
+      return;
+    }
+    await Future.wait([
+      _todoReminderController.onResumed(),
+      _incomingAttachmentService.refresh(),
+      _globalMarkQueryController.onResumed(),
+    ]);
+    if (!mounted) {
+      return;
     }
   }
 
@@ -199,10 +249,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             incomingAttachmentService: _incomingAttachmentService,
           ),
         );
-        final attachmentAwarePage = _withIncomingAttachmentBanner(
-          page,
-          destinations,
-        );
+        final protectedPage = isSensitiveDestination(selectedDestination.id)
+            ? SensitiveScreenGuard(child: page)
+            : page;
+        final attachmentAwarePage =
+            _withIncomingAttachmentBanner(protectedPage, destinations);
 
         if (desktop) {
           return Scaffold(

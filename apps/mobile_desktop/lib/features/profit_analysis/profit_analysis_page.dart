@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
@@ -10,6 +12,11 @@ import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
+import 'daily_loss_profit_panel.dart';
+
+typedef TravelGroupProfitFileSaver = Future<String> Function(
+  DownloadedFile downloadedFile,
+);
 
 const _defaultPreset = 'this_month';
 const _customPreset = 'custom';
@@ -45,11 +52,15 @@ class ProfitAnalysisPage extends StatefulWidget {
     required this.apiClient,
     required this.token,
     required this.role,
+    this.dailyLossProfitFileSaver,
+    this.travelGroupProfitFileSaver,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
+  final DailyLossProfitFileSaver? dailyLossProfitFileSaver;
+  final TravelGroupProfitFileSaver? travelGroupProfitFileSaver;
 
   @override
   State<ProfitAnalysisPage> createState() => _ProfitAnalysisPageState();
@@ -67,8 +78,11 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
   int _page = 1;
   ProfitAnalysisResponse? _response;
   bool _loading = false;
+  bool _exporting = false;
   String? _errorMessage;
   int _requestSerial = 0;
+  String _selectedModule = 'travel_group';
+  bool _dailyLossModuleInitialized = false;
 
   bool get _isAllowed => canViewProfitAnalysis(widget.role);
 
@@ -133,50 +147,109 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
       key: const ValueKey('profit-analysis-page'),
       maxWidth: 1480,
       children: [
-        _buildToolbar(),
-        if (_loading && response != null)
-          const LinearProgressIndicator(
-            key: ValueKey('profit-analysis-refreshing'),
-          ),
-        if (_loading && response == null)
-          const _ProfitStateCard(
-            key: ValueKey('profit-analysis-loading'),
-            icon: Icons.hourglass_top_rounded,
-            title: '正在加载利润分析',
-            message: '正在按旅行团汇总销售、成本、费用、提成和返点。',
-            showProgress: true,
-          )
-        else if (_errorMessage != null && response == null)
-          _ProfitStateCard(
-            key: const ValueKey('profit-analysis-error'),
-            icon: Icons.error_outline_rounded,
-            title: '利润分析加载失败',
-            message: _errorMessage!,
-            actionLabel: '重试',
-            onAction: _load,
-          )
-        else if (response != null) ...[
-          if (_errorMessage != null)
-            _InlineError(
-              key: const ValueKey('profit-analysis-inline-error'),
-              message: _errorMessage!,
-              onRetry: _load,
+        _buildModuleSwitcher(),
+        if (_selectedModule == 'travel_group') ...[
+          _buildToolbar(),
+          if (_loading && response != null)
+            const LinearProgressIndicator(
+              key: ValueKey('profit-analysis-refreshing'),
             ),
-          _buildMetrics(response.summary),
-          if (response.summary.incompleteGroupCount > 0)
-            _IncompleteSummaryNotice(summary: response.summary),
-          if (response.items.isEmpty)
+          if (_loading && response == null)
             const _ProfitStateCard(
-              key: ValueKey('profit-analysis-empty'),
-              icon: Icons.inbox_outlined,
-              title: '暂无旅行团利润数据',
-              message: '当前日期和筛选条件下没有匹配的旅行团。',
+              key: ValueKey('profit-analysis-loading'),
+              icon: Icons.hourglass_top_rounded,
+              title: '正在加载利润分析',
+              message: '正在按旅行团汇总销售、成本、费用、提成和返点。',
+              showProgress: true,
             )
-          else
-            _buildResults(response.items),
-          _buildPagination(response.pagination),
+          else if (_errorMessage != null && response == null)
+            _ProfitStateCard(
+              key: const ValueKey('profit-analysis-error'),
+              icon: Icons.error_outline_rounded,
+              title: '利润分析加载失败',
+              message: _errorMessage!,
+              actionLabel: '重试',
+              onAction: _load,
+            )
+          else if (response != null) ...[
+            if (_errorMessage != null)
+              _InlineError(
+                key: const ValueKey('profit-analysis-inline-error'),
+                message: _errorMessage!,
+                onRetry: _load,
+              ),
+            _buildMetrics(response.summary),
+            if (response.summary.incompleteGroupCount > 0)
+              _IncompleteSummaryNotice(summary: response.summary),
+            if (response.items.isEmpty)
+              const _ProfitStateCard(
+                key: ValueKey('profit-analysis-empty'),
+                icon: Icons.inbox_outlined,
+                title: '暂无旅行团利润数据',
+                message: '当前日期和筛选条件下没有匹配的旅行团。',
+              )
+            else
+              _buildResults(response.items),
+            _buildPagination(response.pagination),
+          ],
         ],
+        if (_dailyLossModuleInitialized)
+          Visibility(
+            visible: _selectedModule == 'daily_loss',
+            maintainState: true,
+            child: DailyLossProfitPanel(
+              apiClient: widget.apiClient,
+              token: widget.token,
+              fileSaver: widget.dailyLossProfitFileSaver,
+            ),
+          ),
       ],
+    );
+  }
+
+  Widget _buildModuleSwitcher() {
+    return Card(
+      key: const ValueKey('profit-analysis-module-switcher'),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'travel_group',
+                icon: Icon(Icons.directions_bus_rounded),
+                label: Text(
+                  '旅行团利润',
+                  key: ValueKey('profit-analysis-travel-module'),
+                ),
+              ),
+              ButtonSegment(
+                value: 'daily_loss',
+                icon: Icon(Icons.remove_circle_outline_rounded),
+                label: Text(
+                  '每日损耗利润',
+                  key: ValueKey('profit-analysis-daily-loss-module'),
+                ),
+              ),
+            ],
+            selected: {_selectedModule},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) {
+              final selected = selection.first;
+              if (selected == _selectedModule) {
+                return;
+              }
+              setState(() {
+                _selectedModule = selected;
+                if (selected == 'daily_loss') {
+                  _dailyLossModuleInitialized = true;
+                }
+              });
+            },
+          ),
+        ),
+      ),
     );
   }
 
@@ -199,6 +272,18 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                         ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                 ),
+                FilledButton.icon(
+                  key: const ValueKey('profit-analysis-export-button'),
+                  onPressed: _exporting ? null : _export,
+                  icon: _exporting
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_rounded),
+                  label: Text(_exporting ? '导出中' : '导出 Excel'),
+                ),
+                const SizedBox(width: 6),
                 IconButton(
                   key: const ValueKey('profit-analysis-refresh-button'),
                   tooltip: '刷新',
@@ -350,10 +435,9 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
   Widget _buildMetrics(ProfitAnalysisSummary summary) {
     final profit = summary.estimatedProfitCents;
     final scheme = Theme.of(context).colorScheme;
-    final profitAccent =
-        (profit ?? summary.knownEstimatedProfitCents) < 0
-            ? scheme.error
-            : scheme.primary;
+    final profitAccent = (profit ?? summary.knownEstimatedProfitCents) < 0
+        ? scheme.error
+        : scheme.primary;
     return MetricGrid(
       key: const ValueKey('profit-analysis-metrics'),
       metrics: [
@@ -366,6 +450,16 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
           label: '有效销售额',
           value: formatMoneyCents(summary.effectiveSalesAmountCents),
           icon: Icons.point_of_sale_rounded,
+        ),
+        MetricData(
+          label: '税费合计',
+          value: _formatNullableMoney(summary.taxFeeCents),
+          icon: Icons.receipt_long_rounded,
+        ),
+        MetricData(
+          label: '手续费合计',
+          value: _formatNullableMoney(summary.paymentServiceFeeCents),
+          icon: Icons.account_balance_wallet_outlined,
         ),
         MetricData(
           label: '可核算团数',
@@ -421,6 +515,8 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
             DataColumn(label: Text('旅行社')),
             DataColumn(label: Text('品鉴师')),
             DataColumn(label: Text('有效销售额'), numeric: true),
+            DataColumn(label: Text('税费'), numeric: true),
+            DataColumn(label: Text('手续费'), numeric: true),
             DataColumn(label: Text('总费用'), numeric: true),
             DataColumn(label: Text('预估利润'), numeric: true),
             DataColumn(label: Text('利润率'), numeric: true),
@@ -447,6 +543,10 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                   DataCell(Text(formatMoneyCents(
                     item.effectiveSalesAmountCents,
                   ))),
+                  DataCell(Text(_formatNullableMoney(item.taxFeeCents))),
+                  DataCell(
+                    Text(_formatNullableMoney(item.paymentServiceFeeCents)),
+                  ),
                   DataCell(Text(formatMoneyCents(item.totalExpenseCents))),
                   DataCell(_ProfitText(item: item)),
                   DataCell(Text(_formatRate(item.estimatedProfitRate))),
@@ -509,6 +609,16 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                           label: '有效销售额',
                           value:
                               formatMoneyCents(item.effectiveSalesAmountCents),
+                        ),
+                        _LabeledValue(
+                          label: '税费',
+                          value: _formatNullableMoney(item.taxFeeCents),
+                        ),
+                        _LabeledValue(
+                          label: '手续费',
+                          value: _formatNullableMoney(
+                            item.paymentServiceFeeCents,
+                          ),
                         ),
                         _LabeledValue(
                           label: '总费用',
@@ -581,8 +691,7 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
             IconButton(
               key: const ValueKey('profit-analysis-next-page'),
               tooltip: '下一页',
-              onPressed: _loading ||
-                      pagination.page >= pagination.totalPages
+              onPressed: _loading || pagination.page >= pagination.totalPages
                   ? null
                   : () {
                       setState(() => _page += 1);
@@ -640,6 +749,54 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
         _loading = false;
         _errorMessage = _friendlyError(error);
       });
+    }
+  }
+
+  Future<void> _export() async {
+    if (_exporting || !_isAllowed) {
+      return;
+    }
+    setState(() {
+      _exporting = true;
+      _errorMessage = null;
+    });
+    try {
+      final downloadedFile = await BusinessApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+      ).exportTravelGroupProfits(
+        preset: _preset,
+        dateFrom: _dateFrom,
+        dateTo: _dateTo,
+        query: _searchController.text,
+        status: _status == 'all' ? null : _status,
+        sortBy: _sortBy,
+        sortDirection: _sortDirection,
+      );
+      final savedPath =
+          await (widget.travelGroupProfitFileSaver?.call(downloadedFile) ??
+              _saveTravelGroupProfitExportFile(downloadedFile));
+      if (!mounted) {
+        return;
+      }
+      setState(() => _exporting = false);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('旅行团利润已导出：$savedPath')),
+        );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _friendlyError(error);
+      setState(() {
+        _exporting = false;
+        _errorMessage = message;
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -742,6 +899,20 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                   label: '旅行社月返',
                   value: formatMoneyCents(item.monthlyAgencyRebateCents),
                 ),
+                _DetailLine(
+                  label: '税费',
+                  value: _formatNullableMoney(item.taxFeeCents),
+                ),
+                _DetailLine(
+                  label: '付款手续费',
+                  value: _formatNullableMoney(
+                    item.paymentServiceFeeCents,
+                  ),
+                ),
+                if (item.paymentMethodFeeBreakdown.isNotEmpty)
+                  _PaymentMethodFeeBreakdown(
+                    rows: item.paymentMethodFeeBreakdown,
+                  ),
                 const Divider(),
                 _DetailLine(
                   label: '总费用',
@@ -751,8 +922,7 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                 _DetailLine(
                   label: '预估利润',
                   value: _profitLabel(item.estimatedProfitCents),
-                  valueColor:
-                      _profitColor(context, item.estimatedProfitCents),
+                  valueColor: _profitColor(context, item.estimatedProfitCents),
                   emphasized: true,
                 ),
                 _DetailLine(
@@ -815,8 +985,7 @@ class _StatusCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = _statusPresentation(item.calculationStatus);
-    final refundEstimate =
-        item.hasWarning('REFUND_COST_REVERSAL_UNAVAILABLE');
+    final refundEstimate = item.hasWarning('REFUND_COST_REVERSAL_UNAVAILABLE');
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -922,6 +1091,73 @@ class _DetailLine extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _PaymentMethodFeeBreakdown extends StatelessWidget {
+  const _PaymentMethodFeeBreakdown({required this.rows});
+
+  final List<PaymentMethodFeeBreakdownRecord> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExpansionTile(
+      key: const ValueKey('profit-analysis-payment-fee-breakdown'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 8),
+      title: const Text('付款方式手续费明细'),
+      subtitle: Text('${rows.length} 组历史费率'),
+      children: [
+        for (var index = 0; index < rows.length; index += 1)
+          Card(
+            key: ValueKey('profit-analysis-payment-fee-row-$index'),
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _DetailLine(
+                    label: '付款方式',
+                    value: _displayPaymentMethod(rows[index]),
+                    emphasized: true,
+                  ),
+                  _DetailLine(
+                    label: '费率',
+                    value: _formatServiceFeeRate(
+                      rows[index].serviceFeeRateSnapshot,
+                    ),
+                  ),
+                  _DetailLine(
+                    label: '原付款金额',
+                    value: _formatNullableMoney(
+                      rows[index].originalPaymentAmountCents,
+                    ),
+                  ),
+                  _DetailLine(
+                    label: '当天退款扣减',
+                    value: formatMoneyCents(
+                      rows[index].sameDayRefundAmountCents,
+                    ),
+                  ),
+                  _DetailLine(
+                    label: '手续费基数',
+                    value: _formatNullableMoney(
+                      rows[index].serviceFeeBaseAmountCents,
+                    ),
+                  ),
+                  _DetailLine(
+                    label: '手续费',
+                    value: _formatNullableMoney(
+                      rows[index].serviceFeeCents,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -1120,6 +1356,31 @@ String _formatRate(double? rate) {
   return '${(rate * 100).toStringAsFixed(1)}%';
 }
 
+String _formatNullableMoney(int? cents) {
+  return cents == null ? '—' : formatMoneyCents(cents);
+}
+
+String _formatServiceFeeRate(String? rate) {
+  final parsed = double.tryParse(rate?.trim() ?? '');
+  if (parsed == null) {
+    return '—';
+  }
+  final fixed = (parsed * 100).toStringAsFixed(4);
+  final normalized =
+      fixed.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  return '$normalized%';
+}
+
+String _displayPaymentMethod(PaymentMethodFeeBreakdownRecord row) {
+  final name = row.paymentMethodNameSnapshot.trim();
+  if (name.isNotEmpty) {
+    return name;
+  }
+  return row.paymentMethodId?.trim().isNotEmpty == true
+      ? row.paymentMethodId!.trim()
+      : '未命名付款方式';
+}
+
 String _profitLabel(int? cents) {
   if (cents == null) {
     return '无法估算';
@@ -1153,6 +1414,8 @@ String _warningText(AnalyticsWarning warning) {
     case 'ACTUAL_COST_COVERAGE_PARTIAL':
     case 'ACTUAL_COST_COVERAGE_UNAVAILABLE':
       return '商品实际成本快照不完整，无法估算利润。';
+    case 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING':
+      return '手续费快照缺失，请财务补齐费率并重新标记订单';
     default:
       return warning.message.isEmpty ? warning.code : warning.message;
   }
@@ -1165,4 +1428,48 @@ String _friendlyError(Object error) {
     return error.message;
   }
   return '请求失败，请稍后重试。';
+}
+
+Future<String> _saveTravelGroupProfitExportFile(
+  DownloadedFile downloadedFile,
+) async {
+  final directory = await getApplicationDocumentsDirectory();
+  final exportDirectory = Directory(
+    '${directory.path}${Platform.pathSeparator}exports',
+  );
+  await exportDirectory.create(recursive: true);
+  final fileName = _safeTravelGroupProfitExportFileName(
+    downloadedFile.fileName,
+  );
+  var target = File(
+    '${exportDirectory.path}${Platform.pathSeparator}$fileName',
+  );
+  if (await target.exists()) {
+    final dot = fileName.lastIndexOf('.');
+    final stem = dot > 0 ? fileName.substring(0, dot) : fileName;
+    final extension = dot > 0 ? fileName.substring(dot) : '';
+    for (var suffix = 2;; suffix += 1) {
+      target = File(
+        '${exportDirectory.path}${Platform.pathSeparator}'
+        '$stem-$suffix$extension',
+      );
+      if (!await target.exists()) {
+        break;
+      }
+    }
+  }
+  await target.writeAsBytes(downloadedFile.bytes, flush: true);
+  return target.path;
+}
+
+String _safeTravelGroupProfitExportFileName(String? value) {
+  final source = (value ?? '').trim();
+  final sanitized =
+      source.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+  if (sanitized.isEmpty) {
+    return 'travel-group-profits.xlsx';
+  }
+  return sanitized.toLowerCase().endsWith('.xlsx')
+      ? sanitized
+      : '$sanitized.xlsx';
 }

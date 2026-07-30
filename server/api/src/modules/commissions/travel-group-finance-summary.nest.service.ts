@@ -9,8 +9,12 @@ import {
 } from '../analytics/analytics-scope.helper';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { SettingsNestService } from '../settings/settings.nest.service';
+import {
+  allocateCentsByPersonalRatio,
+  calculateSalesOrderPointsSplit,
+} from './commission-calculation.helper';
 
-const CALCULATION_VERSION = 'stage7_v1';
+const CALCULATION_VERSION = 'stage7_v2_personal_split';
 const AGENCY_DAILY_REBATE = 'AGENCY_DAILY_REBATE';
 const AGENCY_MONTHLY_REBATE = 'AGENCY_MONTHLY_REBATE';
 const READ_SUMMARY_ROLES = ['admin', 'finance', 'boss'];
@@ -751,11 +755,24 @@ export class TravelGroupFinanceSummaryNestService {
       where: {
         travelGroupId,
         orderType: {
-          not: 'AFTER_SALES',
+          notIn: ['AFTER_SALES', 'BUYBACK'],
         },
+        OR: [
+          { workflowStatus: null },
+          { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+        ],
       },
       include: {
         items: {
+          orderBy: {
+            sortOrder: 'asc',
+          },
+        },
+        paymentDetails: {
+          select: {
+            amountCents: true,
+            paymentMethodCategorySnapshot: true,
+          },
           orderBy: {
             sortOrder: 'asc',
           },
@@ -1206,42 +1223,58 @@ export function buildTravelGroupFinanceCalculation(input: {
 }
 
 function isTravelAgencyPointsOrder(order: any) {
+  const split = calculateSalesOrderPointsSplit(order);
   return (
-    normalizeEnumText(order?.orderType || 'TRAVEL_GROUP') !==
-      'AFTER_SALES' &&
-    normalizeEnumText(order?.pointsDestination || 'TRAVEL_AGENCY') ===
-    'TRAVEL_AGENCY'
+    !['AFTER_SALES', 'BUYBACK'].includes(
+      normalizeEnumText(order?.orderType || 'TRAVEL_GROUP'),
+    ) &&
+    (!order?.workflowStatus ||
+      ['APPROVED', 'COMPLETED'].includes(
+        normalizeEnumText(order.workflowStatus),
+      )) &&
+    split.normalAmountCents > 0
   );
 }
 
 function summarizeSalesOrderForFinance(order: any) {
   const afterSalesOrders = order.afterSalesOrders || [];
   const summarizedAfterSalesOrders = afterSalesOrders.map(summarizeRefund);
-  const confirmedRefunds: any[] = [];
+  const confirmedRefunds = afterSalesOrders
+    .filter(
+      (item: any) =>
+        item.financeConfirmed && toInteger(item.refundAmountCents) > 0,
+    )
+    .map(summarizeRefund);
   const unconfirmedRefunds = afterSalesOrders
     .filter((item: any) => !item.financeConfirmed && toInteger(item.refundAmountCents) > 0)
     .map(summarizeRefund);
-  const confirmedRefundAmountCents = 0;
-  const totalAmountCents = toInteger(order.totalAmountCents);
-  const cashOnDeliveryAmountCents = toInteger(
-    order.cashOnDeliveryAmountCents,
-  );
+  const split = calculateSalesOrderPointsSplit(order);
+  const totalAmountCents = split.normalAmountCents;
+  const cashOnDeliveryAmountCents = allocateCentsByPersonalRatio(
+    getSalesOrderCollectOnDeliveryAmountCents(order),
+    split.totalAmountCents,
+    split.personalAmountCents,
+  ).normalAmountCents;
 
   return {
     id: order.id,
     orderNo: order.orderNo || null,
     orderDate: normalizeDateString(order.orderDate),
     status: normalizeEnumText(order.status),
+    orderTotalAmountCents: split.totalAmountCents,
+    personalAmountCents: split.personalAmountCents,
+    normalAmountCents: split.normalAmountCents,
     totalAmountCents,
     cashOnDeliveryAmountCents,
     paidDepositCents: totalAmountCents - cashOnDeliveryAmountCents,
-    confirmedRefundAmountCents,
-    effectiveAmountCents:
-      afterSalesOrders.length > 0
-        ? totalAmountCents
-        : isFullyRefundedOrCancelled(order.status)
-          ? 0
-          : totalAmountCents,
+    confirmedRefundAmountCents: split.normalRefundAmountCents,
+    personalRefundAmountCents: split.personalRefundAmountCents,
+    normalRefundAmountCents: split.normalRefundAmountCents,
+    personalEffectiveAmountCents: split.personalEffectiveAmountCents,
+    normalEffectiveAmountCents: split.normalEffectiveAmountCents,
+    effectiveAmountCents: isFullyRefundedOrCancelled(order.status)
+      ? 0
+      : split.normalEffectiveAmountCents,
     afterSalesOrders: summarizedAfterSalesOrders,
     confirmedRefunds,
     unconfirmedRefundSummary: {
@@ -1260,6 +1293,35 @@ function summarizeSalesOrderForFinance(order: any) {
   };
 }
 
+function getSalesOrderCollectOnDeliveryAmountCents(order: any) {
+  const paymentDetails = Array.isArray(order?.paymentDetails)
+    ? order.paymentDetails
+    : [];
+  if (paymentDetails.length === 0) {
+    return toInteger(order?.cashOnDeliveryAmountCents);
+  }
+  return paymentDetails
+    .filter((detail: any) =>
+      isCollectOnDeliveryPaymentCategory(
+        detail?.paymentMethodCategorySnapshot,
+      ),
+    )
+    .reduce(
+      (sum: number, detail: any) => sum + toInteger(detail?.amountCents),
+      0,
+    );
+}
+
+function isCollectOnDeliveryPaymentCategory(value: unknown) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  return (
+    normalized === 'collect_on_delivery' ||
+    normalized === 'agency_collection'
+  );
+}
+
 function summarizeRefund(afterSalesOrder: any) {
   return {
     id: afterSalesOrder.id,
@@ -1267,6 +1329,12 @@ function summarizeRefund(afterSalesOrder: any) {
     actionType: normalizeEnumText(afterSalesOrder.actionType),
     status: normalizeEnumText(afterSalesOrder.status),
     refundAmountCents: toInteger(afterSalesOrder.refundAmountCents),
+    personalPointsRefundAmountCents: toInteger(
+      afterSalesOrder.personalPointsRefundAmountCents,
+    ),
+    normalPointsRefundAmountCents:
+      toInteger(afterSalesOrder.refundAmountCents) -
+      toInteger(afterSalesOrder.personalPointsRefundAmountCents),
     financeConfirmed: Boolean(afterSalesOrder.financeConfirmed),
     financeConfirmedAt: normalizeDateString(
       afterSalesOrder.financeConfirmedAt,

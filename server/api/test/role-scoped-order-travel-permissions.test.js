@@ -185,6 +185,261 @@ test('contract: sales and taster retain their own data scopes under global mark 
   );
 });
 
+test('contract: taster travel group list, detail, orders, and writes share the Shanghai-day permission matrix', async () => {
+  const dates = shanghaiFixtureDates();
+  const travelGroups = [
+    group('matrix-past-reception', dates.yesterday, TASTER_RECEPTION_ID),
+    group(
+      'matrix-past-liaison-only',
+      dates.yesterday,
+      TASTER_OTHER_ID,
+      TASTER_LIAISON_ID,
+    ),
+    {
+      ...group(
+        'matrix-today-public-null',
+        dates.today,
+        TASTER_OTHER_ID,
+        TASTER_LIAISON_ID,
+      ),
+      arrivalTime: null,
+    },
+    {
+      ...group(
+        'matrix-today-public-empty',
+        dates.today,
+        TASTER_OTHER_ID,
+        TASTER_LIAISON_ID,
+      ),
+      arrivalTime: '',
+    },
+    group(
+      'matrix-today-arrived-hidden',
+      dates.today,
+      TASTER_OTHER_ID,
+      TASTER_LIAISON_ID,
+    ),
+    group('matrix-today-reception', dates.today, TASTER_RECEPTION_ID),
+    group(
+      'matrix-today-liaison',
+      dates.today,
+      TASTER_OTHER_ID,
+      TASTER_RECEPTION_ID,
+    ),
+    group(
+      'matrix-future-liaison',
+      dates.tomorrow,
+      TASTER_OTHER_ID,
+      TASTER_RECEPTION_ID,
+    ),
+    group(
+      'matrix-future-reception',
+      dates.tomorrow,
+      TASTER_RECEPTION_ID,
+      TASTER_OTHER_ID,
+    ),
+    group(
+      'matrix-future-public',
+      dates.tomorrow,
+      TASTER_OTHER_ID,
+      TASTER_LIAISON_ID,
+    ),
+  ];
+
+  await withPhase1Server(
+    async (baseUrl) => {
+      const reception = await login(
+        baseUrl,
+        'scope-taster-reception',
+        'Password123',
+      );
+      const liaison = await login(
+        baseUrl,
+        'scope-taster-liaison',
+        'Password123',
+      );
+
+      const list = await requestJson(baseUrl, '/api/travel-groups', {
+        token: reception.token,
+      });
+      assert.equal(list.response.status, 200);
+      const listedById = new Map(
+        list.body.data.travelGroups.map((travelGroup) => [
+          travelGroup.id,
+          travelGroup,
+        ]),
+      );
+      assert.deepEqual(
+        new Set(listedById.keys()),
+        new Set([
+          'matrix-past-reception',
+          'matrix-today-public-null',
+          'matrix-today-public-empty',
+          'matrix-today-reception',
+          'matrix-today-liaison',
+          'matrix-future-liaison',
+          'matrix-future-reception',
+          'matrix-future-public',
+        ]),
+      );
+      for (const id of [
+        'matrix-today-reception',
+        'matrix-today-liaison',
+        'matrix-future-liaison',
+      ]) {
+        assert.equal(listedById.get(id).canEditByCurrentUser, true, id);
+      }
+      for (const id of [
+        'matrix-past-reception',
+        'matrix-today-public-null',
+        'matrix-today-public-empty',
+        'matrix-future-reception',
+        'matrix-future-public',
+      ]) {
+        assert.equal(listedById.get(id).canEditByCurrentUser, false, id);
+      }
+
+      for (const id of listedById.keys()) {
+        const detail = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${id}`,
+          { token: reception.token },
+        );
+        assert.equal(detail.response.status, 200, id);
+        assert.equal(
+          detail.body.data.travelGroup.canEditByCurrentUser,
+          listedById.get(id).canEditByCurrentUser,
+          id,
+        );
+      }
+
+      const pastLiaisonOnly = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-past-liaison-only',
+        { token: liaison.token },
+      );
+      assertErrorContract(
+        pastLiaisonOnly,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+      );
+      const arrivedPublic = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-today-arrived-hidden',
+        { token: reception.token },
+      );
+      assertErrorContract(
+        arrivedPublic,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+      );
+
+      for (const id of [
+        'matrix-today-reception',
+        'matrix-today-liaison',
+        'matrix-future-liaison',
+      ]) {
+        const edited = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${id}`,
+          {
+            method: 'PATCH',
+            token: reception.token,
+            body: { remarks: `editable ${id}` },
+          },
+        );
+        assert.equal(edited.response.status, 200, id);
+      }
+
+      const futureSummary = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-future-liaison/taster-summary',
+        {
+          method: 'POST',
+          token: reception.token,
+          body: { tasterSummary: 'future liaison summary' },
+        },
+      );
+      assert.equal(futureSummary.response.status, 201);
+      const futureForbiddenField = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-future-liaison',
+        {
+          method: 'PATCH',
+          token: reception.token,
+          body: { visitDate: dates.today },
+        },
+      );
+      assertErrorContract(
+        futureForbiddenField,
+        403,
+        'FIELD_PERMISSION_DENIED',
+      );
+
+      const pastEdit = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-past-reception',
+        {
+          method: 'PATCH',
+          token: reception.token,
+          body: { remarks: 'past denied' },
+        },
+      );
+      assertErrorContract(
+        pastEdit,
+        403,
+        'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
+      );
+      for (const id of [
+        'matrix-today-public-null',
+        'matrix-future-reception',
+        'matrix-future-public',
+      ]) {
+        const denied = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${id}`,
+          {
+            method: 'PATCH',
+            token: reception.token,
+            body: { remarks: `denied ${id}` },
+          },
+        );
+        assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      }
+
+      const publicFutureDetail = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-future-public',
+        { token: reception.token },
+      );
+      assert.equal(publicFutureDetail.response.status, 200);
+      assert.deepEqual(
+        publicFutureDetail.body.data.travelGroup.salesOrders,
+        [],
+      );
+      assert.equal(
+        publicFutureDetail.body.data.travelGroup.orderSummary.orderCount,
+        0,
+      );
+    },
+    {
+      prisma: {
+        users: fixtureUsers(),
+        travelGroups,
+        salesOrders: [
+          order(
+            'matrix-public-future-order',
+            'matrix-future-public',
+            SALES_ONE_ID,
+            SALES_ONE_ID,
+            dates.todayCreatedAt,
+          ),
+        ],
+      },
+    },
+  );
+});
+
 test('contract: sales keeps one edit while assigned tasters can edit without a limit', async () => {
   const dates = shanghaiFixtureDates();
   await withPhase1Server(
@@ -386,7 +641,7 @@ test('contract: sales keeps one edit while assigned tasters can edit without a l
       assertErrorContract(
         futureEdit,
         403,
-        'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
+        'PERMISSION_DENIED',
       );
       const unrelatedEdit = await requestJson(
         baseUrl,

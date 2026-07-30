@@ -22,6 +22,8 @@
     "backfill:sales-order-shipping-dates": "ts-node scripts/backfill-sales-order-shipping-dates.ts",
     "backfill:todo-reminders": "ts-node scripts/backfill-todo-reminders.ts",
     "backfill:after-sales-independent-orders": "ts-node scripts/backfill-after-sales-independent-orders.ts",
+    "backfill:profit-fee-snapshots": "ts-node scripts/backfill-profit-fee-snapshots.ts",
+    "preflight:special-orders": "ts-node scripts/preflight-special-orders.ts",
     "cutover:inventory": "ts-node scripts/inventory-cutover.ts"
   },
   "dependencies": {

@@ -23,10 +23,10 @@ test('unit: stage7 travel group finance summary service creates summary', async 
     totalSalesAmountCents: 1500000,
     totalCashOnDeliveryCents: 300000,
     totalPaidDepositCents: 1200000,
-    confirmedRefundAmountCents: 0,
-    effectiveSalesAmountCents: 1500000,
+    confirmedRefundAmountCents: 100000,
+    effectiveSalesAmountCents: 1400000,
     totalAgencyDeductionCents: 170000,
-    totalAgencyNetAmountCents: 1330000,
+    totalAgencyNetAmountCents: 1230000,
     totalDailyRebateCents: 36900,
     totalMonthlyRebateCents: 24600,
     paidRebateCents: 0,
@@ -38,7 +38,7 @@ test('unit: stage7 travel group finance summary service creates summary', async 
   assert.equal(result.summary.unpaidMonthlyRebateCents, 24600);
   assert.equal(
     prisma.__store.summaries[0].calculationVersion,
-    'stage7_v1',
+    'stage7_v2_personal_split',
   );
   assert.equal(prisma.__store.operationLogs.length, 1);
   assert.equal(
@@ -56,6 +56,43 @@ test('unit: stage7 travel group finance summary service creates summary', async 
     'sourceSnapshot' in prisma.__store.operationLogs[0].afterData,
     false,
   );
+});
+
+test('unit: stage7 travel group finance summary prefers payment detail snapshots over the compatibility column', async () => {
+  const prisma = createSummaryPrisma({
+    salesOrders: [
+      salesOrder({
+        id: 'order-payment-detail-authority',
+        orderNo: 'SO-PAYMENT-DETAIL-AUTHORITY',
+        totalAmountCents: 100000,
+        cashOnDeliveryAmountCents: 99999,
+        paymentDetails: [
+          {
+            amountCents: 80000,
+            paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+          },
+          {
+            amountCents: 25000,
+            paymentMethodCategorySnapshot: 'COLLECT_ON_DELIVERY',
+          },
+          {
+            amountCents: -5000,
+            paymentMethodCategorySnapshot: 'COLLECT_ON_DELIVERY',
+          },
+        ],
+      }),
+    ],
+    commissionRecords: [],
+  });
+  const service = createService(prisma);
+
+  await service.refreshTravelGroupFinanceSummary('group-stage7');
+
+  assertSummaryAmounts(prisma.__store.summaries[0], {
+    totalSalesAmountCents: 100000,
+    totalCashOnDeliveryCents: 20000,
+    totalPaidDepositCents: 80000,
+  });
 });
 
 test('unit: stage7 travel group finance summary refreshes existing row and preserves payment status', async () => {
@@ -125,8 +162,8 @@ test('unit: stage7 travel group finance summary calculates effective sales amoun
 
   assertSummaryAmounts(prisma.__store.summaries[0], {
     totalSalesAmountCents: 1000000,
-    confirmedRefundAmountCents: 0,
-    effectiveSalesAmountCents: 700000,
+    confirmedRefundAmountCents: 150000,
+    effectiveSalesAmountCents: 150000,
   });
 });
 
@@ -164,7 +201,7 @@ test('unit: stage7 travel group finance summary source snapshot keeps traceabili
   assert.equal(snapshot.travelGroup.guidePhone, '18800000000');
   assert.equal(snapshot.orders.length, 2);
   assert.equal(snapshot.orders[0].items.length, 2);
-  assert.equal(snapshot.confirmedRefunds.length, 0);
+  assert.equal(snapshot.confirmedRefunds.length, 1);
   assert.equal(snapshot.unconfirmedRefundSummary.count, 1);
   assert.equal(snapshot.afterSalesCount, 2);
   assert.equal(snapshot.activeAfterSalesCount, 1);
@@ -268,7 +305,7 @@ test('unit: stage7 travel group finance summary syncs compatibility fields', asy
   assert.equal(prisma.__store.travelGroup.paidDepositCents, 1200000);
   assert.equal(prisma.__store.travelGroup.cashOnDeliveryCents, 300000);
   assert.equal(prisma.__store.travelGroup.liquorCostDeductionCents, 170000);
-  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1330000);
+  assert.equal(prisma.__store.travelGroup.orderAmountCents, 1230000);
 });
 
 test('unit: after-sales after paid rebate preserves paid fact and requires finance handling', async () => {
@@ -384,7 +421,7 @@ test('unit: manual agency deduction recalculates rebates by proportional order a
   await service.refreshTravelGroupFinanceSummary('group-stage7');
 
   assert.equal(prisma.__store.summaries[0].totalAgencyDeductionCents, 300000);
-  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1200000);
+  assert.equal(prisma.__store.summaries[0].totalAgencyNetAmountCents, 1100000);
   assert.equal(prisma.__store.summaries[0].totalDailyRebateCents, 44000);
   assert.equal(prisma.__store.summaries[0].totalMonthlyRebateCents, 24000);
 });
@@ -675,6 +712,7 @@ function salesOrder(overrides = {}) {
     status: overrides.status || 'VALID',
     totalAmountCents: overrides.totalAmountCents || 0,
     cashOnDeliveryAmountCents: overrides.cashOnDeliveryAmountCents || 0,
+    paymentDetails: overrides.paymentDetails || [],
     travelGroupId: 'group-stage7',
     items: overrides.items || [
       orderItem({
@@ -788,8 +826,17 @@ function assertSummaryAmounts(summary, expected) {
 
 function matchesWhere(row, where = {}) {
   return Object.entries(where || {}).every(([key, value]) => {
+    if (key === 'AND' && Array.isArray(value)) {
+      return value.every((item) => matchesWhere(row, item));
+    }
+    if (key === 'OR' && Array.isArray(value)) {
+      return value.some((item) => matchesWhere(row, item));
+    }
     if (value && typeof value === 'object' && Array.isArray(value.in)) {
       return value.in.includes(row[key]);
+    }
+    if (value && typeof value === 'object' && Array.isArray(value.notIn)) {
+      return !value.notIn.includes(row[key]);
     }
     if (
       value &&

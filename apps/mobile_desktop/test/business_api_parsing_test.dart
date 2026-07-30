@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
+import 'package:jiangjiu_mobile_desktop/core/file_security_policy.dart';
 
 void main() {
   test('parses guide JSON and guide library states', () {
@@ -366,6 +367,381 @@ void main() {
     );
   });
 
+  test('parses payment methods, details, summaries, and legacy orders', () {
+    final method = PaymentMethodRecord.fromJson({
+      'id': 'method-cod',
+      'code': 'cash_on_delivery',
+      'name': 'Cash on delivery',
+      'category': 'COLLECT_ON_DELIVERY',
+      'serviceFeeRate': '0.006000',
+      'isActive': true,
+      'isDefault': false,
+      'sortOrder': 50,
+      'createdById': 'usr_admin',
+      'updatedById': 'usr_finance',
+      'createdAt': '2026-07-29T08:00:00.000Z',
+      'updatedAt': '2026-07-29T09:00:00.000Z',
+    });
+    expect(method.id, 'method-cod');
+    expect(method.code, 'cash_on_delivery');
+    expect(method.category, 'collect_on_delivery');
+    expect(method.serviceFeeRate, '0.006000');
+    expect(method.isCollectOnDelivery, isTrue);
+    expect(method.createdById, 'usr_admin');
+    expect(method.updatedById, 'usr_finance');
+
+    final legacyCategoryMethod = PaymentMethodRecord.fromJson({
+      'name': 'Legacy collection',
+      'category': 'agency_collection',
+    });
+    expect(legacyCategoryMethod.isCollectOnDelivery, isTrue);
+    expect(legacyCategoryMethod.serviceFeeRate, isNull);
+
+    final zeroRateMethod = PaymentMethodRecord.fromJson({
+      'name': 'Zero fee',
+      'serviceFeeRate': '0.000000',
+    });
+    expect(zeroRateMethod.serviceFeeRate, '0.000000');
+
+    final nullRateMethod = PaymentMethodRecord.fromJson({
+      'name': 'Unconfigured fee',
+      'serviceFeeRate': null,
+    });
+    expect(nullRateMethod.serviceFeeRate, isNull);
+
+    final reconciliationMethod = PaymentMethodRecord.fromJson({
+      'name': 'Cash',
+      'amountCents': 1200,
+      'sortOrder': 2,
+    });
+    expect(reconciliationMethod.amountCents, 1200);
+    expect(reconciliationMethod.isActive, isTrue);
+
+    final detail = SalesOrderPaymentDetailRecord.fromJson({
+      'id': 'detail-cod',
+      'paymentMethodId': 'method-cod',
+      'paymentMethodNameSnapshot': 'Cash on delivery',
+      'paymentMethodCategorySnapshot': 'COLLECT_ON_DELIVERY',
+      'amountCents': 3000,
+      'sortOrder': 1,
+      'collectionConfirmed': true,
+      'collectionConfirmedAt': '2026-07-29T10:00:00.000Z',
+      'collectionConfirmedById': 'usr_finance',
+      'collectionConfirmedBy': {
+        'id': 'usr_finance',
+        'name': '财务测试员',
+      },
+    });
+    expect(detail.isCollectOnDelivery, isTrue);
+    expect(detail.requiresAgencyConfirmation, isTrue);
+    expect(detail.agencyCollectionConfirmed, isTrue);
+    expect(detail.agencyCollectionConfirmedById, 'usr_finance');
+    expect(detail.agencyCollectionConfirmedByName, '财务测试员');
+
+    final order = SalesOrderRecord.fromJson({
+      'id': 'order-payment',
+      'orderNo': 'SO-PAYMENT',
+      'totalAmountCents': 10000,
+      'personalAmountCents': 3000,
+      'normalAmountCents': 7000,
+      'pointsDestination': 'GUIDE_PERSONAL',
+      'cashOnDeliveryAmountCents': 3000,
+      'paymentDetails': [
+        {
+          'id': 'detail-direct',
+          'paymentMethodId': 'method-direct',
+          'paymentMethodNameSnapshot': 'Direct',
+          'paymentMethodCategorySnapshot': 'direct_receipt',
+          'amountCents': 7000,
+          'sortOrder': 0,
+        },
+        {
+          'id': 'detail-cod',
+          'paymentMethodId': 'method-cod',
+          'paymentMethodNameSnapshot': 'Cash on delivery',
+          'paymentMethodCategorySnapshot': 'collect_on_delivery',
+          'amountCents': 3000,
+          'sortOrder': 1,
+          'agencyCollectionConfirmed': true,
+        },
+      ],
+      'paymentDetailsSummary': 'Direct ¥70; COD ¥30',
+      'paymentSummary': {
+        'directReceiptAmountCents': 7000,
+        'collectOnDeliveryAmountCents': 3000,
+        'confirmedCollectOnDeliveryAmountCents': 3000,
+        'pendingCollectOnDeliveryAmountCents': 0,
+        'hasPendingCollectOnDelivery': false,
+      },
+      'paymentStatus': 'received',
+      'paymentStatusLabel': 'Received',
+      'completedAt': '2026-07-29T11:00:00.000Z',
+      'completedById': 'usr_sales',
+      'paymentDetailsLocked': false,
+      'paymentDetailsLockedAt': '2026-07-29T11:00:00.000Z',
+      'paymentDetailsUnlockedAt': '2026-07-29T12:00:00.000Z',
+      'paymentDetailsUnlockedById': 'usr_admin',
+    });
+    expect(order.paymentDetails, hasLength(2));
+    expect(order.personalAmountCents, 3000);
+    expect(order.normalAmountCents, 7000);
+    expect(order.isGuidePersonal, isTrue);
+    expect(order.cashOnDeliveryAmountCents, 3000);
+    expect(order.paymentSummary.directReceiptAmountCents, 7000);
+    expect(
+      order.paymentSummary.confirmedCollectOnDeliveryAmountCents,
+      3000,
+    );
+    expect(order.isCompleted, isTrue);
+    expect(order.paymentDetailsLocked, isFalse);
+    expect(order.paymentDetailsUnlockedById, 'usr_admin');
+    expect(order.paymentStatusLabel, 'Received');
+
+    final derived = SalesOrderRecord.fromJson({
+      'totalAmountCents': 10000,
+      'cashOnDeliveryAmountCents': 3000,
+      'paymentDetails': [
+        {
+          'paymentMethodCategorySnapshot': 'direct_receipt',
+          'amountCents': 7000,
+        },
+        {
+          'paymentMethodCategorySnapshot': 'agency_collection',
+          'amountCents': 3000,
+          'agencyCollectionConfirmed': false,
+        },
+      ],
+    });
+    expect(derived.paymentSummary.directReceiptAmountCents, 7000);
+    expect(derived.paymentSummary.pendingCollectOnDeliveryAmountCents, 3000);
+    expect(derived.paymentStatusLabel, '代收款');
+
+    final legacy = SalesOrderRecord.fromJson({
+      'totalAmountCents': 10000,
+      'cashOnDeliveryAmountCents': 2500,
+      'paymentSummary': 'Legacy payment summary',
+      'paymentDetailsLockedAt': '2026-07-29T11:00:00.000Z',
+    });
+    expect(legacy.paymentDetails, isEmpty);
+    expect(legacy.cashOnDeliveryAmountCents, 2500);
+    expect(legacy.paymentDetailsSummary, 'Legacy payment summary');
+    expect(legacy.paymentSummary.directReceiptAmountCents, 7500);
+    expect(legacy.paymentSummary.collectOnDeliveryAmountCents, 2500);
+    expect(legacy.paymentSummary.pendingCollectOnDeliveryAmountCents, 2500);
+    expect(legacy.paymentDetailsLocked, isTrue);
+  });
+
+  test('sales sheet parses payment details and derives legacy summaries', () {
+    final sheet = SalesSheetRecord.fromJson({
+      'amounts': {
+        'totalAmountCents': 10000,
+        'cashOnDeliveryAmountCents': 3000,
+      },
+      'paymentDetails': [
+        {
+          'id': 'sheet-direct',
+          'paymentMethodCategorySnapshot': 'direct_receipt',
+          'paymentMethodNameSnapshot': 'Direct',
+          'amountCents': 7000,
+        },
+        {
+          'id': 'sheet-cod',
+          'paymentMethodCategorySnapshot': 'collect_on_delivery',
+          'paymentMethodNameSnapshot': 'COD',
+          'amountCents': 3000,
+          'collectionConfirmed': true,
+          'collectionConfirmedAt': '2026-07-29T10:00:00.000Z',
+          'collectionConfirmedBy': {
+            'id': 'finance-user',
+            'name': '财务测试员',
+          },
+          'confirmationStatus': 'confirmed',
+          'confirmationStatusLabel': '已确认到账',
+        },
+      ],
+    });
+    expect(sheet.paymentDetails, hasLength(2));
+    expect(sheet.paymentDetails.last.isCollectOnDelivery, isTrue);
+    expect(sheet.paymentDetails.last.requiresAgencyConfirmation, isTrue);
+    expect(
+      sheet.paymentDetails.last.paymentMethodCategoryLabel,
+      '代收营业款',
+    );
+    expect(
+      sheet.paymentDetails.last.agencyCollectionConfirmedByName,
+      '财务测试员',
+    );
+    expect(
+      sheet.paymentDetails.last.agencyCollectionConfirmedAt,
+      '2026-07-29T10:00:00.000Z',
+    );
+    expect(sheet.paymentDetails.last.confirmationStatusLabel, '已确认到账');
+    expect(
+      sheet.paymentSummary.confirmedCollectOnDeliveryAmountCents,
+      3000,
+    );
+
+    final explicit = SalesSheetRecord.fromJson({
+      'amounts': {
+        'totalAmountCents': 10000,
+        'cashOnDeliveryAmountCents': 3000,
+      },
+      'paymentSummary': {
+        'directReceiptAmountCents': 7000,
+        'collectOnDeliveryAmountCents': 3000,
+        'confirmedCollectOnDeliveryAmountCents': 3000,
+        'pendingCollectOnDeliveryAmountCents': 0,
+        'hasPendingCollectOnDelivery': false,
+      },
+    });
+    expect(
+      explicit.paymentSummary.confirmedCollectOnDeliveryAmountCents,
+      3000,
+    );
+
+    final legacy = SalesSheetRecord.fromJson({
+      'amounts': {
+        'totalAmountCents': 8000,
+        'cashOnDeliveryAmountCents': 2000,
+      },
+    });
+    expect(legacy.paymentDetails, isEmpty);
+    expect(legacy.paymentSummary.directReceiptAmountCents, 6000);
+    expect(legacy.paymentSummary.collectOnDeliveryAmountCents, 2000);
+  });
+
+  test('payment and order lifecycle APIs use stable paths and preserve errors',
+      () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'payment-token');
+    final methodJson = {
+      'id': 'method/1',
+      'code': 'cash',
+      'name': 'Cash',
+      'category': 'direct_receipt',
+      'serviceFeeRate': '0.006000',
+      'isActive': true,
+      'isDefault': false,
+      'sortOrder': 10,
+    };
+
+    apiClient.nextJson = {
+      'data': {
+        'paymentMethods': [methodJson],
+      },
+    };
+    final methods = await api.listPaymentMethods(includeInactive: true);
+    expect(methods.single.id, 'method/1');
+    expect(methods.single.serviceFeeRate, '0.006000');
+    expect(
+      Uri.parse(apiClient.lastPath!).queryParameters['includeInactive'],
+      'true',
+    );
+
+    apiClient.nextJson = {
+      'data': {'paymentMethod': methodJson},
+    };
+    await api.createPaymentMethod({
+      'name': 'Cash',
+      'serviceFeeRate': null,
+    });
+    expect(apiClient.lastMethod, 'POST');
+    expect(apiClient.lastPath, '/api/payment-methods');
+    expect(apiClient.lastBody?['serviceFeeRate'], isNull);
+
+    await api.updatePaymentMethod('method/1', {
+      'name': 'Cash updated',
+      'serviceFeeRate': '0.123456',
+    });
+    expect(apiClient.lastPath, '/api/payment-methods/method%2F1');
+    expect(apiClient.lastBody?['serviceFeeRate'], '0.123456');
+
+    await api.enablePaymentMethod('method/1');
+    expect(apiClient.lastPath, '/api/payment-methods/method%2F1/enable');
+    await api.disablePaymentMethod('method/1');
+    expect(apiClient.lastPath, '/api/payment-methods/method%2F1/disable');
+    await api.setDefaultPaymentMethod('method/1');
+    expect(apiClient.lastPath, '/api/payment-methods/method%2F1/default');
+
+    apiClient.nextJson = {
+      'data': {
+        'paymentMethods': [methodJson],
+      },
+    };
+    await api.sortPaymentMethods([
+      {'id': 'method/1', 'sortOrder': 20},
+    ]);
+    expect(apiClient.lastPath, '/api/payment-methods/sort-order');
+    expect(apiClient.lastBody?['items'], [
+      {'id': 'method/1', 'sortOrder': 20},
+    ]);
+
+    apiClient.nextJson = {
+      'data': {
+        'salesOrder': {
+          'id': 'order/1',
+          'orderNo': 'SO-PAYMENT',
+        },
+      },
+    };
+    await api.replaceSalesOrderPaymentDetails('order/1', [
+      {'paymentMethodId': 'method/1', 'amountCents': 1000},
+    ]);
+    expect(
+      apiClient.lastPath,
+      '/api/sales-orders/order%2F1/payment-details',
+    );
+    expect(apiClient.lastBody?['paymentDetails'], [
+      {'paymentMethodId': 'method/1', 'amountCents': 1000},
+    ]);
+
+    await api.completeSalesOrder('order/1');
+    expect(apiClient.lastPath, '/api/sales-orders/order%2F1/completion');
+    expect(apiClient.lastBody, {'completed': true});
+
+    await api.lockSalesOrderPaymentDetails('order/1');
+    expect(
+      apiClient.lastPath,
+      '/api/sales-orders/order%2F1/payment-details-lock',
+    );
+    expect(apiClient.lastBody, {'locked': true});
+
+    await api.unlockSalesOrderPaymentDetails('order/1');
+    expect(apiClient.lastBody, {'locked': false});
+
+    await api.confirmCollectOnDeliveryPayment(
+      'order/1',
+      'detail/1',
+      true,
+    );
+    expect(
+      apiClient.lastPath,
+      '/api/sales-orders/order%2F1/payment-details/detail%2F1/'
+      'agency-confirmation',
+    );
+    expect(apiClient.lastBody, {'confirmed': true});
+
+    apiClient.nextError = const ApiException(
+      statusCode: 409,
+      code: 'PAYMENT_DETAILS_LOCKED',
+      message: 'Payment details are locked.',
+    );
+    await expectLater(
+      api.replaceSalesOrderPaymentDetails('order/1', [
+        {'paymentMethodId': 'method/1', 'amountCents': 1000},
+      ]),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.statusCode, 'statusCode', 409)
+            .having(
+              (error) => error.code,
+              'code',
+              'PAYMENT_DETAILS_LOCKED',
+            ),
+      ),
+    );
+  });
+
   test('sales edit API uses the single atomic endpoint', () async {
     final apiClient = _RecordingApiClient();
     final api = BusinessApi(apiClient: apiClient, token: 'token-1');
@@ -460,6 +836,24 @@ void main() {
       'description': 'smoke logistics damage',
       'resolution': 'refund shipping damage',
       'refundAmountCents': '5000',
+      'refundPaymentDetailId': 'payment-detail-1',
+      'refundPaymentMethodNameSnapshot': '收钱吧',
+      'refundOccurredAt': null,
+      'deductsPaymentServiceFee': false,
+      'refundTimingStatus': 'same_day',
+      'isSameDayRefund': true,
+      'requiresRefundPaymentDetail': true,
+      'refundPaymentDetailOptions': [
+        {
+          'id': 'payment-detail-1',
+          'paymentMethodNameSnapshot': '收钱吧',
+          'originalAmountCents': 6000,
+          'confirmedSameDayRefundAmountCents': 1000,
+          'remainingRefundableAmountCents': 5000,
+        },
+      ],
+      'personalPointsRefundAmountCents': 1200,
+      'normalPointsRefundAmountCents': 3800,
       'status': 'waiting_refund',
       'financeConfirmed': 'false',
       'financeConfirmedById': null,
@@ -494,6 +888,25 @@ void main() {
     expect(record.issueType, 'logistics_damage');
     expect(record.actionType, 'refund');
     expect(record.refundAmountCents, 5000);
+    expect(record.refundPaymentDetailId, 'payment-detail-1');
+    expect(record.refundPaymentMethodNameSnapshot, '收钱吧');
+    expect(record.refundOccurredAt, isNull);
+    expect(record.deductsPaymentServiceFee, isFalse);
+    expect(record.refundTimingStatus, 'same_day');
+    expect(record.isSameDayRefund, isTrue);
+    expect(record.requiresRefundPaymentDetail, isTrue);
+    expect(record.refundPaymentDetailOptions.single.id, 'payment-detail-1');
+    expect(
+      record
+          .refundPaymentDetailOptions.single.confirmedSameDayRefundAmountCents,
+      1000,
+    );
+    expect(
+      record.refundPaymentDetailOptions.single.remainingRefundableAmountCents,
+      5000,
+    );
+    expect(record.personalPointsRefundAmountCents, 1200);
+    expect(record.normalPointsRefundAmountCents, 3800);
     expect(record.status, 'waiting_refund');
     expect(record.financeConfirmed, isFalse);
     expect(record.notes, 'smoke note');
@@ -1123,6 +1536,7 @@ void main() {
       groupNo: 'TG-001',
       travelAgency: '测试旅行社',
       guideId: 'guide-1',
+      tastingRoomNo: ' 5 ',
       financeMark: false,
       pendingStatus: 'pending_finance',
     );
@@ -1135,8 +1549,38 @@ void main() {
     expect(travelUri.queryParameters['groupNo'], 'TG-001');
     expect(travelUri.queryParameters['travelAgency'], '测试旅行社');
     expect(travelUri.queryParameters['guideId'], 'guide-1');
+    expect(travelUri.queryParameters['tastingRoomNo'], '5');
     expect(travelUri.queryParameters['financeMark'], 'false');
     expect(travelUri.queryParameters['pendingStatus'], 'pending_finance');
+  });
+
+  test('travel group picker filters use exact dedicated query parameters',
+      () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+    apiClient.nextJson = {
+      'data': {'travelGroups': <Map<String, dynamic>>[]},
+    };
+
+    await api.listTravelGroups(tasterId: ' taster-1 ');
+    var uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/travel-groups');
+    expect(uri.queryParameters['tasterId'], 'taster-1');
+    expect(uri.queryParameters.containsKey('tastingRoomNo'), isFalse);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('groupNo'), isFalse);
+    expect(uri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(uri.queryParameters.containsKey('dateTo'), isFalse);
+
+    await api.listTravelGroups(tastingRoomNo: '  5  ');
+    uri = Uri.parse(apiClient.lastPath!);
+    expect(uri.path, '/api/travel-groups');
+    expect(uri.queryParameters['tastingRoomNo'], '5');
+    expect(uri.queryParameters.containsKey('tasterId'), isFalse);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('groupNo'), isFalse);
+    expect(uri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(uri.queryParameters.containsKey('dateTo'), isFalse);
   });
 
   test('travel group API sends liaison filter and new create/update fields',
@@ -1205,6 +1649,65 @@ void main() {
     expect(apiClient.lastBody, updateBody);
   });
 
+  test('travel group not-entered API sends exact body and parses entry status',
+      () async {
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-1');
+    apiClient.nextJson = {
+      'data': {
+        'travelGroup': {
+          'id': 'group-1',
+          'groupNo': 'TG-001',
+          'entryStatus': 'not_entered',
+          'notEnteredConfirmedAt': '2026-07-29T02:30:00.000Z',
+          'notEnteredConfirmedById': 'front-1',
+          'notEnteredConfirmedBy': {
+            'id': 'front-1',
+            'name': '前台甲',
+            'username': 'front.one',
+          },
+        },
+      },
+    };
+
+    final updated = await api.setTravelGroupNotEntered('group-1', true);
+
+    expect(apiClient.lastMethod, 'PATCH');
+    expect(apiClient.lastPath, '/api/travel-groups/group-1/not-entered');
+    expect(apiClient.lastBody, {'confirmed': true});
+    expect(updated.entryStatus, 'not_entered');
+    expect(
+      updated.notEnteredConfirmedAt,
+      '2026-07-29T02:30:00.000Z',
+    );
+    expect(updated.notEnteredConfirmedById, 'front-1');
+    expect(updated.notEnteredConfirmedBy?.id, 'front-1');
+    expect(updated.notEnteredConfirmedBy?.name, '前台甲');
+    expect(updated.notEnteredConfirmedBy?.username, 'front.one');
+  });
+
+  test('travel group entry status remains compatible with legacy responses',
+      () {
+    final pending = TravelGroupRecord.fromJson({
+      'id': 'group-pending',
+      'arrivalTime': null,
+    });
+    final entered = TravelGroupRecord.fromJson({
+      'id': 'group-entered',
+      'arrivalTime': '09:30',
+    });
+    final confirmedWins = TravelGroupRecord.fromJson({
+      'id': 'group-confirmed',
+      'arrivalTime': '09:30',
+      'entryStatus': 'entered',
+      'notEnteredConfirmedAt': '2026-07-29T02:30:00.000Z',
+    });
+
+    expect(pending.entryStatus, 'pending_entry');
+    expect(entered.entryStatus, 'entered');
+    expect(confirmedWins.entryStatus, 'not_entered');
+  });
+
   test('travel group API uploads, downloads, and deletes safe attachments',
       () async {
     final apiClient = _RecordingApiClient();
@@ -1252,7 +1755,7 @@ void main() {
     );
     expect(apiClient.lastToken, 'token-1');
     expect(apiClient.lastFiles, same(files));
-    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+    expect(apiClient.lastMaxFileSizeBytes, 10 * 1024 * 1024);
     expect(uploaded.attachments.single.originalName, 'vip.jpg');
     expect(uploaded.travelGroup.keyCustomerPhotos.single.id, 'attachment-1');
 
@@ -1283,6 +1786,118 @@ void main() {
     );
     expect(deleted.attachment.id, 'attachment-1');
     expect(deleted.travelGroup.keyCustomerPhotos, isEmpty);
+  });
+
+  test(
+      'parses travel-group profit fees, preserves nulls, and tolerates old responses',
+      () async {
+    final parsed = ProfitAnalysisResponse.fromJson({
+      'range': {
+        'preset': 'custom',
+        'dateFrom': '2026-07-01',
+        'dateTo': '2026-07-31',
+      },
+      'summary': {
+        'groupCount': 1,
+        'taxFeeCents': 90,
+        'paymentServiceFeeCents': 70,
+      },
+      'items': [
+        {
+          'travelGroupId': 'profit-group-1',
+          'groupNo': 'TG-PROFIT-1',
+          'taxFeeCents': null,
+          'paymentServiceFeeCents': 70,
+          'paymentMethodFeeBreakdown': [
+            {
+              'paymentMethodId': 'wallet',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'serviceFeeRateSnapshot': '0.006000',
+              'originalPaymentAmountCents': 6000,
+              'sameDayRefundAmountCents': 1000,
+              'serviceFeeBaseAmountCents': 5000,
+              'serviceFeeCents': 30,
+              'orderCount': 2,
+            },
+            {
+              'paymentMethodId': 'wallet',
+              'paymentMethodNameSnapshot': '收钱吧',
+              'serviceFeeRateSnapshot': '0.010000',
+              'originalPaymentAmountCents': 4000,
+              'sameDayRefundAmountCents': 0,
+              'serviceFeeBaseAmountCents': 4000,
+              'serviceFeeCents': 40,
+              'orderCount': 1,
+            },
+          ],
+          'calculationStatus': 'incomplete',
+        },
+      ],
+      'pagination': {
+        'page': 1,
+        'pageSize': 50,
+        'total': 1,
+        'totalPages': 1,
+      },
+    });
+
+    expect(parsed.summary.taxFeeCents, 90);
+    expect(parsed.summary.paymentServiceFeeCents, 70);
+    expect(parsed.items.single.taxFeeCents, isNull);
+    expect(parsed.items.single.paymentServiceFeeCents, 70);
+    expect(parsed.items.single.paymentMethodFeeBreakdown, hasLength(2));
+    expect(
+      parsed.items.single.paymentMethodFeeBreakdown
+          .map((row) => row.serviceFeeRateSnapshot),
+      ['0.006000', '0.010000'],
+    );
+    expect(
+      parsed.items.single.paymentMethodFeeBreakdown.first.orderCount,
+      2,
+    );
+
+    final old = ProfitAnalysisResponse.fromJson({
+      'range': const {},
+      'summary': const {},
+      'items': [
+        {
+          'travelGroupId': 'old',
+          'groupNo': 'TG-OLD',
+        },
+      ],
+      'pagination': const {},
+    });
+    expect(old.summary.taxFeeCents, 0);
+    expect(old.summary.paymentServiceFeeCents, 0);
+    expect(old.items.single.taxFeeCents, 0);
+    expect(old.items.single.paymentServiceFeeCents, 0);
+    expect(old.items.single.paymentMethodFeeBreakdown, isEmpty);
+
+    final apiClient = _RecordingApiClient();
+    final api = BusinessApi(apiClient: apiClient, token: 'token-profit');
+    await api.exportTravelGroupProfits(
+      preset: 'custom',
+      dateFrom: DateTime(2026, 7, 1),
+      dateTo: DateTime(2026, 7, 31),
+      query: 'Agency A',
+      status: 'estimated',
+      sortBy: 'estimatedProfitCents',
+      sortDirection: 'asc',
+    );
+    final uri = Uri.parse(apiClient.lastPath!);
+    expect(apiClient.lastMethod, 'BYTES');
+    expect(
+      uri.path,
+      '/api/analytics/travel-group-profits/export',
+    );
+    expect(uri.queryParameters['preset'], 'custom');
+    expect(uri.queryParameters['dateFrom'], '2026-07-01');
+    expect(uri.queryParameters['dateTo'], '2026-07-31');
+    expect(uri.queryParameters['query'], 'Agency A');
+    expect(uri.queryParameters['status'], 'estimated');
+    expect(uri.queryParameters['sortBy'], 'estimatedProfitCents');
+    expect(uri.queryParameters['sortDirection'], 'asc');
+    expect(apiClient.lastDefaultFileName, 'travel-group-profits.xlsx');
   });
 
   test('parses phase 8 analytics JSON records', () {
@@ -2575,14 +3190,22 @@ void main() {
         contentType: 'image/png',
       ),
     ];
-    await api.confirmAfterSalesFinanceRefund('as-1', files: proofFiles);
+    await api.confirmAfterSalesFinanceRefund(
+      'as-1',
+      files: proofFiles,
+      refundPaymentDetailId: 'payment-detail-1',
+    );
     expect(apiClient.lastMethod, 'MULTIPART');
     expect(
       apiClient.lastPath,
       '/api/after-sales-orders/as-1/finance-refund-confirm',
     );
     expect(apiClient.lastFiles, same(proofFiles));
-    expect(apiClient.lastMaxFileSizeBytes, 20 * 1024 * 1024);
+    expect(
+      apiClient.lastMultipartFields,
+      {'refundPaymentDetailId': 'payment-detail-1'},
+    );
+    expect(apiClient.lastMaxFileSizeBytes, fileSecurityMaxFileBytes);
 
     final downloadedRefundProof = await api.downloadAfterSalesRefundProof(
       'as-1',
@@ -2859,6 +3482,7 @@ class _RecordingApiClient extends ApiClient {
   Map<String, dynamic> nextJson = <String, dynamic>{
     'data': <String, dynamic>{}
   };
+  ApiException? nextError;
   ApiDownloadedFile nextDownload = ApiDownloadedFile(
     bytes: Uint8List.fromList(<int>[1, 2, 3]),
     fileName: 'export.xlsx',
@@ -2872,7 +3496,16 @@ class _RecordingApiClient extends ApiClient {
   String? lastDefaultFileName;
   Map<String, dynamic>? lastBody;
   List<ApiMultipartFile>? lastFiles;
+  Map<String, String>? lastMultipartFields;
   int? lastMaxFileSizeBytes;
+
+  void _throwNextError() {
+    final error = nextError;
+    nextError = null;
+    if (error != null) {
+      throw error;
+    }
+  }
 
   @override
   Future<Map<String, dynamic>> getJson(
@@ -2882,6 +3515,7 @@ class _RecordingApiClient extends ApiClient {
     lastMethod = 'GET';
     lastPath = path;
     lastToken = token;
+    _throwNextError();
     return nextJson;
   }
 
@@ -2895,6 +3529,7 @@ class _RecordingApiClient extends ApiClient {
     lastPath = path;
     lastToken = token;
     lastBody = Map<String, dynamic>.from(body ?? <String, dynamic>{});
+    _throwNextError();
     return nextJson;
   }
 
@@ -2908,6 +3543,7 @@ class _RecordingApiClient extends ApiClient {
     lastPath = path;
     lastToken = token;
     lastBody = Map<String, dynamic>.from(body ?? <String, dynamic>{});
+    _throwNextError();
     return nextJson;
   }
 
@@ -2921,6 +3557,7 @@ class _RecordingApiClient extends ApiClient {
     lastPath = path;
     lastToken = token;
     lastBody = body == null ? null : Map<String, dynamic>.from(body);
+    _throwNextError();
     return nextJson;
   }
 
@@ -2937,6 +3574,7 @@ class _RecordingApiClient extends ApiClient {
     lastPath = path;
     lastToken = token;
     lastFiles = files;
+    lastMultipartFields = Map<String, String>.from(fields);
     lastMaxFileSizeBytes = maxFileSizeBytes;
     return nextJson;
   }

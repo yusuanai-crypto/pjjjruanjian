@@ -118,6 +118,35 @@ test('contract: finance order profit uses snapshots and marks refund net profit 
   });
 });
 
+test('contract: stage10 travel-group profit coverage includes snapshotted tax and payment fees', async () => {
+  await withProfitServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const result = await requestJson(
+      baseUrl,
+      '/api/analytics/travel-group-profits?preset=custom&dateFrom=2026-07-20&dateTo=2026-07-20',
+      { token: admin.token },
+    );
+
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.data.items.length, 1);
+    const item = result.body.data.items[0];
+    assert.equal(item.groupNo, 'TG-COVERAGE-FEES');
+    assert.equal(item.effectiveSalesAmountCents, 9000);
+    assert.equal(item.taxFeeCents, 90);
+    assert.equal(item.paymentServiceFeeCents, 70);
+    assert.equal(item.totalExpenseCents, 3660);
+    assert.equal(item.estimatedProfitCents, 5340);
+    assert.equal(
+      JSON.stringify(item).includes('actualCostSubtotalCents'),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(item).includes('Customer coverage-fees'),
+      false,
+    );
+  });
+});
+
 test('contract: cost and profit endpoints reject boss, other roles, and anonymous callers', async () => {
   await withProfitServer(async (baseUrl) => {
     const anonymousPaths = [
@@ -160,6 +189,20 @@ test('contract: cost and profit endpoints reject boss, other roles, and anonymou
 function withProfitServer(run) {
   return withPhase1Server(run, {
     prisma: {
+      travelGroups: [
+        {
+          id: 'coverage-fees-group',
+          groupNo: 'TG-COVERAGE-FEES',
+          visitDate: '2026-07-20',
+          travelAgency: 'Coverage Agency',
+          guideName: 'Coverage Guide',
+          tasterName: 'Coverage Taster',
+          guestCount: 10,
+          financeMark: true,
+          parkingFeeCents: 500,
+          cigaretteFeeCents: 0,
+        },
+      ],
       salesOrders: [
         orderSeed('profit-complete', '2026-07-01', [
           itemSeed('complete-line', 10000, 3000),
@@ -174,6 +217,32 @@ function withProfitServer(run) {
         orderSeed('profit-refund', '2026-07-04', [
           itemSeed('refund-line', 10000, 3000),
         ]),
+        orderSeed(
+          'coverage-fees',
+          '2026-07-20',
+          [itemSeed('coverage-fees-line', 10000, 3000)],
+          {
+            travelGroupId: 'coverage-fees-group',
+            financeMark: true,
+            taxRateSnapshot: '0.010000',
+            paymentDetails: [
+              paymentSeed(
+                'coverage-wallet',
+                'coverage-wallet-method',
+                '收钱吧',
+                6000,
+                '0.006000',
+              ),
+              paymentSeed(
+                'coverage-card',
+                'coverage-card-method',
+                '银行卡',
+                4000,
+                '0.010000',
+              ),
+            ],
+          },
+        ),
       ],
       afterSalesOrders: [
         {
@@ -188,6 +257,23 @@ function withProfitServer(run) {
           status: 'COMPLETED',
           financeConfirmed: true,
           createdAt: '2026-07-04T10:00:00.000Z',
+        },
+        {
+          id: 'coverage-fees-refund',
+          afterSalesNo: 'AS-COVERAGE-FEES',
+          salesOrderId: 'coverage-fees',
+          customerId: null,
+          issueType: 'OTHER',
+          actionType: 'REFUND',
+          description: 'same-day fee allocation',
+          refundAmountCents: 1000,
+          status: 'COMPLETED',
+          financeConfirmed: true,
+          refundPaymentDetailId: 'coverage-wallet',
+          refundPaymentMethodNameSnapshot: '收钱吧',
+          refundOccurredAt: '2026-07-20T12:00:00.000Z',
+          deductsPaymentServiceFee: true,
+          createdAt: '2026-07-20T12:00:00.000Z',
         },
       ],
       commissionRecords: [
@@ -204,11 +290,19 @@ function withProfitServer(run) {
           deductionAmountCents: 222,
         },
       ],
+      travelGroupFinanceSummaries: [
+        {
+          id: 'coverage-fees-summary',
+          travelGroupId: 'coverage-fees-group',
+          totalDailyRebateCents: 0,
+          totalMonthlyRebateCents: 0,
+        },
+      ],
     },
   });
 }
 
-function orderSeed(id, orderDate, items) {
+function orderSeed(id, orderDate, items, overrides = {}) {
   return {
     id,
     orderNo: `SO-${id.toUpperCase()}`,
@@ -220,6 +314,7 @@ function orderSeed(id, orderDate, items) {
       (sum, item) => sum + item.subtotalCents,
       0,
     ),
+    ...overrides,
     items,
   };
 }
@@ -240,6 +335,23 @@ function itemSeed(id, subtotalCents, actualCostSubtotalCents) {
         ? null
         : subtotalCents - actualCostSubtotalCents,
     deliveryType: 'SHIPPING',
+  };
+}
+
+function paymentSeed(
+  id,
+  paymentMethodId,
+  paymentMethodNameSnapshot,
+  amountCents,
+  serviceFeeRateSnapshot,
+) {
+  return {
+    id,
+    paymentMethodId,
+    paymentMethodNameSnapshot,
+    amountCents,
+    serviceFeeRateSnapshot,
+    serviceFeeBaseAmountSnapshotCents: amountCents,
   };
 }
 

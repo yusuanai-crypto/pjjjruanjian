@@ -7,6 +7,9 @@ import 'package:jiangjiu_mobile_desktop/app/destinations.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/core/auth/auth_models.dart';
 import 'package:jiangjiu_mobile_desktop/features/shell/app_shell.dart';
+import 'package:jiangjiu_mobile_desktop/features/todo_reminders/local_reminder_scheduler.dart';
+import 'package:jiangjiu_mobile_desktop/features/todo_reminders/todo_reminder_controller.dart';
+import 'package:jiangjiu_mobile_desktop/features/todo_reminders/todo_reminder_models.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -80,6 +83,59 @@ void main() {
     await apiClient.events.close();
     apiClient.close(force: true);
   });
+
+  testWidgets(
+      'fast login then logout does not start fallback sync on disposed shell',
+      (tester) async {
+    final apiClient = _ShellApiClient();
+    final scheduler = _PendingInitializationScheduler();
+    var timerCreations = 0;
+    final todoController = TodoReminderController(
+      apiClient: apiClient,
+      token: 'test-token',
+      userId: _user.id,
+      scheduler: scheduler,
+      timerFactory: (duration, callback) {
+        timerCreations += 1;
+        return Timer(duration, () {});
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppShell(
+          apiClient: apiClient,
+          token: 'test-token',
+          role: UserRole.admin,
+          user: _user,
+          allowedDestinations: [
+            appDestinations.firstWhere(
+              (destination) => destination.id == 'role_menu',
+            ),
+          ],
+          selectedDestinationId: 'role_menu',
+          onDestinationChanged: (_) {},
+          onLogout: () {},
+          todoReminderController: todoController,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(scheduler.initializeCalls, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    scheduler.failInitialization();
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(timerCreations, 0);
+    expect(apiClient.todoGetCalls, 0);
+
+    await apiClient.events.close();
+    apiClient.close(force: true);
+  });
 }
 
 const _user = AuthUser(
@@ -100,6 +156,7 @@ class _ShellApiClient extends ApiClient {
   bool filtered = false;
   bool restricted = false;
   int salesOrderListCalls = 0;
+  int todoGetCalls = 0;
 
   @override
   Stream<ApiSseEvent> openSse(String path, {String? token}) {
@@ -129,6 +186,7 @@ class _ShellApiClient extends ApiClient {
     }
     if (path == '/api/todo-reminders/summary' ||
         path.startsWith('/api/todo-reminders?')) {
+      todoGetCalls += 1;
       return {
         'data': {
           'reminders': const [],
@@ -161,6 +219,42 @@ class _ShellApiClient extends ApiClient {
     }
     throw StateError('Unexpected GET $path');
   }
+}
+
+class _PendingInitializationScheduler implements LocalReminderScheduler {
+  final Completer<void> _initialization = Completer<void>();
+  int initializeCalls = 0;
+
+  @override
+  Future<void> initialize(ValueChanged<String> onReminderActivated) {
+    initializeCalls += 1;
+    return _initialization.future;
+  }
+
+  void failInitialization() {
+    _initialization.completeError(StateError('initialization failed'));
+  }
+
+  @override
+  Future<void> reconcile(
+    List<TodoReminder> reminders, {
+    required String userId,
+  }) async {}
+
+  @override
+  Future<void> schedule(
+    TodoReminder reminder, {
+    required String userId,
+  }) async {}
+
+  @override
+  Future<void> cancel(String reminderId) async {}
+
+  @override
+  Future<void> cancelAllForUser(String userId) async {}
+
+  @override
+  Future<void> handleNotificationActivation() async {}
 }
 
 const _order = <String, dynamic>{

@@ -13,6 +13,7 @@ import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/mark_info_button.dart';
 import '../../shared/widgets/metric_card.dart';
 import '../../shared/widgets/money_text.dart';
+import '../../shared/widgets/payment_details_editor.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
@@ -84,12 +85,19 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   bool get _canExportSalesOrders =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
-      widget.role == UserRole.finance;
+      widget.role == UserRole.finance ||
+      widget.role == UserRole.boss ||
+      widget.role == UserRole.afterSales;
 
   bool get _canChangePointsDestination =>
-      canChangeOrderPointsDestination(widget.role);
-  bool get _canEditPersonalPointsSettings =>
-      canMaintainGuidePointsTable(widget.role);
+      canManageOrderPersonalSplit(widget.role);
+  bool get _canCompleteOrder =>
+      widget.role == UserRole.superAdmin ||
+      widget.role == UserRole.admin ||
+      widget.role == UserRole.finance;
+  bool get _canControlPaymentLock =>
+      widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
+  bool get _canConfirmAgencyCollection => _canCompleteOrder;
 
   @override
   void initState() {
@@ -138,8 +146,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         status: _statusFilter,
         deliveryType: _deliveryFilter,
         packingStatus: _packingFilter,
-        shippingDateStart:
-            _shippingDateRangeAll ? null : _shippingDateStart,
+        shippingDateStart: _shippingDateRangeAll ? null : _shippingDateStart,
         shippingDateEnd: _shippingDateRangeAll ? null : _shippingDateEnd,
         shippingDateSort: _shippingDateSort,
       );
@@ -267,11 +274,22 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                     onChangePointsDestination: () => runAction(
                       () => _changePointsDestination(selected),
                     ),
-                    onEditPersonalPoints: _canEditPersonalPointsSettings
+                    onEditPersonalPoints: null,
+                    onToggleCompletion: _canCompleteOrder
                         ? () => runAction(
-                              () => _changePointsDestination(
+                              () => _toggleOrderCompletion(selected),
+                            )
+                        : null,
+                    onTogglePaymentLock: _canControlPaymentLock
+                        ? () => runAction(
+                              () => _togglePaymentDetailsLock(selected),
+                            )
+                        : null,
+                    onConfirmAgencyCollection: _canConfirmAgencyCollection
+                        ? (detail) => runAction(
+                              () => _toggleAgencyCollectionConfirmation(
                                 selected,
-                                editPersonalSettings: true,
+                                detail,
                               ),
                             )
                         : null,
@@ -446,9 +464,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
 
   Future<void> _openShippingDateDialog(SalesOrderRecord order) async {
     final submittedAt = DateTime.tryParse(order.createdAt ?? '');
-    final shanghaiSubmittedAt = submittedAt
-        ?.toUtc()
-        .add(const Duration(hours: 8));
+    final shanghaiSubmittedAt =
+        submittedAt?.toUtc().add(const Duration(hours: 8));
     final minimumDate = shanghaiSubmittedAt == null
         ? _shanghaiToday()
         : DateTime(
@@ -490,8 +507,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                   icon: const Icon(Icons.local_shipping_rounded),
                   label: Text('发货日期 ${formatDate(selectedDate)}'),
                 ),
-                if (formatDate(selectedDate) ==
-                    formatDate(minimumDate)) ...[
+                if (formatDate(selectedDate) == formatDate(minimumDate)) ...[
                   const SizedBox(height: 10),
                   const StatusTag(
                     label: '该订单计划当天发货，请确认仓库可及时处理。',
@@ -578,6 +594,76 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     await _loadOrders();
   }
 
+  Future<void> _toggleOrderCompletion(SalesOrderRecord order) async {
+    setState(() {
+      _busyOrderIds.add(order.id);
+      _detailErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.setSalesOrderCompletion(
+        order.id,
+        !order.isCompleted,
+      );
+      if (!mounted) return;
+      _replaceOrder(updated);
+      setState(() => _busyOrderIds.remove(order.id));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busyOrderIds.remove(order.id);
+        _detailErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _togglePaymentDetailsLock(SalesOrderRecord order) async {
+    setState(() {
+      _busyOrderIds.add(order.id);
+      _detailErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.setSalesOrderPaymentDetailsLock(
+        order.id,
+        !order.paymentDetailsLocked,
+      );
+      if (!mounted) return;
+      _replaceOrder(updated);
+      setState(() => _busyOrderIds.remove(order.id));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busyOrderIds.remove(order.id);
+        _detailErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _toggleAgencyCollectionConfirmation(
+    SalesOrderRecord order,
+    SalesOrderPaymentDetailRecord detail,
+  ) async {
+    setState(() {
+      _busyOrderIds.add(order.id);
+      _detailErrorMessage = null;
+    });
+    try {
+      final updated = await _businessApi.confirmAgencyCollectionPayment(
+        order.id,
+        detail.id,
+        !detail.agencyCollectionConfirmed,
+      );
+      if (!mounted) return;
+      _replaceOrder(updated);
+      setState(() => _busyOrderIds.remove(order.id));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busyOrderIds.remove(order.id);
+        _detailErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
   Future<void> _openQrSalesSheetDialog(SalesOrderRecord order) async {
     final generated = await showDialog<bool>(
       context: context,
@@ -599,50 +685,16 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     if (!_canChangePointsDestination || _busyOrderIds.contains(order.id)) {
       return;
     }
-    if (editPersonalSettings &&
-        (!_canEditPersonalPointsSettings || !order.isGuidePersonal)) {
+    final selection = await showDialog<_PersonalPointsSelection>(
+      context: context,
+      builder: (context) => _PersonalPointsDialog(
+        businessApi: _businessApi,
+        order: order,
+        editing: order.personalAmountCents > 0 || editPersonalSettings,
+      ),
+    );
+    if (selection == null) {
       return;
-    }
-    _PersonalPointsSelection? selection;
-    if (order.isGuidePersonal && !editPersonalSettings) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('确认转回旅行社积分'),
-          content: Text(
-            '订单 ${order.orderNo} 将退出导游积分表，并重新按旅行社规则'
-            '进入普通积分表。若相关汇总已返款，系统会拒绝操作。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              key: const ValueKey(
-                'order-points-destination-agency-confirm',
-              ),
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('确认转回旅行社'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) {
-        return;
-      }
-    } else {
-      selection = await showDialog<_PersonalPointsSelection>(
-        context: context,
-        builder: (context) => _PersonalPointsDialog(
-          businessApi: _businessApi,
-          order: order,
-          editing: editPersonalSettings,
-        ),
-      );
-      if (selection == null) {
-        return;
-      }
     }
 
     setState(() {
@@ -652,12 +704,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     try {
       final updated = await _businessApi.updateSalesOrderPointsDestination(
         order.id,
-        pointsDestination: order.isGuidePersonal && !editPersonalSettings
-            ? 'TRAVEL_AGENCY'
-            : 'GUIDE_PERSONAL',
-        guideId: selection?.guideId,
-        dailyRebateRate: selection?.dailyRate,
-        monthlyRebateRate: selection?.monthlyRate,
+        personalAmountCents: selection.personalAmountCents,
+        guideId: selection.guideId,
+        dailyRebateRate: selection.dailyRate,
+        monthlyRebateRate: selection.monthlyRate,
       );
       if (!mounted) {
         return;
@@ -670,11 +720,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            editPersonalSettings
-                ? '订单个人积分设置已更新。'
-                : updated.isGuidePersonal
-                    ? '订单已走个人，并进入导游积分表。'
-                    : '订单已转回旅行社积分表。',
+            updated.isGuidePersonal ? '订单走个人金额已更新。' : '订单走个人已取消。',
           ),
         ),
       );
@@ -707,8 +753,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         status: _statusFilter,
         deliveryType: _deliveryFilter,
         packingStatus: _packingFilter,
-        shippingDateStart:
-            _shippingDateRangeAll ? null : _shippingDateStart,
+        shippingDateStart: _shippingDateRangeAll ? null : _shippingDateStart,
         shippingDateEnd: _shippingDateRangeAll ? null : _shippingDateEnd,
         shippingDateSort: _shippingDateSort,
       );
@@ -978,6 +1023,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
               showFinancialMetrics: _canViewOrderFinancialMetrics(
                 widget.role,
               ),
+              showPersonalSplit: canViewOrderPersonalSplit(widget.role),
               onSelect: _selectOrder,
             ),
           ],
@@ -994,6 +1040,7 @@ class _OrderList extends StatelessWidget {
     required this.loading,
     required this.showFinanceMarks,
     required this.showFinancialMetrics,
+    required this.showPersonalSplit,
     required this.onSelect,
   });
 
@@ -1002,6 +1049,7 @@ class _OrderList extends StatelessWidget {
   final bool loading;
   final bool showFinanceMarks;
   final bool showFinancialMetrics;
+  final bool showPersonalSplit;
   final ValueChanged<SalesOrderRecord> onSelect;
 
   @override
@@ -1072,6 +1120,28 @@ class _OrderList extends StatelessWidget {
                     '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
                 Text(_travelGroupLabel(order)),
                 Text('发货 ${_display(order.shippingDate)}'),
+                if (showPersonalSplit)
+                  Text(
+                    order.isGuidePersonal
+                        ? '走个人 '
+                            '${formatMoneyCents(order.personalAmountCents)}'
+                            ' / 正常 '
+                            '${formatMoneyCents(order.normalAmountCents)}'
+                        : '未走个人 / 正常 '
+                            '${formatMoneyCents(order.normalAmountCents)}',
+                    key: const ValueKey(
+                      'order-list-personal-split',
+                    ),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                if (_paymentDetailsSummaryText(order).isNotEmpty)
+                  Text(
+                    _paymentDetailsSummaryText(order),
+                    key: const ValueKey('order-payment-details-summary'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 if (showFinanceMarks) ...[
                   StatusTag(
                     label: _customerMarked(order) ? '客户已标记' : '客户未标记',
@@ -1122,6 +1192,9 @@ class _OrderDetailPanel extends StatelessWidget {
     required this.onOpenQrSalesSheet,
     required this.onChangePointsDestination,
     required this.onEditPersonalPoints,
+    required this.onToggleCompletion,
+    required this.onTogglePaymentLock,
+    required this.onConfirmAgencyCollection,
   });
 
   final SalesOrderRecord? order;
@@ -1140,6 +1213,9 @@ class _OrderDetailPanel extends StatelessWidget {
   final VoidCallback? onOpenQrSalesSheet;
   final VoidCallback? onChangePointsDestination;
   final VoidCallback? onEditPersonalPoints;
+  final VoidCallback? onToggleCompletion;
+  final VoidCallback? onTogglePaymentLock;
+  final ValueChanged<SalesOrderPaymentDetailRecord>? onConfirmAgencyCollection;
 
   @override
   Widget build(BuildContext context) {
@@ -1213,6 +1289,8 @@ class _OrderDetailPanel extends StatelessWidget {
               onOpenQrSalesSheet: onOpenQrSalesSheet,
               onChangePointsDestination: onChangePointsDestination,
               onEditPersonalPoints: onEditPersonalPoints,
+              onToggleCompletion: onToggleCompletion,
+              onTogglePaymentLock: onTogglePaymentLock,
             ),
           ],
         ),
@@ -1237,13 +1315,22 @@ class _OrderDetailPanel extends StatelessWidget {
             ),
             _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
             _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
-            _InfoRow(
-              label: '积分归属',
-              value: order.isGuidePersonal
-                  ? '走个人 · ${order.personalGuideNameSnapshot ?? order.personalPointsGuide?.name ?? '未指定导游'}'
-                  : '走旅行社',
-            ),
-            if (order.isGuidePersonal) ...[
+            if (canViewOrderPersonalSplit(role))
+              _InfoRow(
+                label: '积分归属',
+                value: order.isGuidePersonal
+                    ? '走个人 ${formatMoneyCents(order.personalAmountCents)}'
+                        ' / 正常 ${formatMoneyCents(order.normalAmountCents)}'
+                    : '未走个人 / 正常 '
+                        '${formatMoneyCents(order.normalAmountCents)}',
+              ),
+            if (canViewOrderPersonalSplit(role) && order.isGuidePersonal) ...[
+              _InfoRow(
+                label: '个人收款导游',
+                value: order.personalGuideNameSnapshot ??
+                    order.personalPointsGuide?.name ??
+                    '未指定导游',
+              ),
               _InfoRow(
                 label: '个人日返比例',
                 value: _pointsRatePercent(order.personalDailyRebateRate),
@@ -1289,8 +1376,79 @@ class _OrderDetailPanel extends StatelessWidget {
               ),
               _InfoRow(label: '品鉴师', value: _display(order.tasterName)),
             ],
-            _InfoMoneyRow(
-                label: '货到付款', cents: order.cashOnDeliveryAmountCents),
+            const SizedBox(height: 8),
+            const _SectionTitle('收款明细'),
+            if (order.paymentDetails.isEmpty)
+              Text(
+                _paymentDetailsSummaryText(order).isEmpty
+                    ? '暂无收款明细'
+                    : _paymentDetailsSummaryText(order),
+              )
+            else
+              _PaymentDetailsTable(
+                order: order,
+                orderBusy: orderBusy,
+                onConfirmAgencyCollection: onConfirmAgencyCollection,
+              ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                StatusTag(
+                  label:
+                      '直接到账 ${formatMoneyCents(order.paymentSummary.directReceiptAmountCents)}',
+                  tone: StatusTone.neutral,
+                ),
+                StatusTag(
+                  label:
+                      '代收 ${formatMoneyCents(order.paymentSummary.collectOnDeliveryAmountCents)}',
+                  tone: StatusTone.info,
+                ),
+                StatusTag(
+                  label:
+                      '已确认代收 ${formatMoneyCents(order.paymentSummary.confirmedCollectOnDeliveryAmountCents)}',
+                  tone: StatusTone.success,
+                ),
+                StatusTag(
+                  key: const ValueKey('order-payment-pending-summary'),
+                  label: order.paymentSummary.hasPendingCollectOnDelivery
+                      ? '代收款 ${formatMoneyCents(order.paymentSummary.pendingCollectOnDeliveryAmountCents)}'
+                      : '无待确认代收',
+                  tone: order.paymentSummary.hasPendingCollectOnDelivery
+                      ? StatusTone.warning
+                      : StatusTone.neutral,
+                ),
+              ],
+            ),
+            _InfoRow(
+              label: '订单完成',
+              value: order.isCompleted ? '已完成' : '未完成',
+            ),
+            if (order.paymentDetailsLocked) ...[
+              const SizedBox(height: 8),
+              const StatusTag(
+                key: ValueKey('order-payment-locked-status'),
+                label: '收款明细已锁定（只读）',
+                tone: StatusTone.warning,
+              ),
+              _InfoRow(
+                label: '锁定人',
+                value: _display(order.paymentDetailsLockedById),
+              ),
+              _InfoRow(
+                label: '锁定时间',
+                value: _formatDateTimeText(order.paymentDetailsLockedAt),
+              ),
+            ] else ...[
+              const _InfoRow(label: '收款明细锁定', value: '未锁定'),
+              if (order.paymentDetailsUnlockedAt != null)
+                _InfoRow(
+                  label: '最近解锁',
+                  value:
+                      '${_display(order.paymentDetailsUnlockedById)} · ${_formatDateTimeText(order.paymentDetailsUnlockedAt)}',
+                ),
+            ],
             _InfoRow(label: '客户需开票', value: order.invoiceRequired ? '是' : '否'),
             _InfoRow(label: '财务已开票', value: order.invoiceIssued ? '是' : '否'),
             _InfoRow(label: '财务备注', value: _display(order.financeRemark)),
@@ -1316,6 +1474,129 @@ class _OrderDetailPanel extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _PaymentDetailsTable extends StatelessWidget {
+  const _PaymentDetailsTable({
+    required this.order,
+    required this.orderBusy,
+    required this.onConfirmAgencyCollection,
+  });
+
+  final SalesOrderRecord order;
+  final bool orderBusy;
+  final ValueChanged<SalesOrderPaymentDetailRecord>? onConfirmAgencyCollection;
+
+  @override
+  Widget build(BuildContext context) {
+    final details = [...order.paymentDetails]
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    final showActions = onConfirmAgencyCollection != null;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        key: const ValueKey('order-payment-details-table'),
+        columnSpacing: 24,
+        dataRowMinHeight: 52,
+        dataRowMaxHeight: 92,
+        columns: [
+          const DataColumn(label: Text('收款方式')),
+          const DataColumn(label: Text('金额'), numeric: true),
+          const DataColumn(label: Text('类型')),
+          const DataColumn(label: Text('确认状态')),
+          if (showActions) const DataColumn(label: Text('操作')),
+        ],
+        rows: [
+          for (final detail in details)
+            DataRow(
+              key: ValueKey('order-payment-detail-row-${detail.id}'),
+              cells: [
+                DataCell(
+                  Text(
+                    detail.paymentMethodNameSnapshot,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                DataCell(MoneyText(cents: detail.amountCents)),
+                DataCell(
+                  Text(
+                    detail.isAgencyCollection ? '代收营业款' : '即时收款',
+                  ),
+                ),
+                DataCell(
+                  _PaymentConfirmationStatus(detail: detail),
+                ),
+                if (showActions)
+                  DataCell(
+                    detail.isAgencyCollection
+                        ? OutlinedButton(
+                            key: ValueKey(
+                              'order-payment-confirm-button-${detail.id}',
+                            ),
+                            onPressed: orderBusy
+                                ? null
+                                : () => onConfirmAgencyCollection!(detail),
+                            child: Text(
+                              detail.agencyCollectionConfirmed
+                                  ? '撤销确认'
+                                  : '确认到账',
+                            ),
+                          )
+                        : const Text('—'),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentConfirmationStatus extends StatelessWidget {
+  const _PaymentConfirmationStatus({required this.detail});
+
+  final SalesOrderPaymentDetailRecord detail;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!detail.isAgencyCollection) {
+      return const Text('即时到账');
+    }
+    if (!detail.agencyCollectionConfirmed) {
+      return Text(
+        '代收款（待确认）',
+        key: ValueKey('order-payment-confirmation-${detail.id}'),
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.error,
+          fontWeight: FontWeight.w700,
+        ),
+      );
+    }
+    final confirmer = detail.agencyCollectionConfirmedByName ??
+        detail.agencyCollectionConfirmedById ??
+        '未知';
+    return Semantics(
+      key: ValueKey('order-payment-confirmation-${detail.id}'),
+      label:
+          '已确认到账，确认人 $confirmer，确认时间 ${_formatDateTimeText(detail.agencyCollectionConfirmedAt)}',
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '已确认到账',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text('确认人：$confirmer'),
+          Text(
+              '确认时间：${_formatDateTimeText(detail.agencyCollectionConfirmedAt)}'),
+        ],
+      ),
     );
   }
 }
@@ -1359,10 +1640,13 @@ class _OrderOverviewBlock extends StatelessWidget {
                   label: _packingStatusLabel(order.packingStatus),
                   tone: StatusTone.neutral,
                 ),
-                if (order.isGuidePersonal)
-                  const StatusTag(
-                    key: ValueKey('order-guide-personal-status'),
-                    label: '走个人',
+                if (canViewOrderPersonalSplit(role) && order.isGuidePersonal)
+                  StatusTag(
+                    key: const ValueKey(
+                      'order-guide-personal-status',
+                    ),
+                    label: '走个人 ${formatMoneyCents(order.personalAmountCents)}'
+                        ' / 正常 ${formatMoneyCents(order.normalAmountCents)}',
                     tone: StatusTone.warning,
                   ),
               ],
@@ -1497,6 +1781,8 @@ class _ActionStrip extends StatelessWidget {
     required this.onOpenQrSalesSheet,
     required this.onChangePointsDestination,
     required this.onEditPersonalPoints,
+    required this.onToggleCompletion,
+    required this.onTogglePaymentLock,
   });
 
   final SalesOrderRecord order;
@@ -1512,6 +1798,8 @@ class _ActionStrip extends StatelessWidget {
   final VoidCallback? onOpenQrSalesSheet;
   final VoidCallback? onChangePointsDestination;
   final VoidCallback? onEditPersonalPoints;
+  final VoidCallback? onToggleCompletion;
+  final VoidCallback? onTogglePaymentLock;
 
   @override
   Widget build(BuildContext context) {
@@ -1556,20 +1844,12 @@ class _ActionStrip extends StatelessWidget {
           ),
         if (canChangePointsDestination)
           FilledButton.icon(
-            key: ValueKey(
-              order.isGuidePersonal
-                  ? 'order-points-destination-agency-button'
-                  : 'order-points-destination-personal-button',
+            key: const ValueKey(
+              'order-points-destination-personal-button',
             ),
             onPressed: orderBusy ? null : onChangePointsDestination,
-            icon: Icon(
-              order.isGuidePersonal
-                  ? Icons.apartment_rounded
-                  : Icons.person_rounded,
-            ),
-            label: Text(
-              order.isGuidePersonal ? '转回旅行社' : '走个人',
-            ),
+            icon: const Icon(Icons.person_rounded),
+            label: const Text('调整走个人'),
           ),
         if (order.isGuidePersonal && onEditPersonalPoints != null)
           OutlinedButton.icon(
@@ -1577,6 +1857,34 @@ class _ActionStrip extends StatelessWidget {
             onPressed: orderBusy ? null : onEditPersonalPoints,
             icon: const Icon(Icons.manage_accounts_rounded),
             label: const Text('修改个人设置'),
+          ),
+        if (onToggleCompletion != null)
+          FilledButton.tonalIcon(
+            key: const ValueKey('order-completion-button'),
+            onPressed: orderBusy ? null : onToggleCompletion,
+            icon: Icon(
+              order.isCompleted
+                  ? Icons.restart_alt_rounded
+                  : Icons.task_alt_rounded,
+            ),
+            label: Text(order.isCompleted ? '重新打开订单' : '完成订单'),
+          ),
+        if (onTogglePaymentLock != null)
+          OutlinedButton.icon(
+            key: const ValueKey('order-payment-lock-button'),
+            onPressed: orderBusy ? null : onTogglePaymentLock,
+            icon: Icon(
+              order.paymentDetailsLocked
+                  ? Icons.lock_open_rounded
+                  : Icons.lock_rounded,
+            ),
+            label: Text(
+              order.paymentDetailsLocked
+                  ? '解锁收款明细'
+                  : order.paymentDetailsUnlockedAt != null
+                      ? '重新锁定收款明细'
+                      : '锁定收款明细',
+            ),
           ),
         if (_canViewQrSalesSheet(role))
           OutlinedButton.icon(
@@ -1610,6 +1918,7 @@ class _PersonalPointsDialog extends StatefulWidget {
 }
 
 class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
+  late final TextEditingController _personalAmountController;
   late final TextEditingController _dailyController;
   late final TextEditingController _monthlyController;
   List<GuideRecord> _guides = const [];
@@ -1621,6 +1930,11 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
   @override
   void initState() {
     super.initState();
+    _personalAmountController = TextEditingController(
+      text: widget.order.personalAmountCents > 0
+          ? _centsToYuanInput(widget.order.personalAmountCents)
+          : '',
+    );
     _dailyController = TextEditingController(
       text: widget.editing
           ? _orderRateToPercentInput(
@@ -1642,6 +1956,7 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
 
   @override
   void dispose() {
+    _personalAmountController.dispose();
     _dailyController.dispose();
     _monthlyController.dispose();
     super.dispose();
@@ -1699,14 +2014,28 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
     if (_submitting) {
       return;
     }
+    final personalAmountCents =
+        _orderYuanToCents(_personalAmountController.text);
+    if (personalAmountCents == null) {
+      setState(() {
+        _errorMessage = '请输入调整后的走个人金额，最多两位小数。';
+      });
+      return;
+    }
+    if (personalAmountCents > widget.order.totalAmountCents) {
+      setState(() {
+        _errorMessage = '走个人金额不能超过订单总额。';
+      });
+      return;
+    }
     final guideId = _guideId;
     final dailyRate = _percentToOrderRate(_dailyController.text);
     final monthlyRate = _percentToOrderRate(_monthlyController.text);
-    if (guideId == null || guideId.isEmpty) {
+    if (personalAmountCents > 0 && (guideId == null || guideId.isEmpty)) {
       setState(() => _errorMessage = '请选择个人积分收款导游。');
       return;
     }
-    if (dailyRate == null || monthlyRate == null) {
+    if (personalAmountCents > 0 && (dailyRate == null || monthlyRate == null)) {
       setState(() {
         _errorMessage = '日返和月返比例必须在 0% 至 100% 之间，最多两位小数。';
       });
@@ -1715,9 +2044,10 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
     setState(() => _submitting = true);
     Navigator.of(context).pop(
       _PersonalPointsSelection(
-        guideId: guideId,
-        dailyRate: dailyRate,
-        monthlyRate: monthlyRate,
+        personalAmountCents: personalAmountCents,
+        guideId: personalAmountCents > 0 ? guideId : null,
+        dailyRate: personalAmountCents > 0 ? dailyRate : null,
+        monthlyRate: personalAmountCents > 0 ? monthlyRate : null,
       ),
     );
   }
@@ -1725,8 +2055,13 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
   @override
   Widget build(BuildContext context) {
     final group = widget.order.travelGroup;
+    final draftPersonalAmountCents =
+        _orderYuanToCents(_personalAmountController.text);
+    final draftNormalAmountCents = draftPersonalAmountCents == null
+        ? null
+        : widget.order.totalAmountCents - draftPersonalAmountCents;
     return AlertDialog(
-      title: Text(widget.editing ? '修改个人积分设置' : '确认订单走个人'),
+      title: const Text('调整订单走个人金额'),
       content: SizedBox(
         width: 540,
         child: SingleChildScrollView(
@@ -1748,8 +2083,39 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
                 value: group?.guideName ?? '未填写',
               ),
               _DialogInfoRow(
-                label: '订单金额',
+                label: '订单总额',
                 value: formatMoneyCents(widget.order.totalAmountCents),
+              ),
+              _DialogInfoRow(
+                label: '当前走个人',
+                value: formatMoneyCents(widget.order.personalAmountCents),
+              ),
+              _DialogInfoRow(
+                label: '当前正常金额',
+                value: formatMoneyCents(widget.order.normalAmountCents),
+              ),
+              const Divider(height: 24),
+              TextFormField(
+                key: const ValueKey('personal-points-amount'),
+                controller: _personalAmountController,
+                enabled: !_submitting,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [_OrderMoneyInputFormatter()],
+                onChanged: (_) => setState(() => _errorMessage = null),
+                decoration: const InputDecoration(
+                  labelText: '调整后的走个人金额',
+                  prefixText: '¥ ',
+                  helperText: '请输入最终金额；输入 0 可直接取消走个人',
+                ),
+              ),
+              const SizedBox(height: 8),
+              _DialogInfoRow(
+                label: '调整后正常',
+                value:
+                    draftNormalAmountCents == null || draftNormalAmountCents < 0
+                        ? '—'
+                        : formatMoneyCents(draftNormalAmountCents),
               ),
               const Divider(height: 24),
               if (_loading)
@@ -1801,14 +2167,10 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-              Text(
-                widget.editing
-                    ? '保存后将按订单级快照重算受影响的普通积分和导游积分；'
-                        '订单金额、状态、提成、库存、对账和利润口径不变。'
-                        '如相关汇总已返款，系统会拒绝修改。'
-                    : '确认后，本订单将从普通积分表的订单金额计算中排除，'
-                        '并按收款导游进入导游积分表；订单金额、状态、提成、'
-                        '库存、对账和利润口径不变。',
+              const Text(
+                '正常部分进入普通积分表，走个人部分进入导游积分表。'
+                '订单总额、提成、库存、销售业绩、利润和发票口径不变；'
+                '如相关积分已返，系统会拒绝影响已返结果的修改。',
               ),
               if (_errorMessage != null) ...[
                 const SizedBox(height: 12),
@@ -1830,8 +2192,8 @@ class _PersonalPointsDialogState extends State<_PersonalPointsDialog> {
         ),
         FilledButton(
           key: const ValueKey('personal-points-confirm-button'),
-          onPressed: _loading || _submitting ? null : _submit,
-          child: Text(widget.editing ? '确认修改' : '确认走个人'),
+          onPressed: _submitting ? null : _submit,
+          child: const Text('保存调整'),
         ),
       ],
     );
@@ -1872,14 +2234,51 @@ class _DialogInfoRow extends StatelessWidget {
 
 class _PersonalPointsSelection {
   const _PersonalPointsSelection({
+    required this.personalAmountCents,
     required this.guideId,
     required this.dailyRate,
     required this.monthlyRate,
   });
 
-  final String guideId;
-  final String dailyRate;
-  final String monthlyRate;
+  final int personalAmountCents;
+  final String? guideId;
+  final String? dailyRate;
+  final String? monthlyRate;
+}
+
+class _OrderMoneyInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty ||
+        RegExp(r'^\d+(\.\d{0,2})?$').hasMatch(newValue.text)) {
+      return newValue;
+    }
+    return oldValue;
+  }
+}
+
+String _centsToYuanInput(int cents) {
+  final whole = cents ~/ 100;
+  final fraction = cents.abs() % 100;
+  return '$whole.${fraction.toString().padLeft(2, '0')}';
+}
+
+int? _orderYuanToCents(String value) {
+  final text = value.trim();
+  final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(text);
+  if (match == null) {
+    return null;
+  }
+  final yuan = int.tryParse(match.group(1)!);
+  final fraction = (match.group(2) ?? '').padRight(2, '0');
+  final cents = int.tryParse(fraction.isEmpty ? '0' : fraction);
+  if (yuan == null || cents == null) {
+    return null;
+  }
+  return yuan * 100 + cents;
 }
 
 class _OrderPercentInputFormatter extends TextInputFormatter {
@@ -2241,13 +2640,14 @@ class _SalesSheetDialogDetails extends StatelessWidget {
             MoneyText(cents: sheet.amounts.totalAmountCents, prominent: true),
           ],
         ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            const Expanded(child: Text('货到付款')),
-            MoneyText(cents: sheet.amounts.cashOnDeliveryAmountCents),
-          ],
-        ),
+        const SizedBox(height: 10),
+        const _SectionTitle('收款明细'),
+        if (sheet.paymentDetails.isEmpty)
+          const Text('暂无收款明细')
+        else
+          _SalesSheetDialogPaymentDetailsTable(
+            details: sheet.paymentDetails,
+          ),
         const SizedBox(height: 12),
         Text(
           '如需售后服务，请联系：${_display(sheet.afterSalesPhone)}',
@@ -2256,6 +2656,70 @@ class _SalesSheetDialogDetails extends StatelessWidget {
       ],
     );
   }
+}
+
+class _SalesSheetDialogPaymentDetailsTable extends StatelessWidget {
+  const _SalesSheetDialogPaymentDetailsTable({required this.details});
+
+  final List<SalesSheetPaymentDetailRecord> details;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        key: const ValueKey('order-qr-sales-payment-details-table'),
+        columnSpacing: 22,
+        dataRowMinHeight: 52,
+        dataRowMaxHeight: 92,
+        columns: const [
+          DataColumn(label: Text('收款方式')),
+          DataColumn(label: Text('金额'), numeric: true),
+          DataColumn(label: Text('收款属性')),
+          DataColumn(label: Text('确认状态')),
+        ],
+        rows: [
+          for (final detail in details)
+            DataRow(
+              key: ValueKey('order-qr-sales-payment-detail-${detail.id}'),
+              cells: [
+                DataCell(
+                  Text(
+                    detail.paymentMethodNameSnapshot,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                DataCell(MoneyText(cents: detail.amountCents)),
+                DataCell(Text(detail.paymentMethodCategoryLabel)),
+                DataCell(
+                  Text(
+                    _salesSheetDialogPaymentConfirmationText(detail),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String _salesSheetDialogPaymentConfirmationText(
+  SalesSheetPaymentDetailRecord detail,
+) {
+  if (!detail.agencyCollectionConfirmed) {
+    return detail.confirmationStatusLabel;
+  }
+  final confirmer = detail.agencyCollectionConfirmedByName ??
+      detail.agencyCollectionConfirmedById;
+  return <String>[
+    detail.confirmationStatusLabel,
+    if (confirmer != null && confirmer.trim().isNotEmpty)
+      '确认人：${confirmer.trim()}',
+    if (detail.agencyCollectionConfirmedAt != null &&
+        detail.agencyCollectionConfirmedAt!.trim().isNotEmpty)
+      '确认时间：${_formatDateTimeText(detail.agencyCollectionConfirmedAt)}',
+  ].join('\n');
 }
 
 class _SalesSheetQrPreview extends StatelessWidget {
@@ -2467,7 +2931,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   late String _logisticsProviderCode;
   late final TextEditingController _salesFormNoController;
   late final TextEditingController _salesUserIdController;
-  late final TextEditingController _codController;
   late final TextEditingController _remarkController;
   late final TextEditingController _travelGroupIdController;
   late final TextEditingController _customerNameController;
@@ -2484,6 +2947,10 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   List<ProductOptionRecord> _productOptions = const [];
   bool _loadingProductOptions = true;
   String? _productOptionsError;
+  List<SalesPaymentMethodRecord> _paymentMethods = const [];
+  late final List<PaymentDetailDraft> _paymentDetails;
+  bool _loadingPaymentMethods = true;
+  String? _paymentMethodsError;
   String? _province;
   String? _city;
   String? _district;
@@ -2506,9 +2973,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         TextEditingController(text: widget.order.salesFormNo ?? '');
     _salesUserIdController =
         TextEditingController(text: widget.order.salesUserId ?? '');
-    _codController = TextEditingController(
-      text: _moneyInputText(widget.order.cashOnDeliveryAmountCents),
-    );
     _remarkController = TextEditingController(text: widget.order.remark ?? '');
     _travelGroupIdController =
         TextEditingController(text: widget.order.travelGroupId ?? '');
@@ -2547,12 +3011,44 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     if (_items.isEmpty) {
       _items = [_EditableOrderItemDraft.empty()];
     }
+    _paymentDetails =
+        widget.order.paymentDetails.map(PaymentDetailDraft.fromRecord).toList();
     _invoiceRequired = widget.order.invoiceRequired;
     _invoiceIssued = widget.order.invoiceIssued;
     if (widget.fullEdit) {
       _loadProductOptions();
     } else {
       _loadingProductOptions = false;
+    }
+    _loadPaymentMethods();
+  }
+
+  Future<void> _loadPaymentMethods() async {
+    try {
+      final methods = await widget.businessApi.listPaymentMethods();
+      if (!mounted) return;
+      setState(() {
+        _paymentMethods = methods;
+        _loadingPaymentMethods = false;
+        if (_paymentDetails.isEmpty && methods.isNotEmpty) {
+          final defaultMethod = methods.firstWhere(
+            (method) => method.isDefault,
+            orElse: () => methods.first,
+          );
+          _paymentDetails.add(
+            PaymentDetailDraft(
+              paymentMethodId: defaultMethod.id,
+              amountCents: widget.order.totalAmountCents,
+            ),
+          );
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingPaymentMethods = false;
+        _paymentMethodsError = _messageForError(error);
+      });
     }
   }
 
@@ -2589,7 +3085,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   void dispose() {
     _salesFormNoController.dispose();
     _salesUserIdController.dispose();
-    _codController.dispose();
     _remarkController.dispose();
     _travelGroupIdController.dispose();
     _customerNameController.dispose();
@@ -2603,6 +3098,9 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     _warehouseRemarkController.dispose();
     for (final item in _items) {
       item.dispose();
+    }
+    for (final detail in _paymentDetails) {
+      detail.dispose();
     }
     super.dispose();
   }
@@ -2625,8 +3123,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       context: context,
       builder: (context) => TravelGroupPickerDialog(
         businessApi: widget.businessApi,
-        initialQuery: widget.order.travelGroup?.groupNo ??
-            _travelGroupIdController.text.trim(),
+        initialTasterId: widget.order.travelGroup?.tasterId,
         showFinanceMark: canViewFinanceMark(widget.role),
       ),
     );
@@ -2662,20 +3159,77 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     setState(() => _items[index].selectProduct(product));
   }
 
-  void _submit() {
-    final codCents = _moneyCentsOrNull(_codController.text);
-    if (codCents == null) {
-      setState(() => _errorMessage = '货到付款金额必须为有效的非负金额。');
+  void _addPaymentDetail() {
+    if (_paymentMethods.isEmpty) return;
+    setState(() {
+      _paymentDetails.add(
+        PaymentDetailDraft(
+          paymentMethodId: _paymentMethods.first.id,
+          amountCents: 0,
+        ),
+      );
+    });
+  }
+
+  void _removePaymentDetail(int index) {
+    setState(() => _paymentDetails.removeAt(index).dispose());
+  }
+
+  void _movePaymentDetail(int fromIndex, int toIndex) {
+    if (fromIndex == toIndex ||
+        fromIndex < 0 ||
+        fromIndex >= _paymentDetails.length ||
+        toIndex < 0 ||
+        toIndex >= _paymentDetails.length) {
       return;
     }
+    setState(() {
+      final detail = _paymentDetails.removeAt(fromIndex);
+      _paymentDetails.insert(toIndex, detail);
+    });
+  }
+
+  List<Map<String, dynamic>>? _buildPaymentDetailsPayload(
+    int expectedTotalCents,
+  ) {
+    final payload = <Map<String, dynamic>>[];
+    for (var index = 0; index < _paymentDetails.length; index += 1) {
+      final detail = _paymentDetails[index].toPayload();
+      if (detail == null) {
+        setState(() => _errorMessage = '第 ${index + 1} 条收款明细的方式或金额无效。');
+        return null;
+      }
+      payload.add(detail);
+    }
+    if (payload.isEmpty) {
+      setState(() => _errorMessage = '至少保留一条收款明细。');
+      return null;
+    }
+    final sum = payload.fold<int>(
+      0,
+      (value, detail) => value + (detail['amountCents'] as int),
+    );
+    if (sum != expectedTotalCents) {
+      setState(() => _errorMessage = '收款明细合计必须严格等于订单总额。');
+      return null;
+    }
+    return payload;
+  }
+
+  void _submit() {
     final orderPayload = <String, dynamic>{
       'salesFormNo': _salesFormNoController.text.trim(),
       'orderDate': formatDate(_orderDate),
-      'cashOnDeliveryAmountCents': codCents,
       'invoiceRequired': _invoiceRequired,
     };
 
     if (!widget.fullEdit) {
+      if (!widget.order.paymentDetailsLocked) {
+        final paymentDetails =
+            _buildPaymentDetailsPayload(widget.order.totalAmountCents);
+        if (paymentDetails == null) return;
+        orderPayload['paymentDetails'] = paymentDetails;
+      }
       Navigator.of(context).pop(_OrderEditResult(orderPayload: orderPayload));
       return;
     }
@@ -2688,6 +3242,15 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     final itemPayloads = _buildItemPayloads();
     if (itemPayloads == null) {
       return;
+    }
+    if (!widget.order.paymentDetailsLocked) {
+      final expectedTotal = itemPayloads.fold<int>(
+        0,
+        (value, item) => value + (item['subtotalCents'] as int),
+      );
+      final paymentDetails = _buildPaymentDetailsPayload(expectedTotal);
+      if (paymentDetails == null) return;
+      orderPayload['paymentDetails'] = paymentDetails;
     }
     final logisticsFeeCents = _moneyCentsOrNull(_logisticsFeeController.text);
     if (logisticsFeeCents == null) {
@@ -2870,16 +3433,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                         controller: _salesUserIdController,
                         decoration: const InputDecoration(labelText: '销售人员 ID'),
                       ),
-                    TextField(
-                      key: const ValueKey('order-edit-cod-field'),
-                      controller: _codController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                        labelText: '货到付款金额',
-                        prefixText: '¥ ',
-                      ),
-                    ),
                   ],
                 )
               else ...[
@@ -2888,18 +3441,40 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                   controller: _salesFormNoController,
                   decoration: const InputDecoration(labelText: '销售单号'),
                 ),
-                const SizedBox(height: 10),
-                TextField(
-                  key: const ValueKey('order-edit-cod-field'),
-                  controller: _codController,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: '货到付款金额',
-                    prefixText: '¥ ',
+              ],
+              const SizedBox(height: 12),
+              if (widget.order.paymentDetailsLocked) ...[
+                DecoratedBox(
+                  key: const ValueKey('order-edit-payment-locked-notice'),
+                  decoration: BoxDecoration(
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: const BorderRadius.all(Radius.circular(8)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Text(
+                      '收款明细已锁定，只能查看。锁定人：'
+                      '${_display(widget.order.paymentDetailsLockedById)}；'
+                      '锁定时间：'
+                      '${_formatDateTimeText(widget.order.paymentDetailsLockedAt)}。',
+                    ),
                   ),
                 ),
+                const SizedBox(height: 10),
               ],
+              PaymentDetailsEditor(
+                methods: _paymentMethods,
+                details: _paymentDetails,
+                totalAmountCents: totalAmountCents,
+                loading: _loadingPaymentMethods,
+                errorMessage: _paymentMethodsError,
+                locked: widget.order.paymentDetailsLocked,
+                onAdd: _addPaymentDetail,
+                onRemove: _removePaymentDetail,
+                onMove: _movePaymentDetail,
+                onChanged: () => setState(() {}),
+              ),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 10,
@@ -3741,8 +4316,7 @@ List<SalesOrderItemRecord> _sortedItems(List<SalesOrderItemRecord> items) {
 }
 
 DateTime _shanghaiToday() {
-  final shanghaiNow =
-      DateTime.now().toUtc().add(const Duration(hours: 8));
+  final shanghaiNow = DateTime.now().toUtc().add(const Duration(hours: 8));
   return DateTime(shanghaiNow.year, shanghaiNow.month, shanghaiNow.day);
 }
 
@@ -3984,11 +4558,7 @@ int? _moneyCentsOrNull(String value) {
   if (text.isEmpty) {
     return 0;
   }
-  final amount = double.tryParse(text.replaceAll(',', ''));
-  if (amount == null || amount < 0) {
-    return null;
-  }
-  return (amount * 100).round();
+  return _orderYuanToCents(text.replaceAll(',', ''));
 }
 
 String _moneyInputText(int cents) {
@@ -3998,14 +4568,64 @@ String _moneyInputText(int cents) {
   if (cents % 100 == 0) {
     return '${cents ~/ 100}';
   }
-  return (cents / 100).toStringAsFixed(2);
+  final whole = cents ~/ 100;
+  final fraction = cents.abs() % 100;
+  return '$whole.${fraction.toString().padLeft(2, '0')}';
 }
 
 String _messageForError(Object error) {
   if (error is ApiException) {
+    switch (error.code) {
+      case 'PAYMENT_DETAILS_LOCKED':
+        return '收款明细已锁定，请联系管理员解锁后再修改。';
+      case 'PAYMENT_TOTAL_MISMATCH':
+        return '收款明细合计必须严格等于订单总额。';
+      case 'PAYMENT_DETAIL_NOT_AGENCY_COLLECTION':
+        return '该收款明细不是代收营业款，不能确认到账。';
+      case 'PAYMENT_DETAIL_NOT_FOUND':
+        return '收款明细不存在或已被更新，请刷新后重试。';
+    }
     return error.message;
   }
   return '操作失败，请稍后重试。';
+}
+
+String _paymentDetailsSummaryText(SalesOrderRecord order) {
+  final summary = order.paymentDetailsSummary.trim();
+  if (summary.isNotEmpty) {
+    return summary;
+  }
+  final details = [...order.paymentDetails]
+    ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+  if (details.isNotEmpty) {
+    return details
+        .map(
+          (detail) =>
+              '${detail.paymentMethodNameSnapshot} ${formatMoneyCents(detail.amountCents)}',
+        )
+        .join('；');
+  }
+  final collectOnDelivery = order.cashOnDeliveryAmountCents;
+  if (collectOnDelivery == 0) {
+    return '收钱吧 ${formatMoneyCents(order.totalAmountCents)}';
+  }
+  return '货到付款 ${formatMoneyCents(collectOnDelivery)}；'
+      '收钱吧 ${formatMoneyCents(order.totalAmountCents - collectOnDelivery)}';
+}
+
+String _formatDateTimeText(String? value) {
+  final text = value?.trim() ?? '';
+  if (text.isEmpty) {
+    return '未记录';
+  }
+  final parsed = DateTime.tryParse(text);
+  if (parsed == null) {
+    return text;
+  }
+  final local = parsed.toLocal();
+  String twoDigits(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)} '
+      '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
 }
 
 const _allValue = '__all__';

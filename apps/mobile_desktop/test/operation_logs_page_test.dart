@@ -267,6 +267,21 @@ void main() {
       '审核不通过',
     );
 
+    expect(
+      OperationLogPresentation.operationLabel(
+        null,
+        'travel_groups.not_entered.confirm',
+      ),
+      '确认未进店',
+    );
+    expect(
+      OperationLogPresentation.operationLabel(
+        null,
+        'travel_groups.not_entered.revoke',
+      ),
+      '撤销未进店',
+    );
+
     final product = OperationLogPresentation.present(
       OperationLogEntry(
         id: 'product-change',

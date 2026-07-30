@@ -420,13 +420,17 @@ export class AgencyRuleRecalculationNestService {
           'Sales order does not exist.',
         );
       }
-      if (order.orderType === 'AFTER_SALES') {
+      if (
+        ['AFTER_SALES', 'BUYBACK'].includes(order.orderType) ||
+        (order.workflowStatus &&
+          !['APPROVED', 'COMPLETED'].includes(order.workflowStatus))
+      ) {
         return {
           orders: [],
           warnings: [
             {
-              code: 'after_sales_order_skipped',
-              message: '售后调整单使用创建时规则快照，不参与原订单规则重算。',
+              code: 'commission_ineligible_order_skipped',
+              message: '售后单、回购单或未审核生效的特殊订单不参与规则重算。',
             },
           ],
         };
@@ -437,7 +441,11 @@ export class AgencyRuleRecalculationNestService {
       const orders = await this.prisma.salesOrder.findMany({
         where: {
           travelGroupId: { in: scope.travelGroupIds },
-          orderType: { not: 'AFTER_SALES' },
+          orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] },
+          OR: [
+            { workflowStatus: null },
+            { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+          ],
         },
         select: affectedOrderSelect(),
         orderBy: [{ travelGroupId: 'asc' }, { orderDate: 'asc' }],
@@ -463,7 +471,15 @@ export class AgencyRuleRecalculationNestService {
     );
     const candidates = await this.prisma.salesOrder.findMany({
       where: {
-        orderType: { not: 'AFTER_SALES' },
+        orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] },
+        AND: [
+          {
+            OR: [
+              { workflowStatus: null },
+              { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+            ],
+          },
+        ],
         travelGroup: {
           is: {
             OR: agencyNames.map((name) => ({
@@ -503,6 +519,7 @@ function affectedOrderSelect() {
   return {
     id: true,
     orderType: true,
+    workflowStatus: true,
     orderDate: true,
     travelGroupId: true,
     travelGroup: {

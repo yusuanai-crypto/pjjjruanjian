@@ -204,6 +204,7 @@ export class AfterSalesOrdersNestController {
   async confirmFinanceRefund(
     @Param('id') id: string,
     @UploadedFiles() files: any[],
+    @Body() body: unknown,
     @Req() request: any,
   ) {
     const actor = request.currentUser;
@@ -212,6 +213,7 @@ export class AfterSalesOrdersNestController {
         actor,
         id,
         files,
+        body,
         {
           ipAddress: getRequestIp(request),
         },

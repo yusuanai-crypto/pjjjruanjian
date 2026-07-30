@@ -12,11 +12,16 @@ const {
 
 const XLSX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const SHOUQIANBA_ID = '00000000-0000-4000-8000-000000000001';
+const CASH_ID = '00000000-0000-4000-8000-000000000004';
+const COD_ID = '00000000-0000-4000-8000-000000000005';
+const TRANSFER_ID = '00000000-0000-4000-8000-000000000006';
 
 const EXPECTED_HEADERS = [
   '系统单号',
   '销售单号',
   '订单日期',
+  '发货日期',
   '客户姓名',
   '客户电话',
   '地址',
@@ -26,7 +31,15 @@ const EXPECTED_HEADERS = [
   '酒品明细',
   '配送摘要',
   '订单总额',
-  '货到付款金额',
+  '是否走个人',
+  '走个人金额',
+  '正常金额',
+  '收款方式',
+  '收款金额',
+  '收款属性',
+  '确认状态',
+  '确认人',
+  '确认时间',
   '订单状态',
   '客户标记',
   '订单标记',
@@ -40,11 +53,17 @@ const EXPECTED_HEADERS = [
   '更新时间',
 ];
 
-test('GET /api/sales-orders/export.xlsx allows admin and finance only and returns xlsx headers', async () => {
+test('GET /api/sales-orders/export.xlsx allows personal-split viewers except read-hidden roles', async () => {
   await withPhase1Server(
     async (baseUrl) => {
       const admin = await login(baseUrl);
       const finance = await login(baseUrl, 'finance-export', 'Password123');
+      const boss = await login(baseUrl, 'boss-export', 'Password123');
+      const afterSales = await login(
+        baseUrl,
+        'after-sales-export',
+        'Password123',
+      );
       const sales = await login(baseUrl, 'sales-export', 'Password123');
 
       const adminDownload = await requestBinary(
@@ -74,6 +93,14 @@ test('GET /api/sales-orders/export.xlsx allows admin and finance only and return
         },
       );
       assert.equal(financeDownload.response.status, 200);
+      for (const token of [boss.token, afterSales.token]) {
+        const download = await requestBinary(
+          baseUrl,
+          '/api/sales-orders/export.xlsx?query=Alpha',
+          { token },
+        );
+        assert.equal(download.response.status, 200);
+      }
 
       const salesDenied = await requestJson(
         baseUrl,
@@ -117,7 +144,8 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
 
       const worksheet = await loadSalesOrdersWorksheet(download.buffer);
       assert.deepEqual(readHeaders(worksheet), EXPECTED_HEADERS);
-      assert.equal(worksheet.actualRowCount, 2);
+      assert.equal(readHeaders(worksheet).includes('货到付款金额'), false);
+      assert.equal(worksheet.actualRowCount, 6);
 
       const row = readRowObject(worksheet, 2);
       assert.equal(row['系统单号'], 'SO-EXPORT-ALPHA');
@@ -132,7 +160,15 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(row['酒品明细'], 'Alpha Wine x 2；Gift Box x 1');
       assert.equal(row['配送摘要'], '混合配送');
       assert.equal(row['订单总额'], 998);
-      assert.equal(row['货到付款金额'], 200);
+      assert.equal(row['是否走个人'], '是');
+      assert.equal(row['走个人金额'], 300);
+      assert.equal(row['正常金额'], 698);
+      assert.equal(row['收款方式'], '收钱吧');
+      assert.equal(row['收款金额'], 798);
+      assert.equal(row['收款属性'], '即时收款');
+      assert.equal(row['确认状态'], '无需确认');
+      assert.equal(row['确认人'], '');
+      assert.equal(row['确认时间'], '');
       assert.equal(row['订单状态'], '有效');
       assert.equal(row['客户标记'], '已标记');
       assert.equal(row['订单标记'], '已标记');
@@ -144,9 +180,35 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(row['是否已开票'], '否');
       assert.equal(row['创建时间'], '2026-07-01T09:00:00.000Z');
       assert.equal(row['更新时间'], '2026-07-01T10:00:00.000Z');
-      assert.equal(worksheet.getCell('L2').numFmt, '0.00');
       assert.equal(worksheet.getCell('M2').numFmt, '0.00');
-      assert.equal(worksheet.getCell('T2').numFmt, '0.00');
+      assert.equal(worksheet.getCell('O2').numFmt, '0.00');
+      assert.equal(worksheet.getCell('P2').numFmt, '0.00');
+      assert.equal(worksheet.getCell('R2').numFmt, '0.00');
+      assert.equal(worksheet.getCell('AC2').numFmt, '0.00');
+
+      const collectionRow = readRowObject(worksheet, 3);
+      assert.equal(collectionRow['系统单号'], 'SO-EXPORT-ALPHA');
+      assert.equal(collectionRow['收款方式'], '货到付款');
+      assert.equal(collectionRow['收款金额'], 200);
+      assert.equal(collectionRow['收款属性'], '代收营业款');
+      assert.equal(collectionRow['确认状态'], '已确认到账');
+      assert.equal(collectionRow['确认人'], 'Export Finance');
+      assert.equal(
+        collectionRow['确认时间'],
+        '2026-07-01T11:00:00.000Z',
+      );
+
+      const negativeRow = readRowObject(worksheet, 4);
+      assert.equal(negativeRow['收款方式'], '现金');
+      assert.equal(negativeRow['收款金额'], -1);
+      assert.equal(typeof negativeRow['收款金额'], 'number');
+      assert.equal(worksheet.getCell('R4').numFmt, '0.00');
+
+      const zeroRow = readRowObject(worksheet, 6);
+      assert.equal(zeroRow['收款方式'], '现金');
+      assert.equal(zeroRow['收款金额'], 0);
+      assert.equal(typeof zeroRow['收款金额'], 'number');
+      assert.equal(worksheet.getCell('R6').numFmt, '0.00');
     },
     {
       prisma: buildSalesOrderExportPrismaOptions(),
@@ -193,7 +255,7 @@ test('GET /api/sales-orders/export.xlsx obeys global marked-record filtering', a
   );
 });
 
-test('GET /api/sales-orders/export.xlsx rejects exports over the row limit', async () => {
+test('GET /api/sales-orders/export.xlsx rejects expanded payment rows over the row limit', async () => {
   await withPhase1Server(
     async (baseUrl) => {
       const admin = await login(baseUrl);
@@ -206,7 +268,7 @@ test('GET /api/sales-orders/export.xlsx rejects exports over the row limit', asy
     },
     {
       prisma: {
-        salesOrders: Array.from({ length: 5001 }, (_, index) => ({
+        salesOrders: Array.from({ length: 2501 }, (_, index) => ({
           id: `order_limit_${index}`,
           orderNo: `SO-LIMIT-${String(index).padStart(5, '0')}`,
           orderType: 'EXTERNAL',
@@ -214,6 +276,24 @@ test('GET /api/sales-orders/export.xlsx rejects exports over the row limit', asy
           orderDate: '2026-07-01T00:00:00.000Z',
           createdAt: '2026-07-01T00:00:00.000Z',
           updatedAt: '2026-07-01T00:00:00.000Z',
+          paymentDetails: [
+            {
+              id: `payment_limit_${index}_a`,
+              paymentMethodId: SHOUQIANBA_ID,
+              paymentMethodNameSnapshot: '收钱吧',
+              paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+              amountCents: 0,
+              sortOrder: 0,
+            },
+            {
+              id: `payment_limit_${index}_b`,
+              paymentMethodId: CASH_ID,
+              paymentMethodNameSnapshot: '现金',
+              paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+              amountCents: 0,
+              sortOrder: 1,
+            },
+          ],
         })),
       },
     },
@@ -279,6 +359,20 @@ function buildSalesOrderExportPrismaOptions() {
         username: 'sales-export',
         password: 'Password123',
         role: 'sales',
+      },
+      {
+        id: 'usr_boss_export',
+        name: 'Export Boss',
+        username: 'boss-export',
+        password: 'Password123',
+        role: 'boss',
+      },
+      {
+        id: 'usr_after_sales_export',
+        name: 'Export After Sales',
+        username: 'after-sales-export',
+        password: 'Password123',
+        role: 'after_sales',
       },
     ],
     customers: [
@@ -362,6 +456,8 @@ function buildSalesOrderExportPrismaOptions() {
         district: '观山湖区',
         address: '测试路 1 号',
         totalAmountCents: 99800,
+        personalAmountCents: 30000,
+        pointsDestination: 'GUIDE_PERSONAL',
         cashOnDeliveryAmountCents: 20000,
         logisticsMethod: '顺丰',
         logisticsNo: 'SF123456789',
@@ -387,6 +483,51 @@ function buildSalesOrderExportPrismaOptions() {
             unitPriceCents: 39900,
             deliveryType: 'SHIPPING',
             sortOrder: 1,
+          },
+        ],
+        paymentDetails: [
+          {
+            id: 'payment-export-direct',
+            paymentMethodId: SHOUQIANBA_ID,
+            paymentMethodNameSnapshot: '收钱吧',
+            paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+            amountCents: 79800,
+            sortOrder: 0,
+          },
+          {
+            id: 'payment-export-cod',
+            paymentMethodId: COD_ID,
+            paymentMethodNameSnapshot: '货到付款',
+            paymentMethodCategorySnapshot: 'COLLECT_ON_DELIVERY',
+            amountCents: 20000,
+            sortOrder: 1,
+            collectionConfirmed: true,
+            collectionConfirmedAt: '2026-07-01T11:00:00.000Z',
+            collectionConfirmedById: 'usr_finance_export',
+          },
+          {
+            id: 'payment-export-negative',
+            paymentMethodId: CASH_ID,
+            paymentMethodNameSnapshot: '现金',
+            paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+            amountCents: -100,
+            sortOrder: 2,
+          },
+          {
+            id: 'payment-export-adjustment',
+            paymentMethodId: TRANSFER_ID,
+            paymentMethodNameSnapshot: '转账',
+            paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+            amountCents: 100,
+            sortOrder: 3,
+          },
+          {
+            id: 'payment-export-zero',
+            paymentMethodId: CASH_ID,
+            paymentMethodNameSnapshot: '现金',
+            paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+            amountCents: 0,
+            sortOrder: 4,
           },
         ],
       }),

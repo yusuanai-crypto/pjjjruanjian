@@ -12,9 +12,11 @@ import { GuidesModule } from './modules/guides/guides.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { OperationLogNestController } from './modules/operation-logs/operation-log.nest.controller';
 import { OperationLogsModule } from './modules/operation-logs/operation-logs.module';
+import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
 import { PreparationConfirmationModule } from './modules/preparation-confirmation/preparation-confirmation.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { SpecialOrdersModule } from './modules/special-orders/special-orders.module';
 import { SerializedInventoryModule } from './modules/serialized-inventory/serialized-inventory.module';
 import { TravelAgenciesModule } from './modules/travel-agencies/travel-agencies.module';
 import { TodoRemindersModule } from './modules/todo-reminders/todo-reminders.module';
@@ -26,10 +28,12 @@ import { PrismaModule } from './prisma/prisma.module';
     PrismaModule,
     ScheduleModule.forRoot(),
     OperationLogsModule,
+    PaymentMethodsModule,
     UsersModule,
     AuthModule,
     PreparationConfirmationModule,
     SettingsModule,
+    SpecialOrdersModule,
     InventoryModule,
     SerializedInventoryModule,
     AiModule,

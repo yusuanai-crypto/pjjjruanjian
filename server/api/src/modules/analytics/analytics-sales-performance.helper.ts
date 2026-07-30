@@ -96,7 +96,11 @@ export function buildSalesPerformanceDataset(
     ? input.salesOrders
     : []) {
     const orderId = normalizeOptionalString(rawOrder?.id);
-    if (!orderId || !GROSS_SALES_STATUSES.has(normalizeStatus(rawOrder?.status))) {
+    if (
+      !orderId ||
+      !GROSS_SALES_STATUSES.has(normalizeStatus(rawOrder?.status)) ||
+      !isSalesRevenueOrder(rawOrder)
+    ) {
       continue;
     }
     const order = ensureOrder(ordersById, rawOrder);
@@ -120,7 +124,7 @@ export function buildSalesPerformanceDataset(
     const orderId =
       normalizeOptionalString(rawAfterSalesOrder?.salesOrderId) ||
       normalizeOptionalString(rawOrder?.id);
-    if (!orderId || !rawOrder) {
+    if (!orderId || !rawOrder || !isSalesRevenueOrder(rawOrder)) {
       continue;
     }
     const order = ensureOrder(ordersById, {
@@ -424,6 +428,18 @@ function normalizeStatus(value: unknown) {
   return String(value || '')
     .trim()
     .toUpperCase();
+}
+
+function isSalesRevenueOrder(order: any) {
+  if (normalizeStatus(order?.orderType) === 'BUYBACK') {
+    return false;
+  }
+  return (
+    !order?.workflowStatus ||
+    ['APPROVED', 'COMPLETED'].includes(
+      normalizeStatus(order.workflowStatus),
+    )
+  );
 }
 
 function normalizeOptionalString(value: unknown) {

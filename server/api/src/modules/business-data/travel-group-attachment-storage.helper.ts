@@ -16,6 +16,13 @@ import { pipeline } from 'node:stream/promises';
 import { catchError, throwError } from 'rxjs';
 
 import { createHttpError } from '../../common/errors';
+import {
+  FILE_SECURITY_MAX_FILE_BYTES,
+  FILE_SECURITY_MAX_FILES,
+  FILE_SECURITY_MAX_REQUEST_BYTES,
+  FILE_SECURITY_MAX_TOTAL_FILE_BYTES,
+  FileSecurityPolicy,
+} from './file-security-policy';
 
 export const TRAVEL_GROUP_ATTACHMENT_CATEGORIES = [
   'key_customer_photo',
@@ -25,17 +32,23 @@ export const TRAVEL_GROUP_ATTACHMENT_CATEGORIES = [
 export type TravelGroupAttachmentCategory =
   (typeof TRAVEL_GROUP_ATTACHMENT_CATEGORIES)[number];
 
-export const TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE = 10 * 1024 * 1024;
-export const TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST = 5;
-export const REFUND_PROOF_ATTACHMENT_MAX_FILE_SIZE = 10 * 1024 * 1024;
-export const REFUND_PROOF_ATTACHMENT_MAX_FILES_PER_REQUEST = 5;
-export const ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE = 25 * 1024 * 1024;
+export const TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE =
+  FILE_SECURITY_MAX_FILE_BYTES;
+export const TRAVEL_GROUP_ATTACHMENT_MAX_FILES_PER_REQUEST =
+  FILE_SECURITY_MAX_FILES;
+export const REFUND_PROOF_ATTACHMENT_MAX_FILE_SIZE =
+  FILE_SECURITY_MAX_FILE_BYTES;
+export const REFUND_PROOF_ATTACHMENT_MAX_FILES_PER_REQUEST =
+  FILE_SECURITY_MAX_FILES;
+export const ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE =
+  FILE_SECURITY_MAX_REQUEST_BYTES;
 
 const ATTACHMENT_UPLOAD_MAX_FIELDS = 10;
 const ATTACHMENT_MAGIC_BYTES_LENGTH = 32;
 const TEMPORARY_UPLOAD_NAME_PATTERN =
   /^\.upload-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REQUEST_UPLOAD_STATE = Symbol('attachment-upload-state');
+const ORPHANED_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 const STORAGE_KEY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -91,7 +104,11 @@ export class AttachmentUploadConfigService implements OnModuleInit {
   readonly maxRequestBytes = readUploadLimit(
     'ATTACHMENT_UPLOAD_MAX_REQUEST_BYTES',
     ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE,
-    50 * 1024 * 1024,
+    FILE_SECURITY_MAX_REQUEST_BYTES,
+  );
+  readonly maxTotalFileBytes = Math.min(
+    FILE_SECURITY_MAX_TOTAL_FILE_BYTES,
+    this.maxRequestBytes,
   );
   readonly temporaryRoot = getAttachmentUploadTemporaryRoot();
 
@@ -122,6 +139,7 @@ export class AttachmentUploadConfigService implements OnModuleInit {
       recursive: true,
       mode: 0o700,
     });
+    await this.cleanupOrphanedTemporaryFiles();
   }
 
   createMulterOptions() {
@@ -173,6 +191,34 @@ export class AttachmentUploadConfigService implements OnModuleInit {
       }),
     );
   }
+
+  async cleanupOrphanedTemporaryFiles(
+    nowMilliseconds = Date.now(),
+    retentionMilliseconds = ORPHANED_UPLOAD_RETENTION_MS,
+  ) {
+    const names = await fs.readdir(this.temporaryRoot);
+    await Promise.all(
+      names.map(async (name) => {
+        if (!TEMPORARY_UPLOAD_NAME_PATTERN.test(name)) {
+          return;
+        }
+        const candidate = path.join(this.temporaryRoot, name);
+        try {
+          const stat = await fs.stat(candidate);
+          if (
+            stat.isFile() &&
+            nowMilliseconds - stat.mtimeMs > retentionMilliseconds
+          ) {
+            await fs.unlink(candidate);
+          }
+        } catch (error) {
+          if ((error as any)?.code !== 'ENOENT') {
+            throw error;
+          }
+        }
+      }),
+    );
+  }
 }
 
 @Injectable()
@@ -195,6 +241,7 @@ export class SecureAttachmentUploadInterceptor implements NestInterceptor {
     try {
       result = await this.delegate.intercept(context, next);
     } catch (error) {
+      await this.uploadConfig.cleanupTemporaryFiles(request?.files);
       throw normalizeMultipartUploadError(error);
     }
     return result.pipe(
@@ -223,7 +270,7 @@ export function normalizeTravelGroupAttachmentCategory(
   return normalized as TravelGroupAttachmentCategory;
 }
 
-export function validateTravelGroupAttachmentFile(file: any) {
+export async function validateTravelGroupAttachmentFile(file: any) {
   return validateAttachmentFile(file, {
     allowedTypes: ALLOWED_FILE_TYPES,
     maxFileSize: TRAVEL_GROUP_ATTACHMENT_MAX_FILE_SIZE,
@@ -233,7 +280,7 @@ export function validateTravelGroupAttachmentFile(file: any) {
   });
 }
 
-export function validateRefundProofAttachmentFile(file: any) {
+export async function validateRefundProofAttachmentFile(file: any) {
   return validateAttachmentFile(file, {
     allowedTypes: ALLOWED_REFUND_PROOF_FILE_TYPES,
     maxFileSize: REFUND_PROOF_ATTACHMENT_MAX_FILE_SIZE,
@@ -243,7 +290,7 @@ export function validateRefundProofAttachmentFile(file: any) {
   });
 }
 
-function validateAttachmentFile(
+async function validateAttachmentFile(
   file: any,
   options: {
     allowedTypes: Map<string, Set<string>>;
@@ -267,12 +314,12 @@ function validateAttachmentFile(
       'At least one attachment file is required.',
     );
   }
-  const size = Number(file.size ?? file.buffer.length);
-  if (!Number.isFinite(size) || size < 0) {
+  const size = Number(file.size ?? inMemoryBuffer?.length);
+  if (!Number.isSafeInteger(size) || size <= 0) {
     throw createHttpError(
       400,
-      'INVALID_ATTACHMENT_FILE',
-      'Attachment file size is invalid.',
+      'EMPTY_OR_INVALID_ATTACHMENT',
+      'Attachment file must not be empty.',
     );
   }
   if (size > options.maxFileSize) {
@@ -283,6 +330,8 @@ function validateAttachmentFile(
     );
   }
 
+  FileSecurityPolicy.assertSafeOriginalName(file.originalname);
+  FileSecurityPolicy.assertAllowedExtension(String(file.originalname || ''));
   const originalName = sanitizeAttachmentOriginalName(file.originalname);
   const contentType = normalizeContentType(file.mimetype);
   const allowedExtensions = options.allowedTypes.get(contentType);
@@ -300,6 +349,13 @@ function validateAttachmentFile(
       ? file.magicBytes
       : Buffer.alloc(0);
   assertAttachmentMagicBytes(contentType, magicBytes);
+  await FileSecurityPolicy.validateDocument({
+    originalName,
+    contentType,
+    size,
+    buffer: inMemoryBuffer,
+    temporaryPath,
+  });
 
   return {
     buffer: inMemoryBuffer,
@@ -312,7 +368,7 @@ function validateAttachmentFile(
 
 export function assertAttachmentAggregateSize(
   files: Array<{ size?: unknown }>,
-  maxRequestBytes = ATTACHMENT_UPLOAD_MAX_REQUEST_SIZE,
+  maxRequestBytes = FILE_SECURITY_MAX_TOTAL_FILE_BYTES,
 ) {
   let total = 0;
   for (const file of Array.isArray(files) ? files : []) {
@@ -372,9 +428,12 @@ export async function writeTravelGroupAttachmentFile(
         buffer?: Buffer | null;
         temporaryPath?: string | null;
       },
-) {
+  ) {
   const filePath = resolveAttachmentFilePath(storageKey);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), {
+    recursive: true,
+    mode: 0o700,
+  });
   if (Buffer.isBuffer(source)) {
     await fs.writeFile(filePath, source, {
       flag: 'wx',
@@ -390,11 +449,23 @@ export async function writeTravelGroupAttachmentFile(
     return;
   }
   if (source?.temporaryPath) {
-    await fs.copyFile(
-      source.temporaryPath,
-      filePath,
-      fsSync.constants.COPYFILE_EXCL,
-    );
+    try {
+      await fs.copyFile(
+        source.temporaryPath,
+        filePath,
+        fsSync.constants.COPYFILE_EXCL,
+      );
+      await fs.chmod(filePath, 0o600);
+    } catch (error) {
+      try {
+        await fs.unlink(filePath);
+      } catch (cleanupError) {
+        if ((cleanupError as any)?.code !== 'ENOENT') {
+          throw cleanupError;
+        }
+      }
+      throw error;
+    }
     return;
   }
   throw createHttpError(
@@ -516,7 +587,7 @@ function createPrivateTemporaryStorage(
             ? chunk
             : Buffer.from(chunk);
           requestState.totalBytes += buffer.length;
-          if (requestState.totalBytes > config.maxRequestBytes) {
+          if (requestState.totalBytes > config.maxTotalFileBytes) {
             done(
               createHttpError(
                 413,

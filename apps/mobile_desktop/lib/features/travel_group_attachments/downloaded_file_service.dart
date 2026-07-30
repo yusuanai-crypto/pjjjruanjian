@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
-import 'attachment_picker_service.dart';
+import '../../core/file_security_policy.dart';
 
 class DownloadedFileSaveResult {
   const DownloadedFileSaveResult({
@@ -113,18 +113,19 @@ abstract interface class DownloadDirectoryProvider {
   Future<Directory> getDownloadDirectory(TargetPlatform platform);
 }
 
+typedef DocumentsDirectoryProvider = Future<Directory> Function();
+
 class PlatformDownloadDirectoryProvider implements DownloadDirectoryProvider {
-  const PlatformDownloadDirectoryProvider();
+  PlatformDownloadDirectoryProvider({
+    DocumentsDirectoryProvider? documentsDirectoryProvider,
+  }) : _documentsDirectoryProvider =
+            documentsDirectoryProvider ?? getApplicationDocumentsDirectory;
+
+  final DocumentsDirectoryProvider _documentsDirectoryProvider;
 
   @override
   Future<Directory> getDownloadDirectory(TargetPlatform platform) async {
-    Directory root;
-    if (platform == TargetPlatform.android) {
-      root = await getExternalStorageDirectory() ??
-          await getApplicationDocumentsDirectory();
-    } else {
-      root = await getApplicationDocumentsDirectory();
-    }
+    final root = await _documentsDirectoryProvider();
     return Directory(path.join(root.path, '附件下载'));
   }
 }
@@ -162,7 +163,7 @@ class DownloadedFileService {
   })  : _platform = platform,
         _opener = opener ?? const MethodChannelExternalFileOpener(),
         _directoryProvider =
-            directoryProvider ?? const PlatformDownloadDirectoryProvider(),
+            directoryProvider ?? PlatformDownloadDirectoryProvider(),
         _desktopSaver = desktopSaver ?? const FilePickerDesktopDownloadSaver();
 
   final TargetPlatform? _platform;
@@ -181,22 +182,34 @@ class DownloadedFileService {
     required String originalFileName,
     required Uint8List bytes,
   }) async {
-    final safeName = sanitizeAttachmentFileName(originalFileName);
-    if (!isMobile) {
-      final savedPath = await _desktopSaver.save(
-        fileName: safeName,
-        bytes: bytes,
-      );
-      return savedPath == null
-          ? const DownloadedFileSaveResult.cancelled()
-          : DownloadedFileSaveResult(path: savedPath, cancelled: false);
-    }
+    final prepared = await FileSecurityPolicy.prepareUploads(
+      <FileSecuritySource>[
+        FileSecuritySource(
+          fileName: originalFileName,
+          openRead: () => Stream<List<int>>.value(bytes),
+        ),
+      ],
+    );
+    try {
+      final validated = prepared.single;
+      if (!isMobile) {
+        final savedPath = await _desktopSaver.save(
+          fileName: validated.fileName,
+          bytes: bytes,
+        );
+        return savedPath == null
+            ? const DownloadedFileSaveResult.cancelled()
+            : DownloadedFileSaveResult(path: savedPath, cancelled: false);
+      }
 
-    final directory = await _directoryProvider.getDownloadDirectory(platform);
-    await directory.create(recursive: true);
-    final target = await _uniqueFile(directory, safeName);
-    await target.writeAsBytes(bytes, flush: true);
-    return DownloadedFileSaveResult(path: target.path, cancelled: false);
+      final directory = await _directoryProvider.getDownloadDirectory(platform);
+      await directory.create(recursive: true);
+      final target = await _uniqueFile(directory, validated.fileName);
+      await target.writeAsBytes(bytes, flush: true);
+      return DownloadedFileSaveResult(path: target.path, cancelled: false);
+    } finally {
+      await FileSecurityPolicy.cleanupPreparedUploads(prepared);
+    }
   }
 
   Future<ExternalOpenResult> open({

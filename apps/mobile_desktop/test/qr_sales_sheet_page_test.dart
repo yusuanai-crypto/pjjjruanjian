@@ -44,6 +44,21 @@ void main() {
     expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('生成二维码后显示'), findsWidgets);
     expect(find.text('酱香珍藏'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('qr-sales-payment-details-table')),
+      findsOneWidget,
+    );
+    expect(find.text('收款方式'), findsOneWidget);
+    expect(find.text('收款属性'), findsOneWidget);
+    expect(find.text('确认状态'), findsOneWidget);
+    expect(find.text('收钱吧'), findsOneWidget);
+    expect(find.text('即时收款'), findsOneWidget);
+    expect(find.text('无需确认'), findsOneWidget);
+    expect(find.text('货到付款'), findsNWidgets(2));
+    expect(find.text('代收营业款'), findsNWidgets(2));
+    expect(find.text('代收款（待确认）'), findsOneWidget);
+    expect(find.textContaining('确认人：财务测试员'), findsOneWidget);
+    expect(find.textContaining('确认时间：2026-07-01'), findsOneWidget);
     expect(find.textContaining('测试旅行社'), findsWidgets);
     expect(find.textContaining('FORM-001'), findsNothing);
 
@@ -292,6 +307,46 @@ Map<String, dynamic> _salesSheetJson({
         'sortOrder': 1,
       },
     ],
+    'paymentDetails': const [
+      {
+        'id': 'payment-detail-1',
+        'paymentMethodId': 'payment-shouqianba',
+        'paymentMethodNameSnapshot': '收钱吧',
+        'paymentMethodCategorySnapshot': 'direct_receipt',
+        'amountCents': 78600,
+        'amountYuan': '786.00',
+      },
+      {
+        'id': 'payment-detail-2',
+        'paymentMethodId': 'payment-cod',
+        'paymentMethodNameSnapshot': '货到付款',
+        'paymentMethodCategorySnapshot': 'agency_collection',
+        'amountCents': 1000,
+        'amountYuan': '10.00',
+        'requiresAgencyConfirmation': true,
+        'agencyCollectionConfirmed': false,
+      },
+      {
+        'id': 'payment-detail-3',
+        'paymentMethodId': 'payment-cod',
+        'paymentMethodNameSnapshot': '货到付款',
+        'paymentMethodCategorySnapshot': 'collect_on_delivery',
+        'amountCents': 0,
+        'amountYuan': '0.00',
+        'requiresAgencyConfirmation': true,
+        'agencyCollectionConfirmed': true,
+        'agencyCollectionConfirmedAt': '2026-07-01T09:00:00.000Z',
+        'agencyCollectionConfirmedById': 'finance-user',
+        'agencyCollectionConfirmedByName': '财务测试员',
+      },
+    ],
+    'paymentSummary': const {
+      'directReceiptAmountCents': 78600,
+      'collectOnDeliveryAmountCents': 1000,
+      'confirmedCollectOnDeliveryAmountCents': 0,
+      'pendingCollectOnDeliveryAmountCents': 1000,
+      'hasPendingCollectOnDelivery': true,
+    },
     'amounts': {
       'totalAmountCents': 79600,
       'totalAmountYuan': '796.00',
@@ -331,8 +386,7 @@ Map<String, dynamic> _salesSheetJson({
             'url': qrCodeUrl,
             'generatedAt': '2026-07-01T08:00:00.000Z',
             'expiresAt': '2026-07-31T08:00:00.000Z',
-            'revokedAt':
-                qrCodeActive ? null : '2026-07-02T08:00:00.000Z',
+            'revokedAt': qrCodeActive ? null : '2026-07-02T08:00:00.000Z',
           },
   };
 }

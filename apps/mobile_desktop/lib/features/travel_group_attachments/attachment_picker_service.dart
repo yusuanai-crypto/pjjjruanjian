@@ -10,9 +10,12 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 
 import '../../core/api/api_client.dart';
+import '../../core/crash_reporting/crash_reporter.dart';
+import '../../core/file_security_policy.dart';
 
-const attachmentMaxFileCount = 5;
-const attachmentMaxFileSizeBytes = 10 * 1024 * 1024;
+const attachmentMaxFileCount = fileSecurityMaxFiles;
+const attachmentMaxFileSizeBytes = fileSecurityMaxFileBytes;
+const _attachmentFileHeaderSize = 32;
 
 const guestInfoAttachmentExtensions = <String>[
   'jpg',
@@ -155,6 +158,24 @@ class AttachmentCandidate {
     return File(path!).readAsBytes();
   }
 
+  Future<Uint8List> readHeaderBytes([
+    int maxLength = _attachmentFileHeaderSize,
+  ]) async {
+    final memoryBytes = bytes;
+    if (memoryBytes != null) {
+      if (memoryBytes.length <= maxLength) {
+        return memoryBytes;
+      }
+      return Uint8List.sublistView(memoryBytes, 0, maxLength);
+    }
+    final file = await File(path!).open();
+    try {
+      return await file.read(maxLength);
+    } finally {
+      await file.close();
+    }
+  }
+
   Future<int> length() async {
     final memoryBytes = bytes;
     if (memoryBytes != null) {
@@ -270,25 +291,48 @@ class MethodChannelAttachmentNativeBridge implements AttachmentNativeBridge {
     if (sourcePath == null || sourcePath.trim().isEmpty) {
       throw StateError('HEIC/HEIF 照片缺少可转换的本地路径。');
     }
-    final result = await _channel.invokeMapMethod<String, dynamic>(
-      'convertHeicToJpeg',
-      <String, dynamic>{
-        'path': sourcePath,
-        'fileName': source.fileName,
-      },
-    );
-    final convertedPath = '${result?['path'] ?? ''}'.trim();
-    final convertedName = '${result?['fileName'] ?? ''}'.trim();
-    if (convertedPath.isEmpty || convertedName.isEmpty) {
-      throw StateError('HEIC/HEIF 照片转换失败，请重新选择。');
+    CrashReporting.breadcrumb('heic_conversion.native.start');
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'convertHeicToJpeg',
+        <String, dynamic>{
+          'path': sourcePath,
+          'fileName': source.fileName,
+        },
+      );
+      final convertedPath = '${result?['path'] ?? ''}'.trim();
+      final convertedName = '${result?['fileName'] ?? ''}'.trim();
+      if (convertedPath.isEmpty || convertedName.isEmpty) {
+        throw StateError('HEIC/HEIF 照片转换失败，请重新选择。');
+      }
+      CrashReporting.breadcrumb(
+        'heic_conversion.native.success',
+        data: {
+          if (result?['width'] is num) 'imageWidth': result!['width'],
+          if (result?['height'] is num) 'imageHeight': result!['height'],
+        },
+      );
+      return AttachmentCandidate(
+        fileName: convertedName,
+        path: convertedPath,
+        declaredMimeType: 'image/jpeg',
+        temporary: true,
+        requireDeclaredMimeMatch: true,
+      );
+    } catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'heic_conversion.native.failure',
+        data: {'exceptionType': error.runtimeType.toString()},
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'attachment.heic_conversion',
+        ),
+      );
+      rethrow;
     }
-    return AttachmentCandidate(
-      fileName: convertedName,
-      path: convertedPath,
-      declaredMimeType: 'image/jpeg',
-      temporary: true,
-      requireDeclaredMimeMatch: true,
-    );
   }
 }
 
@@ -351,7 +395,28 @@ class AttachmentPickerService {
     if (kIsWeb || platform != TargetPlatform.android) {
       return const AttachmentPickResult();
     }
-    final candidates = await _galleryPicker.retrieveLostImages();
+    CrashReporting.breadcrumb('image_selection.restore.start');
+    late final List<AttachmentCandidate> candidates;
+    try {
+      candidates = await _galleryPicker.retrieveLostImages();
+    } catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'image_selection.restore.failure',
+        data: {'exceptionType': error.runtimeType.toString()},
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'image_selection.restore',
+        ),
+      );
+      rethrow;
+    }
+    CrashReporting.breadcrumb(
+      'image_selection.restore.complete',
+      data: {'selectedCount': candidates.length},
+    );
     return _prepareAndValidate(
       candidates,
       existingCount: existingCount,
@@ -378,7 +443,32 @@ class AttachmentPickerService {
     if (remaining <= 0) {
       return const AttachmentPickResult(message: '最多只能选择5个文件，请先移除已有文件。');
     }
-    final candidates = await _galleryPicker.pickMultiImage(limit: remaining);
+    CrashReporting.setUserAction('select_images');
+    CrashReporting.breadcrumb(
+      'image_selection.gallery.start',
+      data: {'remainingCount': remaining},
+    );
+    late final List<AttachmentCandidate> candidates;
+    try {
+      candidates = await _galleryPicker.pickMultiImage(limit: remaining);
+    } catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'image_selection.gallery.failure',
+        data: {'exceptionType': error.runtimeType.toString()},
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'image_selection.gallery',
+        ),
+      );
+      rethrow;
+    }
+    CrashReporting.breadcrumb(
+      'image_selection.gallery.complete',
+      data: {'selectedCount': candidates.length},
+    );
     return _prepareAndValidate(
       candidates,
       existingCount: existingCount,
@@ -391,8 +481,39 @@ class AttachmentPickerService {
     required List<String> allowedExtensions,
     required bool imagesOnly,
   }) async {
-    final candidates = await _filePicker.pickFiles(
-      allowedExtensions: allowedExtensions,
+    CrashReporting.setUserAction(
+      imagesOnly ? 'select_images' : 'select_attachments',
+    );
+    CrashReporting.breadcrumb(
+      'image_selection.files.start',
+      data: {'imagesOnly': imagesOnly},
+    );
+    late final List<AttachmentCandidate> candidates;
+    try {
+      candidates = await _filePicker.pickFiles(
+        allowedExtensions: allowedExtensions,
+      );
+    } catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'image_selection.files.failure',
+        data: {'exceptionType': error.runtimeType.toString()},
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'image_selection.files',
+          context: {'imagesOnly': imagesOnly},
+        ),
+      );
+      rethrow;
+    }
+    CrashReporting.breadcrumb(
+      'image_selection.files.complete',
+      data: {
+        'imagesOnly': imagesOnly,
+        'selectedCount': candidates.length,
+      },
     );
     return _prepareAndValidate(
       candidates,
@@ -406,10 +527,22 @@ class AttachmentPickerService {
     required int existingCount,
     required bool imagesOnly,
   }) async {
+    CrashReporting.breadcrumb(
+      'attachment_validation.start',
+      data: {
+        'candidateCount': candidates.length,
+        'existingCount': existingCount,
+        'imagesOnly': imagesOnly,
+      },
+    );
     if (candidates.isEmpty) {
       return const AttachmentPickResult();
     }
     if (existingCount + candidates.length > attachmentMaxFileCount) {
+      CrashReporting.breadcrumb(
+        'attachment_validation.rejected',
+        data: {'reason': 'file_count_limit'},
+      );
       await _deleteTemporaryCandidates(candidates);
       return AttachmentPickResult(
         message: '最多只能选择5个文件；当前已有$existingCount个，本次选择了${candidates.length}个。',
@@ -418,24 +551,122 @@ class AttachmentPickerService {
 
     final accepted = <PickedAttachment>[];
     final rejected = <String>[];
-    for (final original in candidates) {
+    var acceptedBytes = 0;
+    for (var index = 0; index < candidates.length; index += 1) {
+      final original = candidates[index];
       AttachmentCandidate candidate = original;
+      int? observedSize;
       try {
-        final initialBytes = await candidate.readBytes();
-        final initialKind = detectAttachmentFileKind(initialBytes);
-        if (initialKind == AttachmentFileKind.heic) {
-          candidate = await _nativeBridge.convertHeicToJpeg(candidate);
-          if (candidate.path != original.path && original.temporary) {
-            await _deleteTemporaryCandidate(original);
-          }
-        }
-        final length = await candidate.length();
-        if (length > attachmentMaxFileSizeBytes) {
+        final initialLength = await candidate.length();
+        observedSize = initialLength;
+        CrashReporting.breadcrumb(
+          'attachment_validation.size_checked',
+          data: {
+            'candidateIndex': index,
+            'attachmentSizeBytes': initialLength,
+          },
+        );
+        if (initialLength > attachmentMaxFileSizeBytes) {
+          CrashReporting.breadcrumb(
+            'attachment_validation.rejected',
+            data: {
+              'candidateIndex': index,
+              'attachmentSizeBytes': initialLength,
+              'reason': 'file_size_limit',
+            },
+          );
           rejected.add('“${candidate.fileName}”超过10MB');
           await _deleteTemporaryCandidate(candidate);
           continue;
         }
+        final initialExtension =
+            path.extension(candidate.fileName).toLowerCase();
+        if (_isExternalDocumentExtension(initialExtension)) {
+          final prepared = await FileSecurityPolicy.prepareUploads(
+            <FileSecuritySource>[
+              FileSecuritySource(
+                fileName: candidate.fileName,
+                declaredMimeType: candidate.declaredMimeType,
+                openRead: () => candidate.path == null
+                    ? Stream<List<int>>.value(candidate.bytes!)
+                    : File(candidate.path!).openRead(),
+              ),
+            ],
+          );
+          final staged = prepared.single;
+          if (acceptedBytes + staged.size > fileSecurityMaxTotalFileBytes) {
+            await staged.cleanup();
+            rejected.add('本次选择的文件总大小超过24MB');
+            await _deleteTemporaryCandidate(candidate);
+            continue;
+          }
+          acceptedBytes += staged.size;
+          if (candidate.temporary) {
+            await _deleteTemporaryCandidate(candidate);
+          }
+          final kind = attachmentKindForFileName(staged.fileName);
+          accepted.add(
+            PickedAttachment(
+              file: ApiMultipartFile.fromPath(
+                fileName: staged.fileName,
+                path: staged.path,
+                contentType: staged.contentType,
+              ),
+              kind: kind,
+              temporaryPath: staged.path,
+            ),
+          );
+          CrashReporting.breadcrumb(
+            'attachment_validation.accepted',
+            data: {
+              'candidateIndex': index,
+              'attachmentSizeBytes': staged.size,
+              'fileKind': kind.name,
+            },
+          );
+          continue;
+        }
+        final initialHeader = await candidate.readHeaderBytes();
+        final initialKind = detectAttachmentFileKind(initialHeader);
+        if (initialKind == AttachmentFileKind.heic) {
+          CrashReporting.breadcrumb(
+            'heic_conversion.start',
+            data: {
+              'candidateIndex': index,
+              'attachmentSizeBytes': initialLength,
+            },
+          );
+          candidate = await _nativeBridge.convertHeicToJpeg(candidate);
+          if (candidate.path != original.path && original.temporary) {
+            await _deleteTemporaryCandidate(original);
+          }
+          final convertedLength = await candidate.length();
+          observedSize = convertedLength;
+          CrashReporting.breadcrumb(
+            'heic_conversion.complete',
+            data: {
+              'candidateIndex': index,
+              'attachmentSizeBytes': convertedLength,
+            },
+          );
+          if (convertedLength > attachmentMaxFileSizeBytes) {
+            rejected.add('“${candidate.fileName}”超过10MB');
+            await _deleteTemporaryCandidate(candidate);
+            continue;
+          }
+        }
         final bytes = await candidate.readBytes();
+        observedSize = bytes.length;
+        if (bytes.length > attachmentMaxFileSizeBytes) {
+          rejected.add('“${candidate.fileName}”超过10MB');
+          await _deleteTemporaryCandidate(candidate);
+          continue;
+        }
+        if (acceptedBytes + bytes.length > fileSecurityMaxTotalFileBytes) {
+          rejected.add('本次选择的文件总大小超过24MB');
+          await _deleteTemporaryCandidate(candidate);
+          continue;
+        }
         final kind = detectAttachmentFileKind(bytes);
         final validationError = _validateCandidate(
           candidate,
@@ -465,11 +696,51 @@ class AttachmentPickerService {
             temporaryPath: candidate.temporary ? candidate.path : null,
           ),
         );
-      } catch (error) {
-        rejected.add('“${candidate.fileName}”读取或处理失败');
+        acceptedBytes += bytes.length;
+        CrashReporting.breadcrumb(
+          'attachment_validation.accepted',
+          data: {
+            'candidateIndex': index,
+            'attachmentSizeBytes': bytes.length,
+            'fileKind': kind.name,
+          },
+        );
+      } catch (error, stackTrace) {
+        CrashReporting.breadcrumb(
+          'attachment_validation.failure',
+          data: {
+            'candidateIndex': index,
+            if (observedSize != null) 'attachmentSizeBytes': observedSize,
+            'exceptionType': error.runtimeType.toString(),
+          },
+        );
+        unawaited(
+          CrashReporting.recordError(
+            error,
+            stackTrace,
+            source: 'attachment.validation',
+            context: {
+              'candidateIndex': index,
+              if (observedSize != null) 'attachmentSizeBytes': observedSize,
+              'imagesOnly': imagesOnly,
+            },
+          ),
+        );
+        rejected.add(
+          error is FileSecurityViolation
+              ? error.userMessage
+              : '“${candidate.fileName}”读取或处理失败',
+        );
         await _deleteTemporaryCandidate(candidate);
       }
     }
+    CrashReporting.breadcrumb(
+      'attachment_validation.complete',
+      data: {
+        'acceptedCount': accepted.length,
+        'rejectedCount': rejected.length,
+      },
+    );
     return AttachmentPickResult(
       files: accepted,
       message: rejected.isEmpty ? null : '${rejected.join('；')}，已拒绝添加。',
@@ -731,24 +1002,22 @@ Set<String> _mimeTypesForKind(AttachmentFileKind kind) {
 }
 
 String sanitizeAttachmentFileName(String value) {
-  final baseName = path.basename(value.replaceAll('\\', '/')).trim();
-  final sanitized = baseName
-      .replaceAll(RegExp(r'[\u0000-\u001f\u007f<>:"/\\|?*]'), '_')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-  final safe = sanitized.isEmpty ? 'attachment' : sanitized;
-  if (safe.length <= 180) {
-    return safe;
-  }
-  final extension = path.extension(safe);
-  final stem = path.basenameWithoutExtension(safe);
-  final keep = 180 - extension.length;
-  final safeKeep = keep < 1
-      ? 1
-      : keep > stem.length
-          ? stem.length
-          : keep;
-  return '${stem.substring(0, safeKeep)}$extension';
+  return FileSecurityPolicy.sanitizeFileName(value);
+}
+
+bool _isExternalDocumentExtension(String extension) {
+  return const <String>{
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.docm',
+    '.dotm',
+    '.xlsm',
+    '.xltm',
+    '.xlam',
+  }.contains(extension);
 }
 
 AttachmentFileKind attachmentKindForFileName(String fileName) {

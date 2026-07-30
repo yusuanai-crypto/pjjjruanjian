@@ -15,6 +15,57 @@ type SeedConfig = {
   demoPassword: string | null;
 };
 
+const INITIAL_PAYMENT_METHODS = [
+  {
+    id: '00000000-0000-4000-8000-000000000001',
+    code: 'shouqianba',
+    name: '收钱吧',
+    category: 'DIRECT_RECEIPT',
+    sortOrder: 10,
+    isDefault: true,
+  },
+  {
+    id: '00000000-0000-4000-8000-000000000002',
+    code: 'boc_pos',
+    name: '中行POS机',
+    category: 'DIRECT_RECEIPT',
+    sortOrder: 20,
+    isDefault: false,
+  },
+  {
+    id: '00000000-0000-4000-8000-000000000003',
+    code: 'ceb_pos',
+    name: '光大POS机',
+    category: 'DIRECT_RECEIPT',
+    sortOrder: 30,
+    isDefault: false,
+  },
+  {
+    id: '00000000-0000-4000-8000-000000000004',
+    code: 'cash',
+    name: '现金',
+    category: 'DIRECT_RECEIPT',
+    sortOrder: 40,
+    isDefault: false,
+  },
+  {
+    id: '00000000-0000-4000-8000-000000000005',
+    code: 'cash_on_delivery',
+    name: '货到付款',
+    category: 'COLLECT_ON_DELIVERY',
+    sortOrder: 50,
+    isDefault: false,
+  },
+  {
+    id: '00000000-0000-4000-8000-000000000006',
+    code: 'bank_transfer',
+    name: '转账',
+    category: 'DIRECT_RECEIPT',
+    sortOrder: 60,
+    isDefault: false,
+  },
+] as const;
+
 export function resolveSeedConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): SeedConfig {
@@ -68,6 +119,8 @@ async function main() {
       updatedAt: now,
     },
   });
+
+  await upsertInitialPaymentMethods(admin.id, now);
 
   if (!seedConfig.createDemoUsers) {
     return;
@@ -1345,6 +1398,7 @@ async function upsertSeedSalesOrder(
     updatedAt: now,
   };
   const items = buildSeedSalesOrderItems(order.items, now);
+  const paymentDetails = buildSeedSalesOrderPaymentDetails(order, now);
 
   return prisma.salesOrder.upsert({
     where: {
@@ -1356,6 +1410,10 @@ async function upsertSeedSalesOrder(
         deleteMany: {},
         create: items,
       },
+      paymentDetails: {
+        deleteMany: {},
+        create: paymentDetails,
+      },
     },
     create: {
       orderNo: order.orderNo,
@@ -1365,8 +1423,81 @@ async function upsertSeedSalesOrder(
       items: {
         create: items,
       },
+      paymentDetails: {
+        create: paymentDetails,
+      },
     },
   });
+}
+
+async function upsertInitialPaymentMethods(adminUserId: string, now: Date) {
+  await prisma.paymentMethod.updateMany({
+    where: {
+      isDefault: true,
+    },
+    data: {
+      isDefault: false,
+      updatedById: adminUserId,
+      updatedAt: now,
+    },
+  });
+
+  for (const method of INITIAL_PAYMENT_METHODS) {
+    const data = {
+      name: method.name,
+      category: method.category,
+      isActive: true,
+      isDefault: method.isDefault,
+      sortOrder: method.sortOrder,
+      updatedById: adminUserId,
+      updatedAt: now,
+    };
+    await prisma.paymentMethod.upsert({
+      where: {
+        code: method.code,
+      },
+      update: data,
+      create: {
+        id: method.id,
+        code: method.code,
+        ...data,
+        createdById: adminUserId,
+        createdAt: now,
+      },
+    });
+  }
+}
+
+function buildSeedSalesOrderPaymentDetails(
+  order: SeedSalesOrderInput,
+  now: Date,
+) {
+  const cashOnDeliveryAmountCents = order.cashOnDeliveryAmountCents ?? 0;
+  const directAmountCents =
+    order.totalAmountCents - cashOnDeliveryAmountCents;
+  const details = [
+    {
+      paymentMethodId: '00000000-0000-4000-8000-000000000001',
+      paymentMethodNameSnapshot: '收钱吧',
+      paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+      amountCents: directAmountCents,
+      sortOrder: 10,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+  if (cashOnDeliveryAmountCents !== 0) {
+    details.push({
+      paymentMethodId: '00000000-0000-4000-8000-000000000005',
+      paymentMethodNameSnapshot: '货到付款',
+      paymentMethodCategorySnapshot: 'COLLECT_ON_DELIVERY',
+      amountCents: cashOnDeliveryAmountCents,
+      sortOrder: 20,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return details;
 }
 
 function buildSeedSalesOrderItems(items: SeedSalesOrderItem[], now: Date) {

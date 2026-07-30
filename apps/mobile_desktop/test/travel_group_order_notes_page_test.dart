@@ -4,6 +4,81 @@ import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_group_order_notes/travel_group_order_notes_page.dart';
 
 void main() {
+  testWidgets('searches the queue by taster or exact tasting room',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpPage(tester, apiClient);
+
+    expect(find.text('今日'), findsNothing);
+    expect(find.text('品鉴师：测试品鉴师'), findsOneWidget);
+    expect(find.text('品鉴馆号：5'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-search-scope')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('品鉴师'), findsWidgets);
+    expect(find.text('品鉴馆号'), findsOneWidget);
+    expect(find.text('关键词'), findsNothing);
+    expect(find.text('团号'), findsNothing);
+    expect(find.text('旅行社'), findsNothing);
+    expect(find.text('导游'), findsNothing);
+    await tester.tap(find.text('品鉴师').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-taster-field')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试品鉴师').last);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-search-button')),
+    );
+    await tester.pumpAndSettle();
+
+    var uri = Uri.parse(
+      apiClient.getPaths
+          .where((path) => path.startsWith('/api/travel-groups'))
+          .last,
+    );
+    expect(uri.queryParameters['tasterId'], 'taster-1');
+    expect(uri.queryParameters.containsKey('tastingRoomNo'), isFalse);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(uri.queryParameters.containsKey('dateTo'), isFalse);
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-search-scope')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('品鉴馆号').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(
+        const ValueKey('travel-group-notes-tasting-room-no-field'),
+      ),
+      ' 5 ',
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-notes-search-button')),
+    );
+    await tester.pumpAndSettle();
+
+    uri = Uri.parse(
+      apiClient.getPaths
+          .where((path) => path.startsWith('/api/travel-groups'))
+          .last,
+    );
+    expect(uri.queryParameters['tastingRoomNo'], '5');
+    expect(uri.queryParameters.containsKey('tasterId'), isFalse);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('dateFrom'), isFalse);
+    expect(uri.queryParameters.containsKey('dateTo'), isFalse);
+
+    await _openEditor(tester);
+  });
+
   testWidgets('opens an editor dialog instead of a persistent form',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -293,6 +368,19 @@ class _FakeApiClient extends ApiClient {
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     getPaths.add(path);
+    if (path == '/api/users/tasters') {
+      return {
+        'data': {
+          'tasters': const [
+            {
+              'id': 'taster-1',
+              'name': '测试品鉴师',
+              'username': 'test-taster',
+            },
+          ],
+        },
+      };
+    }
     if (path.startsWith('/api/travel-groups')) {
       return {
         'data': {

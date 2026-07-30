@@ -102,6 +102,66 @@ export class AnalyticsNestController {
     return this.analyticsService.listTravelGroupProfits(actor, query);
   }
 
+  @Get('travel-group-profits/export')
+  async travelGroupProfitsExport(
+    @Query() query: any,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult =
+      await this.analyticsService.exportTravelGroupProfitsXlsx(
+        actor,
+        query,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
+  @Get('daily-loss-profits')
+  async dailyLossProfits(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.listDailyLossProfits(actor, query);
+  }
+
+  @Get('daily-loss-profits/export')
+  async dailyLossProfitsExport(
+    @Query() query: any,
+    @Req() request: any,
+    @Res() response: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    const exportResult =
+      await this.analyticsService.exportDailyLossProfitsXlsx(
+        actor,
+        query,
+        {
+          ipAddress: getRequestIp(request),
+        },
+      );
+    response.status(200);
+    response.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${exportResult.fileName}"`,
+    );
+    response.setHeader('Content-Length', exportResult.buffer.length);
+    response.send(exportResult.buffer);
+  }
+
   @Get('trends')
   async trends(@Query() query: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

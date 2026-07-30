@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
@@ -6,8 +7,10 @@ import '../../core/business/business_api.dart';
 import '../../core/business/inventory_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/responsive.dart';
+import '../../shared/widgets/serialized_inventory_picker_dialog.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../warehouse_management/shared/inventory_workspace_shared.dart';
 
 class WarehousePackingPage extends StatefulWidget {
   const WarehousePackingPage({
@@ -15,11 +18,15 @@ class WarehousePackingPage extends StatefulWidget {
     required this.apiClient,
     required this.token,
     required this.role,
+    this.embedded = false,
+    this.onInventoryFactsChanged,
   });
 
   final ApiClient apiClient;
   final String token;
   final UserRole role;
+  final bool embedded;
+  final VoidCallback? onInventoryFactsChanged;
 
   @override
   State<WarehousePackingPage> createState() => _WarehousePackingPageState();
@@ -32,7 +39,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   late final TextEditingController _packageCountController;
   late final TextEditingController _warehouseRemarkController;
 
-  PackingStatus _filter = PackingStatus.pending;
+  String _workbenchStatus = _fulfillmentWaiting;
   String _logisticsMethodFilter = _allLogisticsMethodFilter;
   String _logisticsMethod = logisticsMethods.first;
   bool _hasPackingMark = false;
@@ -44,11 +51,20 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   bool _changingWarehouse = false;
   String? _errorMessage;
   String? _formErrorMessage;
+  int _identityRevision = 0;
+  int _ordersRequestGeneration = 0;
+  DateTime? _dateFrom;
+  DateTime? _dateTo;
+  Map<String, String> _productTrackingModes = const {};
+  final Map<String, List<SerializedUnitSelection>> _serializedSelections = {};
 
   bool get _canEditPacking =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.warehouse;
+
+  bool get _canAccessWorkbench =>
+      _canEditPacking || widget.role == UserRole.boss;
 
   @override
   void initState() {
@@ -63,14 +79,20 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     _queryController = TextEditingController();
     _packageCountController = TextEditingController(text: '0');
     _warehouseRemarkController = TextEditingController();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadOrders());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_canAccessWorkbench) return;
+      _loadProductTrackingModes();
+      _loadOrders();
+    });
   }
 
   @override
   void didUpdateWidget(covariant WarehousePackingPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.apiClient != widget.apiClient ||
-        oldWidget.token != widget.token) {
+        oldWidget.token != widget.token ||
+        oldWidget.role != widget.role) {
+      _inventoryApi.clearCache();
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
       _inventoryApi = InventoryApi(
@@ -78,12 +100,34 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         token: widget.token,
         role: widget.role,
       );
-      _loadOrders();
+      _identityRevision++;
+      _ordersRequestGeneration++;
+      _orders = const <SalesOrderRecord>[];
+      _selectedOrder = null;
+      _formErrorMessage = null;
+      _errorMessage = null;
+      _saving = false;
+      _changingWarehouse = false;
+      _queryController.clear();
+      _workbenchStatus = _fulfillmentWaiting;
+      _logisticsMethodFilter = _allLogisticsMethodFilter;
+      _dateFrom = null;
+      _dateTo = null;
+      _fillDraft(null);
+      _productTrackingModes = const {};
+      if (_canAccessWorkbench) {
+        _loadProductTrackingModes();
+        _loadOrders();
+      } else {
+        setState(() => _loading = false);
+      }
     }
   }
 
   @override
   void dispose() {
+    _ordersRequestGeneration++;
+    _inventoryApi.clearCache();
     _queryController.dispose();
     _packageCountController.dispose();
     _warehouseRemarkController.dispose();
@@ -94,6 +138,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     String? preserveSelectedId,
     SalesOrderRecord? selectedFallback,
   }) async {
+    final identityRevision = _identityRevision;
+    final requestGeneration = ++_ordersRequestGeneration;
     setState(() {
       _loading = true;
       _errorMessage = null;
@@ -102,28 +148,37 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     try {
       final orders = await _businessApi.listWarehouseOrders(
         limit: 100,
+        start: _dateFrom,
+        end: _dateTo,
         query: _queryController.text.trim(),
-        packingStatus: _filter.value,
+        packingStatus: _packingStatusForQuery,
         logisticsMethod: _selectedLogisticsMethodFilter,
       );
-      if (!mounted) {
+      if (!mounted ||
+          identityRevision != _identityRevision ||
+          requestGeneration != _ordersRequestGeneration) {
         return;
       }
 
+      final visibleOrders = orders
+          .where((order) => _matchesWorkbenchStatus(order, _workbenchStatus))
+          .toList();
       final selected = _selectedFrom(
-        orders,
+        visibleOrders,
         preserveSelectedId ?? _selectedOrder?.id,
         fallback: selectedFallback,
       );
       setState(() {
-        _orders = orders;
+        _orders = visibleOrders;
         _selectedOrder = selected;
         _loading = false;
         _formErrorMessage = null;
       });
       _fillDraft(selected);
     } catch (error) {
-      if (!mounted) {
+      if (!mounted ||
+          identityRevision != _identityRevision ||
+          requestGeneration != _ordersRequestGeneration) {
         return;
       }
       setState(() {
@@ -136,25 +191,63 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     }
   }
 
+  Future<void> _loadProductTrackingModes() async {
+    final revision = _identityRevision;
+    try {
+      final options = await _businessApi.listProductOptions();
+      if (!mounted || revision != _identityRevision) return;
+      setState(() {
+        _productTrackingModes = {
+          for (final option in options)
+            option.id: option.inventoryTrackingMode.toLowerCase(),
+        };
+      });
+    } catch (_) {
+      // 商品选项失败不阻断真实订单队列；逐瓶选择区会显示明确的接口状态。
+    }
+  }
+
+  String? get _packingStatusForQuery {
+    return switch (_workbenchStatus) {
+      _fulfillmentWaiting => PackingStatus.pending.value,
+      _fulfillmentPacking => PackingStatus.packing.value,
+      _fulfillmentPacked => PackingStatus.packed.value,
+      _fulfillmentAbnormal => PackingStatus.abnormal.value,
+      _ => null,
+    };
+  }
+
   Future<void> _selectOrder(SalesOrderRecord order) async {
     setState(() {
       _selectedOrder = order;
       _formErrorMessage = null;
       _fillDraft(order);
     });
+    if (widget.embedded &&
+        (context.size?.width ?? MediaQuery.sizeOf(context).width) >=
+            _packingWideBreakpoint) {
+      return;
+    }
     await _showPackingEditor();
   }
 
   Future<void> _changeFulfillmentWarehouse() async {
+    final identityRevision = _identityRevision;
     final order = _selectedOrder;
     if (order == null || _changingWarehouse) {
+      return;
+    }
+    if (order.packingStatus == PackingStatus.packed.value) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('订单已打包出库，不能再更换履约仓。')),
+      );
       return;
     }
     List<WarehouseRecord> warehouses;
     try {
       warehouses = await _inventoryApi.listWarehouses(isActive: true);
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -162,7 +255,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       );
       return;
     }
-    if (!mounted) {
+    if (!mounted || identityRevision != _identityRevision) {
       return;
     }
 
@@ -176,10 +269,37 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       },
     );
 
-    if (selectedWarehouseId == null) {
+    if (identityRevision != _identityRevision || selectedWarehouseId == null) {
       return;
     }
     if (selectedWarehouseId.id == order.fulfillmentWarehouseId) {
+      return;
+    }
+    if (!mounted || identityRevision != _identityRevision) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认更换履约仓'),
+        content: Text(
+          '将 ${order.orderNo} 的履约仓更换为 ${selectedWarehouseId.name}？'
+          '后端将重新计算订单占用和库存摘要。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('warehouse-packing-confirm-warehouse'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认更换'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !mounted ||
+        identityRevision != _identityRevision) {
       return;
     }
 
@@ -189,7 +309,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         order.id,
         selectedWarehouseId.id,
       );
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return;
       }
       setState(() {
@@ -197,6 +317,12 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         _selectedOrder = updated;
       });
       _fillDraft(updated);
+      widget.onInventoryFactsChanged?.call();
+      await _loadOrders(
+        preserveSelectedId: updated.id,
+        selectedFallback: updated,
+      );
+      if (!mounted || identityRevision != _identityRevision) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -205,14 +331,14 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         ),
       );
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(_messageForError(error))),
       );
     } finally {
-      if (mounted) {
+      if (mounted && identityRevision == _identityRevision) {
         setState(() => _changingWarehouse = false);
       }
     }
@@ -222,8 +348,9 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     VoidCallback? closeEditor,
     VoidCallback? refreshEditor,
   }) async {
+    final identityRevision = _identityRevision;
     void updateFormState(VoidCallback fn) {
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return;
       }
       setState(fn);
@@ -244,6 +371,64 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       updateFormState(() => _formErrorMessage = '打包件数必须是 0 或正整数。');
       return false;
     }
+    final serializedAssignments = <Map<String, dynamic>>[];
+    for (final item in order.items) {
+      if (!_isSerializedItem(item)) continue;
+      final fulfillment = item.fulfillment;
+      final lineKey = item.inventoryLineKey;
+      if (fulfillment == null || lineKey == null || lineKey.isEmpty) {
+        updateFormState(
+          () => _formErrorMessage = '逐瓶配货行缺少后端履约标识，功能暂不可用，请刷新后重试。',
+        );
+        return false;
+      }
+      final selected = _serializedSelections[lineKey] ?? const [];
+      final required = fulfillment.requestedQty - fulfillment.outboundQty;
+      if (selected.length < required) {
+        updateFormState(
+          () => _formErrorMessage =
+              '${item.productName} 缺货待配：需要 $required 瓶，当前已选 ${selected.length} 瓶。',
+        );
+        return false;
+      }
+      if (selected.length > required) {
+        updateFormState(
+          () =>
+              _formErrorMessage = '${item.productName} 已选瓶数超过剩余需求 $required 瓶。',
+        );
+        return false;
+      }
+      serializedAssignments.add({
+        'inventoryLineKey': lineKey,
+        'unitIds': selected.map((unit) => unit.id).toList(),
+      });
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认已打包并出库'),
+        content: Text(
+          '确认 ${order.orderNo} 已完成打包？普通商品和已选择的逐瓶商品'
+          '将由后端库存事件正式出库，页面不会直接修改库存数量。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('warehouse-packing-confirm-packed'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认已打包'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !mounted ||
+        identityRevision != _identityRevision) {
+      return false;
+    }
 
     updateFormState(() {
       _saving = true;
@@ -259,9 +444,11 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
           'packageCount': packageCount,
           'warehouseRemark': _warehouseRemarkController.text.trim(),
           'hasPackingMark': _hasPackingMark,
+          if (serializedAssignments.isNotEmpty)
+            'serializedAssignments': serializedAssignments,
         },
       );
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return false;
       }
 
@@ -272,26 +459,33 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         _formErrorMessage = null;
       });
       _fillDraft(updated);
+      widget.onInventoryFactsChanged?.call();
       await _loadOrders(
         preserveSelectedId: updated.id,
         selectedFallback: updated,
       );
-      if (mounted) {
+      if (mounted && identityRevision == _identityRevision) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${updated.orderNo} 打包信息已保存。')),
         );
       }
       return true;
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || identityRevision != _identityRevision) {
         return false;
       }
+      final message = _messageForError(error);
+      await _loadOrders(
+        preserveSelectedId: order.id,
+        selectedFallback: order,
+      );
+      if (!mounted || identityRevision != _identityRevision) return false;
       updateFormState(() {
-        _formErrorMessage = _messageForError(error);
+        _formErrorMessage = message;
       });
       return false;
     } finally {
-      if (mounted) {
+      if (mounted && identityRevision == _identityRevision) {
         setState(() => _saving = false);
         refreshEditor?.call();
       }
@@ -306,6 +500,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   }
 
   void _fillDraft(SalesOrderRecord? order) {
+    _serializedSelections.clear();
     if (order == null) {
       _logisticsMethod = logisticsMethods.first;
       _hasPackingMark = false;
@@ -321,6 +516,13 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     _hasPackingMark = order.hasPackingMark;
     _packageCountController.text = '${order.packageCount}';
     _warehouseRemarkController.text = order.warehouseRemark ?? '';
+    for (final item in order.items) {
+      final lineKey = item.inventoryLineKey;
+      final units = item.fulfillment?.units ?? item.serializedUnits;
+      if (lineKey == null || units.isEmpty) continue;
+      _serializedSelections[lineKey] =
+          units.map(SerializedUnitSelection.fromOrder).toList(growable: false);
+    }
   }
 
   String? get _selectedLogisticsMethodFilter =>
@@ -330,6 +532,50 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_canAccessWorkbench) {
+      return const ErrorState(title: '当前角色不能进入全量销售出库与配货工作台。');
+    }
+    if (widget.embedded) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= _packingWideBreakpoint;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildWorkspaceHeader(),
+              const SizedBox(height: 12),
+              _buildFilters(),
+              const SizedBox(height: 12),
+              Expanded(
+                child: wide
+                    ? Row(
+                        children: [
+                          SizedBox(
+                            width: 430,
+                            child: _buildOrderQueue(fillAvailable: true),
+                          ),
+                          const VerticalDivider(width: 1),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.only(left: 12),
+                              child: _buildPackingEditorContent(
+                                onCancel: null,
+                                closeEditor: () {},
+                                refreshEditor: () {
+                                  if (mounted) setState(() {});
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : _buildOrderQueue(fillAvailable: true),
+              ),
+            ],
+          );
+        },
+      );
+    }
     return ResponsivePage(
       maxWidth: 1360,
       children: [
@@ -376,7 +622,8 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '当前队列：${_packingStatusLabel(_filter.value)} · ${_logisticsMethodFilterLabel(_logisticsMethodFilter)}',
+                    '当前队列：${_fulfillmentStatusLabel(_workbenchStatus)} · '
+                    '${_logisticsMethodFilterLabel(_logisticsMethodFilter)}',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -407,95 +654,129 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
   }
 
   Widget _buildListPane() {
-    final filterForegroundColor = Theme.of(context).colorScheme.onSurface;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FormSection(
-          title: '筛选订单',
-          trailing: StatusTag(
-            label: _packingStatusLabel(_filter.value),
-            tone: _packingTone(_filter.value),
-          ),
-          children: [
-            ResponsiveFormGrid(
-              minItemWidth: 220,
-              children: [
-                TextField(
-                  key: const ValueKey('warehouse-packing-search-field'),
-                  controller: _queryController,
-                  decoration: InputDecoration(
-                    hintText: '搜索订单号、客户、电话、地址',
-                    prefixIcon: const Icon(Icons.search_rounded),
-                    suffixIcon: IconButton(
-                      tooltip: '清空',
-                      onPressed: () {
-                        _queryController.clear();
-                        _loadOrders();
-                      },
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ),
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => _loadOrders(),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('warehouse-packing-search-button'),
-                  onPressed: _loading ? null : _loadOrders,
-                  icon: const Icon(Icons.search_rounded),
-                  label: const Text('查询'),
-                ),
-                _DropdownField<String>(
-                  key: const ValueKey('warehouse-logistics-method-filter'),
-                  label: '物流方式',
-                  value: _logisticsMethodFilter,
-                  items: const [
-                    _allLogisticsMethodFilter,
-                    ...logisticsMethods,
-                  ],
-                  itemLabel: _logisticsMethodFilterLabel,
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _logisticsMethodFilter = value);
-                      _loadOrders();
-                    }
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final status in PackingStatus.values)
-                  FilterChip(
-                    key: ValueKey('warehouse-packing-filter-${status.value}'),
-                    selected: _filter == status,
-                    labelStyle: TextStyle(
-                      color: WidgetStateColor.resolveWith(
-                        (_) => filterForegroundColor,
-                      ),
-                    ),
-                    checkmarkColor: filterForegroundColor,
-                    label: Text(_packingStatusLabel(status.value)),
-                    onSelected: (_) {
-                      setState(() => _filter = status);
-                      _loadOrders();
-                    },
-                  ),
-              ],
-            ),
-          ],
-        ),
+        _buildFilters(),
         const SizedBox(height: 12),
         _buildOrderQueue(),
       ],
     );
   }
 
-  Widget _buildOrderQueue() {
+  Widget _buildFilters() {
+    final foreground = Theme.of(context).colorScheme.onSurface;
+    return FormSection(
+      title: '筛选订单',
+      trailing: StatusTag(
+        label: _fulfillmentStatusLabel(_workbenchStatus),
+        tone: _fulfillmentTone(_workbenchStatus),
+      ),
+      children: [
+        ResponsiveFormGrid(
+          minItemWidth: 220,
+          children: [
+            TextField(
+              key: const ValueKey('warehouse-packing-search-field'),
+              controller: _queryController,
+              decoration: InputDecoration(
+                labelText: '订单号 / 客户',
+                hintText: '搜索订单号、客户、电话、地址',
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: IconButton(
+                  tooltip: '清空',
+                  onPressed: () {
+                    _queryController.clear();
+                    _loadOrders();
+                  },
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ),
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _loadOrders(),
+            ),
+            _DropdownField<String>(
+              key: const ValueKey('warehouse-logistics-method-filter'),
+              label: '配送方式',
+              value: _logisticsMethodFilter,
+              items: const [_allLogisticsMethodFilter, ...logisticsMethods],
+              itemLabel: _logisticsMethodFilterLabel,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _logisticsMethodFilter = value);
+                  _loadOrders();
+                }
+              },
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('warehouse-packing-date-filter'),
+              onPressed: _pickOrderDateRange,
+              icon: const Icon(Icons.date_range_outlined),
+              label: Text(
+                _dateFrom == null
+                    ? '订单日期'
+                    : '${_packingDateLabel(_dateFrom)} 至 '
+                        '${_packingDateLabel(_dateTo)}',
+              ),
+            ),
+            FilledButton.icon(
+              key: const ValueKey('warehouse-packing-search-button'),
+              onPressed: _loading ? null : _loadOrders,
+              icon: const Icon(Icons.search_rounded),
+              label: const Text('查询'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '仓库与商品筛选：当前订单接口尚未提供服务端筛选字段；'
+          '本页不会只筛选最多 100 条返回结果制造完整列表假象。'
+          '部分配货/缺货待配标签来自真实履约字段，但这两类筛选目前也只覆盖接口返回队列。',
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final status in _fulfillmentStatuses)
+              FilterChip(
+                key: ValueKey('warehouse-packing-filter-$status'),
+                selected: _workbenchStatus == status,
+                labelStyle: TextStyle(
+                  color: WidgetStateColor.resolveWith((_) => foreground),
+                ),
+                checkmarkColor: foreground,
+                label: Text(_fulfillmentStatusLabel(status)),
+                onSelected: (_) {
+                  setState(() => _workbenchStatus = status);
+                  _loadOrders();
+                },
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickOrderDateRange() async {
+    final now = DateTime.now();
+    final value = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 1),
+      initialDateRange: _dateFrom == null || _dateTo == null
+          ? null
+          : DateTimeRange(start: _dateFrom!, end: _dateTo!),
+    );
+    if (value == null) return;
+    setState(() {
+      _dateFrom = value.start;
+      _dateTo = value.end;
+    });
+    _loadOrders();
+  }
+
+  Widget _buildOrderQueue({bool fillAvailable = false}) {
     if (_loading) {
       return const LoadingState(title: '正在加载邮寄订单');
     }
@@ -504,7 +785,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
     }
     if (_orders.isEmpty) {
       return EmptyState(
-        title: '${_packingStatusLabel(_filter.value)}暂无邮寄订单',
+        title: '${_fulfillmentStatusLabel(_workbenchStatus)}暂无邮寄订单',
         action: OutlinedButton.icon(
           onPressed: _loadOrders,
           icon: const Icon(Icons.refresh_rounded),
@@ -517,6 +798,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       orders: _orders,
       selectedId: _selectedOrder?.id,
       onSelected: _selectOrder,
+      fillAvailable: fillAvailable,
     );
   }
 
@@ -525,7 +807,9 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       return;
     }
 
-    if (isDesktopWidth(MediaQuery.of(context).size.width)) {
+    final availableWidth =
+        context.size?.width ?? MediaQuery.sizeOf(context).width;
+    if (isDesktopWidth(availableWidth)) {
       await _showPackingDialog();
     } else {
       await _showPackingBottomSheet();
@@ -555,22 +839,16 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
               Navigator.of(editorContext).pop();
             }
 
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(editorContext).viewInsets.bottom,
-                ),
-                child: SizedBox(
-                  height: MediaQuery.of(editorContext).size.height * 0.92,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                    child: _buildPackingEditorContent(
-                      showHeader: true,
-                      onCancel: _saving ? null : closeEditor,
-                      closeEditor: closeEditor,
-                      refreshEditor: refreshEditor,
-                    ),
-                  ),
+            return InventoryKeyboardSafeSheet(
+              heightFactor: .92,
+              onEscape: _saving ? null : closeEditor,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                child: _buildPackingEditorContent(
+                  showHeader: true,
+                  onCancel: _saving ? null : closeEditor,
+                  closeEditor: closeEditor,
+                  refreshEditor: refreshEditor,
                 ),
               ),
             );
@@ -604,24 +882,31 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
               Navigator.of(editorContext).pop();
             }
 
-            return AlertDialog(
-              title: Row(
-                children: [
-                  const Expanded(child: Text('订单核对/打包处理')),
-                  if (_selectedOrder != null)
-                    StatusTag(
-                      label: _packingStatusLabel(_selectedOrder!.packingStatus),
-                      tone: _packingTone(_selectedOrder!.packingStatus),
+            return PopScope<void>(
+              canPop: !_saving,
+              child: InventoryKeyboardScope(
+                onEscape: _saving ? null : closeEditor,
+                child: AlertDialog(
+                  title: Row(
+                    children: [
+                      const Expanded(child: Text('订单核对/打包处理')),
+                      if (_selectedOrder != null)
+                        StatusTag(
+                          label: _packingStatusLabel(
+                              _selectedOrder!.packingStatus),
+                          tone: _packingTone(_selectedOrder!.packingStatus),
+                        ),
+                    ],
+                  ),
+                  content: SizedBox(
+                    width: 680,
+                    child: SingleChildScrollView(
+                      child: _buildPackingEditorContent(
+                        onCancel: _saving ? null : closeEditor,
+                        closeEditor: closeEditor,
+                        refreshEditor: refreshEditor,
+                      ),
                     ),
-                ],
-              ),
-              content: SizedBox(
-                width: 680,
-                child: SingleChildScrollView(
-                  child: _buildPackingEditorContent(
-                    onCancel: _saving ? null : closeEditor,
-                    closeEditor: closeEditor,
-                    refreshEditor: refreshEditor,
                   ),
                 ),
               ),
@@ -703,6 +988,18 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
         ),
         const SizedBox(height: 12),
         FormSection(
+          title: '商品需求与配货',
+          trailing: StatusTag(
+            label: _fulfillmentStatusLabel(_fulfillmentStatus(order)),
+            tone: _fulfillmentTone(_fulfillmentStatus(order)),
+          ),
+          children: [
+            for (final item in order.items)
+              _buildFulfillmentLine(item, order, refreshEditor),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FormSection(
           title: '打包处理',
           trailing: StatusTag(
             label: _packingStatusLabel(order.packingStatus),
@@ -746,6 +1043,7 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
                   controller: _packageCountController,
                   readOnly: !_canEditPacking,
                   keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   decoration: const InputDecoration(labelText: '打包件数'),
                 ),
                 SwitchListTile(
@@ -788,6 +1086,171 @@ class _WarehousePackingPageState extends State<WarehousePackingPage> {
       ],
     );
   }
+
+  Widget _buildFulfillmentLine(
+    SalesOrderItemRecord item,
+    SalesOrderRecord order,
+    VoidCallback refreshEditor,
+  ) {
+    final fulfillment = item.fulfillment;
+    final serialized = _isSerializedItem(item);
+    final lineKey = item.inventoryLineKey;
+    final selected = lineKey == null
+        ? const <SerializedUnitSelection>[]
+        : _serializedSelections[lineKey] ?? const [];
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Text(
+                  '${item.productName} · 需求 '
+                  '${fulfillment?.requestedQty ?? item.quantity} 瓶',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                StatusTag(
+                  label: serialized ? '逐瓶配货' : '普通商品自动出库',
+                  tone: serialized ? StatusTone.info : StatusTone.neutral,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 16,
+              runSpacing: 6,
+              children: [
+                Text('已占用：${fulfillment == null ? '暂未提供' : '暂未提供'}'),
+                Text('已分配：${fulfillment?.assignedQty ?? 0} 瓶'),
+                Text('已出库：${fulfillment?.outboundQty ?? 0} 瓶'),
+                Text('待配：${fulfillment?.unassignedQty ?? '暂未提供'}'
+                    '${fulfillment == null ? '' : ' 瓶'}'),
+              ],
+            ),
+            if (fulfillment == null)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('订单接口未返回该商品的履约数量字段，不能在客户端猜算。'),
+              ),
+            if (!serialized)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('无需手工调整库存；确认已打包后由后端库存事件出库。'),
+              ),
+            if (serialized) ...[
+              const SizedBox(height: 8),
+              if (order.fulfillmentWarehouseId == null ||
+                  item.productId == null ||
+                  lineKey == null ||
+                  fulfillment == null)
+                const StatusTag(
+                  label: '逐瓶配货信息不完整，等待接口',
+                  tone: StatusTone.danger,
+                )
+              else
+                OutlinedButton.icon(
+                  key: ValueKey('warehouse-packing-pick-units-$lineKey'),
+                  onPressed: !_canEditPacking || _saving
+                      ? null
+                      : () => _pickSerializedUnits(
+                            order: order,
+                            item: item,
+                            refreshEditor: refreshEditor,
+                          ),
+                  icon: const Icon(Icons.qr_code_scanner_rounded),
+                  label: Text(
+                    '选择物流码（已选 ${selected.length} / '
+                    '${fulfillment.requestedQty - fulfillment.outboundQty} 瓶）',
+                  ),
+                ),
+              if (selected.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final unit in selected)
+                        Text(
+                          '${unit.moutaiName} · ${unit.factoryDate} · '
+                          '${unit.productionBatch} · ${unit.batchSerialNo} · '
+                          '物流码 ${unit.logisticsCode}',
+                        ),
+                    ],
+                  ),
+                ),
+              if (fulfillment != null &&
+                  selected.length <
+                      fulfillment.requestedQty - fulfillment.outboundQty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: StatusTag(
+                    label: '缺货待配：不会创建假物流码',
+                    tone: StatusTone.warning,
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickSerializedUnits({
+    required SalesOrderRecord order,
+    required SalesOrderItemRecord item,
+    required VoidCallback refreshEditor,
+  }) async {
+    final identityRevision = _identityRevision;
+    final warehouseId = order.fulfillmentWarehouseId;
+    final productId = item.productId;
+    final lineKey = item.inventoryLineKey;
+    final fulfillment = item.fulfillment;
+    if (warehouseId == null ||
+        productId == null ||
+        lineKey == null ||
+        fulfillment == null) {
+      return;
+    }
+    final current = _serializedSelections[lineKey] ?? const [];
+    final selected = await showDialog<List<SerializedUnitSelection>>(
+      context: context,
+      builder: (context) => SerializedInventoryPickerDialog(
+        businessApi: _businessApi,
+        productId: productId,
+        warehouseId: warehouseId,
+        initialUnits: current,
+      ),
+    );
+    if (selected == null || !mounted || identityRevision != _identityRevision) {
+      return;
+    }
+    final maximum = fulfillment.requestedQty - fulfillment.outboundQty;
+    if (selected.length > maximum) {
+      setState(() => _formErrorMessage = '已选瓶数不能超过剩余需求 $maximum 瓶。');
+      refreshEditor();
+      return;
+    }
+    setState(() {
+      _serializedSelections[lineKey] = selected;
+      _formErrorMessage = null;
+    });
+    refreshEditor();
+  }
+
+  bool _isSerializedItem(SalesOrderItemRecord item) {
+    final productId = item.productId;
+    if (productId != null && _productTrackingModes[productId] == 'serialized') {
+      return true;
+    }
+    return item.fulfillment?.units.isNotEmpty == true ||
+        item.serializedUnits.isNotEmpty;
+  }
 }
 
 class _WarehouseOrderList extends StatelessWidget {
@@ -795,11 +1258,13 @@ class _WarehouseOrderList extends StatelessWidget {
     required this.orders,
     required this.selectedId,
     required this.onSelected,
+    this.fillAvailable = false,
   });
 
   final List<SalesOrderRecord> orders;
   final String? selectedId;
   final ValueChanged<SalesOrderRecord> onSelected;
+  final bool fillAvailable;
 
   @override
   Widget build(BuildContext context) {
@@ -824,95 +1289,104 @@ class _WarehouseOrderList extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: orders.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final order = orders[index];
-              final selected = selectedId == order.id;
-              final abnormal =
-                  order.packingStatus == PackingStatus.abnormal.value;
-              return ListTile(
-                key: ValueKey('warehouse-order-${order.id}'),
-                selected: selected,
-                tileColor: abnormal
-                    ? Theme.of(context)
-                        .colorScheme
-                        .errorContainer
-                        .withValues(alpha: 0.28)
-                    : null,
-                selectedTileColor: abnormal
-                    ? Theme.of(context)
-                        .colorScheme
-                        .errorContainer
-                        .withValues(alpha: 0.42)
-                    : Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.08),
-                leading: CircleAvatar(
-                  backgroundColor: abnormal
-                      ? Theme.of(context).colorScheme.errorContainer
-                      : Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: selected ? 0.18 : 0.08),
-                  child: Icon(
-                    abnormal
-                        ? Icons.report_problem_rounded
-                        : Icons.inventory_2_rounded,
-                    color: abnormal
-                        ? Theme.of(context).colorScheme.error
-                        : Theme.of(context).colorScheme.primary,
-                    size: 20,
-                  ),
-                ),
-                title: Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      order.orderNo,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    StatusTag(
-                      label: _packingStatusLabel(order.packingStatus),
-                      tone: _packingTone(order.packingStatus),
-                    ),
-                    StatusTag(
-                      label: _logisticsNoLabel(order),
-                      tone: _logisticsNoTone(order),
-                    ),
-                  ],
-                ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      Text('客户 ${_display(order.customerName)}'),
-                      Text('电话 ${_display(order.customerPhone)}'),
-                      Text('地址 ${_orderAddress(order)}'),
-                      Text('明细 ${_itemSummary(order)}'),
-                      Text('发货 ${_display(order.shippingDate)}'),
-                      Text('物流单号 ${_display(order.logisticsNo)}'),
-                      Text('件数 ${order.packageCount}'),
-                    ],
-                  ),
-                ),
-                trailing: selected
-                    ? const Icon(Icons.check_circle_rounded)
-                    : const Icon(Icons.chevron_right_rounded),
-                onTap: () => onSelected(order),
-              );
-            },
-          ),
+          if (fillAvailable)
+            Expanded(child: _list(context))
+          else
+            _list(context),
         ],
       ),
+    );
+  }
+
+  Widget _list(BuildContext context) {
+    return ListView.separated(
+      shrinkWrap: !fillAvailable,
+      physics: fillAvailable
+          ? const AlwaysScrollableScrollPhysics()
+          : const NeverScrollableScrollPhysics(),
+      itemCount: orders.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        final selected = selectedId == order.id;
+        final fulfillmentStatus = _fulfillmentStatus(order);
+        final abnormal = fulfillmentStatus == _fulfillmentAbnormal;
+        return ListTile(
+          key: ValueKey('warehouse-order-${order.id}'),
+          selected: selected,
+          tileColor: abnormal
+              ? Theme.of(context)
+                  .colorScheme
+                  .errorContainer
+                  .withValues(alpha: 0.28)
+              : null,
+          selectedTileColor: abnormal
+              ? Theme.of(context)
+                  .colorScheme
+                  .errorContainer
+                  .withValues(alpha: 0.42)
+              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+          leading: CircleAvatar(
+            backgroundColor: abnormal
+                ? Theme.of(context).colorScheme.errorContainer
+                : Theme.of(context)
+                    .colorScheme
+                    .primary
+                    .withValues(alpha: selected ? 0.18 : 0.08),
+            child: Icon(
+              abnormal
+                  ? Icons.report_problem_rounded
+                  : Icons.inventory_2_rounded,
+              color: abnormal
+                  ? Theme.of(context).colorScheme.error
+                  : Theme.of(context).colorScheme.primary,
+              size: 20,
+            ),
+          ),
+          title: Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                order.orderNo,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              StatusTag(
+                label: _fulfillmentStatusLabel(fulfillmentStatus),
+                tone: _fulfillmentTone(fulfillmentStatus),
+              ),
+              StatusTag(
+                label: _logisticsNoLabel(order),
+                tone: _logisticsNoTone(order),
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                Text('客户 ${_display(order.customerName)}'),
+                Text('电话 ${_display(order.customerPhone)}'),
+                Text('地址 ${_orderAddress(order)}'),
+                Text('明细 ${_itemSummary(order)}'),
+                Text(
+                  '履约仓 ${_display(order.fulfillmentWarehouseName)}',
+                ),
+                Text('发货 ${_display(order.shippingDate)}'),
+                Text('物流单号 ${_display(order.logisticsNo)}'),
+                Text('件数 ${order.packageCount}'),
+              ],
+            ),
+          ),
+          trailing: selected
+              ? const Icon(Icons.check_circle_rounded)
+              : const Icon(Icons.chevron_right_rounded),
+          onTap: () => onSelected(order),
+        );
+      },
     );
   }
 }
@@ -1013,9 +1487,16 @@ class _SelectedOrderSummary extends StatelessWidget {
     final warehouseLabel = (warehouseName == null || warehouseName.isEmpty)
         ? '待分配'
         : warehouseName;
-    final pendingPackages = order.packageCount > 0
-        ? '${order.packageCount} 件'
-        : '待配';
+    final fulfillment = order.items
+        .map((item) => item.fulfillment)
+        .whereType<SalesOrderItemFulfillmentRecord>()
+        .toList();
+    final pendingQuantity = fulfillment.isEmpty
+        ? null
+        : fulfillment.fold<int>(
+            0,
+            (total, value) => total + value.unassignedQty,
+          );
     return DecoratedBox(
       decoration: BoxDecoration(
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -1040,13 +1521,18 @@ class _SelectedOrderSummary extends StatelessWidget {
               value: _display(order.logisticsNo),
             ),
             _InfoRow(
+              label: '配送方式',
+              value: _display(order.logisticsMethod),
+            ),
+            _InfoRow(
               label: '履约仓库',
               value: warehouseLabel,
             ),
             _InfoRow(
               label: '待配数量',
-              value: pendingPackages,
+              value: pendingQuantity == null ? '暂未提供' : '$pendingQuantity 瓶',
             ),
+            const _InfoRow(label: '已占用', value: '暂未提供'),
             if (onChangeWarehouse != null) ...[
               const SizedBox(height: 8),
               Align(
@@ -1212,6 +1698,79 @@ class _InfoRow extends StatelessWidget {
 }
 
 const _allLogisticsMethodFilter = '__all_logistics_methods__';
+const _packingWideBreakpoint = 900.0;
+const _fulfillmentWaiting = 'pending';
+const _fulfillmentPartial = 'partial';
+const _fulfillmentShortage = 'shortage';
+const _fulfillmentPacking = 'packing';
+const _fulfillmentPacked = 'packed';
+const _fulfillmentAbnormal = 'abnormal';
+const _fulfillmentStatuses = [
+  _fulfillmentWaiting,
+  _fulfillmentPartial,
+  _fulfillmentShortage,
+  _fulfillmentPacking,
+  _fulfillmentPacked,
+  _fulfillmentAbnormal,
+];
+
+String _fulfillmentStatus(SalesOrderRecord order) {
+  if (order.packingStatus == PackingStatus.packed.value) {
+    return _fulfillmentPacked;
+  }
+  if (order.packingStatus == PackingStatus.abnormal.value) {
+    return _fulfillmentAbnormal;
+  }
+  if (order.packingStatus == PackingStatus.packing.value) {
+    return _fulfillmentPacking;
+  }
+  if (order.shippingRiskWarnings.any(
+    (warning) => warning.code == 'INVENTORY_SHORTAGE',
+  )) {
+    return _fulfillmentShortage;
+  }
+  final fulfillment = order.items
+      .map((item) => item.fulfillment)
+      .whereType<SalesOrderItemFulfillmentRecord>();
+  final hasPartial = fulfillment.any(
+    (value) =>
+        value.unassignedQty > 0 &&
+        (value.assignedQty > 0 || value.outboundQty > 0),
+  );
+  return hasPartial ? _fulfillmentPartial : _fulfillmentWaiting;
+}
+
+bool _matchesWorkbenchStatus(SalesOrderRecord order, String status) {
+  return _fulfillmentStatus(order) == status;
+}
+
+String _fulfillmentStatusLabel(String status) {
+  return switch (status) {
+    _fulfillmentPartial => '部分配货',
+    _fulfillmentShortage => '缺货待配',
+    _fulfillmentPacking => '打包中',
+    _fulfillmentPacked => '已打包',
+    _fulfillmentAbnormal => '异常',
+    _ => '待配货',
+  };
+}
+
+StatusTone _fulfillmentTone(String status) {
+  return switch (status) {
+    _fulfillmentPartial || _fulfillmentPacking => StatusTone.info,
+    _fulfillmentPacked => StatusTone.success,
+    _fulfillmentShortage => StatusTone.warning,
+    _fulfillmentAbnormal => StatusTone.danger,
+    _ => StatusTone.warning,
+  };
+}
+
+String _packingDateLabel(DateTime? value) {
+  if (value == null) return '—';
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
 
 SalesOrderRecord? _selectedFrom(
   List<SalesOrderRecord> orders,
@@ -1302,8 +1861,7 @@ String _itemSummary(SalesOrderRecord order) {
 }
 
 String _display(String? value) {
-  final text = value?.trim() ?? '';
-  return text.isEmpty ? '未填写' : text;
+  return inventoryDisplayText(value);
 }
 
 int? _packageCountOrNull(String value) {
@@ -1320,7 +1878,17 @@ int? _packageCountOrNull(String value) {
 
 String _messageForError(Object error) {
   if (error is ApiException) {
-    return error.message;
+    return switch (error.code) {
+      'SALES_ORDER_ALREADY_OUTBOUND' => '订单已经出库，请刷新查看最新状态。',
+      'INVENTORY_UNIT_UNAVAILABLE' => '所选瓶码已被并发占用、不属于当前履约仓，或资料/成本不完整，请重新选择。',
+      'SERIALIZED_ASSIGNMENT_EXCEEDS_REQUESTED' => '已选瓶数超过订单未分配需求。',
+      'SERIALIZED_ASSIGNMENT_LINE_DUPLICATE' => '同一订单商品不能重复提交逐瓶配货。',
+      'SERIALIZED_ASSIGNMENT_UNIT_DUPLICATE' => '同一物流码不能重复选择。',
+      'INVENTORY_CONCURRENT_UPDATE' => '库存状态已变化，已重新拉取真实订单状态。',
+      'INVENTORY_INSUFFICIENT_AVAILABLE' => '当前履约仓库存不足，订单保持缺货待配。',
+      'PERMISSION_DENIED' || 'FIELD_PERMISSION_DENIED' => '当前角色没有此操作权限。',
+      _ => inventoryErrorMessage(error),
+    };
   }
   return '操作失败，请稍后重试。';
 }

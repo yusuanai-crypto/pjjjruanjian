@@ -1444,7 +1444,8 @@ function toAiOrderSummary(
     ),
     travelGroup: toAiTravelGroupSummary(source.travelGroup),
     totalAmountCents: toNumber(source.totalAmountCents),
-    cashOnDeliveryAmountCents: toNumber(source.cashOnDeliveryAmountCents),
+    cashOnDeliveryAmountCents:
+      getSalesOrderCollectOnDeliveryAmountCents(source),
     deliverySummary: nullableString(source.deliverySummary),
     logistics: {
       method: nullableString(source.logisticsMethod),
@@ -1578,6 +1579,32 @@ function summarizeOrderRows(
       0,
     ),
   };
+}
+
+function getSalesOrderCollectOnDeliveryAmountCents(
+  source: Record<string, any>,
+) {
+  const paymentDetails = Array.isArray(source.paymentDetails)
+    ? source.paymentDetails
+    : [];
+  if (paymentDetails.length === 0) {
+    return toNumber(source.cashOnDeliveryAmountCents);
+  }
+  return paymentDetails.reduce((sum: number, item: unknown) => {
+    const detail = isRecord(item) ? item : {};
+    const category = String(
+      detail.paymentMethodCategorySnapshot ||
+        detail.categorySnapshot ||
+        detail.category ||
+        '',
+    )
+      .trim()
+      .toLowerCase();
+    return category === 'collect_on_delivery' ||
+      category === 'agency_collection'
+      ? sum + toNumber(detail.amountCents)
+      : sum;
+  }, 0);
 }
 
 function summarizeAfterSalesRows(

@@ -7,6 +7,7 @@ import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
+import '../../shared/widgets/payment_details_editor.dart';
 import '../../shared/widgets/product_option_picker.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -40,7 +41,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
   late final TextEditingController _addressController;
   late final TextEditingController _orderDateController;
   late final TextEditingController _shippingDateController;
-  late final TextEditingController _cashOnDeliveryAmountController;
   late final TextEditingController _remarkController;
   late final List<String> _provinceOptions;
 
@@ -57,6 +57,11 @@ class _OrderFormPageState extends State<OrderFormPage> {
   List<ProductOptionRecord> _productOptions = const [];
   bool _loadingProductOptions = true;
   String? _productOptionsError;
+  List<SalesPaymentMethodRecord> _paymentMethods = const [];
+  final List<PaymentDetailDraft> _paymentDetails = [];
+  bool _loadingPaymentMethods = true;
+  String? _paymentMethodsError;
+  bool _paymentDetailsAutoDefault = true;
 
   @override
   void initState() {
@@ -71,11 +76,11 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _orderDateController = TextEditingController(text: formatDate(_orderDate));
     _shippingDateController =
         TextEditingController(text: formatDate(_shippingDate));
-    _cashOnDeliveryAmountController = TextEditingController();
     _remarkController = TextEditingController();
     _provinceOptions = administrativeProvinceNames();
     _items = _initialOrderItems();
     _loadProductOptions();
+    _loadPaymentMethods();
   }
 
   @override
@@ -86,6 +91,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
       _loadProductOptions();
+      _loadPaymentMethods();
     }
   }
 
@@ -111,6 +117,44 @@ class _OrderFormPageState extends State<OrderFormPage> {
     }
   }
 
+  Future<void> _loadPaymentMethods() async {
+    setState(() {
+      _loadingPaymentMethods = true;
+      _paymentMethodsError = null;
+    });
+    try {
+      final methods = (await _businessApi.listPaymentMethods())
+          .where((method) => method.isActive)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _paymentMethods = methods;
+        _loadingPaymentMethods = false;
+        _paymentMethodsError =
+            methods.isEmpty ? '暂无启用的收款方式，请联系财务或管理员配置后重试。' : null;
+        if (_paymentDetails.isEmpty && methods.isNotEmpty) {
+          final defaultMethod = methods.firstWhere(
+            (method) => method.isDefault,
+            orElse: () => methods.first,
+          );
+          _paymentDetails.add(
+            PaymentDetailDraft(
+              paymentMethodId: defaultMethod.id,
+              amountCents: _currentTotalAmountCents,
+            ),
+          );
+          _paymentDetailsAutoDefault = true;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingPaymentMethods = false;
+        _paymentMethodsError = _messageForError(error);
+      });
+    }
+  }
+
   @override
   void dispose() {
     _customerNameController.dispose();
@@ -118,8 +162,10 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _addressController.dispose();
     _orderDateController.dispose();
     _shippingDateController.dispose();
-    _cashOnDeliveryAmountController.dispose();
     _remarkController.dispose();
+    for (final detail in _paymentDetails) {
+      detail.dispose();
+    }
     _disposeItems();
     super.dispose();
   }
@@ -265,12 +311,68 @@ class _OrderFormPageState extends State<OrderFormPage> {
     }
   }
 
+  void _restoreDraftPaymentDetails() {
+    final rawDetails = _localDraft?['paymentDetails'];
+    if (rawDetails is! List || rawDetails.isEmpty) {
+      setState(() {
+        _errorMessage = '草稿中没有可恢复的收款明细。';
+        _successMessage = null;
+      });
+      return;
+    }
+    final restored = <PaymentDetailDraft>[];
+    try {
+      for (var index = 0; index < rawDetails.length; index += 1) {
+        final raw = rawDetails[index];
+        if (raw is! Map) {
+          throw _OrderFormValidationError(
+            '草稿第 ${index + 1} 条收款明细无效。',
+          );
+        }
+        final paymentMethodId = '${raw['paymentMethodId'] ?? ''}'.trim();
+        final amount = raw['amountCents'];
+        if (paymentMethodId.isEmpty || amount is! num || amount % 1 != 0) {
+          throw _OrderFormValidationError(
+            '草稿第 ${index + 1} 条收款明细无效。',
+          );
+        }
+        restored.add(
+          PaymentDetailDraft(
+            id: _draftStringOrNull(raw['id']),
+            paymentMethodId: paymentMethodId,
+            amountCents: amount.toInt(),
+          ),
+        );
+      }
+    } catch (error) {
+      for (final detail in restored) {
+        detail.dispose();
+      }
+      setState(() {
+        _errorMessage = _messageForError(error);
+        _successMessage = null;
+      });
+      return;
+    }
+    setState(() {
+      for (final detail in _paymentDetails) {
+        detail.dispose();
+      }
+      _paymentDetails
+        ..clear()
+        ..addAll(restored);
+      _paymentDetailsAutoDefault = false;
+      _errorMessage = null;
+      _successMessage = '已恢复草稿中的收款明细。';
+      _lastSavedOrderNo = null;
+    });
+  }
+
   void _clearForm() {
     final now = DateTime.now();
     _customerNameController.clear();
     _customerPhoneController.clear();
     _addressController.clear();
-    _cashOnDeliveryAmountController.clear();
     _remarkController.clear();
     _orderDate = now;
     _orderDateController.text = formatDate(now);
@@ -282,6 +384,23 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _city = null;
     _district = null;
     _replaceItems(_initialOrderItems());
+    for (final detail in _paymentDetails) {
+      detail.dispose();
+    }
+    _paymentDetails.clear();
+    if (_paymentMethods.isNotEmpty) {
+      final defaultMethod = _paymentMethods.firstWhere(
+        (method) => method.isDefault,
+        orElse: () => _paymentMethods.first,
+      );
+      _paymentDetails.add(
+        PaymentDetailDraft(
+          paymentMethodId: defaultMethod.id,
+          amountCents: 0,
+        ),
+      );
+    }
+    _paymentDetailsAutoDefault = true;
   }
 
   Map<String, dynamic> _buildOrderPayload({bool validateRequired = true}) {
@@ -298,14 +417,18 @@ class _OrderFormPageState extends State<OrderFormPage> {
     if (travelGroupId.isNotEmpty) {
       payload['travelGroupId'] = travelGroupId;
     }
-    _putNonEmpty(payload, 'remark', _remarkController.text);
-
-    final cashOnDeliveryAmountCents =
-        _moneyCentsOrNull(_cashOnDeliveryAmountController.text);
-    if (cashOnDeliveryAmountCents == null) {
-      throw const _OrderFormValidationError('货到付款金额必须为有效的非负金额。');
+    if (validateRequired && _loadingPaymentMethods) {
+      throw const _OrderFormValidationError('收款方式正在加载，请稍后再保存。');
     }
-    payload['cashOnDeliveryAmountCents'] = cashOnDeliveryAmountCents;
+    if (validateRequired && _paymentMethodsError != null) {
+      throw _OrderFormValidationError(
+        '收款方式加载失败：$_paymentMethodsError 请重试后再保存。',
+      );
+    }
+    if (validateRequired && _paymentMethods.isEmpty) {
+      throw const _OrderFormValidationError('暂无可用收款方式，不能保存订单。');
+    }
+    _putNonEmpty(payload, 'remark', _remarkController.text);
 
     final customerPayload = _customerPayload(validateRequired);
     if (_selectedCustomer != null) {
@@ -319,6 +442,34 @@ class _OrderFormPageState extends State<OrderFormPage> {
       throw const _OrderFormValidationError('请至少填写一条订单明细。');
     }
     payload['items'] = itemPayloads;
+    final totalAmountCents = itemPayloads.fold<int>(
+      0,
+      (sum, item) => sum + (item['subtotalCents'] as int? ?? 0),
+    );
+    if (_paymentDetailsAutoDefault && _paymentDetails.length == 1) {
+      _paymentDetails.first.setAmountCents(totalAmountCents);
+    }
+    final paymentDetails = <Map<String, dynamic>>[];
+    for (var index = 0; index < _paymentDetails.length; index += 1) {
+      final detail = _paymentDetails[index].toPayload();
+      if (detail == null) {
+        throw _OrderFormValidationError(
+          '第 ${index + 1} 条收款明细的方式或金额无效。',
+        );
+      }
+      paymentDetails.add(detail);
+    }
+    if (validateRequired && paymentDetails.isEmpty) {
+      throw const _OrderFormValidationError('请至少填写一条收款明细。');
+    }
+    final paymentTotal = paymentDetails.fold<int>(
+      0,
+      (sum, detail) => sum + (detail['amountCents'] as int),
+    );
+    if (validateRequired && paymentTotal != totalAmountCents) {
+      throw const _OrderFormValidationError('收款明细合计必须严格等于订单总额。');
+    }
+    payload['paymentDetails'] = paymentDetails;
 
     return payload;
   }
@@ -400,13 +551,17 @@ class _OrderFormPageState extends State<OrderFormPage> {
   }
 
   void _addItem() {
-    setState(() => _items.add(_OrderItemDraft.empty()));
+    setState(() {
+      _items.add(_OrderItemDraft.empty());
+      _syncAutoDefaultPayment();
+    });
   }
 
   void _deleteItem(int index) {
     setState(() {
       final removed = _items.removeAt(index);
       removed.dispose();
+      _syncAutoDefaultPayment();
     });
   }
 
@@ -415,7 +570,60 @@ class _OrderFormPageState extends State<OrderFormPage> {
   }
 
   void _updateItemProduct(int index, ProductOptionRecord product) {
-    setState(() => _items[index].selectProduct(product));
+    setState(() {
+      _items[index].selectProduct(product);
+      _syncAutoDefaultPayment();
+    });
+  }
+
+  int get _currentTotalAmountCents => _items.fold<int>(
+        0,
+        (sum, item) => sum + item.subtotalCents,
+      );
+
+  void _syncAutoDefaultPayment() {
+    if (_paymentDetailsAutoDefault && _paymentDetails.length == 1) {
+      _paymentDetails.first.setAmountCents(_currentTotalAmountCents);
+    }
+  }
+
+  void _handleItemsChanged() {
+    setState(_syncAutoDefaultPayment);
+  }
+
+  void _addPaymentDetail() {
+    if (_paymentMethods.isEmpty) return;
+    setState(() {
+      _paymentDetailsAutoDefault = false;
+      _paymentDetails.add(
+        PaymentDetailDraft(
+          paymentMethodId: _paymentMethods.first.id,
+          amountCents: 0,
+        ),
+      );
+    });
+  }
+
+  void _removePaymentDetail(int index) {
+    setState(() {
+      _paymentDetailsAutoDefault = false;
+      _paymentDetails.removeAt(index).dispose();
+    });
+  }
+
+  void _movePaymentDetail(int fromIndex, int toIndex) {
+    if (fromIndex == toIndex ||
+        fromIndex < 0 ||
+        fromIndex >= _paymentDetails.length ||
+        toIndex < 0 ||
+        toIndex >= _paymentDetails.length) {
+      return;
+    }
+    setState(() {
+      _paymentDetailsAutoDefault = false;
+      final detail = _paymentDetails.removeAt(fromIndex);
+      _paymentDetails.insert(toIndex, detail);
+    });
   }
 
   void _disposeItems() {
@@ -458,7 +666,6 @@ class _OrderFormPageState extends State<OrderFormPage> {
       0,
       (sum, item) => sum + item.subtotalCents,
     );
-
     return ResponsivePage(
       children: [
         if (_errorMessage != null)
@@ -640,24 +847,40 @@ class _OrderFormPageState extends State<OrderFormPage> {
                     onRetryProductOptions: _loadProductOptions,
                     onAdd: _addItem,
                     onDelete: _deleteItem,
-                    onChanged: () => setState(() {}),
+                    onChanged: _handleItemsChanged,
                     onDeliveryTypeChanged: _updateItemDeliveryType,
                     onProductChanged: _updateItemProduct,
                   ),
                   const SizedBox(height: 12),
+                  PaymentDetailsEditor(
+                    methods: _paymentMethods,
+                    details: _paymentDetails,
+                    totalAmountCents: totalAmountCents,
+                    loading: _loadingPaymentMethods,
+                    errorMessage: _paymentMethodsError,
+                    onRetry: _loadPaymentMethods,
+                    onAdd: _addPaymentDetail,
+                    onRemove: _removePaymentDetail,
+                    onMove: _movePaymentDetail,
+                    onChanged: () {
+                      setState(() => _paymentDetailsAutoDefault = false);
+                    },
+                  ),
+                  if (_localDraft != null)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        key: const ValueKey(
+                          'payment-details-restore-draft-button',
+                        ),
+                        onPressed: _restoreDraftPaymentDetails,
+                        icon: const Icon(Icons.restore_rounded),
+                        label: const Text('恢复草稿收款明细'),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
                   ResponsiveFormGrid(
                     children: [
-                      TextField(
-                        controller: _cashOnDeliveryAmountController,
-                        onChanged: (_) => setState(() {}),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: const InputDecoration(
-                          labelText: '货到付款金额',
-                          prefixText: '¥ ',
-                        ),
-                      ),
                       TextField(
                         controller: _remarkController,
                         onChanged: (_) => setState(() {}),
@@ -669,7 +892,12 @@ class _OrderFormPageState extends State<OrderFormPage> {
                   SectionActions(
                     primaryLabel: _saving ? '保存中...' : '保存订单',
                     secondaryLabel: _localDraft == null ? '暂存本页' : '更新草稿',
-                    onPrimaryPressed: _saving ? null : _saveOrder,
+                    onPrimaryPressed: _saving ||
+                            _loadingPaymentMethods ||
+                            _paymentMethodsError != null ||
+                            _paymentMethods.isEmpty
+                        ? null
+                        : _saveOrder,
                     onSecondaryPressed: _saving ? null : _saveLocalDraft,
                   ),
                 ],
@@ -1196,8 +1424,7 @@ class _InlineNotice extends StatelessWidget {
 const _orderEntryOrderType = 'travel_group';
 
 DateTime _shanghaiToday() {
-  final shanghaiNow =
-      DateTime.now().toUtc().add(const Duration(hours: 8));
+  final shanghaiNow = DateTime.now().toUtc().add(const Duration(hours: 8));
   return DateTime(shanghaiNow.year, shanghaiNow.month, shanghaiNow.day);
 }
 
@@ -1235,6 +1462,11 @@ void _putNonEmpty(Map<String, dynamic> body, String key, String? value) {
   if (text.isNotEmpty) {
     body[key] = text;
   }
+}
+
+String? _draftStringOrNull(Object? value) {
+  final text = '${value ?? ''}'.trim();
+  return text.isEmpty ? null : text;
 }
 
 int? _moneyCentsOrNull(String value) {
@@ -1275,9 +1507,8 @@ String _messageForError(Object error) {
         'arrivalTime': '进店时间',
         'groupType': '团型',
       };
-      final missing = error.missingFields
-          .map((field) => labels[field] ?? field)
-          .join('、');
+      final missing =
+          error.missingFields.map((field) => labels[field] ?? field).join('、');
       return missing.isEmpty
           ? '该旅行团前台信息尚未补齐，请先联系前台处理。'
           : '该旅行团前台信息尚未补齐：$missing，请先联系前台处理。';

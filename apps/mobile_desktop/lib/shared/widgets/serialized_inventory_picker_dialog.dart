@@ -52,11 +52,13 @@ class SerializedInventoryPickerDialog extends StatefulWidget {
     super.key,
     required this.businessApi,
     required this.productId,
+    required this.warehouseId,
     this.initialUnits = const [],
   });
 
   final BusinessApi businessApi;
   final String productId;
+  final String warehouseId;
   final List<SerializedUnitSelection> initialUnits;
 
   @override
@@ -96,6 +98,7 @@ class _SerializedInventoryPickerDialogState
       final available =
           await widget.businessApi.listAvailableSerializedInventory(
         productId: widget.productId,
+        warehouseId: widget.warehouseId,
         query: _query.text.trim(),
       );
       final merged = <String, SerializedUnitSelection>{

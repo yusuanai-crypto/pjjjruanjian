@@ -83,6 +83,7 @@ model User {
   operationLogs                      OperationLog[]
   tasterTravelGroups                 TravelGroup[]                   @relation("TravelGroupTaster")
   liaisonTasterTravelGroups          TravelGroup[]                   @relation("TravelGroupLiaisonTaster")
+  notEnteredConfirmedTravelGroups    TravelGroup[]                   @relation("TravelGroupNotEnteredConfirmedBy")
   lossConfirmedTravelGroups          TravelGroup[]                   @relation("TravelGroupLossConfirmedBy")
   tasterGuideGroups                  GuideCarriedGroup[]             @relation("GuideCarriedGroupTaster")
   tasterPendingGroups                PendingTravelGroup[]            @relation("PendingTravelGroupTaster")
@@ -91,6 +92,13 @@ model User {
   markedGuideGroups                  GuideCarriedGroup[]             @relation("GuideCarriedGroupMarkedBy")
   markedPendingGroups                PendingTravelGroup[]            @relation("PendingTravelGroupMarkedBy")
   markedSalesOrders                  SalesOrder[]                    @relation("SalesOrderMarkedBy")
+  completedSalesOrders               SalesOrder[]                    @relation("SalesOrderCompletedBy")
+  lockedPaymentDetailSalesOrders     SalesOrder[]                    @relation("SalesOrderPaymentDetailsLockedBy")
+  unlockedPaymentDetailSalesOrders   SalesOrder[]                    @relation("SalesOrderPaymentDetailsUnlockedBy")
+  profitFeeSnapshottedSalesOrders    SalesOrder[]                    @relation("SalesOrderProfitFeeSnapshottedBy")
+  createdPaymentMethods              PaymentMethod[]                 @relation("PaymentMethodCreatedBy")
+  updatedPaymentMethods              PaymentMethod[]                 @relation("PaymentMethodUpdatedBy")
+  confirmedSalesOrderPaymentDetails  SalesOrderPaymentDetail[]       @relation("SalesOrderPaymentDetailCollectionConfirmedBy")
   markedCustomers                    Customer[]                      @relation("CustomerMarkedBy")
   financeConfirmedAfterSalesOrders   AfterSalesOrder[]               @relation("AfterSalesOrderFinanceConfirmedBy")
   warehouseConfirmedAfterSalesOrders AfterSalesOrder[]               @relation("AfterSalesOrderWarehouseConfirmedBy")
@@ -136,6 +144,14 @@ model User {
   reversedAfterSalesReceipts         AfterSalesReceipt[]             @relation("AfterSalesReceiptReversedBy")
   createdAfterSalesReceipts          AfterSalesReceipt[]             @relation("AfterSalesReceiptCreatedBy")
   updatedAfterSalesReceipts          AfterSalesReceipt[]             @relation("AfterSalesReceiptUpdatedBy")
+  createdSpecialOrders               SalesOrder[]                    @relation("SpecialOrderCreatedBy")
+  updatedSpecialOrders               SalesOrder[]                    @relation("SpecialOrderUpdatedBy")
+  internalEmployeeSpecialOrders      SalesOrder[]                    @relation("SpecialOrderInternalEmployee")
+  approvedSpecialOrders              SalesOrder[]                    @relation("SpecialOrderApprovedBy")
+  specialOrderWorkflowEvents         SpecialOrderWorkflowEvent[]     @relation("SpecialOrderWorkflowEventActor")
+  uploadedSpecialOrderAttachments    SpecialOrderAttachment[]        @relation("SpecialOrderAttachmentUploadedBy")
+  recordedSpecialOrderPayments       SpecialOrderPayment[]           @relation("SpecialOrderPaymentRecordedBy")
+  reversedSpecialOrderSettlements    SpecialOrderSettlement[]        @relation("SpecialOrderSettlementReversedBy")
   managedWarehouses                  Warehouse[]                     @relation("WarehouseManager")
   createdWarehouses                  Warehouse[]                     @relation("WarehouseCreatedBy")
   updatedWarehouses                  Warehouse[]                     @relation("WarehouseUpdatedBy")
@@ -805,6 +821,7 @@ model Warehouse {
   stocktakeExpectedScans         StocktakeSerializedScan[]         @relation("StocktakeSerializedExpectedWarehouse")
   fulfillmentSalesOrders         SalesOrder[]                      @relation("SalesOrderFulfillmentWarehouse")
   serializedUnits                SerializedInventoryUnit[]
+  specialOrderItems              SalesOrderItem[]                    @relation("SpecialOrderItemWarehouse")
 
   @@index([isActive])
   @@index([managerUserId])
@@ -1587,6 +1604,64 @@ enum SalesOrderPointsDestination {
   @@map("sales_order_points_destination")
 }
 
+enum SpecialOrderWorkflowStatus {
+  DRAFT     @map("draft")
+  PENDING   @map("pending")
+  APPROVED  @map("approved")
+  COMPLETED @map("completed")
+  REJECTED  @map("rejected")
+  CANCELLED @map("cancelled")
+
+  @@map("special_order_workflow_status")
+}
+
+enum SpecialOrderWorkflowEventType {
+  CREATED          @map("created")
+  UPDATED          @map("updated")
+  SUBMITTED        @map("submitted")
+  WITHDRAWN        @map("withdrawn")
+  APPROVED         @map("approved")
+  AUTO_APPROVE     @map("auto_approve")
+  REJECTED         @map("rejected")
+  RESUBMITTED      @map("resubmitted")
+  UNAPPROVED       @map("unapproved")
+  COMPLETED        @map("completed")
+  CANCELLED        @map("cancelled")
+  PAYMENT_RECORDED @map("payment_recorded")
+
+  @@map("special_order_workflow_event_type")
+}
+
+enum SpecialOrderExternalPartyType {
+  GUIDE         @map("guide")
+  TRAVEL_AGENCY @map("travel_agency")
+  OTHER         @map("other")
+
+  @@map("special_order_external_party_type")
+}
+
+enum SpecialOrderSettlementDirection {
+  RECEIVABLE @map("receivable")
+  PAYABLE    @map("payable")
+
+  @@map("special_order_settlement_direction")
+}
+
+enum SpecialOrderPaymentStatus {
+  UNPAID  @map("unpaid")
+  PARTIAL @map("partial")
+  PAID    @map("paid")
+
+  @@map("special_order_payment_status")
+}
+
+enum PaymentMethodCategory {
+  DIRECT_RECEIPT      @map("direct_receipt")
+  COLLECT_ON_DELIVERY @map("collect_on_delivery")
+
+  @@map("payment_method_category")
+}
+
 enum AfterSalesIssueType {
   QUALITY_ISSUE    @map("quality_issue")
   LOGISTICS_DAMAGE @map("logistics_damage")
@@ -1705,6 +1780,8 @@ model TravelGroup {
   liaisonTasterName        String?               @map("liaison_taster_name") @db.VarChar(80)
   expectedArrivalTime      String?               @map("expected_arrival_time") @db.VarChar(30)
   arrivalTime              String?               @map("arrival_time") @db.VarChar(30)
+  notEnteredConfirmedAt    DateTime?             @map("not_entered_confirmed_at") @db.DateTime(0)
+  notEnteredConfirmedById  String?               @map("not_entered_confirmed_by_id") @db.Char(36)
   groupType                String?               @map("group_type") @db.VarChar(60)
   wineDetails              String?               @map("wine_details") @db.Text
   departureTime            String?               @map("departure_time") @db.VarChar(30)
@@ -1749,6 +1826,7 @@ model TravelGroup {
   guide                Guide?                     @relation(fields: [guideId], references: [id], onDelete: SetNull)
   taster               User?                      @relation("TravelGroupTaster", fields: [tasterId], references: [id], onDelete: SetNull)
   liaisonTaster        User?                      @relation("TravelGroupLiaisonTaster", fields: [liaisonTasterId], references: [id], onDelete: SetNull)
+  notEnteredConfirmedBy User?                     @relation("TravelGroupNotEnteredConfirmedBy", fields: [notEnteredConfirmedById], references: [id], onDelete: SetNull)
   lossConfirmedBy      User?                      @relation("TravelGroupLossConfirmedBy", fields: [lossConfirmedById], references: [id], onDelete: SetNull)
   markedBy             User?                      @relation("TravelGroupMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
 
@@ -1759,6 +1837,8 @@ model TravelGroup {
   @@index([tasterName])
   @@index([tasterId])
   @@index([liaisonTasterId])
+  @@index([notEnteredConfirmedAt])
+  @@index([notEnteredConfirmedById])
   @@index([lossConfirmedById])
   @@index([lossStatus])
   @@index([financeMark])
@@ -1947,6 +2027,13 @@ model SalesOrder {
   qrCodeRevokedAt              DateTime?                     @map("qr_code_revoked_at") @db.DateTime(0)
   totalAmountCents             Int                           @default(0) @map("total_amount_cents")
   cashOnDeliveryAmountCents    Int                           @default(0) @map("cash_on_delivery_amount_cents")
+  completedAt                  DateTime?                     @map("completed_at") @db.DateTime(0)
+  completedById                String?                       @map("completed_by_id") @db.Char(36)
+  paymentDetailsLocked         Boolean                       @default(false) @map("payment_details_locked")
+  paymentDetailsLockedAt       DateTime?                     @map("payment_details_locked_at") @db.DateTime(0)
+  paymentDetailsLockedById     String?                       @map("payment_details_locked_by_id") @db.Char(36)
+  paymentDetailsUnlockedAt     DateTime?                     @map("payment_details_unlocked_at") @db.DateTime(0)
+  paymentDetailsUnlockedById   String?                       @map("payment_details_unlocked_by_id") @db.Char(36)
   logisticsMethod              String?                       @map("logistics_method") @db.VarChar(80)
   logisticsProviderCode        String?                       @map("logistics_provider_code") @db.VarChar(40)
   packingStatus                SalesOrderPackingStatus       @default(PACKED) @map("packing_status")
@@ -1969,11 +2056,15 @@ model SalesOrder {
   financeMark                  Boolean                       @default(false) @map("finance_mark")
   markedById                   String?                       @map("marked_by") @db.Char(36)
   markedAt                     DateTime?                     @map("marked_at") @db.DateTime(0)
+  taxRateSnapshot              Decimal?                      @map("tax_rate_snapshot") @db.Decimal(10, 6)
+  profitFeeSnapshottedAt       DateTime?                     @map("profit_fee_snapshotted_at") @db.DateTime(0)
+  profitFeeSnapshottedById     String?                       @map("profit_fee_snapshotted_by_id") @db.Char(36)
   salesUserId                  String?                       @map("sales_user_id") @db.Char(36)
   salesEditCount               Int                           @default(0) @map("sales_edit_count")
   salesEditedAt                DateTime?                     @map("sales_edited_at") @db.DateTime(0)
   outreachUserId               String?                       @map("outreach_user_id") @db.Char(36)
   pointsDestination            SalesOrderPointsDestination   @default(TRAVEL_AGENCY) @map("points_destination")
+  personalAmountCents          Int                           @default(0) @map("personal_amount_cents")
   personalPointsGuideId        String?                       @map("personal_points_guide_id") @db.Char(36)
   personalGuideNameSnapshot    String?                       @map("personal_guide_name_snapshot") @db.VarChar(80)
   personalDailyRebateRate      Decimal?                      @map("personal_daily_rebate_rate") @db.Decimal(5, 4)
@@ -1986,6 +2077,21 @@ model SalesOrder {
   inventoryAppliedAt           DateTime?                     @map("inventory_applied_at") @db.DateTime(0)
   inventoryPolicyVersion       Int?                          @map("inventory_policy_version")
   inventoryVersion             Int                           @default(0) @map("inventory_version")
+  workflowStatus               SpecialOrderWorkflowStatus?   @map("workflow_status")
+  workflowVersion              Int?                          @map("workflow_version")
+  specialOrderCreateKey        String?                       @unique(map: "sales_orders_special_create_key") @map("special_order_create_key") @db.VarChar(191)
+  specialOrderCreateHash       String?                       @map("special_order_create_hash") @db.Char(64)
+  hasOriginalPurchase          Boolean?                      @map("has_original_purchase")
+  sourceRemark                 String?                       @map("source_remark") @db.Text
+  internalEmployeeId           String?                       @map("internal_employee_id") @db.Char(36)
+  externalPartyType            SpecialOrderExternalPartyType? @map("external_party_type")
+  externalPartyId              String?                       @map("external_party_id") @db.Char(36)
+  externalPartyNameSnapshot    String?                       @map("external_party_name_snapshot") @db.VarChar(160)
+  approvedById                 String?                       @map("approved_by_id") @db.Char(36)
+  approvedAt                   DateTime?                     @map("approved_at") @db.DateTime(0)
+  lastSubmittedAt              DateTime?                     @map("last_submitted_at") @db.DateTime(0)
+  rejectionReason              String?                       @map("rejection_reason") @db.VarChar(500)
+  unapprovalReason             String?                       @map("unapproval_reason") @db.VarChar(500)
   createdById                  String?                       @map("created_by_id") @db.Char(36)
   updatedById                  String?                       @map("updated_by_id") @db.Char(36)
   createdAt                    DateTime                      @default(now()) @map("created_at") @db.DateTime(0)
@@ -2001,14 +2107,27 @@ model SalesOrder {
   pointsDestinationChangedBy User?                     @relation("SalesOrderPointsDestinationChangedBy", fields: [pointsDestinationChangedById], references: [id], onDelete: SetNull)
   personalRatesUpdatedBy     User?                     @relation("SalesOrderPersonalRatesUpdatedBy", fields: [personalRatesUpdatedById], references: [id], onDelete: SetNull)
   markedBy                   User?                     @relation("SalesOrderMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  completedBy                User?                     @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  paymentDetailsLockedBy     User?                     @relation("SalesOrderPaymentDetailsLockedBy", fields: [paymentDetailsLockedById], references: [id], onDelete: SetNull)
+  paymentDetailsUnlockedBy   User?                     @relation("SalesOrderPaymentDetailsUnlockedBy", fields: [paymentDetailsUnlockedById], references: [id], onDelete: SetNull)
+  profitFeeSnapshottedBy     User?                     @relation("SalesOrderProfitFeeSnapshottedBy", fields: [profitFeeSnapshottedById], references: [id], onDelete: SetNull)
   fulfillmentWarehouse       Warehouse?                @relation("SalesOrderFulfillmentWarehouse", fields: [fulfillmentWarehouseId], references: [id], onDelete: Restrict)
+  internalEmployee           User?                     @relation("SpecialOrderInternalEmployee", fields: [internalEmployeeId], references: [id], onDelete: Restrict)
+  approvedBy                 User?                     @relation("SpecialOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  createdBy                  User?                     @relation("SpecialOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                  User?                     @relation("SpecialOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   items                      SalesOrderItem[]
+  paymentDetails             SalesOrderPaymentDetail[]
   afterSalesOrders           AfterSalesOrder[]         @relation("AfterSalesSourceOrder")
   generatedAfterSalesOrder   AfterSalesOrder?          @relation("AfterSalesGeneratedOrder")
   commissionRecords          CommissionRecord[]
   serializedInventoryUnits   SerializedInventoryUnit[]
   inventoryReservations      InventoryReservation[]
   inventoryAlerts            InventoryAlert[]
+  specialWorkflowEvents      SpecialOrderWorkflowEvent[]
+  specialAttachments         SpecialOrderAttachment[]
+  specialSettlements         SpecialOrderSettlement[]
+  specialPayments            SpecialOrderPayment[]
 
   @@index([customerId])
   @@index([sourceSalesOrderId])
@@ -2018,11 +2137,17 @@ model SalesOrder {
   @@index([outreachUserId])
   @@index([financeMark])
   @@index([markedById])
+  @@index([profitFeeSnapshottedById])
   @@index([orderType])
   @@index([orderDate])
   @@index([shippingDate])
   @@index([customerPhone])
   @@index([status])
+  @@index([completedAt])
+  @@index([completedById])
+  @@index([paymentDetailsLocked, paymentDetailsLockedAt], map: "sales_orders_payment_details_lock_idx")
+  @@index([paymentDetailsLockedById])
+  @@index([paymentDetailsUnlockedById])
   @@index([salesFormNo])
   @@index([qrCodeExpiresAt])
   @@index([packingStatus])
@@ -2032,13 +2157,75 @@ model SalesOrder {
   @@index([travelGroupId, status])
   @@index([pointsDestination])
   @@index([pointsDestination, travelGroupId])
+  @@index([personalAmountCents])
+  @@index([travelGroupId, personalAmountCents])
   @@index([personalPointsGuideId])
   @@index([travelGroupId, personalPointsGuideId])
   @@index([pointsDestinationChangedById])
   @@index([personalRatesUpdatedById])
   @@index([fulfillmentWarehouseId, status], map: "sales_orders_fulfillment_warehouse_status_idx")
   @@index([inventoryAppliedAt])
+  @@index([createdById, orderType, workflowStatus, createdAt], map: "sales_orders_special_creator_type_status_idx")
+  @@index([orderType, workflowStatus, orderDate], map: "sales_orders_special_type_status_date_idx")
+  @@index([workflowStatus, lastSubmittedAt], map: "sales_orders_special_pending_idx")
+  @@index([internalEmployeeId])
+  @@index([externalPartyType, externalPartyId], map: "sales_orders_special_external_party_idx")
+  @@index([approvedById])
   @@map("sales_orders")
+}
+
+model PaymentMethod {
+  id          String                @id @default(uuid()) @db.Char(36)
+  code        String                @unique @db.VarChar(64)
+  name        String                @unique @db.VarChar(80)
+  category    PaymentMethodCategory @default(DIRECT_RECEIPT)
+  serviceFeeRate Decimal?           @map("service_fee_rate") @db.Decimal(10, 6)
+  isActive    Boolean               @default(true) @map("is_active")
+  sortOrder   Int                   @default(0) @map("sort_order")
+  isDefault   Boolean               @default(false) @map("is_default")
+  createdById String?               @map("created_by_id") @db.Char(36)
+  updatedById String?               @map("updated_by_id") @db.Char(36)
+  createdAt   DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt   DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
+
+  createdBy      User?                     @relation("PaymentMethodCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?                     @relation("PaymentMethodUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  paymentDetails SalesOrderPaymentDetail[]
+  specialPayments SpecialOrderPayment[]
+
+  @@index([isActive, sortOrder])
+  @@index([isDefault])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("payment_methods")
+}
+
+model SalesOrderPaymentDetail {
+  id                            String                @id @default(uuid()) @db.Char(36)
+  salesOrderId                  String                @map("sales_order_id") @db.Char(36)
+  paymentMethodId               String                @map("payment_method_id") @db.Char(36)
+  paymentMethodNameSnapshot     String                @map("payment_method_name_snapshot") @db.VarChar(80)
+  paymentMethodCategorySnapshot PaymentMethodCategory @map("payment_method_category_snapshot")
+  amountCents                   Int                   @map("amount_cents")
+  serviceFeeRateSnapshot        Decimal?              @map("service_fee_rate_snapshot") @db.Decimal(10, 6)
+  serviceFeeBaseAmountSnapshotCents Int?               @map("service_fee_base_amount_snapshot_cents")
+  collectionConfirmed           Boolean               @default(false) @map("collection_confirmed")
+  collectionConfirmedAt         DateTime?             @map("collection_confirmed_at") @db.DateTime(0)
+  collectionConfirmedById       String?               @map("collection_confirmed_by_id") @db.Char(36)
+  sortOrder                     Int                   @default(0) @map("sort_order")
+  createdAt                     DateTime              @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt                     DateTime              @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrder            SalesOrder    @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  paymentMethod         PaymentMethod @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  collectionConfirmedBy User?         @relation("SalesOrderPaymentDetailCollectionConfirmedBy", fields: [collectionConfirmedById], references: [id], onDelete: SetNull)
+  refundAfterSalesOrders AfterSalesOrder[] @relation("AfterSalesRefundPaymentDetail")
+
+  @@index([salesOrderId, sortOrder])
+  @@index([paymentMethodId])
+  @@index([paymentMethodCategorySnapshot, collectionConfirmed], map: "sales_order_payment_details_collection_confirmation_idx")
+  @@index([collectionConfirmedById])
+  @@map("sales_order_payment_details")
 }
 
 model SalesOrderItem {
@@ -2055,6 +2242,13 @@ model SalesOrderItem {
   actualCostSubtotalCents Int?                   @map("actual_cost_subtotal_cents")
   grossProfitCents        Int?                   @map("gross_profit_cents")
   deliveryType            SalesOrderDeliveryType @default(SHIPPING) @map("delivery_type")
+  warehouseId             String?                @map("warehouse_id") @db.Char(36)
+  listUnitPriceCents       Int?                   @map("list_unit_price_cents")
+  discountAmountCents     Int                     @default(0) @map("discount_amount_cents")
+  isGift                  Boolean                 @default(false) @map("is_gift")
+  priceOverrideReason     String?                 @map("price_override_reason") @db.VarChar(500)
+  adjustmentReason        String?                 @map("adjustment_reason") @db.VarChar(500)
+  inventoryCondition      InventoryCondition      @default(SALEABLE) @map("inventory_condition")
   notes                   String?                @db.Text
   sortOrder               Int                    @default(0) @map("sort_order")
   createdAt               DateTime               @default(now()) @map("created_at") @db.DateTime(0)
@@ -2064,12 +2258,130 @@ model SalesOrderItem {
   serializedInventoryUnits SerializedInventoryUnit[]
   afterSalesOrderItems     AfterSalesOrderItem[]
   inventoryReservations    InventoryReservation[]
+  warehouse                Warehouse?                 @relation("SpecialOrderItemWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  specialSerializedUnits   SpecialOrderItemSerializedUnit[]
 
   @@index([salesOrderId])
   @@index([productId])
   @@index([salesOrderId, inventoryLineKey], map: "sales_order_items_order_inventory_line_idx")
   @@index([salesOrderId, sortOrder])
+  @@index([warehouseId, productId], map: "sales_order_items_warehouse_product_idx")
   @@map("sales_order_items")
+}
+
+model SpecialOrderItemSerializedUnit {
+  id                      String   @id @default(uuid()) @db.Char(36)
+  salesOrderItemId        String   @map("sales_order_item_id") @db.Char(36)
+  logisticsCodeSnapshot   String   @map("logistics_code_snapshot") @db.VarChar(160)
+  normalizedLogisticsCode String   @map("normalized_logistics_code") @db.VarChar(160)
+  sortOrder               Int      @default(0) @map("sort_order")
+  createdAt               DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Restrict)
+
+  @@unique([salesOrderItemId, normalizedLogisticsCode], map: "special_order_item_serials_item_code_key")
+  @@index([normalizedLogisticsCode], map: "special_order_item_serials_code_idx")
+  @@map("special_order_item_serialized_units")
+}
+
+model SpecialOrderWorkflowEvent {
+  id                String                        @id @default(uuid()) @db.Char(36)
+  salesOrderId      String                        @map("sales_order_id") @db.Char(36)
+  eventType         SpecialOrderWorkflowEventType @map("event_type")
+  fromStatus        SpecialOrderWorkflowStatus?   @map("from_status")
+  toStatus          SpecialOrderWorkflowStatus    @map("to_status")
+  workflowVersion   Int                           @map("workflow_version")
+  idempotencyKey    String                        @unique(map: "special_order_events_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash       String                        @map("request_hash") @db.Char(64)
+  reason            String?                       @db.VarChar(500)
+  payloadSnapshot   Json?                         @map("payload_snapshot")
+  actorUserId       String?                       @map("actor_user_id") @db.Char(36)
+  actorNameSnapshot String?                       @map("actor_name_snapshot") @db.VarChar(100)
+  actorRoleSnapshot String?                       @map("actor_role_snapshot") @db.VarChar(32)
+  createdAt         DateTime                      @default(now()) @map("created_at") @db.DateTime(0)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  actor      User?      @relation("SpecialOrderWorkflowEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([salesOrderId, workflowVersion], map: "special_order_events_order_version_key")
+  @@index([salesOrderId, createdAt], map: "special_order_events_order_created_idx")
+  @@index([eventType, createdAt], map: "special_order_events_type_created_idx")
+  @@index([actorUserId])
+  @@map("special_order_workflow_events")
+}
+
+model SpecialOrderAttachment {
+  id                 String   @id @default(uuid()) @db.Char(36)
+  salesOrderId       String   @map("sales_order_id") @db.Char(36)
+  originalName       String   @map("original_name") @db.VarChar(255)
+  storageKey         String   @map("storage_key") @db.VarChar(191)
+  contentType        String?  @map("content_type") @db.VarChar(120)
+  sizeBytes          Int      @default(0) @map("size_bytes")
+  checksumSha256     String?  @map("checksum_sha256") @db.Char(64)
+  uploadedById       String?  @map("uploaded_by_id") @db.Char(36)
+  uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.DateTime(0)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  uploadedBy User?      @relation("SpecialOrderAttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([salesOrderId, storageKey], map: "special_order_attachments_order_storage_key")
+  @@index([salesOrderId, uploadedAt], map: "special_order_attachments_order_uploaded_idx")
+  @@index([uploadedById])
+  @@map("special_order_attachments")
+}
+
+model SpecialOrderSettlement {
+  id                   String                          @id @default(uuid()) @db.Char(36)
+  salesOrderId         String                          @map("sales_order_id") @db.Char(36)
+  activeOrderKey       String?                         @unique(map: "special_order_settlements_active_order_key") @map("active_order_key") @db.Char(36)
+  direction            SpecialOrderSettlementDirection
+  totalAmountCents     Int                             @map("total_amount_cents")
+  settledAmountCents   Int                             @default(0) @map("settled_amount_cents")
+  paymentStatus        SpecialOrderPaymentStatus       @default(UNPAID) @map("payment_status")
+  isActive             Boolean                         @default(true) @map("is_active")
+  reversedAt           DateTime?                       @map("reversed_at") @db.DateTime(0)
+  reversedById         String?                         @map("reversed_by_id") @db.Char(36)
+  reversalReason       String?                         @map("reversal_reason") @db.VarChar(500)
+  version              Int                             @default(0)
+  createdAt            DateTime                        @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt            DateTime                        @updatedAt @map("updated_at") @db.DateTime(0)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  reversedBy User?      @relation("SpecialOrderSettlementReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  payments   SpecialOrderPayment[]
+
+  @@index([salesOrderId, createdAt], map: "special_order_settlements_order_created_idx")
+  @@index([direction, paymentStatus], map: "special_order_settlements_direction_status_idx")
+  @@index([reversedById])
+  @@map("special_order_settlements")
+}
+
+model SpecialOrderPayment {
+  id                        String                          @id @default(uuid()) @db.Char(36)
+  salesOrderId              String                          @map("sales_order_id") @db.Char(36)
+  settlementId              String                          @map("settlement_id") @db.Char(36)
+  direction                 SpecialOrderSettlementDirection
+  amountCents               Int                             @map("amount_cents")
+  paymentMethodId           String?                         @map("payment_method_id") @db.Char(36)
+  paymentMethodNameSnapshot String                           @map("payment_method_name_snapshot") @db.VarChar(80)
+  paidAt                    DateTime                         @map("paid_at") @db.DateTime(0)
+  referenceNo               String?                         @map("reference_no") @db.VarChar(120)
+  remark                    String?                         @db.VarChar(500)
+  idempotencyKey            String                          @unique(map: "special_order_payments_idempotency_key") @map("idempotency_key") @db.VarChar(191)
+  requestHash               String                          @map("request_hash") @db.Char(64)
+  recordedById              String?                         @map("recorded_by_id") @db.Char(36)
+  createdAt                 DateTime                        @default(now()) @map("created_at") @db.DateTime(0)
+
+  salesOrder   SalesOrder             @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  settlement   SpecialOrderSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  paymentMethod PaymentMethod?        @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  recordedBy   User?                  @relation("SpecialOrderPaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([salesOrderId, paidAt], map: "special_order_payments_order_paid_idx")
+  @@index([settlementId, paidAt], map: "special_order_payments_settlement_paid_idx")
+  @@index([paymentMethodId])
+  @@index([recordedById])
+  @@map("special_order_payments")
 }
 
 model AfterSalesOrder {
@@ -2083,6 +2395,11 @@ model AfterSalesOrder {
   description                    String                          @db.Text
   resolution                     String?                         @db.Text
   refundAmountCents              Int                             @default(0) @map("refund_amount_cents")
+  refundPaymentDetailId          String?                         @map("refund_payment_detail_id") @db.Char(36)
+  refundPaymentMethodNameSnapshot String?                        @map("refund_payment_method_name_snapshot") @db.VarChar(80)
+  refundOccurredAt               DateTime?                       @map("refund_occurred_at") @db.DateTime(0)
+  deductsPaymentServiceFee       Boolean                         @default(false) @map("deducts_payment_service_fee")
+  personalPointsRefundAmountCents Int                            @default(0) @map("personal_points_refund_amount_cents")
   deductionCalculationMode       String                          @default("manual_product_reference") @map("deduction_calculation_mode") @db.VarChar(40)
   sourceAgencyDeductionCents     Int                             @default(0) @map("source_agency_deduction_cents")
   agencyDeductionRate            Decimal?                        @map("agency_deduction_rate") @db.Decimal(10, 4)
@@ -2113,6 +2430,7 @@ model AfterSalesOrder {
   salesOrder           SalesOrder            @relation("AfterSalesSourceOrder", fields: [salesOrderId], references: [id], onDelete: Restrict)
   afterSalesSalesOrder SalesOrder            @relation("AfterSalesGeneratedOrder", fields: [afterSalesSalesOrderId], references: [id], onDelete: Restrict)
   customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  refundPaymentDetail  SalesOrderPaymentDetail? @relation("AfterSalesRefundPaymentDetail", fields: [refundPaymentDetailId], references: [id], onDelete: SetNull)
   financeConfirmedBy   User?                 @relation("AfterSalesOrderFinanceConfirmedBy", fields: [financeConfirmedById], references: [id], onDelete: SetNull)
   warehouseConfirmedBy User?                 @relation("AfterSalesOrderWarehouseConfirmedBy", fields: [warehouseConfirmedById], references: [id], onDelete: SetNull)
   handledBy            User?                 @relation("AfterSalesOrderHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
@@ -2124,6 +2442,8 @@ model AfterSalesOrder {
 
   @@index([salesOrderId])
   @@index([afterSalesSalesOrderId])
+  @@index([refundPaymentDetailId])
+  @@index([salesOrderId, financeConfirmed, refundOccurredAt], map: "after_sales_orders_refund_fee_effect_idx")
   @@index([customerId])
   @@index([status])
   @@index([issueType])
@@ -2140,6 +2460,7 @@ model AfterSalesOrder {
   @@index([createdById])
   @@index([updatedById])
   @@index([salesOrderId, financeConfirmed])
+  @@index([salesOrderId, financeConfirmed, personalPointsRefundAmountCents], map: "after_sales_orders_personal_refund_idx")
   @@map("after_sales_orders")
 }
 

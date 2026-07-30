@@ -48,17 +48,18 @@ void main() {
     expect(await File(second.filePath!).readAsBytes(), bytes);
   });
 
-  test('mobile saver delegates to Gal-compatible gallery writer', () async {
-    final calls = <({String album, String name})>[];
+  test('mobile saver delegates to the employee-selected system location',
+      () async {
+    final suggestedNames = <String>[];
     final saver = FinanceImageSaveService(
       isWindows: false,
-      galleryWriter: (
+      systemFileSaver: (
         bytes, {
-        required album,
-        required name,
+        required suggestedName,
       }) async {
         expect(bytes, isNotEmpty);
-        calls.add((album: album, name: name));
+        suggestedNames.add(suggestedName);
+        return '/employee-selected/手机积分表.png';
       },
     );
 
@@ -68,10 +69,37 @@ void main() {
       name: '手机积分表',
     );
 
-    expect(result.target, FinanceImageSaveTarget.systemGallery);
-    expect(result.successMessage, '已保存到系统相册：贵州酱酒馆积分表');
-    expect(calls.single.album, financeImageAlbumName);
-    expect(calls.single.name, '手机积分表');
+    expect(result.target, FinanceImageSaveTarget.userSelectedLocation);
+    expect(result.successMessage, '已保存到员工选择的位置');
+    expect(result.filePath, '/employee-selected/手机积分表.png');
+    expect(suggestedNames.single, '手机积分表');
+  });
+
+  test('cancelling the system file saver does not write a public file',
+      () async {
+    final saver = FinanceImageSaveService(
+      isWindows: false,
+      systemFileSaver: (
+        bytes, {
+        required suggestedName,
+      }) async =>
+          null,
+    );
+
+    await expectLater(
+      saver.save(
+        Uint8List.fromList([9, 8, 7]),
+        album: financeImageAlbumName,
+        name: '手机积分表',
+      ),
+      throwsA(
+        isA<FinanceImageSaveException>().having(
+          (error) => error.message,
+          'message',
+          contains('已取消'),
+        ),
+      ),
+    );
   });
 
   test('points-table money scaling uses integer half-up rounding', () {
@@ -541,7 +569,7 @@ void main() {
 
     expect(saver.saved.single.album, financeImageAlbumName);
     expect(saver.saved.single.name, contains('旅行社积分导游联络表'));
-    expect(find.textContaining('系统相册：贵州酱酒馆积分表'), findsWidgets);
+    expect(find.textContaining('系统文件保存器选择的位置'), findsWidgets);
     expect(tester.widget<Switch>(guideSwitchFinder).onChanged, isNotNull);
     expect(
       tester
@@ -1116,12 +1144,12 @@ void main() {
     expect(apiClient.patchBodies.single['totalAgencyDeductionCents'], 5000);
   });
 
-  testWidgets('permission denial does not mark the guide image ready',
+  testWidgets('system file saver rejection does not mark the guide image ready',
       (tester) async {
     final apiClient = _FakeFinanceApiClient();
     final saver = _FakeImageSaver(
       failureForCall: (_) => const FinanceImageSaveException(
-        '相册权限被拒绝，请在系统设置中允许照片写入权限。',
+        '系统文件保存器拒绝写入，图片未保存。',
       ),
     );
     await _pumpPage(
@@ -1141,7 +1169,7 @@ void main() {
     await _pumpUntil(tester, () => saver.attempts == 1);
     await tester.pump();
 
-    expect(find.textContaining('相册权限被拒绝'), findsOneWidget);
+    expect(find.textContaining('系统文件保存器拒绝写入'), findsOneWidget);
     expect(
       tester
           .widget<Switch>(
@@ -1426,7 +1454,7 @@ class _FakeImageSaver {
     saved.add(_SavedImage(album: album, name: name));
     return resultForCall?.call(attempts) ??
         FinanceImageSaveResult(
-          target: FinanceImageSaveTarget.systemGallery,
+          target: FinanceImageSaveTarget.userSelectedLocation,
           album: album,
           filePath: null,
           directoryPath: null,

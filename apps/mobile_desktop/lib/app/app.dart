@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/auth/auth_controller.dart';
+import '../core/crash_reporting/crash_reporter.dart';
 import '../core/storage/session_storage.dart';
 import '../features/login/force_change_password_page.dart';
 import '../features/login/login_page.dart';
@@ -43,6 +44,9 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    CrashReporting.setCurrentPage('bootstrap');
+    CrashReporting.setUserAction('app_bootstrap');
+    CrashReporting.breadcrumb('auth.bootstrap.start');
     WidgetsBinding.instance.addObserver(this);
     _bootstrapAuth();
     _startSessionRefreshTimer();
@@ -76,15 +80,48 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
         return;
       }
 
+      final destinationId = _firstDestinationId(authController);
       setState(() {
         _authController = authController;
-        _selectedDestinationId = _firstDestinationId(authController);
+        _selectedDestinationId = destinationId;
         _bootstrapping = false;
         _bootstrapError = null;
       });
-    } on TimeoutException {
+      CrashReporting.setCurrentPage(
+        authController.session == null ? 'login' : destinationId,
+      );
+      CrashReporting.breadcrumb(
+        'auth.bootstrap.success',
+        data: {'hasSession': authController.session != null},
+      );
+    } on TimeoutException catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'auth.bootstrap.failure',
+        data: {'reason': 'timeout'},
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'auth.bootstrap',
+        ),
+      );
       _showBootstrapError('启动超时，请检查网络连接后重新尝试。');
-    } catch (_) {
+    } catch (error, stackTrace) {
+      CrashReporting.breadcrumb(
+        'auth.bootstrap.failure',
+        data: {
+          'reason': 'exception',
+          'exceptionType': error.runtimeType.toString(),
+        },
+      );
+      unawaited(
+        CrashReporting.recordError(
+          error,
+          stackTrace,
+          source: 'auth.bootstrap',
+        ),
+      );
       _showBootstrapError('客户端启动失败，请重新尝试；如仍失败，请联系管理员。');
     }
   }
@@ -107,6 +144,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
     if (!mounted) {
       return;
     }
+    CrashReporting.setCurrentPage('bootstrap_error');
     setState(() {
       _authController = null;
       _bootstrapping = false;
@@ -115,6 +153,9 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
   }
 
   void _retryBootstrap() {
+    CrashReporting.setCurrentPage('bootstrap');
+    CrashReporting.setUserAction('bootstrap_retry');
+    CrashReporting.breadcrumb('auth.bootstrap.retry');
     setState(() {
       _bootstrapping = true;
       _bootstrapError = null;
@@ -132,22 +173,40 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
       return;
     }
 
+    CrashReporting.setUserAction('login_submit');
+    CrashReporting.breadcrumb(
+      'auth.login.start',
+      data: {'rememberPassword': rememberPassword},
+    );
     await authController.login(
       username: username,
       password: password,
       rememberPassword: rememberPassword,
     );
 
+    if (!mounted) {
+      return;
+    }
+    final destinationId = _firstDestinationId(authController);
     setState(() {
-      _selectedDestinationId = _firstDestinationId(authController);
+      _selectedDestinationId = destinationId;
     });
+    CrashReporting.setCurrentPage(destinationId);
+    CrashReporting.breadcrumb('auth.login.success');
   }
 
   Future<void> _handleLogout() async {
+    CrashReporting.setUserAction('logout');
+    CrashReporting.breadcrumb('auth.logout.start');
     await _authController?.logout();
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _selectedDestinationId = 'dashboard';
     });
+    CrashReporting.setCurrentPage('login');
+    CrashReporting.breadcrumb('auth.logout.success');
   }
 
   void _handleSessionRevoked() {
@@ -158,6 +217,9 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
       setState(() {
         _selectedDestinationId = 'dashboard';
       });
+      CrashReporting.setCurrentPage('login');
+      CrashReporting.setUserAction('session_revoked');
+      CrashReporting.breadcrumb('auth.session.revoked');
     });
   }
 
@@ -169,13 +231,21 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
     if (authController == null) {
       return;
     }
+    CrashReporting.setUserAction('change_password');
+    CrashReporting.breadcrumb('auth.password_change.start');
     await authController.changePassword(
       currentPassword: currentPassword,
       newPassword: newPassword,
     );
+    if (!mounted) {
+      return;
+    }
+    final destinationId = _firstDestinationId(authController);
     setState(() {
-      _selectedDestinationId = _firstDestinationId(authController);
+      _selectedDestinationId = destinationId;
     });
+    CrashReporting.setCurrentPage(destinationId);
+    CrashReporting.breadcrumb('auth.password_change.success');
   }
 
   Future<void> _refreshSessionIfNeeded() async {
@@ -206,6 +276,12 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
   }
 
   void _handleDestinationChanged(String destinationId) {
+    CrashReporting.setCurrentPage(destinationId);
+    CrashReporting.setUserAction('navigate');
+    CrashReporting.breadcrumb(
+      'navigation.destination.changed',
+      data: {'destination': destinationId},
+    );
     setState(() {
       _selectedDestinationId = destinationId;
     });

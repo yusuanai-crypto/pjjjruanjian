@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
@@ -12,6 +13,8 @@ import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
+import '../warehouse_management/returns/customer_returns_tab.dart';
+import '../warehouse_management/shared/inventory_workspace_shared.dart';
 
 typedef AfterSalesRefundProofFilePicker = Future<List<ApiMultipartFile>>
     Function();
@@ -43,6 +46,8 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   final TextEditingController _resolutionController = TextEditingController();
   final TextEditingController _refundAmountController =
       TextEditingController(text: '0');
+  final TextEditingController _personalRefundAmountController =
+      TextEditingController(text: '0');
   final TextEditingController _notesController = TextEditingController();
   final List<_AfterSalesDraftItem> _draftItems = <_AfterSalesDraftItem>[];
   String? _draftProductId;
@@ -67,7 +72,6 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   List<AfterSalesOrderRecord> _roleTodos = const <AfterSalesOrderRecord>[];
   List<AfterSalesOrderRecord> _unfinishedOrders =
       const <AfterSalesOrderRecord>[];
-  final Set<String> _warehouseConfirmingIds = <String>{};
   final Set<String> _financeUploadingIds = <String>{};
   SalesOrderRecord? _selectedOrder;
   AfterSalesOrderRecord? _selectedAfterSales;
@@ -104,8 +108,10 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   @override
   void didUpdateWidget(covariant AfterSalesFormPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.apiClient != widget.apiClient ||
+    if (oldWidget.role != widget.role ||
+        oldWidget.apiClient != widget.apiClient ||
         oldWidget.token != widget.token) {
+      _inventoryApi.clearCache();
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
       _inventoryApi = InventoryApi(
@@ -137,10 +143,12 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
 
   @override
   void dispose() {
+    _inventoryApi.clearCache();
     _queryController.dispose();
     _descriptionController.dispose();
     _resolutionController.dispose();
     _refundAmountController.dispose();
+    _personalRefundAmountController.dispose();
     _notesController.dispose();
     for (final item in _draftItems) {
       item.dispose();
@@ -221,6 +229,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     _descriptionController.clear();
     _resolutionController.clear();
     _refundAmountController.text = '0';
+    _personalRefundAmountController.text = '0';
     _notesController.clear();
     for (final item in _draftItems) {
       item.dispose();
@@ -295,7 +304,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       0,
       (sum, item) => sum + (item.totalPriceCents ?? 0),
     );
-    _refundAmountController.text = (total / 100).toStringAsFixed(2);
+    _refundAmountController.text = _refundCentsToYuanInput(total);
   }
 
   Future<void> _loadAfterSalesHistory({
@@ -392,6 +401,21 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       setState(() => _formErrorMessage = '退款金额格式不正确，请输入最多两位小数的元金额。');
       return;
     }
+    final personalPointsRefundAmountCents = _refundYuanToCents(
+      _personalRefundAmountController.text.trim(),
+    );
+    if (personalPointsRefundAmountCents == null) {
+      setState(() {
+        _formErrorMessage = '个人退款金额格式不正确，请输入最多两位小数的元金额。';
+      });
+      return;
+    }
+    if (personalPointsRefundAmountCents > refundAmountCents) {
+      setState(() {
+        _formErrorMessage = '个人退款金额不能超过本次退款总额。';
+      });
+      return;
+    }
 
     setState(() {
       _savingAfterSales = true;
@@ -406,6 +430,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         'description': _descriptionController.text.trim(),
         'resolution': _resolutionController.text.trim(),
         'refundAmountCents': refundAmountCents,
+        'personalPointsRefundAmountCents': personalPointsRefundAmountCents,
         'status': _status,
         'notes': _notesController.text.trim(),
         'items': submittedItems,
@@ -649,44 +674,15 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     }
   }
 
-  Future<void> _confirmWarehouseTodo(AfterSalesOrderRecord record) async {
-    if (_warehouseConfirmingIds.contains(record.id)) {
-      return;
-    }
-    setState(() {
-      _warehouseConfirmingIds.add(record.id);
-      _todoErrorMessage = null;
-    });
-    try {
-      final updated = await _businessApi.confirmAfterSalesWarehouse(record.id);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${updated.afterSalesNo} 仓库已确认')),
-      );
-      await _loadRoleTodos();
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _todoErrorMessage = _messageForError(error);
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _warehouseConfirmingIds.remove(record.id);
-        });
-      }
-    }
-  }
-
   Future<void> _confirmFinanceRefundTodo(AfterSalesOrderRecord record) async {
     if (_financeUploadingIds.contains(record.id)) {
       return;
     }
     try {
+      final confirmation = await _showFinanceRefundConfirmation(record);
+      if (!mounted || confirmation == null) {
+        return;
+      }
       final picker = widget.filePicker;
       final files = picker == null
           ? await _pickRefundProofFilesFromDevice()
@@ -701,6 +697,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       final updated = await _businessApi.confirmAfterSalesFinanceRefund(
         record.id,
         files: files,
+        refundPaymentDetailId: confirmation.refundPaymentDetailId,
       );
       if (!mounted) {
         return;
@@ -723,6 +720,113 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         });
       }
     }
+  }
+
+  Future<_FinanceRefundConfirmation?> _showFinanceRefundConfirmation(
+    AfterSalesOrderRecord record,
+  ) {
+    String? selectedPaymentDetailId;
+    final sameDay = record.isSameDayRefund;
+    final options = record.refundPaymentDetailOptions;
+    return showDialog<_FinanceRefundConfirmation>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final canContinue = !sameDay ||
+                (selectedPaymentDetailId != null &&
+                    selectedPaymentDetailId!.isNotEmpty);
+            return AlertDialog(
+              key: ValueKey(
+                'after-sales-finance-refund-dialog-${record.id}',
+              ),
+              title: const Text('确认退款'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '本次退款 ${formatMoneyCents(record.refundAmountCents)}',
+                      ),
+                      const SizedBox(height: 12),
+                      if (!sameDay)
+                        const Text(
+                          '跨日退款，本次不调整手续费',
+                          key: ValueKey(
+                            'after-sales-cross-day-refund-notice',
+                          ),
+                        )
+                      else ...[
+                        const Text('请选择本次退款对应的原付款明细：'),
+                        const SizedBox(height: 8),
+                        if (options.isEmpty)
+                          const Text('没有可用的原付款明细，请刷新后重试。')
+                        else
+                          RadioGroup<String>(
+                            groupValue: selectedPaymentDetailId,
+                            onChanged: (value) {
+                              setDialogState(() {
+                                selectedPaymentDetailId = value;
+                              });
+                            },
+                            child: Column(
+                              children: [
+                                for (final option in options)
+                                  RadioListTile<String>(
+                                    key: ValueKey(
+                                      'after-sales-refund-payment-detail-${option.id}',
+                                    ),
+                                    value: option.id,
+                                    enabled:
+                                        option.remainingRefundableAmountCents >=
+                                            record.refundAmountCents,
+                                    title: Text(
+                                      '${option.paymentMethodNameSnapshot} · '
+                                      '原付款 ${formatMoneyCents(option.originalAmountCents)}',
+                                    ),
+                                    subtitle: Text(
+                                      '已分配当天退款 '
+                                      '${formatMoneyCents(option.confirmedSameDayRefundAmountCents)}'
+                                      ' · 剩余可退 '
+                                      '${formatMoneyCents(option.remainingRefundableAmountCents)}',
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  key: const ValueKey(
+                    'after-sales-refund-select-proof-button',
+                  ),
+                  onPressed: canContinue
+                      ? () => Navigator.of(dialogContext).pop(
+                            _FinanceRefundConfirmation(
+                              refundPaymentDetailId:
+                                  sameDay ? selectedPaymentDetailId : null,
+                            ),
+                          )
+                      : null,
+                  child: const Text('选择退款凭证'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<List<ApiMultipartFile>> _pickRefundProofFilesFromDevice() async {
@@ -886,18 +990,12 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                     _canManageAfterSales &&
                     _isWarehouseWorkflow == false) ...[
                   const SizedBox(height: 16),
-                  _AfterSalesReceiptSection(
+                  AfterSalesReceiptProgressPanel(
                     key: ValueKey(
-                      'after-sales-receipt-section-${_selectedAfterSales!.id}',
+                      'after-sales-receipt-progress-${_selectedAfterSales!.id}',
                     ),
+                    api: _inventoryApi,
                     afterSalesOrder: _selectedAfterSales!,
-                    inventoryApi: _inventoryApi,
-                    businessApi: _businessApi,
-                    onSubmitted: () {
-                      _loadAfterSalesHistory(
-                        preserveSelectedId: _selectedAfterSales?.id,
-                      );
-                    },
                   ),
                 ],
               ],
@@ -956,6 +1054,12 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
             tone: _todoLoading ? StatusTone.warning : StatusTone.info,
           ),
           children: [
+            const InventoryInlineNotice(
+              message:
+                  '此页不再使用旧“库管确认”冒充实际收货。退货请到“仓库管理 → 顾客退货”创建 DRAFT 并确认收货；补发/换货使用独立履约流程。',
+              tone: StatusTone.info,
+            ),
+            const SizedBox(height: 12),
             _buildRoleTodoList(),
           ],
         ),
@@ -1010,14 +1114,13 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 ? Icons.inventory_2_rounded
                 : Icons.account_balance_wallet_rounded,
             trailing: _isWarehouseWorkflow
-                ? FilledButton.icon(
-                    key: ValueKey('after-sales-warehouse-confirm-${record.id}'),
-                    onPressed: _warehouseConfirmingIds.contains(record.id)
-                        ? null
-                        : () => _confirmWarehouseTodo(record),
-                    icon: const Icon(Icons.check_rounded),
-                    label: Text(
-                        record.status == 'waiting_receive' ? '已收货' : '已补发'),
+                ? StatusTag(
+                    key:
+                        ValueKey('after-sales-warehouse-progress-${record.id}'),
+                    label: record.status == 'waiting_receive'
+                        ? '转顾客退货工作台'
+                        : '等待独立履约',
+                    tone: StatusTone.info,
                   )
                 : FilledButton.icon(
                     key: ValueKey(
@@ -1222,6 +1325,63 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                   labelText: '退款总额（由明细自动合计）',
                   suffixText: '元',
                 ),
+              ),
+              TextFormField(
+                key: const ValueKey(
+                  'after-sales-personal-refund-amount-field',
+                ),
+                controller: _personalRefundAmountController,
+                enabled: !_savingAfterSales,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(
+                    RegExp(r'^\d*(?:\.\d{0,2})?'),
+                  ),
+                ],
+                onChanged: (_) => setState(() => _formErrorMessage = null),
+                decoration: const InputDecoration(
+                  labelText: '个人退款金额',
+                  suffixText: '元',
+                  helperText: '由退款操作人手工指定，输入 0 表示全部为正常退款',
+                ),
+              ),
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _refundAmountController,
+                builder: (context, refundValue, _) {
+                  return ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _personalRefundAmountController,
+                    builder: (context, personalValue, _) {
+                      final refundAmountCents = _refundYuanToCents(
+                            refundValue.text.trim(),
+                          ) ??
+                          0;
+                      final personalRefundAmountCents = _refundYuanToCents(
+                        personalValue.text.trim(),
+                      );
+                      final normalRefundAmountCents =
+                          personalRefundAmountCents == null
+                              ? null
+                              : refundAmountCents - personalRefundAmountCents;
+                      return InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: '正常退款金额（自动计算）',
+                        ),
+                        child: Text(
+                          key: const ValueKey(
+                            'after-sales-normal-refund-amount-value',
+                          ),
+                          normalRefundAmountCents == null ||
+                                  normalRefundAmountCents < 0
+                              ? '—'
+                              : formatMoneyCents(
+                                  normalRefundAmountCents,
+                                ),
+                        ),
+                      );
+                    },
+                  );
+                },
               ),
             ],
           ),
@@ -1465,6 +1625,20 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
           label: '退款金额',
           value: formatMoneyCents(record.refundAmountCents),
         ),
+        if (canViewOrderPersonalSplit(widget.role)) ...[
+          _InfoLine(
+            label: '个人退款金额',
+            value: formatMoneyCents(
+              record.personalPointsRefundAmountCents,
+            ),
+          ),
+          _InfoLine(
+            label: '正常退款金额',
+            value: formatMoneyCents(
+              record.normalPointsRefundAmountCents,
+            ),
+          ),
+        ],
         _InfoLine(
           label: '财务确认',
           value: record.financeConfirmed
@@ -1608,7 +1782,7 @@ class _AfterSalesDraftItem {
   _AfterSalesDraftItem(this.sourceItem)
       : quantityController = TextEditingController(text: '1'),
         totalPriceController = TextEditingController(
-          text: (sourceItem.unitPriceCents / 100).toStringAsFixed(2),
+          text: _refundCentsToYuanInput(sourceItem.unitPriceCents),
         );
 
   final SalesOrderItemRecord sourceItem;
@@ -1626,292 +1800,6 @@ class _AfterSalesDraftItem {
   }
 }
 
-class _AfterSalesReceiptSection extends StatefulWidget {
-  const _AfterSalesReceiptSection({
-    super.key,
-    required this.afterSalesOrder,
-    required this.inventoryApi,
-    required this.businessApi,
-    required this.onSubmitted,
-  });
-
-  final AfterSalesOrderRecord afterSalesOrder;
-  final InventoryApi inventoryApi;
-  final BusinessApi businessApi;
-  final VoidCallback onSubmitted;
-
-  @override
-  State<_AfterSalesReceiptSection> createState() =>
-      _AfterSalesReceiptSectionState();
-}
-
-class _AfterSalesReceiptSectionState extends State<_AfterSalesReceiptSection> {
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-  final TextEditingController _quantityController =
-      TextEditingController(text: '0');
-  final TextEditingController _noteController = TextEditingController();
-
-  List<WarehouseRecord> _warehouses = const <WarehouseRecord>[];
-  String? _warehouseId;
-  String _condition = _receiptConditionOptions.first.value;
-  bool _loading = false;
-  bool _submitting = false;
-  String? _errorMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadWarehouses());
-  }
-
-  @override
-  void dispose() {
-    _quantityController.dispose();
-    _noteController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadWarehouses() async {
-    setState(() {
-      _loading = true;
-      _errorMessage = null;
-    });
-    try {
-      final warehouses =
-          await widget.inventoryApi.listWarehouses(isActive: true);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _warehouses = warehouses;
-        _warehouseId = _warehouseId ??
-            warehouses
-                .firstWhere(
-                  (warehouse) => warehouse.isDefault,
-                  orElse: () => warehouses.isEmpty
-                      ? const WarehouseRecord(
-                          id: '',
-                          code: '',
-                          name: '',
-                          address: '',
-                          managerName: null,
-                          isActive: true,
-                          isDefault: false,
-                        )
-                      : warehouses.first,
-                )
-                .id;
-        if (_warehouseId?.isEmpty ?? true) {
-          _warehouseId = warehouses.isEmpty ? null : warehouses.first.id;
-        }
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _warehouses = const <WarehouseRecord>[];
-        _loading = false;
-        _errorMessage = _messageForError(error);
-      });
-    }
-  }
-
-  Future<void> _submitReceipt() async {
-    if (_submitting) {
-      return;
-    }
-    final warehouseId = _warehouseId;
-    if (warehouseId == null || warehouseId.isEmpty) {
-      setState(() => _errorMessage = '请选择收货仓库。');
-      return;
-    }
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-    final quantity = int.tryParse(_quantityController.text.trim());
-    if (quantity == null || quantity <= 0) {
-      setState(() => _errorMessage = '实际收到数量必须是正整数。');
-      return;
-    }
-
-    setState(() {
-      _submitting = true;
-      _errorMessage = null;
-    });
-    try {
-      await widget.businessApi.createAfterSalesReceipt(
-        widget.afterSalesOrder.id,
-        {
-          'warehouseId': warehouseId,
-          'quantity': quantity,
-          'condition': _condition,
-          if (_noteController.text.trim().isNotEmpty)
-            'note': _noteController.text.trim(),
-        },
-      );
-      if (!mounted) {
-        return;
-      }
-      _quantityController.text = '0';
-      _noteController.clear();
-      setState(() {
-        _submitting = false;
-        _errorMessage = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('售后收货已提交。')),
-      );
-      widget.onSubmitted();
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _submitting = false;
-        _errorMessage = _messageForError(error);
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const FormSection(
-        title: '实际收货',
-        children: [LoadingState(title: '正在加载收货仓库')],
-      );
-    }
-    return FormSection(
-      title: '实际收货',
-      trailing: StatusTag(
-        label: '${widget.afterSalesOrder.receipts.length} 笔记录',
-        tone: StatusTone.info,
-      ),
-      children: [
-        if (widget.afterSalesOrder.receipts.isNotEmpty) ...[
-          for (final receipt in widget.afterSalesOrder.receipts)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                '${receipt.warehouseName ?? '未分配仓库'} · '
-                '${receipt.productName} · '
-                '数量 ${receipt.quantity} · '
-                '状态 ${_receiptConditionLabel(receipt.condition)}'
-                '${receipt.note != null && receipt.note!.isNotEmpty ? ' · ${receipt.note}' : ''}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          const SizedBox(height: 8),
-          const Divider(height: 1),
-          const SizedBox(height: 12),
-        ],
-        Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              DropdownButtonFormField<String>(
-                key: const ValueKey('after-sales-receipt-warehouse'),
-                initialValue: _warehouseId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '收货仓库'),
-                items: [
-                  for (final warehouse in _warehouses)
-                    DropdownMenuItem(
-                      value: warehouse.id,
-                      child: Text(warehouse.name),
-                    ),
-                ],
-                onChanged: _submitting
-                    ? null
-                    : (value) {
-                        if (value != null) {
-                          setState(() => _warehouseId = value);
-                        }
-                      },
-                validator: (value) =>
-                    (value == null || value.isEmpty) ? '请选择收货仓库' : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                key: const ValueKey('after-sales-received-qty'),
-                controller: _quantityController,
-                enabled: !_submitting,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: '实际收到数量',
-                  suffixText: '瓶',
-                ),
-                validator: (value) {
-                  final parsed = int.tryParse((value ?? '').trim());
-                  if (parsed == null || parsed <= 0) {
-                    return '请输入正整数';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                key: const ValueKey('after-sales-receipt-condition'),
-                initialValue: _condition,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '商品状态'),
-                items: [
-                  for (final option in _receiptConditionOptions)
-                    DropdownMenuItem(
-                      value: option.value,
-                      child: Text(option.label),
-                    ),
-                ],
-                onChanged: _submitting
-                    ? null
-                    : (value) {
-                        if (value != null) {
-                          setState(() => _condition = value);
-                        }
-                      },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                key: const ValueKey('after-sales-receipt-note'),
-                controller: _noteController,
-                enabled: !_submitting,
-                minLines: 2,
-                maxLines: 4,
-                decoration: const InputDecoration(labelText: '收货备注'),
-              ),
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _errorMessage!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ],
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.icon(
-                  key: const ValueKey('after-sales-receipt-submit'),
-                  onPressed: _submitting ? null : _submitReceipt,
-                  icon: _submitting
-                      ? const SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.inbox_rounded),
-                  label: Text(_submitting ? '提交中...' : '提交收货'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _Option {
   const _Option(this.value, this.label);
 
@@ -1919,14 +1807,12 @@ class _Option {
   final String label;
 }
 
-const _receiptConditionOptions = [
-  _Option('SALEABLE', '可售'),
-  _Option('UNAVAILABLE', '不可售'),
-  _Option('ABNORMAL', '异常'),
-];
+class _FinanceRefundConfirmation {
+  const _FinanceRefundConfirmation({
+    required this.refundPaymentDetailId,
+  });
 
-String _receiptConditionLabel(String value) {
-  return _labelFor(_receiptConditionOptions, value);
+  final String? refundPaymentDetailId;
 }
 
 const _issueTypeOptions = [
@@ -1958,7 +1844,20 @@ const _afterSalesStatusOptions = [
 
 String _messageForError(Object error) {
   if (error is ApiException) {
-    return error.message;
+    switch (error.code) {
+      case 'SAME_DAY_REFUND_PAYMENT_DETAIL_REQUIRED':
+        return '当天退款必须选择对应的原付款明细，请重新选择。';
+      case 'REFUND_PAYMENT_DETAIL_INVALID':
+        return '所选付款明细不属于该销售订单，请刷新后重新选择。';
+      case 'REFUND_AMOUNT_EXCEEDS_PAYMENT_DETAIL_BALANCE':
+        return '退款金额超过该付款明细的剩余可退金额，请选择其他明细或核对退款金额。';
+      case 'AFTER_SALES_REFUND_ALREADY_CONFIRMED':
+        return '该笔退款已经确认，请勿重复提交。';
+      case 'REFUND_PROOF_FILE_REQUIRED':
+        return '请先选择至少一份退款凭证。';
+      default:
+        return error.message;
+    }
   }
   return '操作失败，请稍后重试。';
 }
@@ -2015,6 +1914,12 @@ int? _refundYuanToCents(String value) {
     return null;
   }
   return yuan * 100 + cents;
+}
+
+String _refundCentsToYuanInput(int cents) {
+  final whole = cents ~/ 100;
+  final fraction = cents.abs() % 100;
+  return '$whole.${fraction.toString().padLeft(2, '0')}';
 }
 
 String _orderAddress(SalesOrderRecord order) {

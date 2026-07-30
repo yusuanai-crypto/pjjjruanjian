@@ -137,9 +137,252 @@ void main() {
     expect(find.widgetWithText(FilledButton, '订单标记 已标记'), findsOneWidget);
   });
 
-  testWidgets('finance can edit full order information from management page',
+  testWidgets('shows payment summary in list and payment detail table',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+
+    expect(
+      find.text('收钱吧 ¥698.00；货到付款 ¥100.00'),
+      findsOneWidget,
+    );
+
+    await _openOrderDetailDialog(tester);
+
+    expect(
+      find.byKey(const ValueKey('order-payment-details-table')),
+      findsOneWidget,
+    );
+    expect(find.text('收款方式'), findsOneWidget);
+    expect(find.text('金额'), findsOneWidget);
+    expect(find.text('类型'), findsOneWidget);
+    expect(find.text('确认状态'), findsOneWidget);
+    expect(find.text('收钱吧'), findsOneWidget);
+    expect(find.text('货到付款'), findsOneWidget);
+    expect(find.text('即时收款'), findsOneWidget);
+    expect(find.text('代收营业款'), findsOneWidget);
+    expect(find.text('即时到账'), findsOneWidget);
+    expect(find.text('代收款（待确认）'), findsOneWidget);
+    expect(find.text('代收款 ¥100.00'), findsOneWidget);
+  });
+
+  testWidgets('derives list payment summary for an older backend payload',
+      (tester) async {
+    final apiClient = _FakeApiClient(legacyPaymentPayload: true);
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+
+    expect(
+      find.text('货到付款 ¥100.00；收钱吧 ¥698.00'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('locked payment details are read only and show lock metadata',
       (tester) async {
     tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient(paymentDetailsLocked: true);
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+
+    expect(
+      find.byKey(const ValueKey('order-payment-locked-status')),
+      findsOneWidget,
+    );
+    expect(find.text('finance-lock-user'), findsOneWidget);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('order-edit-payment-locked-notice')),
+      findsOneWidget,
+    );
+    expect(find.text('收款明细（已锁定）'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('payment-detail-amount-0')),
+          )
+          .enabled,
+      isFalse,
+    );
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byKey(const ValueKey('payment-detail-method-0')),
+          )
+          .onChanged,
+      isNull,
+    );
+  });
+
+  testWidgets('admin can unlock and relock payment details', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient(paymentDetailsLocked: true);
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.admin);
+    await _openOrderDetailDialog(tester);
+
+    final lockButton = find.byKey(const ValueKey('order-payment-lock-button'));
+    await tester.ensureVisible(lockButton);
+    await tester.tap(lockButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.paymentLockPatchPaths, [
+      '/api/sales-orders/order-1/payment-details-lock',
+    ]);
+    expect(apiClient.lastPaymentLockBody?['locked'], isFalse);
+    expect(find.text('重新锁定收款明细'), findsOneWidget);
+
+    await tester.tap(lockButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.paymentLockPatchPaths, hasLength(2));
+    expect(apiClient.lastPaymentLockBody?['locked'], isTrue);
+    expect(find.text('解锁收款明细'), findsOneWidget);
+  });
+
+  testWidgets('finance can confirm collect-on-delivery payment',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient();
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+
+    final confirmButton = find.byKey(
+      const ValueKey('order-payment-confirm-button-payment-detail-2'),
+    );
+    await tester.ensureVisible(confirmButton);
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.paymentConfirmationPatchPaths, [
+      '/api/sales-orders/order-1/payment-details/payment-detail-2/agency-confirmation',
+    ]);
+    expect(apiClient.lastPaymentConfirmationBody?['confirmed'], isTrue);
+    expect(find.text('已确认到账'), findsOneWidget);
+    expect(find.text('确认人：财务测试员'), findsOneWidget);
+    expect(find.textContaining('确认时间：2026-07-29'), findsOneWidget);
+    expect(find.text('无待确认代收'), findsOneWidget);
+  });
+
+  testWidgets('shows a clear Chinese message for backend payment lock errors',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient(failUpdateWithLockedError: true);
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+    final saveButton = find.byKey(const ValueKey('order-edit-save-button'));
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('收款明细已锁定，请联系管理员解锁后再修改。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'order edit relinks travel groups by taster or exact tasting room',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient();
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-basic-edit-button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('order-basic-edit-button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('order-edit-select-travel-group')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('order-edit-select-travel-group')),
+    );
+    await tester.pumpAndSettle();
+
+    var uri = Uri.parse(apiClient.travelGroupListPaths.last);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('groupNo'), isFalse);
+    expect(uri.queryParameters.containsKey('tastingRoomNo'), isFalse);
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-taster-field')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试品鉴师').last);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-search-button')),
+    );
+    await tester.pumpAndSettle();
+    uri = Uri.parse(apiClient.travelGroupListPaths.last);
+    expect(uri.queryParameters['tasterId'], 'taster-1');
+    expect(uri.queryParameters.containsKey('tastingRoomNo'), isFalse);
+
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-search-scope')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('品鉴馆号').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('travel-group-tasting-room-no-field')),
+      ' 5 ',
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('travel-group-search-button')),
+    );
+    await tester.pumpAndSettle();
+
+    uri = Uri.parse(apiClient.travelGroupListPaths.last);
+    expect(uri.queryParameters['tastingRoomNo'], '5');
+    expect(uri.queryParameters.containsKey('tasterId'), isFalse);
+    expect(uri.queryParameters.containsKey('keyword'), isFalse);
+    expect(uri.queryParameters.containsKey('groupNo'), isFalse);
+
+    await tester.tap(find.text('TG20260630001').last);
+    await tester.pumpAndSettle();
+    final travelGroupField = tester.widget<TextField>(
+      find.byKey(const ValueKey('order-edit-travel-group-id-field')),
+    );
+    expect(travelGroupField.controller?.text, 'group-1');
+  });
+
+  testWidgets('finance can edit full order information from management page',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -157,6 +400,7 @@ void main() {
     expect(find.text('客户与收货'), findsOneWidget);
     expect(find.text('酒品明细'), findsOneWidget);
     expect(find.text('财务与物流'), findsOneWidget);
+    expect(find.text('货到付款（已停用）'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('order-edit-sales-user-id-field')),
       findsOneWidget,
@@ -165,10 +409,6 @@ void main() {
     await tester.enterText(
       find.byKey(const ValueKey('order-edit-sales-form-no-field')),
       'XS-FIN-002',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('order-edit-cod-field')),
-      '120.50',
     );
     await tester.enterText(
       find.byKey(const ValueKey('order-edit-remark-field')),
@@ -201,6 +441,17 @@ void main() {
       '866.40',
     );
     await tester.ensureVisible(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-0')),
+      '745.90',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('payment-detail-amount-1')),
+      '120.50',
+    );
+    await tester.ensureVisible(
       find.byKey(const ValueKey('order-edit-logistics-no-field')),
     );
     await tester.enterText(
@@ -211,9 +462,14 @@ void main() {
       find.byKey(const ValueKey('order-edit-logistics-fee-field')),
       '25.50',
     );
-    await tester.tap(
-      find.byKey(const ValueKey('order-edit-invoice-issued-checkbox')),
+    final invoiceIssuedCheckbox = find.byKey(
+      const ValueKey('order-edit-invoice-issued-checkbox'),
     );
+    final invoiceIssuedTile = tester.widget<CheckboxListTile>(
+      invoiceIssuedCheckbox,
+    );
+    invoiceIssuedTile.onChanged?.call(true);
+    await tester.pump();
     await _selectDropdownValue(
       tester,
       key: const ValueKey('order-edit-logistics-provider-field'),
@@ -246,7 +502,27 @@ void main() {
     expect(apiClient.packingPatchPaths,
         contains('/api/sales-orders/order-1/packing'));
     expect(apiClient.lastOrderUpdateBody?['salesFormNo'], 'XS-FIN-002');
-    expect(apiClient.lastOrderUpdateBody?['cashOnDeliveryAmountCents'], 12050);
+    expect(
+      apiClient.lastOrderUpdateBody?['paymentDetails'],
+      [
+        {
+          'id': 'payment-detail-1',
+          'paymentMethodId': 'payment-shouqianba',
+          'amountCents': 74590,
+        },
+        {
+          'id': 'payment-detail-2',
+          'paymentMethodId': 'payment-cod',
+          'amountCents': 12050,
+        },
+      ],
+    );
+    expect(
+      apiClient.lastOrderUpdateBody?.containsKey(
+        'cashOnDeliveryAmountCents',
+      ),
+      isFalse,
+    );
     expect(apiClient.lastOrderUpdateBody?['remark'], '财务复核后调整订单');
     expect(apiClient.lastOrderUpdateBody?['customerId'], 'customer-1');
     expect(
@@ -611,6 +887,29 @@ void main() {
     expect(find.text('顺丰速运'), findsOneWidget);
     expect(find.text('SF123456789'), findsWidgets);
     expect(find.text('运输中'), findsOneWidget);
+    final paymentTable = find.byKey(
+      const ValueKey('order-qr-sales-payment-details-table'),
+    );
+    expect(paymentTable, findsOneWidget);
+    expect(
+      find.descendant(of: paymentTable, matching: find.text('即时收款')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: paymentTable, matching: find.text('代收营业款')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: paymentTable, matching: find.text('无需确认')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: paymentTable,
+        matching: find.text('代收款（待确认）'),
+      ),
+      findsOneWidget,
+    );
     expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('尚未生成二维码'), findsWidgets);
     expect(
@@ -718,11 +1017,15 @@ class _FakeApiClient extends ApiClient {
   _FakeApiClient({
     this.salesSheetQrUrl,
     this.failDownload = false,
+    this.failUpdateWithLockedError = false,
+    this.legacyPaymentPayload = false,
     this.logisticsNo = 'SF123456789',
     this.packingStatus = 'pending',
+    this.paymentDetailsLocked = false,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final List<String> salesOrderListPaths = <String>[];
+  final List<String> travelGroupListPaths = <String>[];
   final List<String> salesOrderUpdatePaths = <String>[];
   final List<String> salesOrderDownloadPaths = <String>[];
   final List<String> salesSheetPaths = <String>[];
@@ -732,8 +1035,12 @@ class _FakeApiClient extends ApiClient {
   final List<String> qrCodePaths = <String>[];
   final String? salesSheetQrUrl;
   final bool failDownload;
+  final bool failUpdateWithLockedError;
+  final bool legacyPaymentPayload;
   final String? logisticsNo;
   final String packingStatus;
+  final List<String> paymentLockPatchPaths = <String>[];
+  final List<String> paymentConfirmationPatchPaths = <String>[];
   Map<String, dynamic>? lastCustomerMarkBody;
   Map<String, dynamic>? lastOrderMarkBody;
   Map<String, dynamic>? lastOrderUpdateBody;
@@ -741,14 +1048,36 @@ class _FakeApiClient extends ApiClient {
   Map<String, dynamic>? lastOrderPackingBody;
   Map<String, dynamic>? lastSalesEditBody;
   Map<String, dynamic>? lastQrCodeBody;
+  Map<String, dynamic>? lastPaymentLockBody;
+  Map<String, dynamic>? lastPaymentConfirmationBody;
   String? lastDownloadDefaultFileName;
   Completer<void>? downloadGate;
   bool customerMark = false;
   bool orderMark = false;
   bool salesEdited = false;
+  bool paymentDetailsLocked;
+  bool paymentDetailsUnlocked = false;
+  bool agencyCollectionConfirmed = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path == '/api/payment-methods') {
+      return {
+        'data': {
+          'paymentMethods': const [
+            {
+              'id': 'payment-shouqianba',
+              'code': 'shouqianba',
+              'name': '收钱吧',
+              'category': 'direct_receipt',
+              'isActive': true,
+              'sortOrder': 1,
+              'isDefault': true,
+            },
+          ],
+        },
+      };
+    }
     if (path == '/api/products/options') {
       return {
         'data': {
@@ -756,6 +1085,27 @@ class _FakeApiClient extends ApiClient {
             {'id': 'product-1', 'name': '酱香珍藏', 'unit': '瓶'},
             {'id': 'product-2', 'name': '酱香典藏', 'unit': '瓶'},
           ],
+        },
+      };
+    }
+    if (path == '/api/users/tasters') {
+      return {
+        'data': {
+          'tasters': const [
+            {
+              'id': 'taster-1',
+              'name': '测试品鉴师',
+              'username': 'test-taster',
+            },
+          ],
+        },
+      };
+    }
+    if (path.startsWith('/api/travel-groups')) {
+      travelGroupListPaths.add(path);
+      return {
+        'data': {
+          'travelGroups': [_travelGroupJson()],
         },
       };
     }
@@ -876,6 +1226,13 @@ class _FakeApiClient extends ApiClient {
       };
     }
     if (path == '/api/sales-orders/order-1') {
+      if (failUpdateWithLockedError) {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'PAYMENT_DETAILS_LOCKED',
+          message: 'Payment details are locked for this order.',
+        );
+      }
       salesOrderUpdatePaths.add(path);
       lastOrderUpdateBody = Map<String, dynamic>.from(body ?? {});
       return {
@@ -902,6 +1259,28 @@ class _FakeApiClient extends ApiClient {
         },
       };
     }
+    if (path == '/api/sales-orders/order-1/payment-details-lock') {
+      paymentLockPatchPaths.add(path);
+      lastPaymentLockBody = Map<String, dynamic>.from(body ?? {});
+      paymentDetailsLocked = body?['locked'] == true;
+      paymentDetailsUnlocked = !paymentDetailsLocked;
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
+    if (path ==
+        '/api/sales-orders/order-1/payment-details/payment-detail-2/agency-confirmation') {
+      paymentConfirmationPatchPaths.add(path);
+      lastPaymentConfirmationBody = Map<String, dynamic>.from(body ?? {});
+      agencyCollectionConfirmed = body?['confirmed'] == true;
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
     throw StateError('Unexpected PATCH $path');
   }
 
@@ -914,7 +1293,34 @@ class _FakeApiClient extends ApiClient {
       'salesEditLimit': 1,
       'salesEditRemaining': salesEdited ? 0 : 1,
       'canEditByCurrentUser': !salesEdited,
+      'paymentDetailsLocked': paymentDetailsLocked,
+      'paymentDetailsLockedAt':
+          paymentDetailsLocked ? '2026-07-29T08:00:00.000Z' : null,
+      'paymentDetailsLockedById':
+          paymentDetailsLocked ? 'finance-lock-user' : null,
+      'paymentDetailsUnlockedAt':
+          paymentDetailsUnlocked ? '2026-07-29T09:00:00.000Z' : null,
+      'paymentDetailsUnlockedById':
+          paymentDetailsUnlocked ? 'admin-unlock-user' : null,
     });
+    if (legacyPaymentPayload) {
+      order.remove('paymentDetails');
+      order.remove('paymentDetailsSummary');
+    } else {
+      final paymentDetails = (order['paymentDetails'] as List)
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      paymentDetails[1].addAll({
+        'agencyCollectionConfirmed': agencyCollectionConfirmed,
+        'agencyCollectionConfirmedAt':
+            agencyCollectionConfirmed ? '2026-07-29T10:30:00.000Z' : null,
+        'agencyCollectionConfirmedById':
+            agencyCollectionConfirmed ? 'finance-user' : null,
+        'agencyCollectionConfirmedByName':
+            agencyCollectionConfirmed ? '财务测试员' : null,
+      });
+      order['paymentDetails'] = paymentDetails;
+    }
     final updateBody = lastOrderUpdateBody;
     if (updateBody != null) {
       order.addAll(updateBody);
@@ -992,6 +1398,25 @@ Map<String, dynamic> _orderJson({
     'tasterId': 'taster-1',
     'tasterName': '测试品鉴师',
     'cashOnDeliveryAmountCents': 10000,
+    'paymentDetails': const [
+      {
+        'id': 'payment-detail-1',
+        'paymentMethodId': 'payment-shouqianba',
+        'paymentMethodNameSnapshot': '收钱吧',
+        'paymentMethodCategorySnapshot': 'direct_receipt',
+        'amountCents': 69800,
+        'sortOrder': 0,
+      },
+      {
+        'id': 'payment-detail-2',
+        'paymentMethodId': 'payment-cod',
+        'paymentMethodNameSnapshot': '货到付款',
+        'paymentMethodCategorySnapshot': 'agency_collection',
+        'amountCents': 10000,
+        'sortOrder': 1,
+      },
+    ],
+    'paymentDetailsSummary': '收钱吧 ¥698.00；货到付款 ¥100.00',
     'status': 'valid',
     'deliverySummary': 'shipping',
     'packingStatus': 'pending',
@@ -1052,6 +1477,7 @@ Map<String, dynamic> _travelGroupJson() {
     'visitDate': '2026-06-30',
     'travelAgency': '测试旅行社',
     'guideName': '李导',
+    'tastingRoomNo': '5',
     'tasterId': 'taster-1',
     'tasterName': '测试品鉴师',
     'guestCount': 20,
@@ -1115,6 +1541,33 @@ Map<String, dynamic> _salesSheetJson({required String? qrCodeUrl}) {
         'sortOrder': 1,
       },
     ],
+    'paymentDetails': const [
+      {
+        'id': 'sheet-payment-direct',
+        'paymentMethodId': 'payment-shouqianba',
+        'paymentMethodNameSnapshot': '收钱吧',
+        'paymentMethodCategorySnapshot': 'direct_receipt',
+        'amountCents': 69800,
+        'amountYuan': '698.00',
+      },
+      {
+        'id': 'sheet-payment-cod',
+        'paymentMethodId': 'payment-cod',
+        'paymentMethodNameSnapshot': '货到付款',
+        'paymentMethodCategorySnapshot': 'collect_on_delivery',
+        'amountCents': 10000,
+        'amountYuan': '100.00',
+        'requiresAgencyConfirmation': true,
+        'agencyCollectionConfirmed': false,
+      },
+    ],
+    'paymentSummary': const {
+      'directReceiptAmountCents': 69800,
+      'collectOnDeliveryAmountCents': 10000,
+      'confirmedCollectOnDeliveryAmountCents': 0,
+      'pendingCollectOnDeliveryAmountCents': 10000,
+      'hasPendingCollectOnDelivery': true,
+    },
     'amounts': {
       'totalAmountCents': 79800,
       'totalAmountYuan': '798.00',

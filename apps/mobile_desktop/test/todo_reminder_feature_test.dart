@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/app/destinations.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
@@ -108,6 +111,91 @@ void main() {
     controller.dispose();
   });
 
+  test('disposing during API requests completes without notifier errors',
+      () async {
+    final api = _ControlledTodoApiClient();
+    final controller = TodoReminderController(
+      apiClient: api,
+      token: 'token',
+      userId: 'user-1',
+      scheduler: _FakeScheduler(),
+    );
+    var notifications = 0;
+    controller.addListener(() => notifications += 1);
+
+    final syncing = controller.sync();
+    expect(api.requests, hasLength(2));
+    expect(notifications, 1);
+
+    controller.dispose();
+    controller.dispose();
+    api.complete(0, _summaryPayload(unfinished: 1));
+    api.complete(1, _pagePayload('old-reminder'));
+
+    await expectLater(syncing, completes);
+    expect(notifications, 1);
+    expect(api.requests, hasLength(2));
+  });
+
+  test('disposing while scheduler initializes never creates periodic timer',
+      () async {
+    final api = _FakeApiClient();
+    final scheduler = _BlockingInitializeScheduler();
+    var timerCreations = 0;
+    final controller = TodoReminderController(
+      apiClient: api,
+      token: 'token',
+      userId: 'user-1',
+      scheduler: scheduler,
+      timerFactory: (duration, callback) {
+        timerCreations += 1;
+        return Timer(duration, () {});
+      },
+    );
+
+    final initializing = controller.initialize((_) {});
+    expect(scheduler.initializeCalls, 1);
+    controller.dispose();
+    scheduler.completeInitialization();
+
+    await expectLater(initializing, completes);
+    expect(timerCreations, 0);
+    expect(api.paths, isEmpty);
+  });
+
+  test('newer sync result wins when an older request finishes last', () async {
+    final api = _ControlledTodoApiClient();
+    final controller = TodoReminderController(
+      apiClient: api,
+      token: 'token',
+      userId: 'user-1',
+      scheduler: _FakeScheduler(),
+    );
+
+    final olderSync = controller.sync();
+    final newerSync = controller.sync();
+    expect(api.requests, hasLength(4));
+
+    api.complete(2, _summaryPayload(unfinished: 2));
+    api.complete(3, _pagePayload('new-reminder'));
+    await _waitForRequestCount(api, 5);
+    api.complete(4, _pagePayload('new-active-reminder'));
+    await newerSync;
+
+    expect(controller.summary.unfinished, 2);
+    expect(controller.reminders.single.id, 'new-reminder');
+    expect(controller.activeReminders.single.id, 'new-active-reminder');
+
+    api.complete(0, _summaryPayload(unfinished: 1));
+    api.complete(1, _pagePayload('old-reminder'));
+    await olderSync;
+
+    expect(controller.summary.unfinished, 2);
+    expect(controller.reminders.single.id, 'new-reminder');
+    expect(controller.activeReminders.single.id, 'new-active-reminder');
+    controller.dispose();
+  });
+
   test('local notification diff cancels removed or changed schedules only', () {
     final reminder = TodoReminder.fromJson(_reminderJson());
     final current = LocalReminderScheduleEntry.fromReminder(reminder, 'user-1');
@@ -148,6 +236,42 @@ void main() {
       unorderedEquals(['recipient-1', 'removed']),
     );
     expect(diff.scheduleReminderIds, {'recipient-1'});
+  });
+
+  test('ordinary reminders use inexact scheduling and survive reconciliation',
+      () {
+    expect(
+      todoReminderAndroidScheduleMode,
+      AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+    final reminder = TodoReminder.fromJson(_reminderJson());
+    final entry = LocalReminderScheduleEntry.fromReminder(reminder, 'user-1');
+
+    final created = buildLocalReminderScheduleDiff(
+      reminders: [reminder],
+      userId: 'user-1',
+      existing: const [],
+    );
+    expect(created.scheduleReminderIds, {reminder.id});
+    expect(created.cancel, isEmpty);
+
+    final restoredAfterRestart = buildLocalReminderScheduleDiff(
+      reminders: [reminder],
+      userId: 'user-1',
+      existing: [entry],
+    );
+    expect(restoredAfterRestart.scheduleReminderIds, isEmpty);
+    expect(restoredAfterRestart.cancel, isEmpty);
+
+    final cancelled = buildLocalReminderScheduleDiff(
+      reminders: const [],
+      userId: 'user-1',
+      existing: [entry],
+    );
+    expect(
+      cancelled.cancel.map((item) => item.reminderId),
+      [reminder.id],
+    );
   });
 
   testWidgets('todo page exposes an empty state', (tester) async {
@@ -196,6 +320,46 @@ void main() {
     controller.dispose();
   });
 }
+
+Future<void> _waitForRequestCount(
+  _ControlledTodoApiClient api,
+  int count,
+) async {
+  for (var attempt = 0; attempt < 20; attempt += 1) {
+    if (api.requests.length >= count) {
+      return;
+    }
+    await Future<void>.delayed(Duration.zero);
+  }
+  fail('Timed out waiting for $count API requests.');
+}
+
+Map<String, dynamic> _summaryPayload({required int unfinished}) => {
+      'data': {
+        'unfinished': unfinished,
+        'unread': unfinished,
+        'todayDue': 0,
+        'overdue': 0,
+        'urgent': 0,
+      },
+    };
+
+Map<String, dynamic> _pagePayload(String reminderId) => {
+      'data': {
+        'reminders': [
+          {
+            ..._reminderJson(),
+            'id': reminderId,
+            'todoId': 'todo-$reminderId',
+            'title': reminderId,
+          },
+        ],
+        'page': 1,
+        'pageSize': 50,
+        'total': 1,
+        'totalPages': 1,
+      },
+    };
 
 Map<String, dynamic> _reminderJson() => {
       'id': 'recipient-1',
@@ -317,6 +481,23 @@ class _EmptyApiClient extends _FakeApiClient {
   }
 }
 
+class _ControlledTodoApiClient extends ApiClient {
+  _ControlledTodoApiClient() : super(baseUrl: 'https://example.test');
+
+  final List<Completer<Map<String, dynamic>>> requests = [];
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path, {String? token}) {
+    final request = Completer<Map<String, dynamic>>();
+    requests.add(request);
+    return request.future;
+  }
+
+  void complete(int index, Map<String, dynamic> payload) {
+    requests[index].complete(payload);
+  }
+}
+
 class _FakeScheduler implements LocalReminderScheduler {
   final List<String> reconciledIds = [];
   String? cancelledUserId;
@@ -353,4 +534,19 @@ class _FakeScheduler implements LocalReminderScheduler {
 
   @override
   Future<void> handleNotificationActivation() async {}
+}
+
+class _BlockingInitializeScheduler extends _FakeScheduler {
+  final Completer<void> _initialization = Completer<void>();
+  int initializeCalls = 0;
+
+  @override
+  Future<void> initialize(ValueChanged<String> onReminderActivated) {
+    initializeCalls += 1;
+    return _initialization.future;
+  }
+
+  void completeInitialization() {
+    _initialization.complete();
+  }
 }

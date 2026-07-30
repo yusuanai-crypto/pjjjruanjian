@@ -28,15 +28,47 @@ class _FakeApiClient extends ApiClient {
 
   final List<String> requestedPaths = [];
 
-  Map<String, dynamic> _pagination(int total, {int page = 1, int pageSize = 50}) =>
-      {'page': page, 'pageSize': pageSize, 'total': total, 'totalPages': (total / pageSize).ceil()};
+  Map<String, dynamic> _pagination(int total,
+          {int page = 1, int pageSize = 50}) =>
+      {
+        'page': page,
+        'pageSize': pageSize,
+        'total': total,
+        'totalPages': (total / pageSize).ceil()
+      };
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     requestedPaths.add(path);
 
     if (path.startsWith('/api/inventory/warehouses')) {
-      return {'data': {'warehouses': warehouses, 'pagination': _pagination(warehouses.length)}};
+      return {
+        'data': {
+          'warehouses': warehouses,
+          'pagination': _pagination(warehouses.length)
+        }
+      };
+    }
+    if (path == '/api/products/options') {
+      return {
+        'data': {
+          'products': [
+            {
+              'id': 'p1',
+              'name': '测试商品',
+              'unit': '瓶',
+              'inventoryTrackingMode': 'quantity',
+            },
+          ],
+        },
+      };
+    }
+    if (path.startsWith('/api/after-sales-orders')) {
+      return {
+        'data': {
+          'afterSalesOrders': const <Map<String, dynamic>>[],
+        },
+      };
     }
     if (path.startsWith('/api/inventory/stocks')) {
       if (failStocks) {
@@ -48,6 +80,16 @@ class _FakeApiClient extends ApiClient {
           'stocks': stocks,
           'pagination': _pagination(stocks.length),
         }
+      };
+    }
+    if (RegExp(r'^/api/inventory/stocktakes/[^?]+$').hasMatch(path)) {
+      final id = Uri.decodeComponent(path.split('/').last);
+      final record = stocktakes.firstWhere(
+        (item) => item['id'] == id,
+        orElse: () => const <String, dynamic>{},
+      );
+      return {
+        'data': {'stocktake': record},
       };
     }
     if (path.startsWith('/api/inventory/stocktakes')) {
@@ -136,8 +178,17 @@ class _FakeApiClient extends ApiClient {
   }
 }
 
-Map<String, dynamic> _warehouseJson({String id = 'wh1', String name = '主仓库', String code = 'W01'}) =>
-    {'id': id, 'code': code, 'name': name, 'address': '', 'manager': {'name': '张三'}, 'isActive': true, 'isDefault': true};
+Map<String, dynamic> _warehouseJson(
+        {String id = 'wh1', String name = '主仓库', String code = 'W01'}) =>
+    {
+      'id': id,
+      'code': code,
+      'name': name,
+      'address': '',
+      'manager': {'name': '张三'},
+      'isActive': true,
+      'isDefault': true
+    };
 
 Map<String, dynamic> _stockJson({
   String id = 'stk1',
@@ -153,15 +204,31 @@ Map<String, dynamic> _stockJson({
     'id': id,
     'warehouseId': 'wh1',
     'productId': 'p1',
-    'warehouse': {'id': 'wh1', 'code': 'W01', 'name': warehouseName, 'isActive': true, 'isDefault': true},
-    'product': {'id': 'p1', 'name': productName, 'unit': '瓶', 'isActive': true, 'inventoryTrackingMode': 'quantity'},
+    'warehouse': {
+      'id': 'wh1',
+      'code': 'W01',
+      'name': warehouseName,
+      'isActive': true,
+      'isDefault': true
+    },
+    'product': {
+      'id': 'p1',
+      'name': productName,
+      'unit': '瓶',
+      'isActive': true,
+      'inventoryTrackingMode': 'quantity'
+    },
     'onHandQty': onHand,
     'reservedQty': reserved,
     'unavailableQty': unavailable,
     'inTransitQty': inTransit,
     'availableQty': onHand - reserved - unavailable,
     'shortageQty': 0,
-    'lowStock': {'enabled': false, 'minimumAvailableQty': 10, 'isLowStock': false},
+    'lowStock': {
+      'enabled': false,
+      'minimumAvailableQty': 10,
+      'isLowStock': false
+    },
   };
   if (costCents != null) {
     json['inventoryCost'] = {
@@ -199,6 +266,38 @@ Future<void> _pumpPage(
   await tester.pumpAndSettle();
 }
 
+Future<void> _selectModule(WidgetTester tester, String moduleId) async {
+  final module = find.byKey(ValueKey('warehouse-module-$moduleId'));
+  final compactNavigation =
+      find.byKey(const ValueKey('warehouse-secondary-navigation-compact'));
+
+  if (compactNavigation.evaluate().isNotEmpty) {
+    await tester.tap(
+      find.byKey(const ValueKey('warehouse-module-selector-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      module,
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+  } else {
+    await tester.scrollUntilVisible(
+      module,
+      120,
+      scrollable: find.descendant(
+        of: find.byKey(
+          const ValueKey('warehouse-secondary-navigation-wide'),
+        ),
+        matching: find.byType(Scrollable),
+      ),
+    );
+  }
+
+  await tester.tap(module);
+  await tester.pumpAndSettle();
+}
+
 // ===========================================================================
 // requestHash 算法测试
 // ===========================================================================
@@ -218,7 +317,9 @@ void main() {
     });
 
     test('canonicalJson handles arrays preserving order', () {
-      final json = canonicalJson({'arr': [3, 1, 2]});
+      final json = canonicalJson({
+        'arr': [3, 1, 2]
+      });
       expect(json, '{"arr":[3,1,2]}');
     });
 
@@ -265,8 +366,11 @@ void main() {
       expect(hash1, isNot(hash2));
     });
 
-    test('buildCommandEnvelope includes sourceKey, idempotencyKey and requestHash', () {
-      final envelope = buildCommandEnvelope('INBOUND', {'warehouseId': 'wh1', 'quantity': 5});
+    test(
+        'buildCommandEnvelope includes sourceKey, idempotencyKey and requestHash',
+        () {
+      final envelope = buildCommandEnvelope(
+          'INBOUND', {'warehouseId': 'wh1', 'quantity': 5});
       expect(envelope['sourceKey'], isNotNull);
       expect(envelope['idempotencyKey'], isNotNull);
       expect(envelope['requestHash'], isNotNull);
@@ -287,7 +391,8 @@ void main() {
       expect(canAccessInventory(UserRole.superAdmin), isTrue);
     });
 
-    test('canAccessInventory denies sales, front_desk, taster, after_sales', () {
+    test('canAccessInventory denies sales, front_desk, taster, after_sales',
+        () {
       expect(canAccessInventory(UserRole.sales), isFalse);
       expect(canAccessInventory(UserRole.frontDesk), isFalse);
       expect(canAccessInventory(UserRole.taster), isFalse);
@@ -327,13 +432,225 @@ void main() {
       final api = _FakeApiClient();
       await _pumpPage(tester, api, role: UserRole.sales);
       expect(find.text('当前角色无权访问仓库管理模块。'), findsOneWidget);
+      expect(api.requestedPaths, isEmpty);
     });
 
-    testWidgets('warehouse role shows tab bar', (tester) async {
+    testWidgets('all non-inventory roles make zero inventory requests',
+        (tester) async {
+      for (final role in [
+        UserRole.sales,
+        UserRole.afterSales,
+        UserRole.frontDesk,
+        UserRole.taster,
+      ]) {
+        final api = _FakeApiClient();
+        await _pumpPage(tester, api, role: role);
+        expect(
+          find.text('当前角色无权访问仓库管理模块。'),
+          findsOneWidget,
+          reason: role.value,
+        );
+        expect(api.requestedPaths, isEmpty, reason: role.value);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+    });
+
+    testWidgets('warehouse role shows grouped wide navigation', (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-secondary-navigation-wide')),
+        findsOneWidget,
+      );
+      expect(find.byType(TabBar), findsNothing);
+      expect(find.text('工作台'), findsWidgets);
+      expect(find.text('日常作业'), findsOneWidget);
+      expect(find.text('盘点与追溯'), findsOneWidget);
+      expect(find.text('基础设置'), findsOneWidget);
       expect(find.text('仓库管理'), findsWidgets);
+    });
+
+    testWidgets('mobile uses grouped module selector without horizontal tabs',
+        (tester) async {
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.warehouse,
+        size: const Size(380, 800),
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-secondary-navigation-compact')),
+        findsOneWidget,
+      );
+      expect(find.byType(TabBar), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-module-selector-button')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('选择仓库管理模块'), findsOneWidget);
+      expect(find.text('工作台'), findsWidgets);
+      expect(find.text('日常作业'), findsOneWidget);
+    });
+
+    testWidgets(
+        'effective desktop width protects tables from two-level navigation',
+        (tester) async {
+      final api = _FakeApiClient(
+        warehouses: [_warehouseJson()],
+        stocks: [_stockJson()],
+      );
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.warehouse,
+        size: const Size(1120, 800),
+      );
+
+      expect(
+        find.byKey(const ValueKey('warehouse-secondary-navigation-compact')),
+        findsOneWidget,
+      );
+      await _selectModule(tester, 'stock');
+      expect(
+        find.byKey(const ValueKey('warehouse-stock-table')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('tablet layout remains compact and has no render overflow',
+        (tester) async {
+      final api = _FakeApiClient(
+        warehouses: [_warehouseJson()],
+        stocks: [_stockJson()],
+      );
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.warehouse,
+        size: const Size(800, 1024),
+      );
+      await _selectModule(tester, 'stock');
+
+      expect(
+        find.byKey(const ValueKey('warehouse-secondary-navigation-compact')),
+        findsOneWidget,
+      );
+      expect(find.byType(DataTable), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('grouped navigation permissions', () {
+    testWidgets('admin sees settings, operational links and approval',
+        (tester) async {
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.admin,
+        size: const Size(1500, 1600),
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-warehouse_settings')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-fulfillment')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-returns')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-approval')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-serialized')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('finance has cost pages but no quantity-operation modules',
+        (tester) async {
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.finance,
+        size: const Size(1500, 1600),
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-serialized')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-fulfillment')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-returns')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-warehouse_settings')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-approval')),
+        findsNothing,
+      );
+
+      await _selectModule(tester, 'inbound');
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-create-empty')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('boss exposes approval but no other operational entry',
+        (tester) async {
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      await _pumpPage(
+        tester,
+        api,
+        role: UserRole.boss,
+        size: const Size(1500, 1600),
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-approval')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-fulfillment')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-returns')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-warehouse_settings')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('warehouse-module-serialized')),
+        findsNothing,
+      );
+
+      await _selectModule(tester, 'inbound');
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-create-empty')),
+        findsNothing,
+      );
     });
   });
 
@@ -342,26 +659,23 @@ void main() {
   // ===========================================================================
 
   group('page states', () {
-    testWidgets('stock list loads and shows data table on desktop', (tester) async {
+    testWidgets('stock list loads and shows data table on desktop',
+        (tester) async {
       final api = _FakeApiClient(
         warehouses: [_warehouseJson()],
         stocks: [_stockJson()],
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      // 切换到商品库存 Tab
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       expect(find.byType(DataTable), findsOneWidget);
-      expect(find.text('主仓库'), findsWidgets);
-      // DataTable 中商品列显示为 "productName (unit)" 格式
-      expect(find.text('飞天茅台 53° 500ml (瓶)'), findsOneWidget);
+      expect(find.textContaining('主仓库'), findsWidgets);
+      expect(find.text('飞天茅台 53° 500ml'), findsOneWidget);
     });
 
     testWidgets('stock list shows empty state when no data', (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       expect(find.text('暂无库存数据'), findsOneWidget);
     });
 
@@ -371,36 +685,65 @@ void main() {
         failStocks: true,
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       expect(find.textContaining('无法连接服务器'), findsOneWidget);
       expect(find.text('重试'), findsOneWidget);
     });
 
-    testWidgets('stock list shows shortage and low stock indicators', (tester) async {
+    testWidgets('stock list shows shortage and low stock indicators',
+        (tester) async {
       final api = _FakeApiClient(
         warehouses: [_warehouseJson()],
         stocks: [
-          _stockJson(id: 's1', onHand: 10, reserved: 15, unavailable: 0, productName: '商品A'),
+          _stockJson(
+              id: 's1',
+              onHand: 10,
+              reserved: 15,
+              unavailable: 0,
+              productName: '商品A'),
         ],
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       // 可售为负（10-15-0=-5）行应有红色背景
-      expect(find.text('商品A (瓶)'), findsOneWidget);
+      expect(find.text('商品A'), findsOneWidget);
     });
 
-    testWidgets('mobile layout uses card list instead of data table', (tester) async {
+    testWidgets('mobile layout uses card list instead of data table',
+        (tester) async {
       final api = _FakeApiClient(
         warehouses: [_warehouseJson()],
         stocks: [_stockJson()],
       );
-      await _pumpPage(tester, api, role: UserRole.warehouse, size: const Size(380, 800));
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _pumpPage(tester, api,
+          role: UserRole.warehouse, size: const Size(380, 800));
+      await _selectModule(tester, 'stock');
       expect(find.byType(DataTable), findsNothing);
       expect(find.byType(Card), findsWidgets);
+    });
+
+    testWidgets('module switch preserves stock filter state', (tester) async {
+      final api = _FakeApiClient(
+        warehouses: [_warehouseJson()],
+        stocks: [_stockJson()],
+      );
+      await _pumpPage(tester, api, role: UserRole.warehouse);
+      await _selectModule(tester, 'stock');
+      await tester.enterText(
+        find.byKey(const ValueKey('warehouse-stock-search')),
+        '主仓库',
+      );
+      await _selectModule(tester, 'alert');
+      await _selectModule(tester, 'stock');
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('warehouse-stock-search')),
+            )
+            .controller
+            ?.text,
+        '主仓库',
+      );
     });
   });
 
@@ -415,8 +758,7 @@ void main() {
         stocks: [_stockJson(costCents: 150000)],
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       expect(find.text('库存成本'), findsNothing);
     });
 
@@ -426,12 +768,13 @@ void main() {
         stocks: [_stockJson(costCents: 150000)],
       );
       await _pumpPage(tester, api, role: UserRole.finance);
-      await tester.tap(find.text('商品库存'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
       expect(find.text('库存成本'), findsOneWidget);
     });
 
-    test('StockRecord omits cost for warehouse role even if response contains it', () {
+    test(
+        'StockRecord omits cost for warehouse role even if response contains it',
+        () {
       // 模拟后端意外返回成本字段（不应发生，但客户端应防御）
       final json = _stockJson(costCents: 99999);
       final record = StockRecord.fromJson(json, canReadCost: false);
@@ -467,27 +810,83 @@ void main() {
   // ===========================================================================
 
   group('cache isolation on role switch', () {
-    testWidgets('role change triggers clearCache and new InventoryApi', (tester) async {
-      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
-      await _pumpPage(tester, api, role: UserRole.warehouse);
-      // 确认 warehouse 角色正常加载
-      expect(find.byType(TabBar), findsOneWidget);
+    testWidgets('role change resets module state and cost visibility',
+        (tester) async {
+      final api = _FakeApiClient(
+        warehouses: [_warehouseJson()],
+        stocks: [_stockJson(costCents: 150000)],
+      );
+      await _pumpPage(tester, api, role: UserRole.finance);
+      await _selectModule(tester, 'stock');
+      expect(find.text('库存成本'), findsOneWidget);
 
-      // 切换到 finance 角色（重建 widget）
       await tester.pumpWidget(MaterialApp(
         theme: ThemeData.light(),
         home: Scaffold(
           body: WarehouseManagementPage(
             apiClient: api,
             token: 'test-token',
-            role: UserRole.finance,
+            role: UserRole.warehouse,
             onOpenDestination: (_) {},
           ),
         ),
       ));
       await tester.pumpAndSettle();
-      // finance 角色也应正常加载
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-module-content-overview-1')),
+        findsOneWidget,
+      );
+      expect(find.text('库存成本'), findsNothing);
+      await _selectModule(tester, 'stock');
+      expect(find.text('库存成本'), findsNothing);
+    });
+
+    testWidgets('token change disposes visited module state', (tester) async {
+      final api = _FakeApiClient(
+        warehouses: [_warehouseJson()],
+        stocks: [_stockJson()],
+      );
+      tester.view.physicalSize = const Size(1500, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      Widget page(String token) {
+        return MaterialApp(
+          home: Scaffold(
+            body: WarehouseManagementPage(
+              apiClient: api,
+              token: token,
+              role: UserRole.warehouse,
+              onOpenDestination: (_) {},
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(page('token-a'));
+      await tester.pumpAndSettle();
+      await _selectModule(tester, 'stock');
+      await tester.enterText(
+        find.byKey(const ValueKey('warehouse-stock-search')),
+        '不应保留',
+      );
+
+      await tester.pumpWidget(page('token-b'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('warehouse-module-content-overview-1')),
+        findsOneWidget,
+      );
+      await _selectModule(tester, 'stock');
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('warehouse-stock-search')),
+            )
+            .controller
+            ?.text,
+        isEmpty,
+      );
     });
 
     test('InventoryApi clearCache empties internal cache', () {
@@ -584,21 +983,20 @@ void main() {
     testWidgets('inbound form rejects non-integer quantity', (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      // 切换到入库管理 Tab
-      // 注：库存总览 Tab 的 _tipRow 中也包含 "入库管理" 文本，
-      // 因此用 find.widgetWithText(Tab, ...) 精确定位 Tab 本身
-      await tester.tap(find.widgetWithText(Tab, '入库管理'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'inbound');
       // 点击新建入库
-      final createBtn = find.byKey(const ValueKey('warehouse-inbound-create-button'));
+      final createBtn =
+          find.byKey(const ValueKey('warehouse-inbound-create-button'));
       if (createBtn.evaluate().isNotEmpty) {
         await tester.tap(createBtn);
         await tester.pumpAndSettle();
-        // 输入小数
+        // 输入不允许的零数量
         await tester.enterText(
-            find.byKey(const ValueKey('warehouse-inbound-quantity-field')), '1.5');
+            find.byKey(const ValueKey('warehouse-inbound-quantity-field')),
+            '0');
         // 尝试保存
-        await tester.tap(find.byKey(const ValueKey('warehouse-inbound-save-button')));
+        await tester
+            .tap(find.byKey(const ValueKey('warehouse-inbound-save-button')));
         await tester.pumpAndSettle();
         // 应显示验证错误
         expect(find.textContaining('正整数'), findsOneWidget);
@@ -611,7 +1009,8 @@ void main() {
   // ===========================================================================
 
   group('stocktake approval', () {
-    testWidgets('warehouse role sees stocktake tab but not approval button', (tester) async {
+    testWidgets('warehouse role does not build approval module',
+        (tester) async {
       final api = _FakeApiClient(
         warehouses: [_warehouseJson()],
         stocktakes: [
@@ -627,13 +1026,14 @@ void main() {
         ],
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('盘点审批'));
-      await tester.pumpAndSettle();
-      // warehouse 角色无审批权限
-      expect(find.text('当前角色无盘点审批权限。'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-module-approval')),
+        findsNothing,
+      );
     });
 
-    testWidgets('boss role sees pending stocktakes with approve/reject', (tester) async {
+    testWidgets('boss role sees pending stocktakes with approve/reject',
+        (tester) async {
       final api = _FakeApiClient(
         warehouses: [_warehouseJson()],
         stocktakes: [
@@ -649,11 +1049,12 @@ void main() {
         ],
       );
       await _pumpPage(tester, api, role: UserRole.boss);
-      await tester.tap(find.text('盘点审批'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'approval');
       expect(find.text('主仓库 · 商品A'), findsOneWidget);
-      expect(find.byKey(const ValueKey('warehouse-approval-approve-st1')), findsOneWidget);
-      expect(find.byKey(const ValueKey('warehouse-approval-reject-st1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('warehouse-approval-approve-st1')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('warehouse-approval-reject-st1')),
+          findsOneWidget);
     });
   });
 
@@ -662,23 +1063,25 @@ void main() {
   // ===========================================================================
 
   group('report access', () {
-    testWidgets('warehouse role cannot see inventory-valuation report', (tester) async {
+    testWidgets('warehouse role cannot see inventory-valuation report',
+        (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('库存报表'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'report');
       // 下拉框中不应有"库存估值"
-      final dropdown = find.byKey(const ValueKey('warehouse-report-type-selector'));
+      final dropdown =
+          find.byKey(const ValueKey('warehouse-report-type-selector'));
       expect(dropdown, findsOneWidget);
       // warehouse 的可用报表不应包含 inventory-valuation
     });
 
-    testWidgets('finance role can access all reports including valuation', (tester) async {
+    testWidgets('finance role can access cost reports including valuation',
+        (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.finance);
-      await tester.tap(find.text('库存报表'));
-      await tester.pumpAndSettle();
-      final dropdown = find.byKey(const ValueKey('warehouse-report-type-selector'));
+      await _selectModule(tester, 'report');
+      final dropdown =
+          find.byKey(const ValueKey('warehouse-report-type-selector'));
       expect(dropdown, findsOneWidget);
     });
   });
@@ -688,7 +1091,8 @@ void main() {
   // ===========================================================================
 
   group('quick actions', () {
-    testWidgets('packing entry chip navigates to warehouse_packing', (tester) async {
+    testWidgets('packing module embeds the existing warehouse workbench',
+        (tester) async {
       String? navigated;
       tester.view.physicalSize = const Size(1500, 900);
       tester.view.devicePixelRatio = 1;
@@ -705,20 +1109,82 @@ void main() {
         ),
       ));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('warehouse-management-packing-entry')));
-      expect(navigated, 'warehouse_packing');
+      await _selectModule(tester, 'fulfillment');
+      expect(find.text('库管打包工作台'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-management-packing-entry')),
+        findsNothing,
+      );
+      expect(navigated, isNull);
     });
 
-    testWidgets('moutai entry chip visible for warehouse role', (tester) async {
+    testWidgets('moutai compatibility entry visible for warehouse role',
+        (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      expect(find.byKey(const ValueKey('warehouse-management-moutai-entry')), findsOneWidget);
+      await _selectModule(tester, 'serialized');
+      expect(find.byKey(const ValueKey('warehouse-management-moutai-entry')),
+          findsOneWidget);
     });
 
-    testWidgets('moutai entry chip hidden for boss role', (tester) async {
+    testWidgets('moutai module hidden for boss role', (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.boss);
-      expect(find.byKey(const ValueKey('warehouse-management-moutai-entry')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('warehouse-module-serialized')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('returns opens the real warehouse receipt workbench',
+        (tester) async {
+      String? navigated;
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      tester.view.physicalSize = const Size(1500, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WarehouseManagementPage(
+              apiClient: api,
+              token: 't',
+              role: UserRole.warehouse,
+              onOpenDestination: (id) => navigated = id,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _selectModule(tester, 'returns');
+      expect(
+        find.byKey(const ValueKey('customer-returns-wide-workbench')),
+        findsOneWidget,
+      );
+      expect(find.text('暂无需要库管收货的售后单'), findsOneWidget);
+      expect(
+        api.requestedPaths.any(
+          (path) => path.startsWith('/api/after-sales-orders?'),
+        ),
+        isTrue,
+      );
+      expect(navigated, isNull);
+    });
+
+    testWidgets('warehouse settings loads real management UI for admin',
+        (tester) async {
+      final api = _FakeApiClient(warehouses: [_warehouseJson()]);
+      await _pumpPage(tester, api, role: UserRole.admin);
+      await _selectModule(tester, 'warehouse_settings');
+      expect(
+        find.byKey(const ValueKey('warehouse-settings-wide-layout')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('warehouse-settings-table')),
+          findsOneWidget);
+      expect(find.text('仓库编号'), findsWidgets);
+      expect(find.text('负责人'), findsWidgets);
+      expect(find.text('物理删除'), findsNothing);
     });
   });
 
@@ -741,8 +1207,7 @@ void main() {
         ],
       );
       await _pumpPage(tester, api, role: UserRole.warehouse);
-      await tester.tap(find.text('库存预警'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'alert');
       expect(find.text('主仓库 · 商品A'), findsOneWidget);
       expect(find.text('最低可售：10 瓶'), findsOneWidget);
     });
@@ -761,8 +1226,7 @@ void main() {
         ],
       );
       await _pumpPage(tester, api, role: UserRole.boss);
-      await tester.tap(find.text('库存预警'));
-      await tester.pumpAndSettle();
+      await _selectModule(tester, 'alert');
       expect(find.text('已停用'), findsOneWidget);
     });
   });

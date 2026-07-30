@@ -5,7 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
+import '../../shared/widgets/responsive.dart';
+import '../../shared/widgets/state_views.dart';
+import '../../shared/widgets/status_tag.dart';
+import '../warehouse_management/shared/inventory_workspace_shared.dart';
 
 typedef MoutaiSavePathPicker = Future<String?> Function(String fileName);
 typedef MoutaiFileWriter = Future<void> Function(
@@ -50,24 +55,25 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
   bool _exporting = false;
   String? _statusFilter;
   String? _error;
+  int _identityRevision = 0;
+  int _requestGeneration = 0;
 
-  bool get _canSeeCost =>
-      widget.role == UserRole.superAdmin ||
-      widget.role == UserRole.admin ||
-      widget.role == UserRole.finance;
-
-  bool get _canCreate =>
+  bool get _canAccess =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance ||
       widget.role == UserRole.warehouse;
+
+  bool get _canSeeCost => canReadSerializedCost(widget.role);
+
+  bool get _canCreate => canInboundWrite(widget.role);
 
   @override
   void initState() {
     super.initState();
     _api = widget.businessApi ??
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
-    _load();
+    if (_canAccess) _load();
   }
 
   @override
@@ -75,15 +81,34 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.businessApi != widget.businessApi ||
         oldWidget.apiClient != widget.apiClient ||
-        oldWidget.token != widget.token) {
+        oldWidget.token != widget.token ||
+        oldWidget.role != widget.role) {
       _api = widget.businessApi ??
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
-      _load();
+      _identityRevision++;
+      _requestGeneration++;
+      _units = const [];
+      _selectedIds.clear();
+      _exporting = false;
+      _nameFilter.clear();
+      _codeFilter.clear();
+      _dateFilter.clear();
+      _batchFilter.clear();
+      _serialFilter.clear();
+      _orderFilter.clear();
+      _statusFilter = null;
+      _error = null;
+      if (_canAccess) {
+        _load();
+      } else {
+        setState(() => _loading = false);
+      }
     }
   }
 
   @override
   void dispose() {
+    _requestGeneration++;
     _nameFilter.dispose();
     _codeFilter.dispose();
     _dateFilter.dispose();
@@ -94,6 +119,8 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
   }
 
   Future<void> _load() async {
+    final identityRevision = _identityRevision;
+    final requestGeneration = ++_requestGeneration;
     setState(() {
       _loading = true;
       _error = null;
@@ -108,8 +135,13 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
         batchSerialNo: _serialFilter.text.trim(),
         status: _statusFilter,
         orderNo: _orderFilter.text.trim(),
+        includeCost: _canSeeCost,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          identityRevision != _identityRevision ||
+          requestGeneration != _requestGeneration) {
+        return;
+      }
       setState(() {
         _units = page.units;
         _selectedIds.removeWhere(
@@ -118,7 +150,11 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted ||
+          identityRevision != _identityRevision ||
+          requestGeneration != _requestGeneration) {
+        return;
+      }
       setState(() {
         _loading = false;
         _error = _message(error);
@@ -132,6 +168,7 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
       _show('请先勾选需要导出的茅台。');
       return;
     }
+    final identityRevision = _identityRevision;
     setState(() => _exporting = true);
     try {
       final orderedIds = [
@@ -139,6 +176,7 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
           if (_selectedIds.contains(unit.id)) unit.id,
       ];
       final downloaded = await _api.exportMoutaiLogisticsDocx(orderedIds);
+      if (!mounted || identityRevision != _identityRevision) return;
       final targetPath = await (widget.savePathPicker?.call(
             downloaded.fileName,
           ) ??
@@ -148,8 +186,9 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
             type: FileType.custom,
             allowedExtensions: const ['docx'],
           ));
+      if (!mounted || identityRevision != _identityRevision) return;
       if (targetPath == null || targetPath.trim().isEmpty) {
-        if (mounted) setState(() => _exporting = false);
+        setState(() => _exporting = false);
         return;
       }
       if (widget.fileWriter != null) {
@@ -157,11 +196,11 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
       } else {
         await File(targetPath).writeAsBytes(downloaded.bytes, flush: true);
       }
-      if (!mounted) return;
+      if (!mounted || identityRevision != _identityRevision) return;
       setState(() => _exporting = false);
       _show('已保存到：$targetPath');
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || identityRevision != _identityRevision) return;
       setState(() => _exporting = false);
       _show(_message(error));
     }
@@ -200,61 +239,83 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_canAccess) {
+      return const Scaffold(
+        body: SafeArea(
+          child: ErrorState(title: '当前角色不能进入全量逐瓶库存页面。'),
+        ),
+      );
+    }
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                crossAxisAlignment: WrapCrossAlignment.center,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final horizontalPadding =
+                constraints.maxWidth >= AppBreakpoints.desktop ? 20.0 : 12.0;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                16,
+                horizontalPadding,
+                16,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    '茅台',
-                    style: Theme.of(context).textTheme.headlineSmall,
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        '茅台',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      BottleQuantityText(
+                        _selectedIds.length,
+                        labelPrefix: '已选择 ',
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _loading ? null : _load,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('刷新'),
+                      ),
+                      FilledButton.icon(
+                        key: const Key('moutai-export-button'),
+                        onPressed: _exporting ? null : _export,
+                        icon: _exporting
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.description_outlined),
+                        label: Text(_exporting ? '正在生成…' : '导出物流单'),
+                      ),
+                      if (_canCreate)
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('moutai-inbound-button'),
+                          onPressed: _openInbound,
+                          icon: const Icon(Icons.add_box_outlined),
+                          label: const Text('逐瓶入库'),
+                        ),
+                    ],
                   ),
-                  Text('已选择 ${_selectedIds.length} 瓶'),
-                  OutlinedButton.icon(
-                    onPressed: _loading ? null : _load,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('刷新'),
+                  const SizedBox(height: 14),
+                  _buildFilters(),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: _loading
+                        ? const LoadingState(title: '正在加载逐瓶库存')
+                        : _error != null
+                            ? ErrorState(title: _error!, onRetry: _load)
+                            : _buildInventory(constraints.maxWidth),
                   ),
-                  FilledButton.icon(
-                    key: const Key('moutai-export-button'),
-                    onPressed: _exporting ? null : _export,
-                    icon: _exporting
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.description_outlined),
-                    label: Text(_exporting ? '正在生成…' : '导出物流单'),
-                  ),
-                  if (_canCreate)
-                    FilledButton.tonalIcon(
-                      onPressed: _openInbound,
-                      icon: const Icon(Icons.add_box_outlined),
-                      label: const Text('逐瓶入库'),
-                    ),
                 ],
               ),
-              const SizedBox(height: 14),
-              _buildFilters(),
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Text(_error!, style: const TextStyle(color: Colors.red)),
-              ],
-              const SizedBox(height: 12),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildTable(),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -284,6 +345,9 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
               ),
               DropdownMenuItem(value: 'available', child: Text('可售')),
               DropdownMenuItem(value: 'allocated', child: Text('已占用')),
+              DropdownMenuItem(value: 'reserved', child: Text('已占用')),
+              DropdownMenuItem(value: 'outbound', child: Text('已出库')),
+              DropdownMenuItem(value: 'unavailable', child: Text('不可售')),
               DropdownMenuItem(value: 'void', child: Text('作废')),
             ],
             onChanged: (value) => setState(() => _statusFilter = value),
@@ -306,9 +370,12 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
     );
   }
 
-  Widget _buildTable() {
+  Widget _buildInventory(double availableWidth) {
     if (_units.isEmpty) {
-      return const Center(child: Text('暂无逐瓶库存。'));
+      return const EmptyState(title: '当前筛选下暂无逐瓶库存');
+    }
+    if (availableWidth < AppBreakpoints.tablet) {
+      return _buildMobileCards();
     }
     return Scrollbar(
       thumbVisibility: true,
@@ -365,14 +432,22 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
                         },
                       ),
                     ),
-                    DataCell(Text(unit.moutaiName ?? '资料不完整')),
-                    DataCell(Text(unit.logisticsCode ?? '-')),
-                    DataCell(Text(unit.factoryDate ?? '-')),
-                    DataCell(Text(unit.productionBatch ?? '-')),
-                    DataCell(Text(unit.batchSerialNo ?? '-')),
-                    DataCell(Text(_statusLabel(unit.status))),
-                    DataCell(Text(unit.salesOrderNo ?? '-')),
-                    DataCell(Text(unit.createdAt ?? '-')),
+                    DataCell(
+                      Text(inventoryDisplayText(unit.moutaiName)),
+                    ),
+                    DataCell(
+                      Text(inventoryDisplayText(unit.logisticsCode)),
+                    ),
+                    DataCell(Text(inventoryDisplayText(unit.factoryDate))),
+                    DataCell(
+                      Text(inventoryDisplayText(unit.productionBatch)),
+                    ),
+                    DataCell(
+                      Text(inventoryDisplayText(unit.batchSerialNo)),
+                    ),
+                    DataCell(_serializedStatusTag(unit.status)),
+                    DataCell(Text(inventoryDisplayText(unit.salesOrderNo))),
+                    DataCell(Text(formatInventoryDateTime(unit.createdAt))),
                     if (_canSeeCost)
                       DataCell(
                         Text(
@@ -398,6 +473,120 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildMobileCards() {
+    return ListView.separated(
+      key: const ValueKey('moutai-mobile-card-list'),
+      itemCount: _units.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final unit = _units[index];
+        final selected = _selectedIds.contains(unit.id);
+        final label = inventoryDisplayText(unit.moutaiName);
+        return Semantics(
+          container: true,
+          label: '$label，物流码 ${inventoryDisplayText(unit.logisticsCode)}，'
+              '${_statusLabel(unit.status)}',
+          child: Card(
+            key: ValueKey('moutai-mobile-card-${unit.id}'),
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        key: ValueKey('moutai-select-${unit.id}'),
+                        value: selected,
+                        semanticLabel: '选择 $label',
+                        onChanged: (checked) {
+                          setState(() {
+                            if (checked == true) {
+                              _selectedIds.add(unit.id);
+                            } else {
+                              _selectedIds.remove(unit.id);
+                            }
+                          });
+                        },
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              label,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 3),
+                            SelectableText(
+                              '物流码 ${inventoryDisplayText(unit.logisticsCode)}',
+                            ),
+                          ],
+                        ),
+                      ),
+                      _serializedStatusTag(unit.status),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '出厂日期 ${inventoryDisplayText(unit.factoryDate)} · '
+                    '生产批次 ${inventoryDisplayText(unit.productionBatch)}',
+                  ),
+                  Text(
+                    '批次序号 ${inventoryDisplayText(unit.batchSerialNo)} · '
+                    '关联订单 ${inventoryDisplayText(unit.salesOrderNo)}',
+                  ),
+                  Text('入库时间 ${formatInventoryDateTime(unit.createdAt)}'),
+                  if (_canSeeCost)
+                    Text(
+                      '进货价 '
+                      '${unit.purchaseCostCents == null ? '待补' : formatMoneyCents(unit.purchaseCostCents!)}',
+                    ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      tooltip: unit.salesOrderId == null ? '编辑' : '资料纠错',
+                      onPressed: () => _openEdit(unit),
+                      icon: Icon(
+                        unit.salesOrderId == null
+                            ? Icons.edit_outlined
+                            : Icons.rule_outlined,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _serializedStatusTag(String status) {
+    final normalized = status.toLowerCase();
+    final (tone, icon) = switch (normalized) {
+      'available' => (StatusTone.success, Icons.check_circle_outline_rounded),
+      'allocated' || 'reserved' => (
+          StatusTone.info,
+          Icons.lock_outline_rounded,
+        ),
+      'outbound' => (StatusTone.neutral, Icons.local_shipping_outlined),
+      'unavailable' => (StatusTone.danger, Icons.block_rounded),
+      'pending_cost' => (StatusTone.warning, Icons.payments_outlined),
+      'void' => (StatusTone.danger, Icons.block_rounded),
+      _ => (StatusTone.neutral, Icons.info_outline_rounded),
+    };
+    return InventoryStatusTag(
+      label: _statusLabel(status),
+      tone: tone,
+      icon: icon,
     );
   }
 }
@@ -501,82 +690,88 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('茅台逐瓶入库'),
-      content: SizedBox(
-        width: 680,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_loadingProducts) const LinearProgressIndicator(),
-              DropdownButtonFormField<String>(
-                initialValue: _productId,
-                decoration: const InputDecoration(labelText: '茅台主商品'),
-                items: [
-                  for (final product in _products)
-                    DropdownMenuItem(
-                      value: product.id,
-                      child: Text(product.label),
-                    ),
-                ],
-                onChanged: (value) => setState(() => _productId = value),
-              ),
-              TextField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: '默认商品名称'),
-              ),
-              TextField(
-                controller: _date,
-                decoration:
-                    const InputDecoration(labelText: '默认出厂日期 YYYY-MM-DD'),
-              ),
-              TextField(
-                controller: _batch,
-                decoration: const InputDecoration(labelText: '默认生产批次'),
-              ),
-              if (widget.canEditCost)
+    return PopScope<bool>(
+      canPop: !_saving,
+      child: InventoryKeyboardScope(
+        onEscape: _saving ? null : () => Navigator.of(context).pop(false),
+        child: AlertDialog(
+          scrollable: true,
+          title: const Text('茅台逐瓶入库'),
+          content: SizedBox(
+            width: 680,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_loadingProducts) const LinearProgressIndicator(),
+                DropdownButtonFormField<String>(
+                  initialValue: _productId,
+                  decoration: const InputDecoration(labelText: '茅台主商品'),
+                  items: [
+                    for (final product in _products)
+                      DropdownMenuItem(
+                        value: product.id,
+                        child: Text(product.label),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => _productId = value),
+                ),
                 TextField(
-                  controller: _cost,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: '默认进货价（元）'),
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: '默认商品名称'),
                 ),
-              const SizedBox(height: 12),
-              TextField(
-                key: const Key('moutai-inbound-rows'),
-                controller: _rows,
-                minLines: 6,
-                maxLines: 14,
-                decoration: InputDecoration(
-                  labelText: '逐瓶资料（一行一瓶）',
-                  alignLabelWithHint: true,
-                  helperMaxLines: 4,
-                  helperText: widget.canEditCost
-                      ? '格式：物流码,批次序号[,商品名称覆盖[,进货价元覆盖]]；'
-                          '扫码枪可连续录入，一行一个物流码。'
-                      : '格式：物流码,批次序号[,商品名称覆盖]；'
-                          '库管录入后状态为“待补进货价”。',
+                TextField(
+                  controller: _date,
+                  decoration:
+                      const InputDecoration(labelText: '默认出厂日期 YYYY-MM-DD'),
                 ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Text(_error!, style: const TextStyle(color: Colors.red)),
+                TextField(
+                  controller: _batch,
+                  decoration: const InputDecoration(labelText: '默认生产批次'),
+                ),
+                if (widget.canEditCost)
+                  TextField(
+                    controller: _cost,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: '默认进货价（元）'),
+                  ),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const Key('moutai-inbound-rows'),
+                  controller: _rows,
+                  minLines: 6,
+                  maxLines: 14,
+                  decoration: InputDecoration(
+                    labelText: '逐瓶资料（一行一瓶）',
+                    alignLabelWithHint: true,
+                    helperMaxLines: 4,
+                    helperText: widget.canEditCost
+                        ? '格式：物流码,批次序号[,商品名称覆盖[,进货价元覆盖]]；'
+                            '扫码枪可连续录入，一行一个物流码。'
+                        : '格式：物流码,批次序号[,商品名称覆盖]；'
+                            '库管录入后状态为“待补进货价”。',
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                ],
               ],
-            ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed:
+                  _saving ? null : () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: _saving ? null : _submit,
+              child: Text(_saving ? '保存中…' : '确认入库'),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _submit,
-          child: Text(_saving ? '保存中…' : '确认入库'),
-        ),
-      ],
     );
   }
 }
@@ -671,62 +866,69 @@ class _MoutaiEditDialogState extends State<_MoutaiEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(_correction ? '逐瓶资料纠错' : '编辑逐瓶资料'),
-      content: SizedBox(
-        width: 520,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: '商品名称'),
-              ),
-              TextField(
-                controller: _date,
-                decoration: const InputDecoration(labelText: '出厂日期 YYYY-MM-DD'),
-              ),
-              TextField(
-                controller: _batch,
-                decoration: const InputDecoration(labelText: '生产批次'),
-              ),
-              TextField(
-                controller: _serial,
-                decoration: const InputDecoration(labelText: '批次序号'),
-              ),
-              TextField(
-                controller: _code,
-                decoration: const InputDecoration(labelText: '物流码'),
-              ),
-              if (widget.canEditCost)
+    return PopScope<bool>(
+      canPop: !_saving,
+      child: InventoryKeyboardScope(
+        onEscape: _saving ? null : () => Navigator.of(context).pop(false),
+        child: AlertDialog(
+          scrollable: true,
+          title: Text(_correction ? '逐瓶资料纠错' : '编辑逐瓶资料'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 TextField(
-                  controller: _cost,
-                  decoration: const InputDecoration(labelText: '进货价（元）'),
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: '商品名称'),
                 ),
-              if (_correction)
                 TextField(
-                  controller: _reason,
-                  decoration: const InputDecoration(labelText: '纠错原因（必填）'),
+                  controller: _date,
+                  decoration:
+                      const InputDecoration(labelText: '出厂日期 YYYY-MM-DD'),
                 ),
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Text(_error!, style: const TextStyle(color: Colors.red)),
+                TextField(
+                  controller: _batch,
+                  decoration: const InputDecoration(labelText: '生产批次'),
+                ),
+                TextField(
+                  controller: _serial,
+                  decoration: const InputDecoration(labelText: '批次序号'),
+                ),
+                TextField(
+                  controller: _code,
+                  decoration: const InputDecoration(labelText: '物流码'),
+                ),
+                if (widget.canEditCost)
+                  TextField(
+                    controller: _cost,
+                    decoration: const InputDecoration(labelText: '进货价（元）'),
+                  ),
+                if (_correction)
+                  TextField(
+                    controller: _reason,
+                    decoration: const InputDecoration(labelText: '纠错原因（必填）'),
+                  ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                ],
               ],
-            ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed:
+                  _saving ? null : () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: _saving ? null : _submit,
+              child: Text(_saving ? '保存中…' : '保存'),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _submit,
-          child: Text(_saving ? '保存中…' : '保存'),
-        ),
-      ],
     );
   }
 }
@@ -805,7 +1007,9 @@ String _statusLabel(String status) {
   return switch (status.toLowerCase()) {
     'pending_cost' => '待补进货价',
     'available' => '可售',
-    'allocated' => '已占用',
+    'allocated' || 'reserved' => '已占用',
+    'outbound' => '已出库',
+    'unavailable' => '不可售',
     'void' => '作废',
     _ => status,
   };
@@ -826,7 +1030,7 @@ String _message(Object error) {
       'MOUTAI_LOGISTICS_TEMPLATE_MISSING' =>
         '物流单模板损坏或缺失，请联系管理员。',
       'LOGISTICS_CODE_DUPLICATE' => '物流码已存在或本次录入重复。',
-      _ => error.message,
+      _ => inventoryErrorMessage(error),
     };
   }
   if (error is FormatException) return error.message;

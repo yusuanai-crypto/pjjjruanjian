@@ -133,6 +133,41 @@ test('reconcile is idempotent, copies to every active role account and backfills
   assert.ok(store.businessTodos[0].resolvedAt instanceof Date);
 });
 
+test('not-entered confirmation resolves travel todos and revoke reactivates them', async () => {
+  const store = createTodoStore({
+    users: [user('front-1', 'FRONT_DESK', true)],
+    travelGroups: [pendingFrontDeskGroup()],
+  });
+  const service = createService(store);
+  const now = new Date('2026-07-26T01:00:00.000Z');
+
+  await service.reconcileSource('TRAVEL_GROUP', 'group-1', now);
+  assert.equal(store.businessTodos.length, 1);
+  assert.equal(store.businessTodos[0].status, 'ACTIVE');
+
+  store.travelGroups[0].notEnteredConfirmedAt =
+    new Date('2026-07-26T01:05:00.000Z');
+  store.travelGroups[0].notEnteredConfirmedById = 'front-1';
+  await service.reconcileSource(
+    'TRAVEL_GROUP',
+    'group-1',
+    new Date('2026-07-26T01:05:00.000Z'),
+  );
+  assert.equal(store.businessTodos.length, 1);
+  assert.equal(store.businessTodos[0].status, 'RESOLVED');
+
+  store.travelGroups[0].notEnteredConfirmedAt = null;
+  store.travelGroups[0].notEnteredConfirmedById = null;
+  await service.reconcileSource(
+    'TRAVEL_GROUP',
+    'group-1',
+    new Date('2026-07-26T01:10:00.000Z'),
+  );
+  assert.equal(store.businessTodos.length, 1);
+  assert.equal(store.businessTodos[0].status, 'ACTIVE');
+  assert.equal(store.todoRecipients.length, 1);
+});
+
 test('overdue reminders escalate once to all enabled manager roles', async () => {
   const store = createTodoStore({
     users: [

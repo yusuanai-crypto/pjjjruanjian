@@ -319,12 +319,15 @@ class _ReconciliationTablePageState extends State<ReconciliationTablePage> {
     if (record == null) return 0;
     return record.travelGroupSalesCents +
         _centsFromText(_backOfficeSalesController.text) +
-        record.buybackCents +
         record.externalSalesCents +
         record.internalPurchaseCents +
         record.afterSalesCents -
         record.refundsCents;
   }
+
+  int get _payableTotalCents => _dailyReconciliation?.buybackCents ?? 0;
+
+  int get _netCashFlowCents => _receivableTotalCents - _payableTotalCents;
 
   int get _actualTotalCents {
     return _paymentMethods.fold<int>(
@@ -333,7 +336,7 @@ class _ReconciliationTablePageState extends State<ReconciliationTablePage> {
     );
   }
 
-  int get _differenceCents => _actualTotalCents - _receivableTotalCents;
+  int get _differenceCents => _actualTotalCents - _netCashFlowCents;
 
   List<ReconciliationRecord> get _filteredRecords {
     final query = _searchQuery.trim().toLowerCase();
@@ -406,6 +409,22 @@ class _ReconciliationTablePageState extends State<ReconciliationTablePage> {
                 (sum, item) => sum + item.receivableTotalCents,
               )),
               icon: Icons.account_balance_wallet_rounded,
+            ),
+            MetricData(
+              label: '应付合计',
+              value: formatMoneyCents(records.fold<int>(
+                0,
+                (sum, item) => sum + item.payableTotalCents,
+              )),
+              icon: Icons.outbox_rounded,
+            ),
+            MetricData(
+              label: '净现金流',
+              value: formatMoneyCents(records.fold<int>(
+                0,
+                (sum, item) => sum + item.netCashFlowCents,
+              )),
+              icon: Icons.swap_vert_rounded,
             ),
             MetricData(
               label: '实收合计',
@@ -638,6 +657,14 @@ class _ReconciliationTablePageState extends State<ReconciliationTablePage> {
                 tone: StatusTone.info,
               ),
               StatusTag(
+                label: '应付 ${formatMoneyCents(_payableTotalCents)}',
+                tone: StatusTone.warning,
+              ),
+              StatusTag(
+                label: '净现金流 ${formatMoneyCents(_netCashFlowCents)}',
+                tone: StatusTone.neutral,
+              ),
+              StatusTag(
                 label: '实收 ${formatMoneyCents(_actualTotalCents)}',
                 tone: StatusTone.success,
               ),
@@ -695,6 +722,15 @@ class _ReconciliationTablePageState extends State<ReconciliationTablePage> {
         _AmountLine(
           label: '应收合计',
           cents: record?.receivableTotalCents ?? 0,
+          prominent: true,
+        ),
+        _AmountLine(
+          label: '应付合计',
+          cents: record?.payableTotalCents ?? 0,
+        ),
+        _AmountLine(
+          label: '净现金流',
+          cents: record?.netCashFlowCents ?? 0,
           prominent: true,
         ),
         _AmountLine(

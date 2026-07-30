@@ -231,8 +231,10 @@ function createInMemoryPrisma(options = {}) {
   const guideCarriedGroups = [];
   const pendingTravelGroups = [];
   const customers = [];
+  const paymentMethods = [];
   const salesOrders = [];
   const salesOrderItems = [];
+  const salesOrderPaymentDetails = [];
   const inventoryConfigurations = [];
   const warehouses = [];
   const warehouseProductStocks = [];
@@ -280,7 +282,20 @@ function createInMemoryPrisma(options = {}) {
   seedGuides(guides, options.guides || [], now);
   seedCustomers(customers, options.customers || [], now);
   seedTravelGroups(travelGroups, options.travelGroups || [], now);
+  seedPaymentMethods(paymentMethods, options.paymentMethods || [], now);
   seedSalesOrders(salesOrders, options.salesOrders || [], now, salesOrderItems);
+  seedSalesOrderPaymentDetails(
+    salesOrderPaymentDetails,
+    options.salesOrders || [],
+    salesOrders,
+    paymentMethods,
+    now,
+  );
+  seedSimpleRows(
+    salesOrderPaymentDetails,
+    options.salesOrderPaymentDetails || [],
+    now,
+  );
   seedSimpleRows(
     inventoryConfigurations,
     options.inventoryConfigurations || [],
@@ -364,8 +379,10 @@ function createInMemoryPrisma(options = {}) {
     guideCarriedGroups,
     pendingTravelGroups,
     customers,
+    paymentMethods,
     salesOrders,
     salesOrderItems,
+    salesOrderPaymentDetails,
     inventoryConfigurations,
     warehouses,
     warehouseProductStocks,
@@ -919,6 +936,7 @@ function createInMemoryPrisma(options = {}) {
       tastingItems: travelGroupTastingItems,
       users,
       salesOrders,
+      salesOrderPaymentDetails,
       travelGroupFinanceSummaries,
     }),
     guideCarriedGroup: createTravelGroupDelegate(guideCarriedGroups),
@@ -1298,6 +1316,7 @@ function createInMemoryPrisma(options = {}) {
       serializedInventoryAssignments,
       serializedInventoryUnits,
     ),
+    paymentMethod: createPaymentMethodDelegate(paymentMethods),
     salesOrder: {
       findUnique: async ({ where, include } = {}) => {
         const row = salesOrders.find((order) => matchesUnique(order, where));
@@ -1314,6 +1333,7 @@ function createInMemoryPrisma(options = {}) {
           afterSalesOrders,
           commissionRecords,
           guides,
+          salesOrderPaymentDetails,
         );
         if (include?.inventoryAlerts) {
           const config =
@@ -1353,6 +1373,7 @@ function createInMemoryPrisma(options = {}) {
                   afterSalesOrders,
                   commissionRecords,
                   guides,
+                  salesOrderPaymentDetails,
                 ),
                 where,
               ),
@@ -1373,15 +1394,20 @@ function createInMemoryPrisma(options = {}) {
               afterSalesOrders,
               commissionRecords,
               guides,
+              salesOrderPaymentDetails,
             );
             return select ? selectRow(expanded, select) : expanded;
           });
       },
       create: async ({ data, include } = {}) => {
         const nestedItems = data.items?.create || [];
+        const nestedPaymentDetails = data.paymentDetails?.create || [];
         const row = {
+          workflowStatus: null,
+          workflowVersion: null,
           ...data,
           items: undefined,
+          paymentDetails: undefined,
           id: data.id || crypto.randomUUID(),
           createdAt: asDate(data.createdAt) || new Date(),
           updatedAt: asDate(data.updatedAt) || new Date(),
@@ -1389,6 +1415,8 @@ function createInMemoryPrisma(options = {}) {
           salesEditedAt: asDate(data.salesEditedAt) || null,
           pointsDestination:
             data.pointsDestination || 'TRAVEL_AGENCY',
+          personalAmountCents:
+            data.personalAmountCents ?? 0,
           fulfillmentWarehouseId:
             data.fulfillmentWarehouseId ?? null,
           inventoryAppliedAt:
@@ -1417,6 +1445,15 @@ function createInMemoryPrisma(options = {}) {
             createdAt: asDate(item.createdAt) || new Date(),
           });
         }
+        for (const detail of nestedPaymentDetails) {
+          salesOrderPaymentDetails.push({
+            ...detail,
+            id: detail.id || crypto.randomUUID(),
+            salesOrderId: row.id,
+            createdAt: asDate(detail.createdAt) || new Date(),
+            updatedAt: asDate(detail.updatedAt) || new Date(),
+          });
+        }
         return withSalesOrderIncludes(
           row,
           include,
@@ -1427,6 +1464,7 @@ function createInMemoryPrisma(options = {}) {
           afterSalesOrders,
           commissionRecords,
           guides,
+          salesOrderPaymentDetails,
         );
       },
       updateMany: async ({ where, data } = {}) => {
@@ -1451,15 +1489,26 @@ function createInMemoryPrisma(options = {}) {
           throw new Error('Sales order not found in test Prisma store.');
         }
         const nestedItems = data.items?.create || [];
+        const nestedPaymentDetails = data.paymentDetails?.create || [];
         if (data.items?.deleteMany !== undefined) {
           removeWhere(
             salesOrderItems,
             (item) => item.salesOrderId === salesOrders[index].id,
           );
         }
+        if (data.paymentDetails?.deleteMany !== undefined) {
+          removeWhere(
+            salesOrderPaymentDetails,
+            (detail) =>
+              detail.salesOrderId === salesOrders[index].id,
+          );
+        }
         salesOrders[index] = {
           ...salesOrders[index],
-          ...withoutNested(data, 'items'),
+          ...withoutNested(
+            withoutNested(data, 'items'),
+            'paymentDetails',
+          ),
           updatedAt: asDate(data?.updatedAt) || new Date(),
         };
         for (const item of nestedItems) {
@@ -1468,6 +1517,15 @@ function createInMemoryPrisma(options = {}) {
             id: item.id || crypto.randomUUID(),
             salesOrderId: salesOrders[index].id,
             createdAt: asDate(item.createdAt) || new Date(),
+          });
+        }
+        for (const detail of nestedPaymentDetails) {
+          salesOrderPaymentDetails.push({
+            ...detail,
+            id: detail.id || crypto.randomUUID(),
+            salesOrderId: salesOrders[index].id,
+            createdAt: asDate(detail.createdAt) || new Date(),
+            updatedAt: asDate(detail.updatedAt) || new Date(),
           });
         }
         return withSalesOrderIncludes(
@@ -1480,10 +1538,16 @@ function createInMemoryPrisma(options = {}) {
           afterSalesOrders,
           commissionRecords,
           guides,
+          salesOrderPaymentDetails,
         );
       },
     },
+    salesOrderPaymentDetail: createSimpleInventoryDelegate(
+      salesOrderPaymentDetails,
+      { uniqueFields: ['id'] },
+    ),
     afterSalesOrder: createAfterSalesOrderDelegate(afterSalesOrders, {
+      afterSalesOrders,
       salesOrders,
       salesOrderItems,
       afterSalesOrderItems,
@@ -1492,7 +1556,9 @@ function createInMemoryPrisma(options = {}) {
       users,
       commissionRecords,
       products,
+      salesOrderPaymentDetails,
       failCreateOnce: Boolean(options.failAfterSalesOrderCreateOnce),
+      failUpdateOnce: Boolean(options.failAfterSalesOrderUpdateOnce),
     }),
     afterSalesOrderItem: createSimpleInventoryDelegate(
       afterSalesOrderItems,
@@ -1664,8 +1730,10 @@ function createInMemoryPrisma(options = {}) {
     travelGroups,
     travelGroupTastingItems,
     customers,
+    paymentMethods,
     salesOrders,
     salesOrderItems,
+    salesOrderPaymentDetails,
     inventoryConfigurations,
     warehouses,
     warehouseProductStocks,
@@ -2214,6 +2282,7 @@ function createCustomerDelegate(rows) {
 
 function createAfterSalesOrderDelegate(rows, relations = {}) {
   let failCreateOnce = Boolean(relations.failCreateOnce);
+  let failUpdateOnce = Boolean(relations.failUpdateOnce);
   return {
     findUnique: async ({ where, include } = {}) => {
       const row = rows.find((item) => matchesUnique(item, where));
@@ -2266,6 +2335,10 @@ function createAfterSalesOrderDelegate(rows, relations = {}) {
       return withAfterSalesOrderIncludes(row, include, relations);
     },
     update: async ({ where, data, include } = {}) => {
+      if (failUpdateOnce) {
+        failUpdateOnce = false;
+        throw new Error('Simulated after-sales update failure.');
+      }
       const index = rows.findIndex((item) => matchesUnique(item, where));
       if (index < 0) {
         throw new Error('After-sales order not found in test Prisma store.');
@@ -2603,12 +2676,15 @@ function createTravelGroupDelegate(rows, options = {}) {
   const tastingItems = options.tastingItems || [];
   const users = options.users || [];
   const salesOrders = options.salesOrders || [];
+  const salesOrderPaymentDetails =
+    options.salesOrderPaymentDetails || [];
   const travelGroupFinanceSummaries =
     options.travelGroupFinanceSummaries || [];
   const relations = {
     tastingItems,
     users,
     salesOrders,
+    salesOrderPaymentDetails,
     travelGroupFinanceSummaries,
   };
   return {
@@ -2647,6 +2723,9 @@ function createTravelGroupDelegate(rows, options = {}) {
         childCount: data.childCount ?? 0,
         parkingFeeCents: data.parkingFeeCents ?? 500,
         cigaretteFeeCents: data.cigaretteFeeCents ?? null,
+        notEnteredConfirmedAt:
+          asDate(data.notEnteredConfirmedAt) || null,
+        notEnteredConfirmedById: data.notEnteredConfirmedById ?? null,
         lossStatus: data.lossStatus ?? 'PENDING',
         lossConfirmedAt: asDate(data.lossConfirmedAt) || null,
         lossConfirmedById: data.lossConfirmedById ?? null,
@@ -2856,6 +2935,8 @@ function seedTravelGroups(rows, seeds, now) {
       liaisonTasterName: seedValue(seed, 'liaisonTasterName', null),
       expectedArrivalTime: seedValue(seed, 'expectedArrivalTime', null),
       arrivalTime: seedValue(seed, 'arrivalTime', null),
+      notEnteredConfirmedAt: asDate(seed.notEnteredConfirmedAt) || null,
+      notEnteredConfirmedById: seed.notEnteredConfirmedById ?? null,
       groupType: seedValue(seed, 'groupType', 'seed'),
       wineDetails: seedValue(seed, 'wineDetails', null),
       departureTime: seedValue(seed, 'departureTime', null),
@@ -2944,6 +3025,196 @@ function seedGuides(rows, seeds, now) {
   }
 }
 
+function seedPaymentMethods(rows, seeds, now) {
+  const defaults = [
+    {
+      id: '00000000-0000-4000-8000-000000000001',
+      code: 'shouqianba',
+      name: '收钱吧',
+      category: 'DIRECT_RECEIPT',
+      sortOrder: 10,
+      isDefault: true,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000002',
+      code: 'boc_pos',
+      name: '中行POS机',
+      category: 'DIRECT_RECEIPT',
+      sortOrder: 20,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000003',
+      code: 'ceb_pos',
+      name: '光大POS机',
+      category: 'DIRECT_RECEIPT',
+      sortOrder: 30,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000004',
+      code: 'cash',
+      name: '现金',
+      category: 'DIRECT_RECEIPT',
+      sortOrder: 40,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000005',
+      code: 'cash_on_delivery',
+      name: '货到付款',
+      category: 'COLLECT_ON_DELIVERY',
+      sortOrder: 50,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000006',
+      code: 'bank_transfer',
+      name: '转账',
+      category: 'DIRECT_RECEIPT',
+      sortOrder: 60,
+    },
+  ];
+  for (const method of defaults) {
+    rows.push({
+      ...method,
+      isActive: true,
+      isDefault: Boolean(method.isDefault),
+      createdById: null,
+      updatedById: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  for (const seed of seeds) {
+    const index = rows.findIndex(
+      (method) =>
+        method.id === seed.id ||
+        (seed.code && method.code === seed.code),
+    );
+    const row = {
+      ...(index >= 0 ? rows[index] : {}),
+      ...seed,
+      id: seed.id || (index >= 0 ? rows[index].id : crypto.randomUUID()),
+      code:
+        seed.code ||
+        (index >= 0
+          ? rows[index].code
+          : `custom_${crypto.randomUUID().replace(/-/g, '')}`),
+      category:
+        seed.category ||
+        (index >= 0 ? rows[index].category : 'DIRECT_RECEIPT'),
+      isActive: seed.isActive ?? (index >= 0 ? rows[index].isActive : true),
+      isDefault:
+        seed.isDefault ?? (index >= 0 ? rows[index].isDefault : false),
+      sortOrder: seed.sortOrder ?? (index >= 0 ? rows[index].sortOrder : 0),
+      createdAt:
+        asDate(seed.createdAt) ||
+        (index >= 0 ? rows[index].createdAt : now),
+      updatedAt: asDate(seed.updatedAt) || now,
+    };
+    if (index >= 0) {
+      rows[index] = row;
+    } else {
+      rows.push(row);
+    }
+  }
+}
+
+function seedSalesOrderPaymentDetails(
+  rows,
+  seeds,
+  salesOrders,
+  paymentMethods,
+  now,
+) {
+  const defaultMethod = paymentMethods.find(
+    (method) => method.code === 'shouqianba',
+  );
+  const collectionMethod = paymentMethods.find(
+    (method) => method.code === 'cash_on_delivery',
+  );
+  for (let index = 0; index < salesOrders.length; index += 1) {
+    const order = salesOrders[index];
+    const seed = seeds[index] || {};
+    const explicit = Array.isArray(seed.paymentDetails)
+      ? seed.paymentDetails
+      : null;
+    if (explicit) {
+      for (let detailIndex = 0; detailIndex < explicit.length; detailIndex += 1) {
+        const detail = explicit[detailIndex];
+        const method = paymentMethods.find(
+          (candidate) => candidate.id === detail.paymentMethodId,
+        );
+        rows.push({
+          ...detail,
+          id: detail.id || crypto.randomUUID(),
+          salesOrderId: order.id,
+          paymentMethodNameSnapshot:
+            detail.paymentMethodNameSnapshot || method?.name || '收钱吧',
+          paymentMethodCategorySnapshot:
+            detail.paymentMethodCategorySnapshot ||
+            method?.category ||
+            'DIRECT_RECEIPT',
+          amountCents: detail.amountCents ?? 0,
+          sortOrder: detail.sortOrder ?? detailIndex,
+          collectionConfirmed:
+            detail.collectionConfirmed ??
+            Boolean(
+              detail.collectionConfirmedAt ||
+                detail.agencyCollectionConfirmedAt,
+            ),
+          collectionConfirmedAt:
+            asDate(
+              detail.collectionConfirmedAt ||
+                detail.agencyCollectionConfirmedAt,
+            ) || null,
+          collectionConfirmedById:
+            detail.collectionConfirmedById ??
+            detail.agencyCollectionConfirmedById ??
+            null,
+          createdAt: asDate(detail.createdAt) || now,
+          updatedAt: asDate(detail.updatedAt) || now,
+        });
+      }
+      continue;
+    }
+    const cod = Number(order.cashOnDeliveryAmountCents || 0);
+    const remainder = Number(order.totalAmountCents || 0) - cod;
+    if (cod !== 0 && collectionMethod) {
+      rows.push({
+        id: crypto.randomUUID(),
+        salesOrderId: order.id,
+        paymentMethodId: collectionMethod.id,
+        paymentMethodNameSnapshot: collectionMethod.name,
+        paymentMethodCategorySnapshot: collectionMethod.category,
+        amountCents: cod,
+        sortOrder: 1,
+        collectionConfirmed: false,
+        collectionConfirmedAt: null,
+        collectionConfirmedById: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    if (
+      defaultMethod &&
+      (remainder !== 0 || (cod === 0 && order.totalAmountCents === 0))
+    ) {
+      rows.push({
+        id: crypto.randomUUID(),
+        salesOrderId: order.id,
+        paymentMethodId: defaultMethod.id,
+        paymentMethodNameSnapshot: defaultMethod.name,
+        paymentMethodCategorySnapshot: defaultMethod.category,
+        amountCents: remainder,
+        sortOrder: 0,
+        collectionConfirmed: false,
+        collectionConfirmedAt: null,
+        collectionConfirmedById: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+}
+
 function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
   for (const seed of seeds) {
     const row = {
@@ -2966,6 +3237,22 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       qrCodeRevokedAt: asDate(seed.qrCodeRevokedAt) || null,
       totalAmountCents: seed.totalAmountCents ?? 0,
       cashOnDeliveryAmountCents: seed.cashOnDeliveryAmountCents ?? 0,
+      completedAt: asDate(seed.completedAt) || null,
+      completedById: seed.completedById ?? null,
+      paymentDetailsLocked:
+        seed.paymentDetailsLocked ??
+        Boolean(
+          seed.paymentDetailsLockedAt &&
+            !seed.paymentDetailsUnlockedAt,
+        ),
+      paymentDetailsLockedAt:
+        asDate(seed.paymentDetailsLockedAt) || null,
+      paymentDetailsLockedById:
+        seed.paymentDetailsLockedById ?? null,
+      paymentDetailsUnlockedAt:
+        asDate(seed.paymentDetailsUnlockedAt) || null,
+      paymentDetailsUnlockedById:
+        seed.paymentDetailsUnlockedById ?? null,
       logisticsMethod: seed.logisticsMethod ?? null,
       logisticsProviderCode: seed.logisticsProviderCode ?? null,
       packingStatus: seed.packingStatus || 'PACKED',
@@ -2987,10 +3274,16 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       financeMark: Boolean(seed.financeMark),
       markedById: seed.markedById ?? null,
       markedAt: asDate(seed.markedAt) || null,
+      taxRateSnapshot: seed.taxRateSnapshot ?? null,
+      profitFeeSnapshottedAt:
+        asDate(seed.profitFeeSnapshottedAt) || null,
+      profitFeeSnapshottedById:
+        seed.profitFeeSnapshottedById ?? null,
       outreachUserId: seed.outreachUserId ?? null,
       salesUserId: seed.salesUserId ?? null,
       pointsDestination:
         seed.pointsDestination || 'TRAVEL_AGENCY',
+      personalAmountCents: seed.personalAmountCents ?? 0,
       personalPointsGuideId: seed.personalPointsGuideId ?? null,
       personalGuideNameSnapshot:
         seed.personalGuideNameSnapshot ?? null,
@@ -3015,6 +3308,8 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       inventoryPolicyVersion:
         seed.inventoryPolicyVersion ?? null,
       inventoryVersion: seed.inventoryVersion ?? 0,
+      workflowStatus: seed.workflowStatus ?? null,
+      workflowVersion: seed.workflowVersion ?? null,
       createdById: seed.createdById ?? null,
       updatedById: seed.updatedById ?? null,
       createdAt: asDate(seed.createdAt) || now,
@@ -3060,6 +3355,14 @@ function seedAfterSalesOrders(rows, seeds, now) {
       description: seed.description || 'seed smoke test after sales description',
       resolution: seed.resolution ?? null,
       refundAmountCents: seed.refundAmountCents ?? 0,
+      refundPaymentDetailId: seed.refundPaymentDetailId ?? null,
+      refundPaymentMethodNameSnapshot:
+        seed.refundPaymentMethodNameSnapshot ?? null,
+      refundOccurredAt: asDate(seed.refundOccurredAt) || null,
+      deductsPaymentServiceFee:
+        Boolean(seed.deductsPaymentServiceFee),
+      personalPointsRefundAmountCents:
+        seed.personalPointsRefundAmountCents ?? 0,
       deductionCalculationMode:
         seed.deductionCalculationMode || 'manual_product_reference',
       sourceAgencyDeductionCents: seed.sourceAgencyDeductionCents ?? 0,
@@ -3370,6 +3673,44 @@ function createSimpleInventoryDelegate(rows, options = {}) {
   };
 }
 
+function createPaymentMethodDelegate(rows) {
+  return {
+    findUnique: async ({ where } = {}) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findFirst: async ({ where, orderBy } = {}) => {
+      const result = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      );
+      return result[0] || null;
+    },
+    findMany: async ({ where, orderBy } = {}) =>
+      sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      ),
+    create: async ({ data } = {}) => {
+      if (rows.some((item) => item.code === data.code)) {
+        throw createPrismaUniqueError('code');
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data } = {}) =>
+      updateOneInventoryRow(rows, where, data),
+    updateMany: async ({ where, data } = {}) =>
+      updateInventoryRows(rows, where, data),
+  };
+}
+
 function matchesWarehouseProductUnique(row, where = {}) {
   if (where?.warehouseId_productId) {
     return (
@@ -3489,6 +3830,9 @@ function matchesWhere(row, where = {}) {
     }
     if (value && typeof value === 'object' && Array.isArray(value.in)) {
       return value.in.includes(row[key]);
+    }
+    if (value && typeof value === 'object' && Array.isArray(value.notIn)) {
+      return !value.notIn.includes(row[key]);
     }
     if (value && typeof value === 'object' && value.not !== undefined) {
       return !valuesEqual(row[key], value.not);
@@ -3634,6 +3978,8 @@ function withTravelGroupIncludes(group, include, relations) {
   const tastingItems = relations?.tastingItems || [];
   const users = relations?.users || [];
   const salesOrders = relations?.salesOrders || [];
+  const salesOrderPaymentDetails =
+    relations?.salesOrderPaymentDetails || [];
   const commissionRecords = relations?.commissionRecords || [];
   const travelGroupFinanceSummaries =
     relations?.travelGroupFinanceSummaries || [];
@@ -3656,6 +4002,14 @@ function withTravelGroupIncludes(group, include, relations) {
     );
     row.liaisonTaster = liaisonTaster ? copyRow(liaisonTaster) : null;
   }
+  if (include?.notEnteredConfirmedBy) {
+    const notEnteredConfirmedBy = users.find(
+      (user) => user.id === group.notEnteredConfirmedById,
+    );
+    row.notEnteredConfirmedBy = notEnteredConfirmedBy
+      ? copyRow(notEnteredConfirmedBy)
+      : null;
+  }
   if (include?.lossConfirmedBy) {
     const lossConfirmedBy = users.find(
       (user) => user.id === group.lossConfirmedById,
@@ -3668,7 +4022,24 @@ function withTravelGroupIncludes(group, include, relations) {
     row.salesOrders = sortRows(
       salesOrders
         .filter((order) => order.travelGroupId === group.id)
-        .map(copyRow),
+        .map((order) => {
+          const expanded = copyRow(order);
+          if (includeConfig.include?.paymentDetails) {
+            const paymentInclude =
+              typeof includeConfig.include.paymentDetails === 'object'
+                ? includeConfig.include.paymentDetails
+                : {};
+            expanded.paymentDetails = sortRows(
+              salesOrderPaymentDetails
+                .filter(
+                  (detail) => detail.salesOrderId === order.id,
+                )
+                .map(copyRow),
+              paymentInclude.orderBy,
+            );
+          }
+          return expanded;
+        }),
       includeConfig.orderBy,
     );
   }
@@ -3714,8 +4085,32 @@ function withSalesOrderIncludes(
   afterSalesOrders = [],
   commissionRecords = [],
   guides = [],
+  salesOrderPaymentDetails = [],
 ) {
   const row = copyRow(order);
+  if (include?.paymentDetails) {
+    const includeConfig =
+      typeof include.paymentDetails === 'object'
+        ? include.paymentDetails
+        : {};
+    row.paymentDetails = sortRows(
+      salesOrderPaymentDetails
+        .filter((detail) => detail.salesOrderId === order.id)
+        .map((detail) => {
+          const expanded = copyRow(detail);
+          if (includeConfig.include?.collectionConfirmedBy) {
+            const confirmedBy = users.find(
+              (user) => user.id === detail.collectionConfirmedById,
+            );
+            expanded.collectionConfirmedBy = confirmedBy
+              ? copyRow(confirmedBy)
+              : null;
+          }
+          return expanded;
+        }),
+      includeConfig.orderBy,
+    );
+  }
   if (include?.items) {
     const includeConfig = typeof include.items === 'object' ? include.items : {};
     row.items = sortRows(
@@ -3863,6 +4258,8 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
           relations.users || [],
           relations.afterSalesOrders || [],
           relations.commissionRecords || [],
+          [],
+          relations.salesOrderPaymentDetails || [],
         )
       : null;
   }
@@ -3884,6 +4281,8 @@ function withAfterSalesOrderIncludes(order, include, relations = {}) {
           relations.users || [],
           relations.afterSalesOrders || [],
           relations.commissionRecords || [],
+          [],
+          relations.salesOrderPaymentDetails || [],
         )
       : null;
   }

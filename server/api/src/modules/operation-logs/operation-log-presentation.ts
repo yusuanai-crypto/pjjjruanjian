@@ -122,6 +122,8 @@ const ACTION_LABELS: Record<string, string> = {
   archive: '归档',
   restore: '恢复',
   refresh: '刷新',
+  'not_entered.confirm': '确认未进店',
+  'not_entered.revoke': '撤销未进店',
   revoke: '撤销',
   confirm: '确认',
   send: '发送',
@@ -137,6 +139,8 @@ const ACTION_LABELS: Record<string, string> = {
   generate: '生成',
   regenerate: '重新生成',
   trigger: '触发',
+  'points_destination.guide_personal': '调整走个人金额',
+  'points_destination.travel_agency': '取消走个人',
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -181,6 +185,13 @@ const FIELD_LABELS: Record<string, string> = {
   amount: '金额',
   totalAmount: '总金额',
   totalAmountCents: '总金额',
+  personalAmountCents: '走个人金额',
+  normalAmountCents: '正常金额',
+  personalPointsRefundAmountCents: '个人退款金额',
+  normalPointsRefundAmountCents: '正常退款金额',
+  pointsDestination: '积分归属',
+  pointsDestinationChangedById: '走个人修改人',
+  pointsDestinationChangedAt: '走个人修改时间',
   unitPrice: '单价',
   unitPriceCents: '单价',
   remark: '备注',

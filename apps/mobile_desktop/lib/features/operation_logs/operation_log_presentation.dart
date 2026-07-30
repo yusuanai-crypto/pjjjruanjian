@@ -340,6 +340,8 @@ class OperationLogPresentation {
     'archive': '归档',
     'restore': '恢复',
     'refresh': '刷新',
+    'not_entered.confirm': '确认未进店',
+    'not_entered.revoke': '撤销未进店',
     'revoke': '撤销',
     'confirm': '确认',
     'send': '发送',

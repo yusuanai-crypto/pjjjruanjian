@@ -11,6 +11,7 @@ import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../../shared/widgets/time_picker_field.dart';
+import '../travel_groups/travel_group_picker_dialog.dart';
 import '../travel_groups/tasting_items_editor.dart';
 
 class TravelGroupOrderNotesPage extends StatefulWidget {
@@ -35,10 +36,14 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   late final TextEditingController _searchController;
 
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
+  List<TasterOption> _tasters = const <TasterOption>[];
+  TravelGroupSearchScope _scope = TravelGroupSearchScope.taster;
   String _filter = '待销售';
-  String _query = '';
+  String? _selectedTasterId;
   String? _selectedGroupId;
+  bool _loadingTasters = true;
   bool _loading = true;
+  String? _tasterErrorMessage;
   String? _errorMessage;
   String? _successMessage;
 
@@ -48,6 +53,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     _businessApi =
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
     _searchController = TextEditingController();
+    _loadTasters();
     _loadData();
   }
 
@@ -58,6 +64,7 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         oldWidget.token != widget.token) {
       _businessApi =
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+      _loadTasters();
       _loadData();
     }
   }
@@ -68,14 +75,53 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
     super.dispose();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadTasters() async {
+    setState(() {
+      _loadingTasters = true;
+      _tasterErrorMessage = null;
+    });
+    try {
+      final tasters = await _businessApi.listTasters();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _tasters = tasters;
+        _loadingTasters = false;
+        if (_selectedTasterId != null &&
+            !tasters.any((taster) => taster.id == _selectedTasterId)) {
+          _selectedTasterId = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _tasters = const <TasterOption>[];
+        _loadingTasters = false;
+        _tasterErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  Future<void> _loadData({bool applyFilter = false}) async {
     setState(() {
       _loading = true;
       _errorMessage = null;
     });
 
     try {
-      final groups = await _businessApi.listTravelGroups(limit: 100);
+      final groups = await _businessApi.listTravelGroups(
+        limit: 100,
+        tasterId: applyFilter && _scope == TravelGroupSearchScope.taster
+            ? _trimmedOrNull(_selectedTasterId)
+            : null,
+        tastingRoomNo:
+            applyFilter && _scope == TravelGroupSearchScope.tastingRoomNo
+                ? _trimmedOrNull(_searchController.text)
+                : null,
+      );
       if (!mounted) {
         return;
       }
@@ -107,28 +153,36 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
   }
 
   List<TravelGroupRecord> get _visibleGroups {
-    final query = _query.trim().toLowerCase();
     return _groups.where((group) {
-      if (_filter == '今日' && group.visitDate != formatDate(DateTime.now())) {
-        return false;
-      }
       if (_filter == '待销售' && !_needsSupplement(group)) {
         return false;
       }
       if (_filter == '已出单' && group.status != 'ordered') {
         return false;
       }
-      if (query.isEmpty) {
-        return true;
-      }
-      return [
-        group.groupNo,
-        group.travelAgency ?? '',
-        group.guideName ?? '',
-        group.licensePlate ?? '',
-        group.tasterName ?? '',
-      ].any((value) => value.toLowerCase().contains(query));
+      return true;
     }).toList();
+  }
+
+  void _changeScope(TravelGroupSearchScope scope) {
+    setState(() {
+      _scope = scope;
+      _selectedTasterId = null;
+      _searchController.clear();
+    });
+    _loadData();
+  }
+
+  bool get _canSearch {
+    if (_loading || _loadingTasters) {
+      return false;
+    }
+    switch (_scope) {
+      case TravelGroupSearchScope.taster:
+        return _trimmedOrNull(_selectedTasterId) != null;
+      case TravelGroupSearchScope.tastingRoomNo:
+        return _trimmedOrNull(_searchController.text) != null;
+    }
   }
 
   Future<void> _openNotesEditor(TravelGroupRecord group) async {
@@ -225,6 +279,11 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
       children: [
         if (_errorMessage != null)
           _InlineNotice(message: _errorMessage!, tone: StatusTone.danger),
+        if (_tasterErrorMessage != null)
+          _InlineNotice(
+            message: _tasterErrorMessage!,
+            tone: StatusTone.danger,
+          ),
         if (_successMessage != null)
           _InlineNotice(message: _successMessage!, tone: StatusTone.success),
         _OrderNotesSummary(
@@ -233,11 +292,21 @@ class _TravelGroupOrderNotesPageState extends State<TravelGroupOrderNotesPage> {
         ),
         _GroupQueue(
           loading: _loading,
+          loadingTasters: _loadingTasters,
           searchController: _searchController,
+          scope: _scope,
+          tasters: _tasters,
+          selectedTasterId: _selectedTasterId,
           filter: _filter,
           groups: visibleGroups,
           selectedGroupId: _selectedGroupId,
-          onQueryChanged: (value) => setState(() => _query = value),
+          canSearch: _canSearch,
+          onScopeChanged: _changeScope,
+          onTasterChanged: (value) {
+            setState(() => _selectedTasterId = value);
+          },
+          onRoomNoChanged: (_) => setState(() {}),
+          onSearch: () => _loadData(applyFilter: true),
           onFilterChanged: (value) => setState(() => _filter = value),
           onSelectGroup: _openNotesEditor,
         ),
@@ -272,21 +341,37 @@ class _OrderNotesSummary extends StatelessWidget {
 class _GroupQueue extends StatelessWidget {
   const _GroupQueue({
     required this.loading,
+    required this.loadingTasters,
     required this.searchController,
+    required this.scope,
+    required this.tasters,
+    required this.selectedTasterId,
     required this.filter,
     required this.groups,
     required this.selectedGroupId,
-    required this.onQueryChanged,
+    required this.canSearch,
+    required this.onScopeChanged,
+    required this.onTasterChanged,
+    required this.onRoomNoChanged,
+    required this.onSearch,
     required this.onFilterChanged,
     required this.onSelectGroup,
   });
 
   final bool loading;
+  final bool loadingTasters;
   final TextEditingController searchController;
+  final TravelGroupSearchScope scope;
+  final List<TasterOption> tasters;
+  final String? selectedTasterId;
   final String filter;
   final List<TravelGroupRecord> groups;
   final String? selectedGroupId;
-  final ValueChanged<String> onQueryChanged;
+  final bool canSearch;
+  final ValueChanged<TravelGroupSearchScope> onScopeChanged;
+  final ValueChanged<String?> onTasterChanged;
+  final ValueChanged<String> onRoomNoChanged;
+  final VoidCallback onSearch;
   final ValueChanged<String> onFilterChanged;
   final ValueChanged<TravelGroupRecord> onSelectGroup;
 
@@ -300,14 +385,94 @@ class _GroupQueue extends StatelessWidget {
           trailing:
               StatusTag(label: '${groups.length} 个团', tone: StatusTone.info),
           children: [
-            AppSearchField(
-              controller: searchController,
-              hintText: '搜索团号、旅行社、导游、车牌',
-              onChanged: onQueryChanged,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 150,
+                  child: DropdownButtonFormField<TravelGroupSearchScope>(
+                    key: const ValueKey(
+                      'travel-group-notes-search-scope',
+                    ),
+                    initialValue: scope,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '搜索范围'),
+                    items: [
+                      for (final item in TravelGroupSearchScope.values)
+                        DropdownMenuItem(
+                          value: item,
+                          child: Text(_travelGroupScopeLabel(item)),
+                        ),
+                    ],
+                    onChanged: loading
+                        ? null
+                        : (value) {
+                            if (value != null) {
+                              onScopeChanged(value);
+                            }
+                          },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: scope == TravelGroupSearchScope.taster
+                      ? DropdownButtonFormField<String>(
+                          key: const ValueKey(
+                            'travel-group-notes-taster-field',
+                          ),
+                          initialValue: tasters.any(
+                            (taster) => taster.id == selectedTasterId,
+                          )
+                              ? selectedTasterId
+                              : null,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: '品鉴师',
+                            hintText: loadingTasters ? '正在加载品鉴师' : '请选择品鉴师',
+                          ),
+                          items: [
+                            for (final taster in tasters)
+                              DropdownMenuItem(
+                                value: taster.id,
+                                child: Text(_tasterOptionLabel(taster)),
+                              ),
+                          ],
+                          onChanged: loadingTasters ? null : onTasterChanged,
+                        )
+                      : TextField(
+                          key: const ValueKey(
+                            'travel-group-notes-tasting-room-no-field',
+                          ),
+                          controller: searchController,
+                          decoration: const InputDecoration(
+                            labelText: '品鉴馆号',
+                            hintText: '输入品鉴馆号',
+                            prefixIcon: Icon(Icons.meeting_room_rounded),
+                          ),
+                          textInputAction: TextInputAction.search,
+                          onChanged: onRoomNoChanged,
+                          onSubmitted: (_) {
+                            if (canSearch) {
+                              onSearch();
+                            }
+                          },
+                        ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                key: const ValueKey('travel-group-notes-search-button'),
+                onPressed: canSearch ? onSearch : null,
+                icon: const Icon(Icons.search_rounded),
+                label: const Text('搜索'),
+              ),
             ),
             const SizedBox(height: 12),
             AppFilterBar(
-              filters: const ['待销售', '今日', '已出单', '全部'],
+              filters: const ['待销售', '已出单', '全部'],
               selected: filter,
               onSelected: onFilterChanged,
             ),
@@ -327,8 +492,9 @@ class _GroupQueue extends StatelessWidget {
                   subtitle:
                       '${group.travelAgency ?? '未填旅行社'} · ${group.guideName ?? '未填导游'}',
                   meta: [
-                    group.visitDate,
-                    if (group.licensePlate != null) group.licensePlate!,
+                    '到店日期：${_displayValue(group.visitDate, '未填写到店日期')}',
+                    '品鉴师：${_displayValue(group.tasterName, '未分配品鉴师')}',
+                    '品鉴馆号：${_displayValue(group.tastingRoomNo, '未填写品鉴馆号')}',
                     group.guestCount > 0 ? '${group.guestCount} 人' : '人数未填写',
                   ],
                   icon: selectedGroupId == group.id
@@ -864,6 +1030,33 @@ class _InlineNotice extends StatelessWidget {
       child: StatusTag(label: message, tone: tone),
     );
   }
+}
+
+String _travelGroupScopeLabel(TravelGroupSearchScope scope) {
+  switch (scope) {
+    case TravelGroupSearchScope.taster:
+      return '品鉴师';
+    case TravelGroupSearchScope.tastingRoomNo:
+      return '品鉴馆号';
+  }
+}
+
+String _tasterOptionLabel(TasterOption taster) {
+  final name = taster.name.trim();
+  if (name.isNotEmpty) {
+    return name;
+  }
+  final username = taster.username.trim();
+  return username.isEmpty ? '未命名品鉴师' : username;
+}
+
+String? _trimmedOrNull(String? value) {
+  final text = value?.trim() ?? '';
+  return text.isEmpty ? null : text;
+}
+
+String _displayValue(String? value, String fallback) {
+  return _trimmedOrNull(value) ?? fallback;
 }
 
 String _messageForError(Object error) {

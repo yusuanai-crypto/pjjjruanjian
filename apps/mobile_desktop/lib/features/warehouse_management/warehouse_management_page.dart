@@ -3,13 +3,27 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
+import '../../core/business/business_api.dart';
 import '../../core/business/inventory_api.dart';
-import '../../shared/widgets/responsive.dart';
-import '../../shared/widgets/state_views.dart';
-import '../../shared/widgets/status_tag.dart';
 import '../../shared/widgets/form_section.dart';
-import '../../shared/widgets/metric_card.dart';
+import '../../shared/widgets/responsive.dart';
+import '../../shared/widgets/status_tag.dart';
+import '../warehouse/warehouse_packing_page.dart';
+import 'compatibility/inventory_compatibility_entries.dart';
 import 'inventory_workspace_tabs.dart';
+import 'navigation/warehouse_secondary_navigation.dart';
+import 'overview/inventory_overview_page.dart';
+import 'returns/customer_returns_tab.dart';
+import 'shared/inventory_workspace_shared.dart';
+import 'warehouse_settings_page.dart';
+
+export 'shared/inventory_workspace_shared.dart'
+    show
+        confirmInventoryAction,
+        inventoryErrorMessage,
+        parseBottleQuantity,
+        parseNonNegativeInt,
+        parseNonNegativeYuanCents;
 
 class WarehouseManagementPage extends StatefulWidget {
   const WarehouseManagementPage({
@@ -31,99 +45,390 @@ class WarehouseManagementPage extends StatefulWidget {
 }
 
 class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
-  late InventoryApi _api;
+  InventoryApi? _api;
+  BusinessApi? _businessApi;
+  String _selectedModuleId = 'overview';
+  Set<String> _visitedModuleIds = {'overview'};
+  int _actorRevision = 0;
+  String? _stockFilterRequest;
+  int _stockFilterRevision = 0;
+  final Map<String, String?> _moduleFilterRequests = {};
+  final Map<String, int> _moduleFilterRevisions = {};
+  final Map<String, InventorySelectionContext> _moduleSelectionRequests = {};
+  final Map<String, int> _createRequestRevisions = {};
+  bool _warehouseSettingsDirty = false;
 
   @override
   void initState() {
     super.initState();
-    _api = InventoryApi(
-        apiClient: widget.apiClient, token: widget.token, role: widget.role);
+    _api = _createApiIfAllowed();
+    _businessApi = _createBusinessApiIfAllowed();
   }
 
   @override
   void didUpdateWidget(covariant WarehouseManagementPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 角色或 token 变化时清除库存与成本缓存，防止残留。
-    if (oldWidget.role != widget.role ||
+    final actorChanged = oldWidget.role != widget.role ||
         oldWidget.token != widget.token ||
-        oldWidget.apiClient != widget.apiClient) {
-      setState(() {
-        _api.clearCache();
-        _api = InventoryApi(
-            apiClient: widget.apiClient,
-            token: widget.token,
-            role: widget.role);
-      });
-    }
+        oldWidget.apiClient != widget.apiClient;
+    if (!actorChanged) return;
+
+    // 清空旧身份拥有的数量与成本缓存，并用新的组件 key 销毁所有模块状态。
+    _api?.clearCache();
+    _api = _createApiIfAllowed();
+    _businessApi = _createBusinessApiIfAllowed();
+    _actorRevision++;
+    _selectedModuleId = 'overview';
+    _visitedModuleIds = {'overview'};
+    _stockFilterRequest = null;
+    _stockFilterRevision = 0;
+    _moduleFilterRequests.clear();
+    _moduleFilterRevisions.clear();
+    _moduleSelectionRequests.clear();
+    _createRequestRevisions.clear();
+    _warehouseSettingsDirty = false;
   }
 
-  List<_InventoryTab> get _tabs {
+  @override
+  void dispose() {
+    _api?.clearCache();
+    super.dispose();
+  }
+
+  InventoryApi? _createApiIfAllowed() {
+    if (!canAccessInventory(widget.role)) return null;
+    return InventoryApi(
+      apiClient: widget.apiClient,
+      token: widget.token,
+      role: widget.role,
+    );
+  }
+
+  BusinessApi? _createBusinessApiIfAllowed() {
+    if (!canAccessInventory(widget.role)) return null;
+    return BusinessApi(apiClient: widget.apiClient, token: widget.token);
+  }
+
+  bool get _canUseOperationalEntries {
+    return widget.role == UserRole.superAdmin ||
+        widget.role == UserRole.admin ||
+        widget.role == UserRole.warehouse;
+  }
+
+  bool get _canUseSerializedInventory {
+    return widget.role == UserRole.superAdmin ||
+        widget.role == UserRole.admin ||
+        widget.role == UserRole.finance ||
+        widget.role == UserRole.warehouse;
+  }
+
+  List<_WarehouseModuleGroup> get _moduleGroups {
+    final api = _api!;
     final role = widget.role;
-    final list = <_InventoryTab>[
-      _InventoryTab(
-          id: 'overview',
-          label: '库存总览',
-          icon: Icons.space_dashboard_rounded,
-          builder: (ctx) => _OverviewTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'stock',
-          label: '商品库存',
-          icon: Icons.inventory_2_rounded,
-          builder: (ctx) => StockTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'inbound',
-          label: '入库管理',
-          icon: Icons.input_rounded,
-          builder: (ctx) => InboundTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'transfer',
-          label: '调拨与在途',
-          icon: Icons.swap_horiz_rounded,
-          builder: (ctx) => TransferTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'unavailable',
-          label: '不可售管理',
-          icon: Icons.block_rounded,
-          builder: (ctx) => UnavailableTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'stocktake',
-          label: '商品盘点',
-          icon: Icons.fact_check_rounded,
-          builder: (ctx) => StocktakeTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'approval',
-          label: '盘点审批',
-          icon: Icons.approval_rounded,
-          builder: (ctx) => StocktakeApprovalTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'alert',
-          label: '库存预警',
-          icon: Icons.warning_amber_rounded,
-          builder: (ctx) => AlertTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'movement',
-          label: '出入库流水',
-          icon: Icons.receipt_long_rounded,
-          builder: (ctx) => MovementTab(api: _api, role: role)),
-      _InventoryTab(
-          id: 'report',
-          label: '库存报表',
-          icon: Icons.assessment_rounded,
-          builder: (ctx) => ReportTab(api: _api, role: role)),
+    return [
+      _WarehouseModuleGroup(
+        id: 'workbench',
+        label: '工作台',
+        modules: [
+          _WarehouseModule(
+            id: 'overview',
+            label: '库存总览',
+            icon: Icons.space_dashboard_rounded,
+            description: '查看仓库、库存、在途、预警和待审批概况。',
+            builder: () => InventoryOverviewPage(
+              api: api,
+              role: role,
+              onNavigate: _handleOverviewNavigation,
+            ),
+          ),
+          _WarehouseModule(
+            id: 'stock',
+            label: '商品库存',
+            icon: Icons.inventory_2_rounded,
+            description: '按仓库查看数量、状态；成本字段严格按角色控制。',
+            builder: () => StockTab(
+              api: api,
+              role: role,
+              onNavigate: _handleStockNavigation,
+              onOpenSerialized: () =>
+                  widget.onOpenDestination('moutai_inventory'),
+              requestedFilter: _stockFilterRequest,
+              filterRequestRevision: _stockFilterRevision,
+            ),
+          ),
+          _WarehouseModule(
+            id: 'alert',
+            label: '库存预警',
+            icon: Icons.warning_amber_rounded,
+            description: '查看负库存和低库存等需要处理的异常。',
+            builder: () => AlertTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              onNavigate: _handleAlertNavigation,
+            ),
+          ),
+        ],
+      ),
+      _WarehouseModuleGroup(
+        id: 'daily',
+        label: '日常作业',
+        modules: [
+          _WarehouseModule(
+            id: 'inbound',
+            label: '入库',
+            icon: Icons.input_rounded,
+            description: '查看入库记录；有权限的角色可创建并生效入库。',
+            builder: () => InboundTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              onOpenSerialized: () =>
+                  widget.onOpenDestination('moutai_inventory'),
+              onInventoryFactsChanged: _invalidateInventoryFacts,
+              createRequestRevision: _createRequestRevisions['inbound'] ?? 0,
+              requestedFilter: _moduleFilterRequests['inbound'],
+              filterRequestRevision: _moduleFilterRevisions['inbound'] ?? 0,
+              requestedSelection: _moduleSelectionRequests['inbound'],
+            ),
+          ),
+          if (_canUseOperationalEntries)
+            _WarehouseModule(
+              id: 'fulfillment',
+              label: '销售出库与配货',
+              icon: Icons.local_shipping_outlined,
+              description: '嵌入现有库管打包工作台，共用真实订单、逐瓶选择和出库动作。',
+              builder: () => WarehousePackingPage(
+                apiClient: widget.apiClient,
+                token: widget.token,
+                role: widget.role,
+                embedded: true,
+                onInventoryFactsChanged: _invalidateInventoryFacts,
+              ),
+            ),
+          _WarehouseModule(
+            id: 'transfer',
+            label: '调拨与在途',
+            icon: Icons.swap_horiz_rounded,
+            description: '查看调拨流程；仓库角色可执行调出和调入确认。',
+            builder: () => TransferTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              createRequestRevision: _createRequestRevisions['transfer'] ?? 0,
+              requestedFilter: _moduleFilterRequests['transfer'],
+              filterRequestRevision: _moduleFilterRevisions['transfer'] ?? 0,
+              requestedSelection: _moduleSelectionRequests['transfer'],
+              onInventoryFactsChanged: _invalidateInventoryFacts,
+            ),
+          ),
+          _WarehouseModule(
+            id: 'returns',
+            label: '顾客退货',
+            icon: Icons.assignment_return_rounded,
+            description: '登记库管实际收货并查看返库进度；财务退款仍在财务页面处理。',
+            builder: () => CustomerReturnsTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              onInventoryFactsChanged: _invalidateInventoryFacts,
+            ),
+          ),
+          _WarehouseModule(
+            id: 'unavailable',
+            label: '不可售',
+            icon: Icons.block_rounded,
+            description: '查看不可售库存；有权限的角色可执行转换和恢复。',
+            builder: () => UnavailableTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              onOpenSerialized: () =>
+                  widget.onOpenDestination('moutai_inventory'),
+              onInventoryFactsChanged: _invalidateInventoryFacts,
+              requestedSelection: _moduleSelectionRequests['unavailable'],
+              filterRequestRevision: _moduleFilterRevisions['unavailable'] ?? 0,
+            ),
+          ),
+        ],
+      ),
+      _WarehouseModuleGroup(
+        id: 'traceability',
+        label: '盘点与追溯',
+        modules: [
+          _WarehouseModule(
+            id: 'stocktake',
+            label: '商品盘点',
+            icon: Icons.fact_check_rounded,
+            description: '查看盘点单；仓库角色可创建并提交盘点。',
+            builder: () => StocktakeTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              onOpenSerialized: () =>
+                  widget.onOpenDestination('moutai_inventory'),
+              createRequestRevision: _createRequestRevisions['stocktake'] ?? 0,
+              requestedSelection: _moduleSelectionRequests['stocktake'],
+              filterRequestRevision: _moduleFilterRevisions['stocktake'] ?? 0,
+            ),
+          ),
+          if (canStocktakeApprove(role))
+            _WarehouseModule(
+              id: 'approval',
+              label: '盘点审批',
+              icon: Icons.approval_rounded,
+              description: '审批待处理盘点；boss 的唯一仓库管理写操作。',
+              builder: () => StocktakeApprovalTab(
+                api: api,
+                businessApi: _businessApi!,
+                role: role,
+                onInventoryFactsChanged: _invalidateInventoryFacts,
+              ),
+            ),
+          _WarehouseModule(
+            id: 'movement',
+            label: '流水',
+            icon: Icons.receipt_long_rounded,
+            description: '按真实库存流水追溯数量变化。',
+            builder: () => MovementTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+              requestedSelection: _moduleSelectionRequests['movement'],
+              filterRequestRevision: _moduleFilterRevisions['movement'] ?? 0,
+            ),
+          ),
+          _WarehouseModule(
+            id: 'report',
+            label: '报表',
+            icon: Icons.assessment_rounded,
+            description: '查看和导出角色有权访问的库存报表。',
+            builder: () => ReportTab(
+              api: api,
+              businessApi: _businessApi!,
+              role: role,
+            ),
+          ),
+        ],
+      ),
+      if (canManageWarehouse(role) || _canUseSerializedInventory)
+        _WarehouseModuleGroup(
+          id: 'settings',
+          label: '基础设置',
+          modules: [
+            if (canManageWarehouse(role))
+              _WarehouseModule(
+                id: 'warehouse_settings',
+                label: '仓库设置',
+                icon: Icons.settings_outlined,
+                description: '维护仓库资料、默认仓库和启用状态，不提供物理删除。',
+                builder: () => WarehouseSettingsPage(
+                  api: api,
+                  role: role,
+                  onDirtyChanged: (dirty) => _warehouseSettingsDirty = dirty,
+                ),
+              ),
+            if (_canUseSerializedInventory)
+              _WarehouseModule(
+                id: 'serialized',
+                label: '茅台逐瓶库存',
+                icon: Icons.qr_code_scanner_rounded,
+                description: '跳转到现有逐瓶库存页面，保留兼容入口。',
+                builder: () => SerializedInventoryCompatibilityEntry(
+                  onOpenDestination: widget.onOpenDestination,
+                ),
+              ),
+          ],
+        ),
     ];
-    // 茅台逐瓶入口：warehouse/admin/superAdmin/finance 可见
-    if (role == UserRole.superAdmin ||
-        role == UserRole.admin ||
-        role == UserRole.finance ||
-        role == UserRole.warehouse) {
-      list.add(_InventoryTab(
-          id: 'serialized',
-          label: '茅台逐瓶',
-          icon: Icons.qr_code_scanner_rounded,
-          builder: (ctx) => _SerializedEntryTab(
-              onOpenDestination: widget.onOpenDestination)));
+  }
+
+  Future<void> _selectModule(String moduleId) async {
+    if (_selectedModuleId == moduleId) return;
+    if (_selectedModuleId == 'warehouse_settings' && _warehouseSettingsDirty) {
+      final discard = await confirmInventoryAction(
+        context,
+        title: '放弃未保存修改？',
+        content: '仓库资料尚未保存，切换模块将丢失这些修改。',
+        confirmLabel: '放弃并切换',
+        danger: true,
+      );
+      if (!discard || !mounted) return;
+      _warehouseSettingsDirty = false;
     }
-    return list;
+    setState(() {
+      _selectedModuleId = moduleId;
+      _visitedModuleIds = {..._visitedModuleIds, moduleId};
+    });
+  }
+
+  void _handleOverviewNavigation(
+    WarehouseOverviewNavigationRequest request,
+  ) {
+    final modules =
+        _moduleGroups.expand((group) => group.modules).map((item) => item.id);
+    if (!modules.contains(request.moduleId)) return;
+    setState(() {
+      _selectedModuleId = request.moduleId;
+      _visitedModuleIds = {..._visitedModuleIds, request.moduleId};
+      if (request.moduleId == 'stock' && request.filter != null) {
+        _stockFilterRequest = request.filter;
+        _stockFilterRevision++;
+      }
+      if (request.filter != null) {
+        _moduleFilterRequests[request.moduleId] = request.filter;
+        _moduleFilterRevisions[request.moduleId] =
+            (_moduleFilterRevisions[request.moduleId] ?? 0) + 1;
+      }
+      if (request.action == 'create') {
+        _createRequestRevisions[request.moduleId] =
+            (_createRequestRevisions[request.moduleId] ?? 0) + 1;
+      }
+    });
+  }
+
+  void _handleStockNavigation(WarehouseStockNavigationRequest request) {
+    final modules =
+        _moduleGroups.expand((group) => group.modules).map((item) => item.id);
+    if (!modules.contains(request.moduleId)) return;
+    setState(() {
+      _selectedModuleId = request.moduleId;
+      _visitedModuleIds = {..._visitedModuleIds, request.moduleId};
+      _moduleSelectionRequests[request.moduleId] = InventorySelectionContext(
+        warehouseId: request.warehouseId,
+        productId: request.productId,
+      );
+      _moduleFilterRevisions[request.moduleId] =
+          (_moduleFilterRevisions[request.moduleId] ?? 0) + 1;
+      if (request.action == 'create') {
+        _createRequestRevisions[request.moduleId] =
+            (_createRequestRevisions[request.moduleId] ?? 0) + 1;
+      }
+    });
+  }
+
+  void _handleAlertNavigation(WarehouseAlertNavigationRequest request) {
+    final modules =
+        _moduleGroups.expand((group) => group.modules).map((item) => item.id);
+    if (!modules.contains(request.moduleId)) return;
+    setState(() {
+      _selectedModuleId = request.moduleId;
+      _visitedModuleIds = {..._visitedModuleIds, request.moduleId};
+    });
+  }
+
+  void _invalidateInventoryFacts() {
+    _api?.clearCache();
+    if (!mounted) return;
+    setState(() {
+      _visitedModuleIds = {..._visitedModuleIds}..removeAll({
+          'overview',
+          'stock',
+          'alert',
+          'movement',
+          'report',
+        });
+    });
   }
 
   @override
@@ -135,446 +440,163 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
           FormSection(
             title: '仓库管理',
             children: [
-              _InlineNotice(
-                  message: '当前角色无权访问仓库管理模块。', tone: StatusTone.danger),
+              InventoryInlineNotice(
+                message: '当前角色无权访问仓库管理模块。',
+                tone: StatusTone.danger,
+              ),
             ],
           ),
         ],
       );
     }
 
-    final tabs = _tabs;
-    final desktop = isDesktopWidth(MediaQuery.of(context).size.width);
-    final horizontalPadding = desktop ? 24.0 : 12.0;
+    final groups = _moduleGroups;
+    final modules = groups.expand((group) => group.modules).toList();
+    if (!modules.any((module) => module.id == _selectedModuleId)) {
+      _selectedModuleId = modules.first.id;
+      _visitedModuleIds = {_selectedModuleId};
+    }
+    final navigationGroups = [
+      for (final group in groups)
+        WarehouseNavigationGroup(
+          id: group.id,
+          label: group.label,
+          items: [
+            for (final module in group.modules)
+              WarehouseNavigationItem(
+                id: module.id,
+                label: module.label,
+                icon: module.icon,
+              ),
+          ],
+        ),
+    ];
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(horizontalPadding, 16, horizontalPadding, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildHeader(desktop),
-          _buildQuickActions(),
-          const SizedBox(height: 8),
-          Expanded(
-              child: desktop
-                  ? _buildDesktopBody(tabs)
-                  : _buildMobileBody(tabs)),
-        ],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // AppShell 宽屏本身已有 244px 一级导航。只有剩余内容区足够同时容纳
+        // 二级导航和 1024px 桌面工作台时才继续显示左侧二级导航，避免常见
+        // 1366px Windows 窗口被两级侧栏压成窄表格。
+        final wide = constraints.maxWidth >= AppBreakpoints.desktop + 256;
+        final padding = wide ? 24.0 : 12.0;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(padding, 16, padding, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeader(),
+              const SizedBox(height: 12),
+              if (wide)
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      WarehouseSecondaryNavigation(
+                        groups: navigationGroups,
+                        selectedId: _selectedModuleId,
+                        onSelected: _selectModule,
+                        wide: true,
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(child: _buildModuleStack(groups, modules)),
+                    ],
+                  ),
+                )
+              else ...[
+                WarehouseSecondaryNavigation(
+                  groups: navigationGroups,
+                  selectedId: _selectedModuleId,
+                  onSelected: _selectModule,
+                  wide: false,
+                ),
+                const SizedBox(height: 12),
+                Expanded(child: _buildModuleStack(groups, modules)),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildHeader(bool desktop) {
+  Widget _buildHeader() {
     return Row(
       children: [
-        Icon(Icons.warehouse_rounded,
-            color: Theme.of(context).colorScheme.primary, size: 28),
+        Icon(
+          Icons.warehouse_rounded,
+          color: Theme.of(context).colorScheme.primary,
+          size: 28,
+        ),
         const SizedBox(width: 10),
         Expanded(
-          child: Text('仓库管理',
-              style: Theme.of(context)
-                  .textTheme
-                  .headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w700)),
+          child: Text(
+            '仓库管理',
+            style: Theme.of(context)
+                .textTheme
+                .headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
         ),
-        StatusTag(
-          label: widget.role.label,
-          tone: StatusTone.info,
-        ),
+        StatusTag(label: widget.role.label, tone: StatusTone.info),
       ],
     );
   }
 
-  Widget _buildQuickActions() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          ActionChip(
-            key: const ValueKey('warehouse-management-packing-entry'),
-            label: const Text('库管打包'),
-            avatar: const Icon(Icons.inventory_2_rounded, size: 18),
-            onPressed: () => widget.onOpenDestination('warehouse_packing'),
-          ),
-          if (widget.role == UserRole.superAdmin ||
-              widget.role == UserRole.admin ||
-              widget.role == UserRole.finance ||
-              widget.role == UserRole.warehouse)
-            ActionChip(
-              key: const ValueKey(
-                  'warehouse-management-moutai-entry'),
-              label: const Text('茅台逐瓶库存'),
-              avatar: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-              onPressed: () =>
-                  widget.onOpenDestination('moutai_inventory'),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDesktopBody(List<_InventoryTab> tabs) {
-    return DefaultTabController(
-      length: tabs.length,
-      child: Column(
-        children: [
-          Material(
-            color: Colors.transparent,
-            child: TabBar(
-              key: const ValueKey('warehouse-management-tabbar'),
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              tabs: tabs
-                  .map((t) => Tab(
-                      icon: Icon(t.icon, size: 18), text: t.label))
-                  .toList(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: TabBarView(
-              children: tabs.map((t) => t.builder(context)).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMobileBody(List<_InventoryTab> tabs) {
-    return DefaultTabController(
-      length: tabs.length,
-      child: Column(
-        children: [
-          Material(
-            color: Colors.transparent,
-            child: TabBar(
-              key: const ValueKey('warehouse-management-tabbar-mobile'),
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              tabs: tabs.map((t) => Tab(text: t.label)).toList(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: TabBarView(
-              children: tabs.map((t) => t.builder(context)).toList(),
-            ),
-          ),
-        ],
-      ),
+  Widget _buildModuleStack(
+    List<_WarehouseModuleGroup> groups,
+    List<_WarehouseModule> modules,
+  ) {
+    return IndexedStack(
+      key: ValueKey('warehouse-module-stack-$_actorRevision'),
+      index: modules.indexWhere((module) => module.id == _selectedModuleId),
+      children: [
+        for (final module in modules)
+          _visitedModuleIds.contains(module.id)
+              ? InventoryPageScaffold(
+                  key: ValueKey(
+                    'warehouse-module-content-${module.id}-$_actorRevision',
+                  ),
+                  groupLabel: groups
+                      .firstWhere((group) => group.modules.contains(module))
+                      .label,
+                  title: module.label,
+                  description: module.description,
+                  child: module.builder(),
+                )
+              : SizedBox(
+                  key: ValueKey(
+                    'warehouse-module-placeholder-${module.id}-$_actorRevision',
+                  ),
+                ),
+      ],
     );
   }
 }
 
-class _InventoryTab {
-  const _InventoryTab(
-      {required this.id,
-      required this.label,
-      required this.icon,
-      required this.builder});
+class _WarehouseModuleGroup {
+  const _WarehouseModuleGroup({
+    required this.id,
+    required this.label,
+    required this.modules,
+  });
+
+  final String id;
+  final String label;
+  final List<_WarehouseModule> modules;
+}
+
+class _WarehouseModule {
+  const _WarehouseModule({
+    required this.id,
+    required this.label,
+    required this.icon,
+    required this.description,
+    required this.builder,
+  });
+
   final String id;
   final String label;
   final IconData icon;
-  final WidgetBuilder builder;
-}
-
-// ---------------------------------------------------------------------------
-// 库存总览
-// ---------------------------------------------------------------------------
-
-class _OverviewTab extends StatefulWidget {
-  const _OverviewTab({required this.api, required this.role});
-  final InventoryApi api;
-  final UserRole role;
-
-  @override
-  State<_OverviewTab> createState() => _OverviewTabState();
-}
-
-class _OverviewTabState extends State<_OverviewTab> {
-  InventoryOverview? _overview;
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final overview = await widget.api.fetchOverview();
-      if (!mounted) return;
-      setState(() {
-        _overview = overview;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = _message(e);
-        _loading = false;
-      });
-    }
-  }
-
-  String _message(Object e) {
-    if (e is ApiException) return e.message;
-    return '加载库存总览失败，请稍后重试。';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const LoadingState(title: '正在加载库存总览');
-    if (_error != null) {
-      return ErrorState(title: _error!, onRetry: _load);
-    }
-    final o = _overview;
-    if (o == null) {
-      return const EmptyState(title: '暂无库存数据');
-    }
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          MetricGrid(
-            metrics: [
-              MetricData(
-                label: '在用仓库',
-                value: '${o.warehouseCount}',
-                icon: Icons.warehouse_rounded,
-              ),
-              MetricData(
-                label: '商品库存项',
-                value: '${o.productStockCount}',
-                icon: Icons.inventory_2_rounded,
-              ),
-              MetricData(
-                label: '调拨在途',
-                value: '${o.inTransitCount}',
-                icon: Icons.swap_horiz_rounded,
-                accent: o.inTransitCount > 0 ? Colors.orange : null,
-              ),
-              MetricData(
-                label: '可售为负',
-                value: '${o.negativeAvailableCount}',
-                icon: Icons.error_outline_rounded,
-                accent: o.negativeAvailableCount > 0 ? Colors.red : null,
-              ),
-              MetricData(
-                label: '待审盘点',
-                value: '${o.pendingStocktakeCount}',
-                icon: Icons.approval_rounded,
-                accent: o.pendingStocktakeCount > 0 ? Colors.orange : null,
-              ),
-              MetricData(
-                label: '活跃预警',
-                value: '${o.activeAlertCount}',
-                icon: Icons.warning_amber_rounded,
-                accent: o.activeAlertCount > 0 ? Colors.orange : null,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          FormSection(
-            title: '使用提示',
-            children: [
-              _tipRow(Icons.input_rounded, '入库管理',
-                  canInboundWrite(widget.role) ? '可录入期初、采购和其他入库' : '仅查看入库记录'),
-              _tipRow(Icons.swap_horiz_rounded, '调拨与在途',
-                  canInboundWrite(widget.role) ? '可创建调拨、确认调出/调入' : '仅查看调拨记录'),
-              _tipRow(Icons.block_rounded, '不可售管理',
-                  canInboundWrite(widget.role) ? '可标记/恢复不可售库存' : '仅查看不可售记录'),
-              _tipRow(Icons.fact_check_rounded, '商品盘点',
-                  canStocktakeWrite(widget.role)
-                      ? '可创建和提交盘点'
-                      : canStocktakeApprove(widget.role)
-                          ? '可审批盘点'
-                          : '仅查看盘点记录'),
-              if (canReadInventoryCost(widget.role))
-                _tipRow(Icons.payments_rounded, '成本与金额',
-                    canCostWrite(widget.role) ? '可维护批次成本并查看金额报表' : '可查看成本和金额'),
-              if (!canReadInventoryCost(widget.role))
-                _tipRow(Icons.visibility_off_rounded, '成本信息',
-                    '当前角色不可查看成本，成本列不会显示'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tipRow(IconData icon, String title, String desc) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 10),
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text(desc,
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant))),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 茅台逐瓶入口（跳转）
-// ---------------------------------------------------------------------------
-
-class _SerializedEntryTab extends StatelessWidget {
-  const _SerializedEntryTab({required this.onOpenDestination});
-  final ValueChanged<String> onOpenDestination;
-
-  @override
-  Widget build(BuildContext context) {
-    return FormSection(
-      title: '茅台逐瓶库存',
-      children: [
-        const _InlineNotice(
-          message: '茅台逐瓶库存（物流码、批次、状态管理）请在专属页面操作。',
-          tone: StatusTone.info,
-        ),
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          key: const ValueKey('warehouse-management-open-serialized'),
-          onPressed: () => onOpenDestination('moutai_inventory'),
-          icon: const Icon(Icons.qr_code_scanner_rounded),
-          label: const Text('打开茅台逐瓶库存'),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 辅助 Widget
-// ---------------------------------------------------------------------------
-
-class _InlineNotice extends StatelessWidget {
-  const _InlineNotice({required this.message, required this.tone});
-  final String message;
-  final StatusTone tone;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final color = switch (tone) {
-      StatusTone.danger => scheme.errorContainer,
-      StatusTone.warning => Colors.orange.shade50,
-      StatusTone.success => scheme.primaryContainer,
-      StatusTone.info => scheme.secondaryContainer,
-      StatusTone.neutral => scheme.surfaceContainerHighest,
-    };
-    final fg = switch (tone) {
-      StatusTone.danger => scheme.onErrorContainer,
-      StatusTone.warning => Colors.orange.shade900,
-      StatusTone.success => scheme.onPrimaryContainer,
-      StatusTone.info => scheme.onSecondaryContainer,
-      StatusTone.neutral => scheme.onSurface,
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(message, style: TextStyle(color: fg, fontSize: 13)),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 共享辅助函数
-// ---------------------------------------------------------------------------
-
-String inventoryErrorMessage(Object e) {
-  if (e is ApiException) {
-    return switch (e.code) {
-      'PERMISSION_DENIED' || 'FIELD_PERMISSION_DENIED' => '没有此操作权限。',
-      'INVENTORY_REQUEST_HASH_MISMATCH' => '请求校验失败，请重试。',
-      'INVENTORY_VALIDATION_FAILED' => '数据校验失败：${e.message}',
-      'INVENTORY_WAREHOUSE_NOT_FOUND' => '仓库不存在。',
-      'INVENTORY_PRODUCT_NOT_FOUND' => '商品不存在。',
-      'INVENTORY_STOCK_NOT_FOUND' => '库存记录不存在。',
-      'INVENTORY_INBOUND_DOCUMENT_NOT_FOUND' => '入库单不存在。',
-      'INVENTORY_TRANSFER_NOT_FOUND' => '调拨单不存在。',
-      'INVENTORY_CONCURRENT_UPDATE' => '数据已被其他人更新，请刷新后重试。',
-      'INVENTORY_RESERVED_QTY_NEGATIVE' => '操作会导致占用数量为负。',
-      'INVENTORY_UNAVAILABLE_QTY_NEGATIVE' => '操作会导致不可售数量为负。',
-      'INVENTORY_IN_TRANSIT_QTY_NEGATIVE' => '操作会导致在途数量为负。',
-      'INVENTORY_TRACKING_DISABLED' => '该商品未启用库存跟踪。',
-      'INVENTORY_COST_FIELD_FORBIDDEN' => '当前角色不可在入库时填写成本。',
-      'INVENTORY_COST_REPORT_FORBIDDEN' => '当前角色不可查看库存估值报表。',
-      'INVENTORY_WAREHOUSE_HAS_ACTIVE_BUSINESS' => '仓库有活跃业务，无法停用。',
-      'INVENTORY_REPORT_EXPORT_LIMIT_EXCEEDED' => '导出行数超限（上限 10 万行）。',
-      'LOGISTICS_CODE_DUPLICATE' => '物流码已存在。',
-      'NETWORK_ERROR' => '无法连接服务器，请检查网络。',
-      _ => e.message,
-    };
-  }
-  return '操作失败，请稍后重试。';
-}
-
-/// 二次确认对话框，返回 true 表示用户确认。
-Future<bool> confirmInventoryAction(
-  BuildContext context, {
-  required String title,
-  required String content,
-  String confirmLabel = '确认',
-  String cancelLabel = '取消',
-  bool danger = false,
-}) async {
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: Text(content),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: Text(cancelLabel),
-        ),
-        FilledButton(
-          style: danger
-              ? FilledButton.styleFrom(
-                  backgroundColor: Theme.of(ctx).colorScheme.error)
-              : null,
-          onPressed: () => Navigator.pop(ctx, true),
-          child: Text(confirmLabel),
-        ),
-      ],
-    ),
-  );
-  return result ?? false;
-}
-
-/// 整数瓶数校验：只允许正整数。
-int? parseBottleQuantity(String value) {
-  final trimmed = value.trim();
-  if (trimmed.isEmpty) return null;
-  if (!RegExp(r'^[1-9][0-9]*$').hasMatch(trimmed)) return null;
-  return int.tryParse(trimmed);
-}
-
-/// 非负整数校验（盘点数量等允许 0）。
-int? parseNonNegativeInt(String value) {
-  final trimmed = value.trim();
-  if (trimmed.isEmpty) return null;
-  if (!RegExp(r'^(0|[1-9][0-9]*)$').hasMatch(trimmed)) return null;
-  return int.tryParse(trimmed);
+  final String description;
+  final Widget Function() builder;
 }

@@ -18,10 +18,13 @@ class TravelGroupDetailPanel extends StatelessWidget {
     required this.role,
     this.marking = false,
     this.summarizing = false,
+    this.updatingNotEntered = false,
     this.onCreateOrder,
     this.onEdit,
     this.onFinanceMark,
     this.onSummary,
+    this.onConfirmNotEntered,
+    this.onRevokeNotEntered,
     this.onPreviewAttachment,
     this.onDownloadAttachment,
     this.onDeleteAttachment,
@@ -33,10 +36,13 @@ class TravelGroupDetailPanel extends StatelessWidget {
   final UserRole role;
   final bool marking;
   final bool summarizing;
+  final bool updatingNotEntered;
   final VoidCallback? onCreateOrder;
   final VoidCallback? onEdit;
   final VoidCallback? onFinanceMark;
   final VoidCallback? onSummary;
+  final VoidCallback? onConfirmNotEntered;
+  final VoidCallback? onRevokeNotEntered;
   final TravelGroupAttachmentAction? onPreviewAttachment;
   final TravelGroupAttachmentAction? onDownloadAttachment;
   final TravelGroupAttachmentAction? onDeleteAttachment;
@@ -50,6 +56,11 @@ class TravelGroupDetailPanel extends StatelessWidget {
     final summaryAction = onSummary;
     final editAction = onEdit;
     final createOrderAction = onCreateOrder;
+    final notEnteredAction = group.entryStatus == 'not_entered'
+        ? onRevokeNotEntered
+        : group.entryStatus == 'pending_entry'
+            ? onConfirmNotEntered
+            : null;
 
     return FormSection(
       title: '旅行团详情',
@@ -89,6 +100,12 @@ class TravelGroupDetailPanel extends StatelessWidget {
                     : const Icon(Icons.rate_review_rounded),
                 label: const Text('总结'),
               ),
+            if (notEnteredAction != null)
+              _NotEnteredButton(
+                confirmed: group.entryStatus == 'not_entered',
+                busy: updatingNotEntered,
+                onPressed: notEnteredAction,
+              ),
             if (markAction != null)
               _FinanceMarkButton(
                 marked: group.financeMark,
@@ -98,6 +115,7 @@ class TravelGroupDetailPanel extends StatelessWidget {
             if (createOrderAction == null &&
                 editAction == null &&
                 summaryAction == null &&
+                notEnteredAction == null &&
                 markAction == null)
               StatusTag(
                 label: '${_roleLabel(role)}只读',
@@ -119,6 +137,18 @@ class TravelGroupDetailPanel extends StatelessWidget {
         ),
         _InfoRow(label: '预计进店时间', value: group.expectedArrivalTime),
         _InfoRow(label: '实际进店时间', value: group.arrivalTime),
+        _InfoRow(
+          label: '进店状态',
+          value: _entryStatusLabel(group.entryStatus),
+        ),
+        _InfoRow(
+          label: '未进店确认人',
+          value: group.notEnteredConfirmedBy?.name,
+        ),
+        _InfoRow(
+          label: '未进店确认时间',
+          value: group.notEnteredConfirmedAt,
+        ),
         _InfoRow(label: '离店', value: group.departureTime),
         _InfoRow(label: '损耗状态', value: _lossStatusLabel(group.lossStatus)),
         _InfoRow(label: '损耗确认人', value: group.lossConfirmedByName),
@@ -471,6 +501,41 @@ class _FinanceMarkButton extends StatelessWidget {
   }
 }
 
+class _NotEnteredButton extends StatelessWidget {
+  const _NotEnteredButton({
+    required this.confirmed,
+    required this.busy,
+    required this.onPressed,
+  });
+
+  final bool confirmed;
+  final bool busy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      key: ValueKey(
+        confirmed
+            ? 'revoke-travel-group-not-entered-button'
+            : 'confirm-travel-group-not-entered-button',
+      ),
+      onPressed: busy ? null : onPressed,
+      icon: busy
+          ? const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              confirmed
+                  ? Icons.undo_rounded
+                  : Icons.person_off_outlined,
+            ),
+      label: Text(confirmed ? '撤销未进店' : '确认未进店'),
+    );
+  }
+}
+
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, required this.value});
 
@@ -574,6 +639,18 @@ String _groupStatusLabel(String status) {
     case 'unmarked':
     default:
       return '未出单';
+  }
+}
+
+String _entryStatusLabel(String status) {
+  switch (status) {
+    case 'not_entered':
+      return '未进店';
+    case 'entered':
+      return '已进店';
+    case 'pending_entry':
+    default:
+      return '待进店';
   }
 }
 

@@ -6,6 +6,9 @@ final class ShareViewController: UIViewController {
   private let appGroupIdentifier =
     "group.com.example.jiangjiuMobileDesktop.share"
   private let maxFileSize: Int64 = 10 * 1024 * 1024
+  private let maxRequestSize: Int64 = 24 * 1024 * 1024
+  private let incomingPayloadName = "payload"
+  private let incomingMetadataName = "metadata.json"
   private let statusLabel = UILabel()
 
   private let supportedTypes: [(UTType, String)] = [
@@ -79,7 +82,8 @@ final class ShareViewController: UIViewController {
     do {
       try FileManager.default.createDirectory(
         at: incomingDirectory,
-        withIntermediateDirectories: true
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
       )
     } catch {
       finish(message: "无法创建附件临时目录。", openApp: false)
@@ -89,6 +93,7 @@ final class ShareViewController: UIViewController {
     let group = DispatchGroup()
     let lock = NSLock()
     var importedCount = 0
+    var importedBytes: Int64 = 0
     var errors: [String] = []
     for provider in providers {
       guard let supported = supportedType(for: provider) else {
@@ -116,7 +121,11 @@ final class ShareViewController: UIViewController {
           let values = try sourceURL.resourceValues(
             forKeys: [.fileSizeKey]
           )
-          guard Int64(values.fileSize ?? 0) <= self.maxFileSize else {
+          let fileSize = Int64(values.fileSize ?? 0)
+          guard fileSize > 0 else {
+            throw ImportError.emptyFile
+          }
+          guard fileSize <= self.maxFileSize else {
             throw ImportError.fileTooLarge
           }
           let originalStem = (sourceURL.lastPathComponent as NSString)
@@ -127,16 +136,50 @@ final class ShareViewController: UIViewController {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
           try FileManager.default.createDirectory(
             at: targetDirectory,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
           )
-          let target = targetDirectory.appendingPathComponent(safeName)
+          let target = targetDirectory.appendingPathComponent(
+            self.incomingPayloadName
+          )
+          let metadataURL = targetDirectory.appendingPathComponent(
+            self.incomingMetadataName
+          )
           try FileManager.default.copyItem(at: sourceURL, to: target)
+          try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: target.path
+          )
+          let metadata = IncomingFileMetadata(
+            originalName: safeName,
+            mimeType: supported.0.preferredMIMEType
+              ?? self.mimeType(forExtension: supported.1)
+          )
+          try JSONEncoder().encode(metadata).write(
+            to: metadataURL,
+            options: [.atomic]
+          )
+          try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: metadataURL.path
+          )
           lock.lock()
+          guard importedBytes + fileSize <= self.maxRequestSize else {
+            errors.append("本次导入文件总大小超过24MB。")
+            lock.unlock()
+            try? FileManager.default.removeItem(at: targetDirectory)
+            return
+          }
+          importedBytes += fileSize
           importedCount += 1
           lock.unlock()
         } catch ImportError.fileTooLarge {
           lock.lock()
           errors.append("“\(sourceURL.lastPathComponent)”超过10MB。")
+          lock.unlock()
+        } catch ImportError.emptyFile {
+          lock.lock()
+          errors.append("不能导入空文件。")
           lock.unlock()
         } catch {
           lock.lock()
@@ -203,7 +246,32 @@ final class ShareViewController: UIViewController {
     return String((sanitized.isEmpty ? "attachment" : sanitized).prefix(160))
   }
 
+  private func mimeType(forExtension value: String) -> String {
+    switch value {
+    case "pdf":
+      return "application/pdf"
+    case "doc":
+      return "application/msword"
+    case "docx":
+      return
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    case "xls":
+      return "application/vnd.ms-excel"
+    case "xlsx":
+      return
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    default:
+      return "application/octet-stream"
+    }
+  }
+
+  private struct IncomingFileMetadata: Codable {
+    let originalName: String
+    let mimeType: String
+  }
+
   private enum ImportError: Error {
     case fileTooLarge
+    case emptyFile
   }
 }

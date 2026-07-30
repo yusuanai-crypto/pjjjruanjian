@@ -6,6 +6,45 @@ bool canViewFinanceMark(UserRole role) {
       role == UserRole.finance;
 }
 
+bool canConfirmTravelGroupNotEntered(
+  UserRole role, {
+  String? liaisonTasterId,
+  String? currentUserId,
+}) {
+  if (role == UserRole.taster) {
+    final actorId = currentUserId?.trim() ?? '';
+    return actorId.isNotEmpty && liaisonTasterId == actorId;
+  }
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.boss ||
+      role == UserRole.frontDesk;
+}
+
+bool canRevokeTravelGroupNotEntered(UserRole role) {
+  return role == UserRole.frontDesk;
+}
+
+bool canManagePaymentMethods(UserRole role) {
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.finance;
+}
+
+bool canAccessSpecialOrders(UserRole role) {
+  return canCreateSpecialOrders(role) || canReviewSpecialOrders(role);
+}
+
+bool canCreateSpecialOrders(UserRole role) {
+  return role == UserRole.sales || role == UserRole.afterSales;
+}
+
+bool canReviewSpecialOrders(UserRole role) {
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.boss;
+}
+
 bool canViewProfitAnalysis(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||
@@ -26,7 +65,22 @@ bool canMaintainGuidePointsTable(UserRole role) {
 }
 
 bool canChangeOrderPointsDestination(UserRole role) {
-  return canViewGuidePointsTable(role);
+  return canManageOrderPersonalSplit(role);
+}
+
+bool canViewOrderPersonalSplit(UserRole role) {
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.finance ||
+      role == UserRole.boss ||
+      role == UserRole.afterSales;
+}
+
+bool canManageOrderPersonalSplit(UserRole role) {
+  return role == UserRole.superAdmin ||
+      role == UserRole.admin ||
+      role == UserRole.finance ||
+      role == UserRole.boss;
 }
 
 // --- 库存权限（与后端 inventory-access.policy.ts 对齐）---
@@ -80,6 +134,10 @@ bool canStocktakeApprove(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||
       role == UserRole.boss;
+}
+
+bool canStocktakeReverse(UserRole role) {
+  return role == UserRole.superAdmin || role == UserRole.admin;
 }
 
 bool canManageWarehouse(UserRole role) {

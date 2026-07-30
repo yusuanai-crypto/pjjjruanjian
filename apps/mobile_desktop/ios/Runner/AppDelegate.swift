@@ -10,6 +10,10 @@ import UniformTypeIdentifiers
   private let appGroupIdentifier =
     "group.com.example.jiangjiuMobileDesktop.share"
   private let maxFileSize: Int64 = 10 * 1024 * 1024
+  private let maxRequestSize: Int64 = 24 * 1024 * 1024
+  private let orphanRetention: TimeInterval = 24 * 60 * 60
+  private let incomingPayloadName = "payload"
+  private let incomingMetadataName = "metadata.json"
   private var attachmentChannel: FlutterMethodChannel?
   private var documentInteractionController: UIDocumentInteractionController?
   private var hasTakenIncomingFiles = false
@@ -18,6 +22,7 @@ import UniformTypeIdentifiers
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    cleanupOrphanedPrivateFiles()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -86,55 +91,76 @@ import UniformTypeIdentifiers
       "incoming",
       isDirectory: true
     )
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: incomingDirectory,
-        includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-        options: [.skipsHiddenFiles]
-      )
-    else {
+    guard let stagedDirectories = try? FileManager.default.contentsOfDirectory(
+      at: incomingDirectory,
+      includingPropertiesForKeys: [.isDirectoryKey],
+      options: [.skipsHiddenFiles]
+    ) else {
       return ["files": [], "errors": []]
     }
 
     var files: [[String: Any]] = []
     var errors: [String] = []
-    for case let source as URL in enumerator {
+    var totalBytes: Int64 = 0
+    for stagedDirectory in stagedDirectories {
       guard files.count < 5 else {
         errors.append("一次最多导入5个文件。")
-        try? FileManager.default.removeItem(at: source)
+        try? FileManager.default.removeItem(at: stagedDirectory)
         continue
       }
+      let source = stagedDirectory.appendingPathComponent(incomingPayloadName)
+      let metadataURL = stagedDirectory.appendingPathComponent(
+        incomingMetadataName
+      )
+      var targetDirectory: URL?
       do {
+        let metadataData = try Data(contentsOf: metadataURL)
+        let metadata = try JSONDecoder().decode(
+          IncomingFileMetadata.self,
+          from: metadataData
+        )
         let values = try source.resourceValues(
           forKeys: [.isRegularFileKey, .fileSizeKey]
         )
-        guard values.isRegularFile == true else {
-          continue
-        }
-        let safeName = sanitizeFileName(source.lastPathComponent)
+        guard values.isRegularFile == true else { throw IncomingDocumentError.invalidFile }
+        let safeName = sanitizeFileName(metadata.originalName)
         guard
           let mimeType = supportedMimeType(forFileName: safeName)
         else {
           errors.append("“\(safeName)”格式不受支持。")
-          try? FileManager.default.removeItem(at: source)
+          try? FileManager.default.removeItem(at: stagedDirectory)
           continue
         }
         let fileSize = Int64(values.fileSize ?? 0)
-        guard fileSize <= maxFileSize else {
+        guard fileSize > 0, fileSize <= maxFileSize else {
           errors.append("“\(safeName)”超过10MB，已拒绝导入。")
-          try? FileManager.default.removeItem(at: source)
+          try? FileManager.default.removeItem(at: stagedDirectory)
           continue
         }
-        let targetDirectory = FileManager.default.temporaryDirectory
+        guard totalBytes + fileSize <= maxRequestSize else {
+          errors.append("本次导入文件总大小超过24MB，已停止导入。")
+          try? FileManager.default.removeItem(at: stagedDirectory)
+          continue
+        }
+        let createdTargetDirectory = FileManager.default.temporaryDirectory
           .appendingPathComponent("incoming", isDirectory: true)
           .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        targetDirectory = createdTargetDirectory
         try FileManager.default.createDirectory(
-          at: targetDirectory,
-          withIntermediateDirectories: true
+          at: createdTargetDirectory,
+          withIntermediateDirectories: true,
+          attributes: [.posixPermissions: 0o700]
         )
-        let target = targetDirectory.appendingPathComponent(safeName)
+        let target = createdTargetDirectory.appendingPathComponent(
+          ".incoming-\(UUID().uuidString)"
+        )
         try FileManager.default.copyItem(at: source, to: target)
-        try FileManager.default.removeItem(at: source)
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600],
+          ofItemAtPath: target.path
+        )
+        try FileManager.default.removeItem(at: stagedDirectory)
+        totalBytes += fileSize
         files.append([
           "path": target.path,
           "fileName": safeName,
@@ -142,7 +168,11 @@ import UniformTypeIdentifiers
           "coldStart": coldStart,
         ])
       } catch {
-        errors.append("复制“\(source.lastPathComponent)”失败，请重新导入。")
+        if let targetDirectory {
+          try? FileManager.default.removeItem(at: targetDirectory)
+        }
+        try? FileManager.default.removeItem(at: stagedDirectory)
+        errors.append("复制外部附件失败，请重新导入。")
       }
     }
     removeEmptyDirectories(below: incomingDirectory)
@@ -161,7 +191,7 @@ import UniformTypeIdentifiers
       }
     }
     let safeName = sanitizeFileName(sourceURL.lastPathComponent)
-    guard supportedMimeType(forFileName: safeName) != nil else {
+    guard let mimeType = supportedMimeType(forFileName: safeName) else {
       return false
     }
     guard
@@ -174,7 +204,10 @@ import UniformTypeIdentifiers
     let targetDirectory = container
       .appendingPathComponent("incoming", isDirectory: true)
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    let target = targetDirectory.appendingPathComponent(safeName)
+    let target = targetDirectory.appendingPathComponent(incomingPayloadName)
+    let metadataURL = targetDirectory.appendingPathComponent(
+      incomingMetadataName
+    )
     var coordinatorError: NSError?
     var copyError: Error?
     let coordinator = NSFileCoordinator()
@@ -187,14 +220,32 @@ import UniformTypeIdentifiers
         let values = try readableURL.resourceValues(
           forKeys: [.fileSizeKey]
         )
-        guard Int64(values.fileSize ?? 0) <= maxFileSize else {
+        let fileSize = Int64(values.fileSize ?? 0)
+        guard fileSize > 0, fileSize <= maxFileSize else {
           throw IncomingDocumentError.fileTooLarge
         }
         try FileManager.default.createDirectory(
           at: targetDirectory,
-          withIntermediateDirectories: true
+          withIntermediateDirectories: true,
+          attributes: [.posixPermissions: 0o700]
         )
         try FileManager.default.copyItem(at: readableURL, to: target)
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600],
+          ofItemAtPath: target.path
+        )
+        let metadata = IncomingFileMetadata(
+          originalName: safeName,
+          mimeType: mimeType
+        )
+        try JSONEncoder().encode(metadata).write(
+          to: metadataURL,
+          options: [.atomic]
+        )
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600],
+          ofItemAtPath: metadataURL.path
+        )
       } catch {
         copyError = error
       }
@@ -281,17 +332,23 @@ import UniformTypeIdentifiers
           .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
           at: targetDirectory,
-          withIntermediateDirectories: true
+          withIntermediateDirectories: true,
+          attributes: [.posixPermissions: 0o700]
         )
         let stem = (originalName as NSString).deletingPathExtension
+        let outputName = "\(self.sanitizeFileName(stem)).jpg"
         let target = targetDirectory.appendingPathComponent(
-          "\(self.sanitizeFileName(stem)).jpg"
+          ".converted-\(UUID().uuidString)"
         )
         try jpegData.write(to: target, options: [.atomic])
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600],
+          ofItemAtPath: target.path
+        )
         DispatchQueue.main.async {
           result([
             "path": target.path,
-            "fileName": target.lastPathComponent,
+            "fileName": outputName,
           ])
         }
       } catch {
@@ -420,7 +477,47 @@ import UniformTypeIdentifiers
     }
   }
 
+  private func cleanupOrphanedPrivateFiles() {
+    let roots = [
+      FileManager.default.temporaryDirectory.appendingPathComponent(
+        "incoming",
+        isDirectory: true
+      ),
+      FileManager.default.temporaryDirectory.appendingPathComponent(
+        "converted",
+        isDirectory: true
+      ),
+      FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: appGroupIdentifier
+      )?.appendingPathComponent("incoming", isDirectory: true),
+    ].compactMap { $0 }
+    let cutoff = Date().addingTimeInterval(-orphanRetention)
+    for root in roots {
+      guard let children = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: [.contentModificationDateKey],
+        options: [.skipsHiddenFiles]
+      ) else {
+        continue
+      }
+      for candidate in children {
+        let modified = try? candidate.resourceValues(
+          forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+        if let modified, modified < cutoff {
+          try? FileManager.default.removeItem(at: candidate)
+        }
+      }
+    }
+  }
+
+  private struct IncomingFileMetadata: Codable {
+    let originalName: String
+    let mimeType: String
+  }
+
   private enum IncomingDocumentError: Error {
     case fileTooLarge
+    case invalidFile
   }
 }

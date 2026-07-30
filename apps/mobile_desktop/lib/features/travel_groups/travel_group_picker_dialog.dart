@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/business/business_api.dart';
 import '../../shared/widgets/state_views.dart';
@@ -9,26 +8,24 @@ typedef TravelGroupListLoader = Future<List<TravelGroupRecord>> Function(
   TravelGroupPickerQuery query,
 );
 
+typedef TasterListLoader = Future<List<TasterOption>> Function();
+
 enum TravelGroupSearchScope {
-  keyword,
-  groupNo,
-  travelAgency,
-  guide,
+  taster,
+  tastingRoomNo,
 }
 
 class TravelGroupPickerQuery {
   const TravelGroupPickerQuery({
     required this.scope,
-    required this.text,
-    required this.start,
-    required this.end,
+    required this.tasterId,
+    required this.tastingRoomNo,
     required this.limit,
   });
 
   final TravelGroupSearchScope scope;
-  final String text;
-  final DateTime? start;
-  final DateTime? end;
+  final String? tasterId;
+  final String? tastingRoomNo;
   final int limit;
 }
 
@@ -37,21 +34,20 @@ class TravelGroupPickerDialog extends StatefulWidget {
     super.key,
     this.businessApi,
     this.loadTravelGroups,
-    this.initialQuery,
-    this.initialStart,
-    this.initialEnd,
+    this.loadTasters,
+    this.initialTasterId,
     this.limit = 30,
     this.showFinanceMark = false,
   }) : assert(
-          businessApi != null || loadTravelGroups != null,
-          'businessApi or loadTravelGroups must be provided.',
+          businessApi != null ||
+              (loadTravelGroups != null && loadTasters != null),
+          'businessApi or both loaders must be provided.',
         );
 
   final BusinessApi? businessApi;
   final TravelGroupListLoader? loadTravelGroups;
-  final String? initialQuery;
-  final DateTime? initialStart;
-  final DateTime? initialEnd;
+  final TasterListLoader? loadTasters;
+  final String? initialTasterId;
   final int limit;
   final bool showFinanceMark;
 
@@ -61,53 +57,102 @@ class TravelGroupPickerDialog extends StatefulWidget {
 }
 
 class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
-  late final TextEditingController _searchController;
-  TravelGroupSearchScope _scope = TravelGroupSearchScope.keyword;
-  DateTime? _start;
-  DateTime? _end;
+  late final TextEditingController _tastingRoomNoController;
+  TravelGroupSearchScope _scope = TravelGroupSearchScope.taster;
+  String? _selectedTasterId;
+  List<TasterOption> _tasters = const <TasterOption>[];
   List<TravelGroupRecord> _groups = const <TravelGroupRecord>[];
+  TravelGroupPickerQuery? _lastQuery;
+  bool _loadingTasters = true;
   bool _loading = true;
+  String? _tasterErrorMessage;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _searchController = TextEditingController(text: widget.initialQuery ?? '');
-    _start = widget.initialStart;
-    _end = widget.initialEnd;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _tastingRoomNoController = TextEditingController();
+    _selectedTasterId = _trimmedOrNull(widget.initialTasterId);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadTasters();
+      _loadTravelGroups();
+    });
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _tastingRoomNoController.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _loadTasters() async {
+    setState(() {
+      _loadingTasters = true;
+      _tasterErrorMessage = null;
+    });
+
+    try {
+      final loader = widget.loadTasters;
+      final tasters = loader == null
+          ? await widget.businessApi!.listTasters()
+          : await loader();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _tasters = tasters;
+        _loadingTasters = false;
+        if (_selectedTasterId != null &&
+            !tasters.any((taster) => taster.id == _selectedTasterId)) {
+          _selectedTasterId = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _tasters = const <TasterOption>[];
+        _loadingTasters = false;
+        _tasterErrorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  TravelGroupPickerQuery _query({required bool applyFilter}) {
+    return TravelGroupPickerQuery(
+      scope: _scope,
+      tasterId: applyFilter && _scope == TravelGroupSearchScope.taster
+          ? _trimmedOrNull(_selectedTasterId)
+          : null,
+      tastingRoomNo:
+          applyFilter && _scope == TravelGroupSearchScope.tastingRoomNo
+              ? _trimmedOrNull(_tastingRoomNoController.text)
+              : null,
+      limit: widget.limit,
+    );
+  }
+
+  Future<void> _loadTravelGroups({
+    TravelGroupPickerQuery? query,
+    bool applyFilter = false,
+  }) async {
+    final effectiveQuery = query ?? _query(applyFilter: applyFilter);
+    _lastQuery = effectiveQuery;
     setState(() {
       _loading = true;
       _errorMessage = null;
     });
 
     try {
-      final query = TravelGroupPickerQuery(
-        scope: _scope,
-        text: _searchController.text.trim(),
-        start: _start,
-        end: _end,
-        limit: widget.limit,
-      );
       final loader = widget.loadTravelGroups;
       final groups = loader == null
           ? await widget.businessApi!.listTravelGroups(
-              limit: widget.limit,
-              start: _start,
-              end: _end,
-              keyword: _keywordFor(query),
-              groupNo: _groupNoFor(query),
+              limit: effectiveQuery.limit,
+              tasterId: effectiveQuery.tasterId,
+              tastingRoomNo: effectiveQuery.tastingRoomNo,
             )
-          : await loader(query);
+          : await loader(effectiveQuery);
       if (!mounted) {
         return;
       }
@@ -127,32 +172,25 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
     }
   }
 
-  Future<void> _pickDateRange() async {
-    final now = DateTime.now();
-    final initialStart = _start ?? now;
-    final initialEnd = _end ?? initialStart;
-    final result = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(now.year - 3),
-      lastDate: DateTime(now.year + 3, 12, 31),
-      initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
-    );
-    if (result == null || !mounted) {
-      return;
-    }
+  void _changeScope(TravelGroupSearchScope scope) {
     setState(() {
-      _start = result.start;
-      _end = result.end;
+      _scope = scope;
+      _selectedTasterId = null;
+      _tastingRoomNoController.clear();
     });
-    await _load();
+    _loadTravelGroups();
   }
 
-  void _clearDateRange() {
-    setState(() {
-      _start = null;
-      _end = null;
-    });
-    _load();
+  bool get _canSearch {
+    if (_loading || _loadingTasters) {
+      return false;
+    }
+    switch (_scope) {
+      case TravelGroupSearchScope.taster:
+        return _trimmedOrNull(_selectedTasterId) != null;
+      case TravelGroupSearchScope.tastingRoomNo:
+        return _trimmedOrNull(_tastingRoomNoController.text) != null;
+    }
   }
 
   @override
@@ -188,59 +226,80 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
                             if (scope == null) {
                               return;
                             }
-                            setState(() => _scope = scope);
+                            _changeScope(scope);
                           },
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
-                    key: const ValueKey('travel-group-search-field'),
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      labelText: _searchLabel(_scope),
-                      hintText: _searchHint(_scope),
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      suffixIcon: _searchController.text.trim().isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: '清空搜索',
-                              onPressed: () {
-                                _searchController.clear();
-                                _load();
-                              },
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                    ),
-                    textInputAction: TextInputAction.search,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: (_) => _load(),
-                  ),
+                  child: _scope == TravelGroupSearchScope.taster
+                      ? DropdownButtonFormField<String>(
+                          key: const ValueKey('travel-group-taster-field'),
+                          initialValue: _tasters.any(
+                            (taster) => taster.id == _selectedTasterId,
+                          )
+                              ? _selectedTasterId
+                              : null,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: '品鉴师',
+                            hintText: _loadingTasters ? '正在加载品鉴师' : '请选择品鉴师',
+                          ),
+                          items: [
+                            for (final taster in _tasters)
+                              DropdownMenuItem(
+                                value: taster.id,
+                                child: Text(_tasterLabel(taster)),
+                              ),
+                          ],
+                          onChanged: _loadingTasters
+                              ? null
+                              : (value) {
+                                  setState(() => _selectedTasterId = value);
+                                },
+                        )
+                      : TextField(
+                          key: const ValueKey(
+                            'travel-group-tasting-room-no-field',
+                          ),
+                          controller: _tastingRoomNoController,
+                          decoration: InputDecoration(
+                            labelText: '品鉴馆号',
+                            hintText: '输入品鉴馆号',
+                            prefixIcon: const Icon(Icons.meeting_room_rounded),
+                            suffixIcon:
+                                _tastingRoomNoController.text.trim().isEmpty
+                                    ? null
+                                    : IconButton(
+                                        tooltip: '清空馆号',
+                                        onPressed: () {
+                                          _tastingRoomNoController.clear();
+                                          setState(() {});
+                                          _loadTravelGroups();
+                                        },
+                                        icon: const Icon(Icons.close_rounded),
+                                      ),
+                          ),
+                          textInputAction: TextInputAction.search,
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) {
+                            if (_canSearch) {
+                              _loadTravelGroups(applyFilter: true);
+                            }
+                          },
+                        ),
                 ),
               ],
             ),
             const SizedBox(height: 10),
             Row(
               children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('travel-group-date-button'),
-                  onPressed: _loading ? null : _pickDateRange,
-                  icon: const Icon(Icons.event_rounded),
-                  label: Text(_dateLabel()),
-                ),
-                if (_start != null || _end != null) ...[
-                  const SizedBox(width: 6),
-                  IconButton(
-                    key: const ValueKey('travel-group-clear-date-button'),
-                    tooltip: '清空日期',
-                    onPressed: _loading ? null : _clearDateRange,
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
                 const Spacer(),
                 FilledButton.icon(
                   key: const ValueKey('travel-group-search-button'),
-                  onPressed: _loading ? null : _load,
+                  onPressed: _canSearch
+                      ? () => _loadTravelGroups(applyFilter: true)
+                      : null,
                   icon: const Icon(Icons.search_rounded),
                   label: const Text('搜索'),
                 ),
@@ -264,8 +323,21 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
     if (_loading) {
       return const LoadingState(title: '正在加载旅行团');
     }
+    if (_scope == TravelGroupSearchScope.taster && _loadingTasters) {
+      return const LoadingState(title: '正在加载品鉴师');
+    }
+    if (_scope == TravelGroupSearchScope.taster &&
+        _tasterErrorMessage != null) {
+      return ErrorState(
+        title: _tasterErrorMessage!,
+        onRetry: _loadTasters,
+      );
+    }
     if (_errorMessage != null) {
-      return ErrorState(title: _errorMessage!, onRetry: _load);
+      return ErrorState(
+        title: _errorMessage!,
+        onRetry: () => _loadTravelGroups(query: _lastQuery),
+      );
     }
     if (_groups.isEmpty) {
       return const EmptyState(
@@ -288,16 +360,6 @@ class _TravelGroupPickerDialogState extends State<TravelGroupPickerDialog> {
       },
     );
   }
-
-  String _dateLabel() {
-    if (_start == null && _end == null) {
-      return '到店日期';
-    }
-    if (_start != null && _end != null) {
-      return '${formatDate(_start!)} 至 ${formatDate(_end!)}';
-    }
-    return formatDate((_start ?? _end)!);
-  }
 }
 
 class _TravelGroupListTile extends StatelessWidget {
@@ -313,10 +375,16 @@ class _TravelGroupListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final agency = _display(group.travelAgency, fallback: '未填写旅行社');
-    final guide = _display(group.guideName, fallback: '未填写导游');
     final visitDate =
         group.visitDate.trim().isEmpty ? '未填写到店日期' : group.visitDate;
+    final taster = _display(
+      group.tasterName,
+      fallback: '未分配品鉴师',
+    );
+    final tastingRoomNo = _display(
+      group.tastingRoomNo,
+      fallback: '未填写品鉴馆号',
+    );
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       leading: CircleAvatar(
@@ -337,9 +405,7 @@ class _TravelGroupListTile extends StatelessWidget {
           if (showFinanceMark)
             StatusTag(
               label: group.financeMark ? '已标记' : '未标记',
-              tone: group.financeMark
-                  ? StatusTone.success
-                  : StatusTone.neutral,
+              tone: group.financeMark ? StatusTone.success : StatusTone.neutral,
             ),
         ],
       ),
@@ -348,11 +414,11 @@ class _TravelGroupListTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('旅行社：$agency'),
-            const SizedBox(height: 2),
-            Text('导游：$guide'),
-            const SizedBox(height: 2),
             Text('到店日期：$visitDate'),
+            const SizedBox(height: 2),
+            Text('品鉴师：$taster'),
+            const SizedBox(height: 2),
+            Text('品鉴馆号：$tastingRoomNo'),
           ],
         ),
       ),
@@ -362,64 +428,27 @@ class _TravelGroupListTile extends StatelessWidget {
   }
 }
 
-String? _keywordFor(TravelGroupPickerQuery query) {
-  if (query.text.isEmpty) {
-    return null;
-  }
-  switch (query.scope) {
-    case TravelGroupSearchScope.keyword:
-    case TravelGroupSearchScope.travelAgency:
-    case TravelGroupSearchScope.guide:
-      return query.text;
-    case TravelGroupSearchScope.groupNo:
-      return null;
-  }
-}
-
-String? _groupNoFor(TravelGroupPickerQuery query) {
-  if (query.text.isEmpty || query.scope != TravelGroupSearchScope.groupNo) {
-    return null;
-  }
-  return query.text;
-}
-
 String _scopeLabel(TravelGroupSearchScope scope) {
   switch (scope) {
-    case TravelGroupSearchScope.keyword:
-      return '关键词';
-    case TravelGroupSearchScope.groupNo:
-      return '团号';
-    case TravelGroupSearchScope.travelAgency:
-      return '旅行社';
-    case TravelGroupSearchScope.guide:
-      return '导游';
+    case TravelGroupSearchScope.taster:
+      return '品鉴师';
+    case TravelGroupSearchScope.tastingRoomNo:
+      return '品鉴馆号';
   }
 }
 
-String _searchLabel(TravelGroupSearchScope scope) {
-  switch (scope) {
-    case TravelGroupSearchScope.keyword:
-      return '搜索旅行团';
-    case TravelGroupSearchScope.groupNo:
-      return '搜索团号';
-    case TravelGroupSearchScope.travelAgency:
-      return '搜索旅行社';
-    case TravelGroupSearchScope.guide:
-      return '搜索导游';
+String _tasterLabel(TasterOption taster) {
+  final name = taster.name.trim();
+  if (name.isNotEmpty) {
+    return name;
   }
+  final username = taster.username.trim();
+  return username.isEmpty ? '未命名品鉴师' : username;
 }
 
-String _searchHint(TravelGroupSearchScope scope) {
-  switch (scope) {
-    case TravelGroupSearchScope.keyword:
-      return '输入团号、旅行社或导游';
-    case TravelGroupSearchScope.groupNo:
-      return '输入团号';
-    case TravelGroupSearchScope.travelAgency:
-      return '输入旅行社名称';
-    case TravelGroupSearchScope.guide:
-      return '输入导游姓名';
-  }
+String? _trimmedOrNull(String? value) {
+  final trimmed = value?.trim() ?? '';
+  return trimmed.isEmpty ? null : trimmed;
 }
 
 String _display(String? value, {required String fallback}) {

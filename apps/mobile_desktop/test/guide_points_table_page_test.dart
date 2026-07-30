@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/guide_points/guide_points_table_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/travel_group_finance/travel_group_finance_supplement_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -115,13 +118,107 @@ void main() {
     );
     expect(dailyPaidButton.onPressed, isNull);
   });
+
+  testWidgets('large guide points export saves fixed-size pages',
+      (tester) async {
+    final client = _GuidePointsApiClient(summaryCount: 100);
+    final renderedPages = <GuidePointsImageExportPage>[];
+    final savedNames = <String>[];
+    await _pumpGuidePage(
+      tester,
+      client,
+      UserRole.finance,
+      imagePageRenderer: (page) async {
+        renderedPages.add(page);
+        return Uint8List.fromList([137, 80, 78, 71]);
+      },
+      imageSaver: (
+        bytes, {
+        required album,
+        required name,
+      }) async {
+        expect(bytes, isNotEmpty);
+        expect(album, guidePointsImageAlbumName);
+        savedNames.add(name);
+        return FinanceImageSaveResult(
+          target: FinanceImageSaveTarget.userSelectedLocation,
+          album: album,
+          filePath: null,
+          directoryPath: null,
+        );
+      },
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('guide-points-export-image')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(renderedPages, hasLength(13));
+    expect(
+      renderedPages.map((page) => page.records.length),
+      [...List.filled(12, 8), 4],
+    );
+    expect(
+      renderedPages.map((page) => page.pageNumber),
+      List.generate(13, (index) => index + 1),
+    );
+    expect(renderedPages.every((page) => page.totalPages == 13), isTrue);
+    expect(savedNames, hasLength(13));
+    expect(savedNames[0], contains('第1页.png'));
+    expect(savedNames[12], contains('第13页.png'));
+    expect(find.textContaining('共 13 页'), findsOneWidget);
+  });
+
+  testWidgets('one failed guide page reports its number and continues',
+      (tester) async {
+    final client = _GuidePointsApiClient(summaryCount: 17);
+    final savedNames = <String>[];
+    await _pumpGuidePage(
+      tester,
+      client,
+      UserRole.finance,
+      imagePageRenderer: (page) async {
+        if (page.pageNumber == 2) {
+          throw const FinanceImageSaveException('设备内存不足，无法生成图片。');
+        }
+        return Uint8List.fromList([137, 80, 78, 71]);
+      },
+      imageSaver: (
+        bytes, {
+        required album,
+        required name,
+      }) async {
+        savedNames.add(name);
+        return FinanceImageSaveResult(
+          target: FinanceImageSaveTarget.userSelectedLocation,
+          album: album,
+          filePath: null,
+          directoryPath: null,
+        );
+      },
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('guide-points-export-image')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(savedNames, hasLength(2));
+    expect(savedNames.first, contains('第1页.png'));
+    expect(savedNames.last, contains('第3页.png'));
+    expect(find.textContaining('成功 2 页，失败 1 页'), findsOneWidget);
+    expect(find.textContaining('第2页：设备内存不足'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpGuidePage(
   WidgetTester tester,
   ApiClient client,
-  UserRole role,
-) async {
+  UserRole role, {
+  FinanceImageSaver? imageSaver,
+  GuidePointsImagePageRenderer? imagePageRenderer,
+}) async {
   tester.view.physicalSize = const Size(1800, 1200);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -133,6 +230,8 @@ Future<void> _pumpGuidePage(
           apiClient: client,
           token: 'token',
           role: role,
+          imageSaver: imageSaver ?? saveFinanceImage,
+          imagePageRenderer: imagePageRenderer,
         ),
       ),
     ),
@@ -141,10 +240,13 @@ Future<void> _pumpGuidePage(
 }
 
 class _GuidePointsApiClient extends ApiClient {
-  _GuidePointsApiClient({this.dailyPaid = false})
-      : super(baseUrl: 'http://127.0.0.1:3000');
+  _GuidePointsApiClient({
+    this.dailyPaid = false,
+    this.summaryCount = 2,
+  }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool dailyPaid;
+  final int summaryCount;
   final List<Map<String, dynamic>> rateBodies = [];
 
   @override
@@ -155,21 +257,26 @@ class _GuidePointsApiClient extends ApiClient {
     if (path.startsWith('/api/guide-points-summaries?')) {
       return {
         'data': {
-          'guidePointsSummaries': [
-            _summaryJson(
-              id: 'summary-a',
-              guideId: 'guide-a',
-              guideName: '收款导游甲',
-              dailyPaid: dailyPaid,
-              includeOrders: false,
-            ),
-            _summaryJson(
-              id: 'summary-b',
-              guideId: 'guide-b',
-              guideName: '收款导游乙',
-              includeOrders: false,
-            ),
-          ],
+          'guidePointsSummaries': summaryCount == 2
+              ? [
+                  _summaryJson(
+                    id: 'summary-a',
+                    guideId: 'guide-a',
+                    guideName: '收款导游甲',
+                    dailyPaid: dailyPaid,
+                    includeOrders: false,
+                  ),
+                  _summaryJson(
+                    id: 'summary-b',
+                    guideId: 'guide-b',
+                    guideName: '收款导游乙',
+                    includeOrders: false,
+                  ),
+                ]
+              : [
+                  for (var index = 1; index <= summaryCount; index += 1)
+                    _generatedSummaryJson(index),
+                ],
         },
       };
     }
@@ -224,6 +331,23 @@ class _GuidePointsApiClient extends ApiClient {
     }
     throw StateError('Unexpected PATCH $path');
   }
+}
+
+Map<String, dynamic> _generatedSummaryJson(int index) {
+  final summary = _summaryJson(
+    id: 'summary-$index',
+    guideId: 'guide-$index',
+    guideName: '收款导游$index',
+    includeOrders: false,
+  );
+  summary['travelGroupId'] = 'group-$index';
+  final travelGroup = Map<String, dynamic>.from(
+    summary['travelGroup'] as Map<String, dynamic>,
+  )
+    ..['id'] = 'group-$index'
+    ..['groupNo'] = 'TG-GUIDE-${index.toString().padLeft(3, '0')}';
+  summary['travelGroup'] = travelGroup;
+  return summary;
 }
 
 Map<String, dynamic> _summaryJson({

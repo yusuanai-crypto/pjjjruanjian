@@ -131,6 +131,22 @@ void main() {
     });
   });
 
+  group('Android permission policy', () {
+    test('uses scoped storage and inexact alarms only', () async {
+      final manifest = await File(
+        'android/app/src/main/AndroidManifest.xml',
+      ).readAsString();
+      expect(manifest, isNot(contains('WRITE_EXTERNAL_STORAGE')));
+      expect(manifest, isNot(contains('requestLegacyExternalStorage')));
+      expect(manifest, isNot(contains('SCHEDULE_EXACT_ALARM')));
+      expect(manifest, contains('android.permission.RECEIVE_BOOT_COMPLETED'));
+      expect(
+        manifest,
+        contains('ScheduledNotificationBootReceiver'),
+      );
+    });
+  });
+
   group('session token migration', () {
     test('moves a legacy token to secure storage before removing it', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{

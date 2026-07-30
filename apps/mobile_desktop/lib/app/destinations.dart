@@ -88,6 +88,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.fact_check_rounded,
       phase: 4),
   AppDestination(
+      id: 'special_orders',
+      label: '内购/外销/回购',
+      icon: Icons.swap_horiz_rounded,
+      phase: 12),
+  AppDestination(
       id: 'qr_sales_sheet',
       label: '二维码销售单',
       icon: Icons.qr_code_2_rounded,
@@ -112,6 +117,12 @@ const appDestinations = <AppDestination>[
       label: '提成规则',
       icon: Icons.rule_folder_rounded,
       phase: 7),
+  AppDestination(
+    id: 'payment_method_management',
+    label: '收款方式管理',
+    icon: Icons.payments_rounded,
+    phase: 6,
+  ),
   AppDestination(
       id: 'product_management',
       label: '商品管理',
@@ -201,11 +212,22 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       role != UserRole.finance) {
     ids.remove('product_management');
   }
+  if (!canManagePaymentMethods(role)) {
+    ids.remove('payment_method_management');
+  }
+  if (!canAccessSpecialOrders(role)) {
+    ids.remove('special_orders');
+  }
   if (role != UserRole.superAdmin &&
       role != UserRole.admin &&
       role != UserRole.finance &&
       role != UserRole.warehouse) {
     ids.remove('moutai_inventory');
+  }
+  if (role != UserRole.superAdmin &&
+      role != UserRole.admin &&
+      role != UserRole.warehouse) {
+    ids.remove('warehouse_packing');
   }
   if (!canAccessInventory(role)) {
     ids.remove('warehouse_management');

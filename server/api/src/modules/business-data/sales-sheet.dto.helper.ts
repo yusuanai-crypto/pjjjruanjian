@@ -78,12 +78,31 @@ export function buildSalesSheetDto(
     address: order?.address,
   });
   const items = normalizeItems(order?.items);
+  const paymentDetails = normalizePaymentDetails(order?.paymentDetails);
   const deliverySummary = buildDeliverySummary(items);
   const salesUser = buildInternalSalesUser(order?.salesUser, order);
   const travelGroup = buildInternalTravelGroup(order?.travelGroup, order);
   const qrCode = buildInternalQrCode(order, options);
   const totalAmountCents = toCents(order?.totalAmountCents);
-  const cashOnDeliveryAmountCents = toCents(order?.cashOnDeliveryAmountCents);
+  const cashOnDeliveryAmountCents =
+    paymentDetails.length > 0
+      ? paymentDetails
+          .filter(
+            (detail: any) =>
+              isCollectOnDeliveryCategory(
+                detail.paymentMethodCategorySnapshot,
+              ),
+          )
+          .reduce(
+            (sum: number, detail: any) => sum + detail.amountCents,
+            0,
+          )
+      : toCents(order?.cashOnDeliveryAmountCents);
+  const paymentSummary = buildPaymentSummary(
+    paymentDetails,
+    totalAmountCents,
+    cashOnDeliveryAmountCents,
+  );
   const logisticsFeeCents = toCents(order?.logisticsFeeCents);
   const logisticsProviderCode = normalizeLogisticsProviderCode(
     order?.logisticsProviderCode,
@@ -128,6 +147,8 @@ export function buildSalesSheetDto(
     travelGroup,
     salesUser,
     items,
+    paymentDetails,
+    paymentSummary,
     amounts: {
       totalAmountCents,
       totalAmountYuan: formatCentsAsYuan(totalAmountCents),
@@ -226,6 +247,19 @@ export function buildPublicSalesSheetDto(source: any) {
       deliveryType: item.deliveryType,
       deliveryTypeLabel: item.deliveryTypeLabel,
     })),
+    paymentDetails: salesSheet.paymentDetails.map((detail: any) => ({
+      paymentMethodNameSnapshot: detail.paymentMethodNameSnapshot,
+      paymentMethodCategorySnapshot:
+        detail.paymentMethodCategorySnapshot,
+      paymentMethodCategoryLabel: detail.paymentMethodCategoryLabel,
+      amountCents: detail.amountCents,
+      amountYuan: detail.amountYuan,
+      requiresAgencyConfirmation: detail.requiresAgencyConfirmation,
+      agencyCollectionConfirmed: detail.agencyCollectionConfirmed,
+      confirmationStatus: detail.confirmationStatus,
+      confirmationStatusLabel: detail.confirmationStatusLabel,
+    })),
+    paymentSummary: salesSheet.paymentSummary,
     status: salesSheet.status,
     delivery: salesSheet.delivery,
     logistics: {
@@ -407,6 +441,140 @@ function normalizeItems(items: any[]) {
         sortOrder: Number(item?.sortOrder || 0),
       };
     });
+}
+
+function normalizePaymentDetails(details: any[]) {
+  return (Array.isArray(details) ? details : [])
+    .map((detail: any, index: number) => ({
+      detail,
+      index,
+      sortOrder: Number(detail?.sortOrder || 0),
+    }))
+    .sort(
+      (left, right) =>
+        left.sortOrder - right.sortOrder || left.index - right.index,
+    )
+    .map(({ detail }) => {
+      const amountCents = toCents(detail?.amountCents);
+      const category = normalizePaymentMethodCategory(
+        detail?.paymentMethodCategorySnapshot,
+      );
+      const collectionConfirmedAt =
+        detail?.collectionConfirmedAt ||
+        detail?.agencyCollectionConfirmedAt ||
+        null;
+      const requiresAgencyConfirmation =
+        category === 'collect_on_delivery';
+      const agencyCollectionConfirmed =
+        requiresAgencyConfirmation &&
+        Boolean(
+          detail?.collectionConfirmed ?? collectionConfirmedAt,
+        );
+      const confirmationStatus = !requiresAgencyConfirmation
+        ? 'not_required'
+        : agencyCollectionConfirmed
+          ? 'confirmed'
+          : 'pending';
+      return {
+        id: detail?.id || null,
+        paymentMethodId: detail?.paymentMethodId || null,
+        paymentMethodNameSnapshot:
+          detail?.paymentMethodNameSnapshot || null,
+        paymentMethodCategorySnapshot: category || 'direct_receipt',
+        paymentMethodCategoryLabel: requiresAgencyConfirmation
+          ? '代收营业款'
+          : '即时收款',
+        amountCents,
+        amountYuan: formatCentsAsYuan(amountCents),
+        sortOrder: Number(detail?.sortOrder || 0),
+        requiresAgencyConfirmation,
+        agencyCollectionConfirmed,
+        agencyCollectionConfirmedAt: toIsoString(
+          collectionConfirmedAt,
+        ),
+        agencyCollectionConfirmedById:
+          detail?.collectionConfirmedById ||
+          detail?.agencyCollectionConfirmedById ||
+          null,
+        agencyCollectionConfirmedByName:
+          detail?.collectionConfirmedByName ||
+          detail?.agencyCollectionConfirmedByName ||
+          detail?.collectionConfirmedBy?.name ||
+          detail?.agencyCollectionConfirmedBy?.name ||
+          null,
+        confirmationStatus,
+        confirmationStatusLabel:
+          confirmationStatus === 'confirmed'
+            ? '已确认到账'
+            : confirmationStatus === 'pending'
+              ? '代收款（待确认）'
+              : '无需确认',
+      };
+    });
+}
+
+function buildPaymentSummary(
+  details: any[],
+  totalAmountCents: number,
+  cashOnDeliveryAmountCents: number,
+) {
+  if (!Array.isArray(details) || details.length === 0) {
+    return {
+      directReceiptAmountCents:
+        totalAmountCents - cashOnDeliveryAmountCents,
+      collectOnDeliveryAmountCents: cashOnDeliveryAmountCents,
+      confirmedCollectOnDeliveryAmountCents: 0,
+      pendingCollectOnDeliveryAmountCents:
+        cashOnDeliveryAmountCents,
+      hasPendingCollectOnDelivery:
+        cashOnDeliveryAmountCents !== 0,
+    };
+  }
+  let directReceiptAmountCents = 0;
+  let collectOnDeliveryAmountCents = 0;
+  let confirmedCollectOnDeliveryAmountCents = 0;
+  let pendingCollectOnDeliveryAmountCents = 0;
+  let hasPendingCollectOnDelivery = false;
+  for (const detail of details) {
+    const amountCents = toCents(detail?.amountCents);
+    if (!detail?.requiresAgencyConfirmation) {
+      directReceiptAmountCents += amountCents;
+      continue;
+    }
+    collectOnDeliveryAmountCents += amountCents;
+    if (detail?.agencyCollectionConfirmed) {
+      confirmedCollectOnDeliveryAmountCents += amountCents;
+    } else {
+      pendingCollectOnDeliveryAmountCents += amountCents;
+      if (amountCents !== 0) {
+        hasPendingCollectOnDelivery = true;
+      }
+    }
+  }
+  return {
+    directReceiptAmountCents,
+    collectOnDeliveryAmountCents,
+    confirmedCollectOnDeliveryAmountCents,
+    pendingCollectOnDeliveryAmountCents,
+    hasPendingCollectOnDelivery,
+  };
+}
+
+function isCollectOnDeliveryCategory(value: unknown) {
+  const category = String(value || '').trim().toUpperCase();
+  return (
+    category === 'COLLECT_ON_DELIVERY' ||
+    category === 'AGENCY_COLLECTION'
+  );
+}
+
+function normalizePaymentMethodCategory(value: unknown) {
+  if (isCollectOnDeliveryCategory(value)) {
+    return 'collect_on_delivery';
+  }
+  return (
+    normalizeEnumText(value)?.toLowerCase() || 'direct_receipt'
+  );
 }
 
 function buildDeliverySummary(items: any[]) {

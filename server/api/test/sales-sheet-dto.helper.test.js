@@ -39,6 +39,46 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
   assert.equal(salesSheet.amounts.totalAmountYuan, '598.00');
   assert.equal(salesSheet.amounts.cashOnDeliveryAmountYuan, '100.00');
   assert.equal(salesSheet.amounts.logisticsFeeYuan, '12.00');
+  assert.equal(salesSheet.paymentDetails.length, 2);
+  assert.equal(
+    salesSheet.paymentDetails[0].paymentMethodNameSnapshot,
+    '收钱吧',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[0].paymentMethodCategoryLabel,
+    '即时收款',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[0].confirmationStatusLabel,
+    '无需确认',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[1].paymentMethodNameSnapshot,
+    '货到付款',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[1].paymentMethodCategoryLabel,
+    '代收营业款',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[1].confirmationStatusLabel,
+    '已确认到账',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[1].agencyCollectionConfirmedByName,
+    '财务测试员',
+  );
+  assert.equal(
+    salesSheet.paymentDetails[1].agencyCollectionConfirmedAt,
+    '2026-07-01T12:00:00.000Z',
+  );
+  assert.deepEqual(salesSheet.paymentSummary, {
+    directReceiptAmountCents: 49800,
+    collectOnDeliveryAmountCents: 10000,
+    confirmedCollectOnDeliveryAmountCents: 10000,
+    pendingCollectOnDeliveryAmountCents: 0,
+    hasPendingCollectOnDelivery: false,
+  });
   assert.equal(salesSheet.status.label, '有效');
   assert.equal(salesSheet.delivery.summary, 'mixed');
   assert.equal(salesSheet.delivery.summaryLabel, '混合配送');
@@ -69,6 +109,20 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
     deliveryType: 'self_pickup',
     deliveryTypeLabel: '自提',
   });
+  assert.equal(salesSheet.public.paymentDetails.length, 2);
+  assert.equal(
+    salesSheet.public.paymentDetails[1].confirmationStatusLabel,
+    '已确认到账',
+  );
+  assert.deepEqual(
+    salesSheet.public.paymentSummary,
+    salesSheet.paymentSummary,
+  );
+  assert.equal(
+    'agencyCollectionConfirmedByName' in
+      salesSheet.public.paymentDetails[1],
+    false,
+  );
 });
 
 test('unit: sales sheet DTO supports orders without a travel group', () => {
@@ -90,6 +144,25 @@ test('unit: sales sheet DTO supports orders without a travel group', () => {
   assert.equal('travelGroup' in salesSheet.public, false);
   assert.equal(salesSheet.qrCode, null);
   assert.equal(salesSheet.public.qrCode, null);
+  assert.equal(salesSheet.paymentDetails.length, 2);
+});
+
+test('unit: sales sheet payment summary falls back to compatibility amounts', () => {
+  const salesSheet = buildSalesSheetDto(
+    buildOrderFixture({
+      paymentDetails: [],
+      totalAmountCents: 10000,
+      cashOnDeliveryAmountCents: 3000,
+    }),
+  );
+
+  assert.deepEqual(salesSheet.paymentSummary, {
+    directReceiptAmountCents: 7000,
+    collectOnDeliveryAmountCents: 3000,
+    confirmedCollectOnDeliveryAmountCents: 0,
+    pendingCollectOnDeliveryAmountCents: 3000,
+    hasPendingCollectOnDelivery: true,
+  });
 });
 
 test('unit: sales sheet public view exposes only approved customer and logistics fields', () => {
@@ -273,6 +346,31 @@ function buildOrderFixture(overrides = {}) {
         deliveryType: 'SELF_PICKUP',
         notes: '内部明细备注 B',
         sortOrder: 1,
+      },
+    ],
+    paymentDetails: [
+      {
+        id: 'payment-direct',
+        paymentMethodId: 'method-direct',
+        paymentMethodNameSnapshot: '收钱吧',
+        paymentMethodCategorySnapshot: 'DIRECT_RECEIPT',
+        amountCents: 49800,
+        sortOrder: 0,
+      },
+      {
+        id: 'payment-cod',
+        paymentMethodId: 'method-cod',
+        paymentMethodNameSnapshot: '货到付款',
+        paymentMethodCategorySnapshot: 'COLLECT_ON_DELIVERY',
+        amountCents: 10000,
+        sortOrder: 1,
+        collectionConfirmed: true,
+        collectionConfirmedAt: new Date('2026-07-01T12:00:00.000Z'),
+        collectionConfirmedById: 'finance-user-1',
+        collectionConfirmedBy: {
+          id: 'finance-user-1',
+          name: '财务测试员',
+        },
       },
     ],
     operationLogs: [

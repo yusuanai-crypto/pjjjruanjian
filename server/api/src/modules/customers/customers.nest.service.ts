@@ -101,6 +101,15 @@ export class CustomersNestService {
       include: {
         items: true,
         travelGroup: true,
+        paymentDetails: {
+          select: {
+            amountCents: true,
+            paymentMethodCategorySnapshot: true,
+          },
+          orderBy: {
+            sortOrder: 'asc',
+          },
+        },
         commissionRecords: {
           where: {
             targetType: TASTER_COMMISSION_TARGET_TYPE,
@@ -543,7 +552,8 @@ function toCustomerOrderSummaryDto(order: any) {
     totalAmountCents: Number(order.totalAmountCents || 0),
     tasterCommissionCents: tasterCommission?.amountCents ?? 0,
     tasterCommission,
-    cashOnDeliveryAmountCents: Number(order.cashOnDeliveryAmountCents || 0),
+    cashOnDeliveryAmountCents:
+      getSalesOrderCollectOnDeliveryAmountCents(order),
     status: ORDER_STATUS_FROM_PRISMA[order.status] || order.status,
     packingStatus:
       PACKING_STATUS_FROM_PRISMA[order.packingStatus] || order.packingStatus || null,
@@ -554,6 +564,32 @@ function toCustomerOrderSummaryDto(order: any) {
     createdAt: toIsoString(order.createdAt),
     updatedAt: toIsoString(order.updatedAt),
   };
+}
+
+function getSalesOrderCollectOnDeliveryAmountCents(order: any) {
+  const paymentDetails = Array.isArray(order?.paymentDetails)
+    ? order.paymentDetails
+    : [];
+  if (paymentDetails.length === 0) {
+    return Number(order?.cashOnDeliveryAmountCents || 0);
+  }
+  return paymentDetails
+    .filter((detail: any) => {
+      const category = String(
+        detail?.paymentMethodCategorySnapshot || '',
+      )
+        .trim()
+        .toLowerCase();
+      return (
+        category === 'collect_on_delivery' ||
+        category === 'agency_collection'
+      );
+    })
+    .reduce(
+      (sum: number, detail: any) =>
+        sum + Number(detail?.amountCents || 0),
+      0,
+    );
 }
 
 function toCustomerOrderTasterCommissionDto(order: any) {

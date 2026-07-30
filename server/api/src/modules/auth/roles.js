@@ -54,7 +54,7 @@ const ROLE_DEFINITIONS = {
   taster: {
     role: 'taster',
     title: '品鉴师',
-    description: '查看今天及未来旅行团，今天关联团可无限次修改，并查看接待品鉴师关系订单。',
+    description: '查看本人全部接待团、今天及未来对接团、今天未进店团和全部未来团；今天关联品鉴师可修改，未来仅对接品鉴师可修改，历史团只读。',
   },
 };
 
@@ -75,6 +75,7 @@ const MENU_ENTRIES = {
   travel_group_order_notes: { id: 'travel_group_order_notes', title: '损耗与离店备注', phase: 4 },
   own_taster_receptions: { id: 'own_taster_receptions', title: '我的接待', phase: 3, dataScope: 'self' },
   sales_orders: { id: 'sales_orders', title: '销售订单', phase: 4 },
+  special_orders: { id: 'special_orders', title: '内购/外销/回购', phase: 12 },
   order_query: { id: 'order_query', title: '订单管理', phase: 4 },
   after_sales_orders: { id: 'after_sales_orders', title: '售后处理', phase: 6 },
   finance_workspace: { id: 'finance_workspace', title: '物流单号与品鉴师提成填写', phase: 6 },
@@ -82,6 +83,11 @@ const MENU_ENTRIES = {
   warehouse_workspace: { id: 'warehouse_workspace', title: '库管发货', phase: 6 },
   commissions: { id: 'commissions', title: '提成积分', phase: 7 },
   commission_rules: { id: 'commission_rules', title: '提成规则', phase: 7 },
+  payment_method_management: {
+    id: 'payment_method_management',
+    title: '收款方式管理',
+    phase: 6,
+  },
   product_management: { id: 'product_management', title: '商品管理', phase: 10 },
   serialized_inventory: { id: 'serialized_inventory', title: '茅台', phase: 10 },
   own_commissions: { id: 'own_commissions', title: '我的提成', phase: 7, dataScope: 'self' },
@@ -108,6 +114,7 @@ const ROLE_MENU_IDS = {
     'travel_group_order_notes',
     'customers',
     'sales_orders',
+    'special_orders',
     'order_query',
     'after_sales_orders',
     'finance_workspace',
@@ -115,6 +122,7 @@ const ROLE_MENU_IDS = {
     'warehouse_workspace',
     'commissions',
     'commission_rules',
+    'payment_method_management',
     'product_management',
     'serialized_inventory',
     'analytics',
@@ -138,6 +146,7 @@ const ROLE_MENU_IDS = {
     'travel_group_order_notes',
     'customers',
     'sales_orders',
+    'special_orders',
     'order_query',
     'after_sales_orders',
     'finance_workspace',
@@ -145,6 +154,7 @@ const ROLE_MENU_IDS = {
     'warehouse_workspace',
     'commissions',
     'commission_rules',
+    'payment_method_management',
     'product_management',
     'serialized_inventory',
     'analytics',
@@ -158,6 +168,7 @@ const ROLE_MENU_IDS = {
     'global_mark_query',
     'travel_group_query',
     'customers',
+    'special_orders',
     'order_query',
     'guide_points_table',
     'analytics',
@@ -179,6 +190,7 @@ const ROLE_MENU_IDS = {
     'travel_group_order_notes',
     'customers',
     'sales_orders',
+    'special_orders',
     'order_query',
   ],
   finance: [
@@ -195,6 +207,7 @@ const ROLE_MENU_IDS = {
     'reconciliation_table',
     'commissions',
     'commission_rules',
+    'payment_method_management',
     'product_management',
     'serialized_inventory',
     'ai_assistant',
@@ -213,6 +226,7 @@ const ROLE_MENU_IDS = {
     'todo_reminders',
     'travel_group_query',
     'customers',
+    'special_orders',
     'order_query',
     'after_sales_orders',
     'analytics',
@@ -294,6 +308,12 @@ const TRAVEL_GROUP_WRITE_PERMISSIONS = [
   'travel_groups:update',
 ];
 const TRAVEL_GROUP_FINANCE_MARK_PERMISSIONS = ['travel_groups:finance_mark'];
+const TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS = [
+  'travel_groups:confirm_not_entered',
+];
+const TRAVEL_GROUP_REVOKE_NOT_ENTERED_PERMISSIONS = [
+  'travel_groups:revoke_not_entered',
+];
 const TRAVEL_GROUP_TASTER_WRITE_PERMISSIONS = [
   'travel_groups:taster_update',
   'travel_groups:taster_summary',
@@ -338,6 +358,25 @@ const SALES_ORDER_FINANCE_MARK_PERMISSIONS = ['sales_orders:finance_mark'];
 const SALES_ORDER_SHIPPING_DATE_PERMISSIONS = [
   'sales_orders:update_shipping_date',
 ];
+const SPECIAL_ORDER_SELF_PERMISSIONS = [
+  'special_orders:list',
+  'special_orders:read',
+  'special_orders:create',
+  'special_orders:update_own',
+  'special_orders:cancel_own',
+  'special_orders:submit_own',
+  'special_orders:withdraw_own',
+];
+const SPECIAL_ORDER_REVIEW_PERMISSIONS = [
+  'special_orders:list',
+  'special_orders:read',
+  'special_orders:create',
+  'special_orders:review',
+  'special_orders:unapprove',
+  'special_orders:complete',
+  'special_orders:payments',
+  'special_orders:export',
+];
 const GUIDE_POINTS_READ_PERMISSIONS = [
   'guide_points_summaries:list',
   'guide_points_summaries:read',
@@ -377,6 +416,7 @@ const ROLE_PERMISSIONS = {
     ...INVENTORY_COST_WRITE_PERMISSIONS,
     ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     ...GROUP_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...CUSTOMER_CREATE_PERMISSIONS,
@@ -384,6 +424,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_FINANCE_MARK_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
     ...GUIDE_POINTS_WRITE_PERMISSIONS,
     ...GUIDE_POINTS_SWITCH_PERMISSIONS,
@@ -406,6 +447,7 @@ const ROLE_PERMISSIONS = {
     ...INVENTORY_COST_WRITE_PERMISSIONS,
     ...INVENTORY_QUANTITY_WRITE_PERMISSIONS,
     ...GROUP_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS,
     ...GROUP_FINANCE_MARK_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...CUSTOMER_CREATE_PERMISSIONS,
@@ -413,6 +455,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_FINANCE_MARK_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     ...SALES_ORDER_FINANCE_MARK_PERMISSIONS,
     ...GUIDE_POINTS_WRITE_PERMISSIONS,
     ...GUIDE_POINTS_SWITCH_PERMISSIONS,
@@ -426,8 +469,10 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GLOBAL_MARK_ENABLE_PERMISSION,
     ...GROUP_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS,
     ...CUSTOMER_READ_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     ...GUIDE_POINTS_READ_PERMISSIONS,
     ...GUIDE_POINTS_SWITCH_PERMISSIONS,
     ...INVENTORY_READ_PERMISSIONS,
@@ -438,6 +483,8 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GLOBAL_MARK_ENABLE_PERMISSION,
     ...GROUP_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS,
+    ...TRAVEL_GROUP_REVOKE_NOT_ENTERED_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
   ],
   sales: [
@@ -449,6 +496,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
     ...SALES_ORDER_CREATE_PERMISSIONS,
+    ...SPECIAL_ORDER_SELF_PERMISSIONS,
     ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
   ],
   finance: [
@@ -492,6 +540,7 @@ const ROLE_PERMISSIONS = {
     ...CUSTOMER_CREATE_PERMISSIONS,
     ...CUSTOMER_UPDATE_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
+    ...SPECIAL_ORDER_SELF_PERMISSIONS,
     ...SALES_ORDER_SHIPPING_DATE_PERMISSIONS,
   ],
   taster: [
@@ -499,6 +548,7 @@ const ROLE_PERMISSIONS = {
     ...GLOBAL_MARK_READ_PERMISSION,
     ...GROUP_READ_PERMISSIONS,
     ...TRAVEL_GROUP_TASTER_WRITE_PERMISSIONS,
+    ...TRAVEL_GROUP_CONFIRM_NOT_ENTERED_PERMISSIONS,
     ...SALES_ORDER_READ_PERMISSIONS,
   ],
 };
@@ -517,8 +567,10 @@ const ROLE_DATA_SCOPES = {
   warehouse: { orders: 'delivery_related' },
   after_sales: { orders: 'after_sales_related' },
   taster: {
-    travelGroups: 'today_and_future',
-    travelGroupUpdates: 'today_assigned_taster_or_liaison_unlimited_edits',
+    travelGroups:
+      'own_receptions_all_dates_or_own_liaisons_today_future_or_public_today_unarrived_and_future',
+    travelGroupUpdates:
+      'today_reception_or_liaison_future_liaison_only_history_read_only',
     orders: 'today_and_future_reception_taster_only',
     receptions: 'own_user_id',
     commissions: 'own_user_id',

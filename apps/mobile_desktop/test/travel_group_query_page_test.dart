@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -48,7 +49,7 @@ void main() {
 
     expect(find.text('旅行团管理'), findsOneWidget);
     expect(find.text('旅行团查询'), findsNothing);
-    expect(find.text('全部旅行团'), findsOneWidget);
+    expect(find.text('可查看旅行团'), findsOneWidget);
     expect(find.text('我对接的'), findsOneWidget);
     expect(find.text('我接的团'), findsOneWidget);
     expect(find.text('我参与的'), findsNothing);
@@ -83,6 +84,7 @@ void main() {
     query = _travelGroupQuery(apiClient.travelGroupGetPaths.last);
     expect(query['liaisonTasterId'], 'actor-1');
     expect(query.containsKey('tasterId'), isFalse);
+    expect(query['dateFrom'], _todayDate());
 
     await tester.tap(find.text('我接的团'));
     await tester.pumpAndSettle();
@@ -114,11 +116,41 @@ void main() {
     expect(find.text('全部日期'), findsWidgets);
   });
 
-  testWidgets('unrelated taster can view all fields but cannot edit',
+  testWidgets('license plate search hint and request reuse keyword parameter',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.sales,
+      currentUserId: 'sales-1',
+    );
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText?.contains('车牌号') == true,
+    );
+    expect(searchField, findsOneWidget);
+
+    await tester.enterText(searchField, '  贵A12345  ');
+    final searchButton = find.widgetWithText(FilledButton, '查询');
+    await tester.ensureVisible(searchButton);
+    await tester.tap(searchButton);
+    await tester.pumpAndSettle();
+
+    final query = _travelGroupQuery(apiClient.travelGroupGetPaths.last);
+    expect(query['keyword'], '贵A12345');
+    expect(query.containsKey('licensePlate'), isFalse);
+  });
+
+  testWidgets('unrelated taster can view today unarrived group but cannot edit',
       (tester) async {
     final apiClient = _FakeApiClient(
       tasterId: 'other-taster',
       liaisonTasterId: 'other-liaison',
+      arrivalTime: null,
     );
 
     await _pumpQueryPage(
@@ -131,6 +163,10 @@ void main() {
 
     expect(find.text('品鉴师只读'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
+    expect(
+      find.text('该旅行团尚未进店，所有品鉴师均可查看；只有关联品鉴师可以修改。'),
+      findsOneWidget,
+    );
     expect(find.text('对接品鉴师'), findsOneWidget);
     expect(find.text('重点客户信息'), findsOneWidget);
     expect(find.text('预计进店时间'), findsOneWidget);
@@ -301,7 +337,8 @@ void main() {
     expect(apiClient.lastPatchBody?.containsKey('parkingFeeCents'), isFalse);
   });
 
-  testWidgets('future taster group explains read-only state', (tester) async {
+  testWidgets('future reception-only taster group explains read-only state',
+      (tester) async {
     final apiClient = _FakeApiClient(
       tasterId: 'actor-1',
       visitDate: _tomorrowDate(),
@@ -320,9 +357,82 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.textContaining('未来旅行团仅可查看'), findsOneWidget);
+    expect(
+      find.text('未来旅行团仅对接品鉴师可以修改，其他品鉴师仅可查看。'),
+      findsOneWidget,
+    );
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
     expect(find.text('上传'), findsNothing);
+  });
+
+  testWidgets('future liaison uses backend edit capability for all write entries',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'other-taster',
+      liaisonTasterId: 'actor-1',
+      visitDate: _tomorrowDate(),
+      canEditByCurrentUser: true,
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(
+      find.byKey(const ValueKey('travel-group-taster-read-only-reason')),
+      findsNothing,
+    );
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '总结'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '上传'), findsNWidgets(2));
+  });
+
+  testWidgets('backend canEdit false wins over future liaison relationship',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'other-taster',
+      liaisonTasterId: 'actor-1',
+      visitDate: _tomorrowDate(),
+      canEditByCurrentUser: false,
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, '总结'), findsNothing);
+    expect(find.widgetWithText(TextButton, '上传'), findsNothing);
+    expect(
+      find.text('当前旅行团为只读。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('historical reception group is not mislabeled as future',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      tasterId: 'actor-1',
+      visitDate: _yesterdayDate(),
+      canEditByCurrentUser: false,
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+
+    expect(find.text('历史旅行团仅可查看。'), findsOneWidget);
+    expect(find.textContaining('未来旅行团'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, '编辑'), findsNothing);
   });
 
   testWidgets('assigned taster keeps writes after the historical edit count',
@@ -348,6 +458,230 @@ void main() {
     expect(find.widgetWithText(OutlinedButton, '编辑'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '总结'), findsOneWidget);
     expect(find.widgetWithText(TextButton, '上传'), findsNWidgets(2));
+  });
+
+  testWidgets('liaison taster can confirm but unrelated taster cannot',
+      (tester) async {
+    final liaisonClient = _FakeApiClient(
+      tasterId: 'other-taster',
+      liaisonTasterId: 'actor-1',
+      arrivalTime: null,
+      entryStatus: 'pending_entry',
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: liaisonClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsOneWidget,
+    );
+
+    final unrelatedClient = _FakeApiClient(
+      tasterId: 'other-taster',
+      liaisonTasterId: 'other-liaison',
+      arrivalTime: null,
+      entryStatus: 'pending_entry',
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: unrelatedClient,
+      role: UserRole.taster,
+      currentUserId: 'actor-1',
+    );
+    await _openDetailDialog(tester);
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('confirm uses second confirmation and keeps detail open',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      arrivalTime: null,
+      entryStatus: 'pending_entry',
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.admin,
+      currentUserId: 'admin-1',
+    );
+    await _openDetailDialog(tester);
+
+    final confirmButton = find.byKey(
+      const ValueKey('confirm-travel-group-not-entered-button'),
+    );
+    await tester.ensureVisible(confirmButton);
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(AlertDialog, '确认未进店'), findsOneWidget);
+    expect(find.textContaining('TG20260629001'), findsOneWidget);
+    expect(find.textContaining('操作者'), findsOneWidget);
+    expect(find.textContaining('确认时间'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'confirm-travel-group-not-entered-dialog-submit',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(apiClient.notEnteredPatchCalls, 1);
+    expect(
+      apiClient.lastPatchPath,
+      '/api/travel-groups/group-1/not-entered',
+    );
+    expect(apiClient.lastPatchBody, {'confirmed': true});
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('未进店'), findsOneWidget);
+    expect(find.text('测试前台'), findsOneWidget);
+    expect(confirmButton, findsNothing);
+  });
+
+  testWidgets('confirm request disables action and prevents duplicate calls',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      arrivalTime: null,
+      entryStatus: 'pending_entry',
+    );
+    apiClient.notEnteredCompleter = Completer<Map<String, dynamic>>();
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.admin,
+      currentUserId: 'admin-1',
+    );
+    await _openDetailDialog(tester);
+
+    final confirmButton = find.byKey(
+      const ValueKey('confirm-travel-group-not-entered-button'),
+    );
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'confirm-travel-group-not-entered-dialog-submit',
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(apiClient.notEnteredPatchCalls, 1);
+    expect(
+      tester.widget<OutlinedButton>(confirmButton).onPressed,
+      isNull,
+    );
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    await tester.tap(confirmButton, warnIfMissed: false);
+    await tester.pump();
+    expect(apiClient.notEnteredPatchCalls, 1);
+
+    apiClient.notEnteredCompleter!.complete(
+      apiClient._notEnteredResponse(true),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('未进店'), findsOneWidget);
+  });
+
+  testWidgets('front desk can revoke and restore pending entry in open detail',
+      (tester) async {
+    final apiClient = _FakeApiClient(
+      arrivalTime: null,
+      entryStatus: 'not_entered',
+      notEnteredConfirmedAt: '2026-07-29T02:30:00.000Z',
+      notEnteredConfirmedById: 'front-1',
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: apiClient,
+      role: UserRole.frontDesk,
+      currentUserId: 'front-1',
+    );
+    await _openDetailDialog(tester);
+
+    final revokeButton = find.byKey(
+      const ValueKey('revoke-travel-group-not-entered-button'),
+    );
+    await tester.tap(revokeButton);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AlertDialog, '撤销未进店'), findsOneWidget);
+    expect(find.textContaining('TG20260629001'), findsOneWidget);
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'revoke-travel-group-not-entered-dialog-submit',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastPatchBody, {'confirmed': false});
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('待进店'), findsOneWidget);
+    expect(revokeButton, findsNothing);
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('entered state hides confirm and API failure preserves pending',
+      (tester) async {
+    final enteredClient = _FakeApiClient(
+      arrivalTime: '09:25',
+      entryStatus: 'entered',
+    );
+    await _pumpQueryPage(
+      tester,
+      apiClient: enteredClient,
+      role: UserRole.admin,
+      currentUserId: 'admin-1',
+    );
+    await _openDetailDialog(tester);
+    expect(
+      find.byKey(const ValueKey('confirm-travel-group-not-entered-button')),
+      findsNothing,
+    );
+
+    final failingClient = _FakeApiClient(
+      arrivalTime: null,
+      entryStatus: 'pending_entry',
+    )..failNotEntered = true;
+    await _pumpQueryPage(
+      tester,
+      apiClient: failingClient,
+      role: UserRole.admin,
+      currentUserId: 'admin-1',
+    );
+    await _openDetailDialog(tester);
+    final confirmButton = find.byKey(
+      const ValueKey('confirm-travel-group-not-entered-button'),
+    );
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'confirm-travel-group-not-entered-dialog-submit',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('待进店'), findsOneWidget);
+    expect(confirmButton, findsOneWidget);
+    expect(find.text('该旅行团已进店，不能确认未进店。'), findsWidgets);
   });
 
   testWidgets(
@@ -437,19 +771,35 @@ class _FakeApiClient extends ApiClient {
     this.tasterId = 'taster-1',
     this.liaisonTasterId = 'liaison-1',
     this.visitDate,
+    this.arrivalTime = '9:25',
+    String? entryStatus,
+    String? notEnteredConfirmedAt,
+    String? notEnteredConfirmedById,
+    this.canEditByCurrentUser,
     this.tasterEditCount = 0,
     this.includeAttachment = false,
-  }) : super(baseUrl: 'http://127.0.0.1:3000');
+  })  : _entryStatus = entryStatus,
+        _notEnteredConfirmedAt = notEnteredConfirmedAt,
+        _notEnteredConfirmedById = notEnteredConfirmedById,
+        super(baseUrl: 'http://127.0.0.1:3000');
 
   final String? tasterId;
   final String? liaisonTasterId;
   final String? visitDate;
+  final String? arrivalTime;
+  final bool? canEditByCurrentUser;
   final int tasterEditCount;
   final bool includeAttachment;
   final List<String> travelGroupGetPaths = [];
 
+  String? _entryStatus;
+  String? _notEnteredConfirmedAt;
+  String? _notEnteredConfirmedById;
   String? lastPatchPath;
   Map<String, dynamic>? lastPatchBody;
+  int notEnteredPatchCalls = 0;
+  bool failNotEntered = false;
+  Completer<Map<String, dynamic>>? notEnteredCompleter;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -471,6 +821,11 @@ class _FakeApiClient extends ApiClient {
               tasterId: tasterId,
               liaisonTasterId: liaisonTasterId,
               visitDate: visitDate,
+              arrivalTime: arrivalTime,
+              entryStatus: _entryStatus,
+              notEnteredConfirmedAt: _notEnteredConfirmedAt,
+              notEnteredConfirmedById: _notEnteredConfirmedById,
+              canEditByCurrentUser: canEditByCurrentUser,
               tasterEditCount: tasterEditCount,
               includeAttachment: includeAttachment,
             ),
@@ -503,6 +858,26 @@ class _FakeApiClient extends ApiClient {
   }) async {
     lastPatchPath = path;
     lastPatchBody = body;
+    if (path.endsWith('/not-entered')) {
+      notEnteredPatchCalls += 1;
+      if (failNotEntered) {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'TRAVEL_GROUP_ALREADY_ENTERED',
+          message: '该旅行团已进店，不能确认未进店。',
+        );
+      }
+      final pendingResponse = notEnteredCompleter;
+      if (pendingResponse != null) {
+        return pendingResponse.future;
+      }
+      final confirmed = body?['confirmed'] == true;
+      _entryStatus = confirmed ? 'not_entered' : 'pending_entry';
+      _notEnteredConfirmedAt =
+          confirmed ? '2026-07-29T02:30:00.000Z' : null;
+      _notEnteredConfirmedById = confirmed ? 'actor-1' : null;
+      return _notEnteredResponse(confirmed);
+    }
     return {
       'data': {
         'travelGroup': {
@@ -510,11 +885,36 @@ class _FakeApiClient extends ApiClient {
             tasterId: tasterId,
             liaisonTasterId: liaisonTasterId,
             visitDate: visitDate,
+            arrivalTime: arrivalTime,
+            entryStatus: _entryStatus,
+            notEnteredConfirmedAt: _notEnteredConfirmedAt,
+            notEnteredConfirmedById: _notEnteredConfirmedById,
+            canEditByCurrentUser: canEditByCurrentUser,
             tasterEditCount: tasterEditCount,
             includeAttachment: includeAttachment,
           ),
           ...?body,
         },
+      },
+    };
+  }
+
+  Map<String, dynamic> _notEnteredResponse(bool confirmed) {
+    return {
+      'data': {
+        'travelGroup': _travelGroupJson(
+          tasterId: tasterId,
+          liaisonTasterId: liaisonTasterId,
+          visitDate: visitDate,
+          arrivalTime: arrivalTime,
+          entryStatus: confirmed ? 'not_entered' : 'pending_entry',
+          notEnteredConfirmedAt:
+              confirmed ? '2026-07-29T02:30:00.000Z' : null,
+          notEnteredConfirmedById: confirmed ? 'actor-1' : null,
+          canEditByCurrentUser: canEditByCurrentUser,
+          tasterEditCount: tasterEditCount,
+          includeAttachment: includeAttachment,
+        ),
       },
     };
   }
@@ -554,11 +954,21 @@ Map<String, dynamic> _travelGroupJson({
   String? tasterId = 'taster-1',
   String? liaisonTasterId = 'liaison-1',
   String? visitDate,
+  String? arrivalTime = '9:25',
+  String? entryStatus,
+  String? notEnteredConfirmedAt,
+  String? notEnteredConfirmedById,
+  bool? canEditByCurrentUser,
   int tasterEditCount = 0,
   bool includeAttachment = false,
 }) {
   final resolvedVisitDate = visitDate ?? _todayDate();
   final associated = tasterId == 'actor-1' || liaisonTasterId == 'actor-1';
+  final resolvedCanEdit = canEditByCurrentUser ??
+      (resolvedVisitDate == _todayDate()
+          ? associated
+          : resolvedVisitDate.compareTo(_todayDate()) > 0 &&
+              liaisonTasterId == 'actor-1');
   return {
     'id': 'group-1',
     'kind': 'travel',
@@ -580,7 +990,7 @@ Map<String, dynamic> _travelGroupJson({
     'tasterEditLimit': null,
     'tasterEditRemaining': null,
     'tasterEditUnlimited': true,
-    'canEditByCurrentUser': associated && resolvedVisitDate == _todayDate(),
+    'canEditByCurrentUser': resolvedCanEdit,
     'liaisonTasterName': '赵对接',
     'sourceRegion': '遵义',
     'ageInfo': '40-55 岁',
@@ -600,7 +1010,17 @@ Map<String, dynamic> _travelGroupJson({
           ]
         : const [],
     'expectedArrivalTime': '09:10',
-    'arrivalTime': '9:25',
+    'arrivalTime': arrivalTime,
+    if (entryStatus != null) 'entryStatus': entryStatus,
+    'notEnteredConfirmedAt': notEnteredConfirmedAt,
+    'notEnteredConfirmedById': notEnteredConfirmedById,
+    'notEnteredConfirmedBy': notEnteredConfirmedById == null
+        ? null
+        : {
+            'id': notEnteredConfirmedById,
+            'name': '测试前台',
+            'username': 'front.test',
+          },
     'groupType': 'KB团',
     'wineDetails': '',
     'departureTime': '',
@@ -640,6 +1060,13 @@ String _todayDate() {
 
 String _tomorrowDate() {
   final now = DateTime.now().toUtc().add(const Duration(hours: 8, days: 1));
+  return '${now.year.toString().padLeft(4, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-'
+      '${now.day.toString().padLeft(2, '0')}';
+}
+
+String _yesterdayDate() {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 8, days: -1));
   return '${now.year.toString().padLeft(4, '0')}-'
       '${now.month.toString().padLeft(2, '0')}-'
       '${now.day.toString().padLeft(2, '0')}';

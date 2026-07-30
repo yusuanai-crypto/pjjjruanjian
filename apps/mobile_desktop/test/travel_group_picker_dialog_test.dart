@@ -6,58 +6,129 @@ import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/travel_group_picker_dialog.dart';
 
 void main() {
-  testWidgets('searches travel groups by agency scope', (tester) async {
-    final queries = <TravelGroupPickerQuery>[];
+  testWidgets('only offers taster and tasting room search scopes',
+      (tester) async {
     await _openPicker(
       tester,
-      loadTravelGroups: (query) async {
-        queries.add(query);
-        return _filterGroups(_groups, query);
-      },
+      loadTravelGroups: (query) async => _filterGroups(_groups, query),
     );
 
-    expect(find.text('TG20260629001'), findsOneWidget);
-    expect(find.text('TG20260630002'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('travel-group-taster-field')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('travel-group-tasting-room-no-field')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('travel-group-date-button')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('travel-group-clear-date-button')),
+      findsNothing,
+    );
 
     await tester.tap(find.byKey(const ValueKey('travel-group-search-scope')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('旅行社').last);
-    await tester.pumpAndSettle();
 
-    await tester.enterText(
-      find.byKey(const ValueKey('travel-group-search-field')),
-      '甲社',
-    );
-    await tester.tap(find.byKey(const ValueKey('travel-group-search-button')));
-    await tester.pumpAndSettle();
-
-    expect(queries.last.scope, TravelGroupSearchScope.travelAgency);
-    expect(queries.last.text, '甲社');
-    expect(find.text('TG20260629001'), findsOneWidget);
-    expect(find.text('TG20260630002'), findsNothing);
+    expect(find.text('品鉴师'), findsWidgets);
+    expect(find.text('品鉴馆号'), findsOneWidget);
+    expect(find.text('关键词'), findsNothing);
+    expect(find.text('团号'), findsNothing);
+    expect(find.text('旅行社'), findsNothing);
+    expect(find.text('导游'), findsNothing);
   });
 
-  testWidgets('passes initial date range to travel group loader',
+  testWidgets('searches by selected taster id without room number',
       (tester) async {
     final queries = <TravelGroupPickerQuery>[];
     await _openPicker(
       tester,
-      initialStart: DateTime(2026, 6, 30),
-      initialEnd: DateTime(2026, 6, 30),
       loadTravelGroups: (query) async {
         queries.add(query);
         return _filterGroups(_groups, query);
       },
     );
 
-    expect(queries.single.start, DateTime(2026, 6, 30));
-    expect(queries.single.end, DateTime(2026, 6, 30));
-    expect(find.text('2026-06-30 至 2026-06-30'), findsOneWidget);
-    expect(find.text('TG20260629001'), findsNothing);
-    expect(find.text('TG20260630002'), findsOneWidget);
+    final searchButton = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('travel-group-search-button')),
+    );
+    expect(searchButton.onPressed, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('travel-group-taster-field')));
+    await tester.pumpAndSettle();
+    expect(find.text('测试品鉴师'), findsWidgets);
+    expect(find.text('另一位品鉴师'), findsOneWidget);
+    expect(find.text('已停用品鉴师'), findsNothing);
+    await tester.tap(find.text('测试品鉴师').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('travel-group-search-button')));
+    await tester.pumpAndSettle();
+
+    expect(queries.last.scope, TravelGroupSearchScope.taster);
+    expect(queries.last.tasterId, 'taster-1');
+    expect(queries.last.tastingRoomNo, isNull);
+    expect(find.text('TG20260629001'), findsOneWidget);
+    expect(find.text('TG20260630002'), findsNothing);
   });
 
-  testWidgets('selects a travel group and returns the record', (tester) async {
+  testWidgets('trims tasting room number and clears stale scope conditions',
+      (tester) async {
+    final queries = <TravelGroupPickerQuery>[];
+    await _openPicker(
+      tester,
+      loadTravelGroups: (query) async {
+        queries.add(query);
+        return _filterGroups(_groups, query);
+      },
+    );
+
+    await tester.tap(find.byKey(const ValueKey('travel-group-taster-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试品鉴师').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('travel-group-search-button')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('travel-group-search-scope')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('品鉴馆号').last);
+    await tester.pumpAndSettle();
+
+    expect(queries.last.tasterId, isNull);
+    expect(queries.last.tastingRoomNo, isNull);
+    expect(
+      find.byKey(const ValueKey('travel-group-taster-field')),
+      findsNothing,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('travel-group-tasting-room-no-field')),
+      '  5  ',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('travel-group-search-button')));
+    await tester.pumpAndSettle();
+
+    expect(queries.last.scope, TravelGroupSearchScope.tastingRoomNo);
+    expect(queries.last.tasterId, isNull);
+    expect(queries.last.tastingRoomNo, '5');
+    expect(find.text('TG20260629001'), findsOneWidget);
+    expect(find.text('TG20260630002'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('travel-group-search-scope')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('品鉴师').last);
+    await tester.pumpAndSettle();
+
+    expect(queries.last.tasterId, isNull);
+    expect(queries.last.tastingRoomNo, isNull);
+  });
+
+  testWidgets('shows required result fields and returns the selected record',
+      (tester) async {
     TravelGroupRecord? selected;
     await _openPicker(
       tester,
@@ -65,24 +136,20 @@ void main() {
       onSelected: (group) => selected = group,
     );
 
+    expect(find.text('TG20260629001'), findsOneWidget);
+    expect(find.text('到店日期：2026-06-29'), findsOneWidget);
+    expect(find.text('品鉴师：测试品鉴师'), findsOneWidget);
+    expect(find.text('品鉴馆号：5'), findsOneWidget);
+    expect(find.text('品鉴师：未分配品鉴师'), findsOneWidget);
+    expect(find.text('品鉴馆号：未填写品鉴馆号'), findsOneWidget);
+
     await tester.tap(find.text('TG20260629001'));
     await tester.pumpAndSettle();
 
     expect(selected?.id, 'group-1');
-    expect(selected?.travelAgency, '甲社');
   });
 
-  testWidgets('hides travel group finance mark by default', (tester) async {
-    await _openPicker(
-      tester,
-      loadTravelGroups: (_) async => _groups,
-    );
-
-    expect(find.text('已标记'), findsNothing);
-    expect(find.text('未标记'), findsNothing);
-  });
-
-  testWidgets('shows travel group finance mark when enabled', (tester) async {
+  testWidgets('preserves optional finance mark display', (tester) async {
     await _openPicker(
       tester,
       loadTravelGroups: (_) async => _groups,
@@ -106,7 +173,7 @@ void main() {
     expect(find.text('暂无匹配旅行团'), findsOneWidget);
   });
 
-  testWidgets('shows error state and retry action', (tester) async {
+  testWidgets('shows error state and retries the same query', (tester) async {
     var attempts = 0;
     await _openPicker(
       tester,
@@ -149,8 +216,7 @@ void main() {
 Future<void> _openPicker(
   WidgetTester tester, {
   required TravelGroupListLoader loadTravelGroups,
-  DateTime? initialStart,
-  DateTime? initialEnd,
+  TasterListLoader? loadTasters,
   ValueChanged<TravelGroupRecord?>? onSelected,
   bool settle = true,
   bool showFinanceMark = false,
@@ -167,8 +233,7 @@ Future<void> _openPicker(
                     context: context,
                     builder: (context) => TravelGroupPickerDialog(
                       loadTravelGroups: loadTravelGroups,
-                      initialStart: initialStart,
-                      initialEnd: initialEnd,
+                      loadTasters: loadTasters ?? () async => _tasters,
                       showFinanceMark: showFinanceMark,
                     ),
                   );
@@ -195,55 +260,45 @@ List<TravelGroupRecord> _filterGroups(
   List<TravelGroupRecord> groups,
   TravelGroupPickerQuery query,
 ) {
-  final text = query.text.trim();
   return groups.where((group) {
-    final visitDate = DateTime.tryParse(group.visitDate);
-    if (query.start != null &&
-        visitDate != null &&
-        visitDate.isBefore(query.start!)) {
+    if (query.tasterId != null && group.tasterId != query.tasterId) {
       return false;
     }
-    if (query.end != null &&
-        visitDate != null &&
-        visitDate.isAfter(query.end!)) {
+    if (query.tastingRoomNo != null &&
+        group.tastingRoomNo != query.tastingRoomNo) {
       return false;
     }
-    if (text.isEmpty) {
-      return true;
-    }
-    switch (query.scope) {
-      case TravelGroupSearchScope.keyword:
-        return [
-          group.groupNo,
-          group.travelAgency,
-          group.guideName,
-          group.visitDate,
-        ].whereType<String>().join(' ').contains(text);
-      case TravelGroupSearchScope.groupNo:
-        return group.groupNo.contains(text);
-      case TravelGroupSearchScope.travelAgency:
-        return (group.travelAgency ?? '').contains(text);
-      case TravelGroupSearchScope.guide:
-        return (group.guideName ?? '').contains(text);
-    }
+    return true;
   }).toList();
 }
+
+const _tasters = <TasterOption>[
+  TasterOption(
+    id: 'taster-1',
+    name: '测试品鉴师',
+    username: 'taster-one',
+  ),
+  TasterOption(
+    id: 'taster-2',
+    name: '另一位品鉴师',
+    username: 'taster-two',
+  ),
+];
 
 final _groups = <TravelGroupRecord>[
   _group(
     id: 'group-1',
     groupNo: 'TG20260629001',
     visitDate: '2026-06-29',
-    travelAgency: '甲社',
-    guideName: '王导',
+    tasterId: 'taster-1',
+    tasterName: '测试品鉴师',
+    tastingRoomNo: '5',
     financeMark: true,
   ),
   _group(
     id: 'group-2',
     groupNo: 'TG20260630002',
     visitDate: '2026-06-30',
-    travelAgency: '乙社',
-    guideName: '李导',
   ),
 ];
 
@@ -251,8 +306,9 @@ TravelGroupRecord _group({
   required String id,
   required String groupNo,
   required String visitDate,
-  required String travelAgency,
-  required String guideName,
+  String? tasterId,
+  String? tasterName,
+  String? tastingRoomNo,
   bool financeMark = false,
 }) {
   return TravelGroupRecord.fromJson({
@@ -260,8 +316,9 @@ TravelGroupRecord _group({
     'kind': 'travel',
     'groupNo': groupNo,
     'visitDate': visitDate,
-    'travelAgency': travelAgency,
-    'guideName': guideName,
+    'tasterId': tasterId,
+    'tasterName': tasterName,
+    'tastingRoomNo': tastingRoomNo,
     'guestCount': 24,
     'status': 'unmarked',
     'financeMark': financeMark,

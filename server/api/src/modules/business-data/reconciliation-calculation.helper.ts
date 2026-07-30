@@ -42,6 +42,8 @@ export interface ReconciliationCalculationResult {
   afterSalesCents: number;
   refundsCents: number;
   receivableTotalCents: number;
+  payableTotalCents: number;
+  netCashFlowCents: number;
   actualTotalCents: number;
   differenceCents: number;
   sourceHash: string;
@@ -156,6 +158,13 @@ export function calculateReconciliation(
         normalizeEnum(order?.status) as any,
       ),
     )
+    .filter(
+      (order) =>
+        !order?.workflowStatus ||
+        ['APPROVED', 'COMPLETED'].includes(
+          normalizeEnum(order.workflowStatus),
+        ),
+    )
     .filter((order) => RECONCILIATION_ORDER_TYPE_FIELDS[normalizeEnum(order?.orderType)]);
 
   for (const order of includedOrders) {
@@ -185,11 +194,8 @@ export function calculateReconciliation(
       safeAdd(
         safeAdd(
           safeAdd(
-            safeAdd(
-              amounts.travelGroupSalesCents,
-              amounts.backOfficeSalesCents,
-            ),
-            amounts.buybackCents,
+            amounts.travelGroupSalesCents,
+            amounts.backOfficeSalesCents,
           ),
           amounts.externalSalesCents,
         ),
@@ -198,6 +204,11 @@ export function calculateReconciliation(
       amounts.afterSalesCents,
     ),
     -refundsCents,
+  );
+  const payableTotalCents = amounts.buybackCents;
+  const netCashFlowCents = safeAdd(
+    receivableTotalCents,
+    -payableTotalCents,
   );
 
   const sourceHash = buildSourceHash({
@@ -218,8 +229,10 @@ export function calculateReconciliation(
     afterSalesCents: amounts.afterSalesCents,
     refundsCents,
     receivableTotalCents,
+    payableTotalCents,
+    netCashFlowCents,
     actualTotalCents,
-    differenceCents: safeAdd(actualTotalCents, -receivableTotalCents),
+    differenceCents: safeAdd(actualTotalCents, -netCashFlowCents),
     sourceHash,
   };
 }
@@ -242,6 +255,9 @@ function buildSourceHash(input: {
         id: String(order?.id || ''),
         orderType: normalizeEnum(order?.orderType),
         status: normalizeEnum(order?.status),
+        workflowStatus: order?.workflowStatus
+          ? normalizeEnum(order.workflowStatus)
+          : null,
         totalAmountCents: toIntegerCents(order?.totalAmountCents),
       }))
       .sort(compareFactIds),

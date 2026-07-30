@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/moutai_inventory/moutai_inventory_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
@@ -22,6 +23,10 @@ void main() {
     expect(find.text('茅台'), findsOneWidget);
     expect(find.text('进货价'), findsOneWidget);
     expect(find.text(formatMoneyCents(123456)), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('moutai-inbound-button')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const Key('moutai-select-all')));
     await tester.pump();
@@ -34,6 +39,70 @@ void main() {
     await tester.pumpWidget(_page(warehouseClient, UserRole.warehouse));
     await tester.pumpAndSettle();
     expect(find.text('茅台'), findsOneWidget);
+    expect(find.text('进货价'), findsNothing);
+    expect(find.text(formatMoneyCents(123456)), findsNothing);
+    expect(
+      find.byKey(const ValueKey('moutai-inbound-button')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('finance can maintain cost but cannot create inventory units',
+      (tester) async {
+    tester.view.physicalSize = const Size(1500, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      _page(_FakeInventoryApiClient(), UserRole.finance),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('进货价'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('moutai-inbound-button')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('expanded serialized statuses use stable Chinese labels',
+      (tester) async {
+    tester.view.physicalSize = const Size(1500, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      _page(
+        _FakeInventoryApiClient(status: 'outbound'),
+        UserRole.warehouse,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('已出库'), findsWidgets);
+  });
+
+  testWidgets('role switch clears selected units and reloads cost projection',
+      (tester) async {
+    tester.view.physicalSize = const Size(1500, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = _FakeInventoryApiClient();
+
+    await tester.pumpWidget(_page(client, UserRole.finance));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('moutai-select-unit-1')));
+    await tester.pump();
+    expect(find.text('已选择 1 瓶'), findsOneWidget);
+    expect(find.text('进货价'), findsOneWidget);
+
+    await tester.pumpWidget(_page(client, UserRole.warehouse));
+    await tester.pumpAndSettle();
+    expect(client.getCalls, 2);
+    expect(find.text('已选择 0 瓶'), findsOneWidget);
     expect(find.text('进货价'), findsNothing);
     expect(find.text(formatMoneyCents(123456)), findsNothing);
   });
@@ -122,6 +191,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('所选库存资料不完整，无法导出。'), findsOneWidget);
   });
+
+  testWidgets('mobile uses cards and keeps logistics codes readable',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      _page(_FakeInventoryApiClient(), UserRole.warehouse),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('moutai-mobile-card-list')),
+      findsOneWidget,
+    );
+    expect(find.byType(DataTable), findsNothing);
+    expect(find.textContaining('物流码 000001'), findsOneWidget);
+    expect(find.text('进货价'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unauthorized role makes zero serialized inventory requests',
+      (tester) async {
+    final client = _FakeInventoryApiClient();
+    await tester.pumpWidget(_page(client, UserRole.sales));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('不能进入全量逐瓶库存页面'), findsOneWidget);
+    expect(client.getCalls, 0);
+  });
+
+  test('warehouse DTO projection drops cost returned by the server', () async {
+    final client = _FakeInventoryApiClient();
+    final page = await BusinessApi(apiClient: client, token: 'token')
+        .listSerializedInventory(includeCost: false);
+
+    expect(page.units, isNotEmpty);
+    expect(page.units.every((unit) => unit.purchaseCostCents == null), isTrue);
+  });
+
+  testWidgets('stale serialized response cannot overwrite newer filters',
+      (tester) async {
+    final client = _DelayedInventoryApiClient();
+    await tester.pumpWidget(_page(client, UserRole.warehouse));
+    await tester.pump();
+    expect(client.requests, hasLength(1));
+
+    await tester.tap(find.widgetWithText(FilledButton, '查询'));
+    await tester.pump();
+    expect(client.requests, hasLength(2));
+
+    client.requests[1].complete(_serializedPayload('最新结果', '000009'));
+    await tester.pump();
+    expect(find.text('最新结果'), findsOneWidget);
+
+    client.requests[0].complete(_serializedPayload('过期结果', '000001'));
+    await tester.pump();
+    expect(find.text('最新结果'), findsOneWidget);
+    expect(find.text('过期结果'), findsNothing);
+  });
 }
 
 Widget _page(
@@ -142,9 +273,12 @@ Widget _page(
 }
 
 class _FakeInventoryApiClient extends ApiClient {
-  _FakeInventoryApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
+  _FakeInventoryApiClient({this.status = 'available'})
+      : super(baseUrl: 'http://127.0.0.1:3000');
 
+  final String status;
   int exportCalls = 0;
+  int getCalls = 0;
   List<String> exportedUnitIds = const [];
   Completer<ApiDownloadedFile>? pendingExport;
   ApiException? exportError;
@@ -152,9 +286,13 @@ class _FakeInventoryApiClient extends ApiClient {
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     if (path.startsWith('/api/serialized-inventory')) {
+      getCalls += 1;
       return {
         'data': {
-          'units': [_unit('unit-1', '000001'), _unit('unit-2', '000002')],
+          'units': [
+            _unit('unit-1', '000001', status: status),
+            _unit('unit-2', '000002', status: status),
+          ],
           'pagination': {
             'page': 1,
             'pageSize': 100,
@@ -188,7 +326,46 @@ class _FakeInventoryApiClient extends ApiClient {
   }
 }
 
-Map<String, dynamic> _unit(String id, String logisticsCode) {
+class _DelayedInventoryApiClient extends ApiClient {
+  _DelayedInventoryApiClient() : super(baseUrl: 'http://127.0.0.1:3000');
+
+  final List<Completer<Map<String, dynamic>>> requests = [];
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path, {String? token}) {
+    if (!path.startsWith('/api/serialized-inventory')) {
+      throw StateError('Unexpected GET $path');
+    }
+    final completer = Completer<Map<String, dynamic>>();
+    requests.add(completer);
+    return completer.future;
+  }
+}
+
+Map<String, dynamic> _serializedPayload(
+  String productName,
+  String logisticsCode,
+) {
+  final unit = _unit('delayed-unit', logisticsCode);
+  unit['moutaiName'] = productName;
+  return {
+    'data': {
+      'units': [unit],
+      'pagination': {
+        'page': 1,
+        'pageSize': 100,
+        'total': 1,
+        'totalPages': 1,
+      },
+    },
+  };
+}
+
+Map<String, dynamic> _unit(
+  String id,
+  String logisticsCode, {
+  String status = 'available',
+}) {
   return {
     'id': id,
     'productId': 'product-moutai',
@@ -199,7 +376,7 @@ Map<String, dynamic> _unit(String id, String logisticsCode) {
     'batchSerialNo': '00002',
     'logisticsCode': logisticsCode,
     'purchaseCostCents': 123456,
-    'status': 'available',
+    'status': status,
     'dataComplete': true,
     'salesOrder': null,
     'createdAt': '2026-07-23T00:00:00.000Z',

@@ -34,7 +34,7 @@
 | 订单状态 | `status` | enum，含 `VALID`、`PARTIAL_REFUND`、`REFUNDED`、`CANCELLED` |
 | 客户关联和快照 | `customerId`、`customerName`、`customerPhone`、`province`、`city`、`district`、`address` | 可支撑售后按客户定位订单 |
 | 旅行团关联 | `travelGroupId` | 可支撑按旅行团查询订单和售后上下文 |
-| 金额 | `totalAmountCents`、`cashOnDeliveryAmountCents` | 可支撑财务销售额、货到付款统计 |
+| 金额 | `totalAmountCents`、`paymentDetails`、`cashOnDeliveryAmountCents` | 财务收款和代收统计以明细分类快照为准，旧字段仅兼容兜底 |
 | 物流 | `logisticsMethod`、`logisticsNo`、`logisticsFeeCents` | 物流方式由库管维护，物流单号和运费由财务维护 |
 | 打包 | `packingStatus`、`packageCount`、`warehouseRemark` | 可支撑待打包、打包中、已打包、异常 |
 | 开票 | `invoiceRequired`、`invoiceIssued` | 可支撑待开票查询 |
@@ -195,7 +195,7 @@
 - 查询 `salesOrder.findMany` 和 `travelGroup.findMany`。
 - `salesAmountCents` 来自非 `CANCELLED` 订单的 `totalAmountCents` 合计。
 - `refundAmountCents` 来自状态为 `REFUNDED` 或 `PARTIAL_REFUND` 的订单 `totalAmountCents` 合计。
-- `cashOnDeliveryAmountCents` 来自非 `CANCELLED` 订单的 `cashOnDeliveryAmountCents` 合计。
+- `cashOnDeliveryAmountCents` 兼容指标来自非 `CANCELLED` 订单的 `COLLECT_ON_DELIVERY` 明细有符号合计；只有无明细过渡数据才回退旧列。
 - 返回 `recentOrders`，尚无售后待确认、净销售额、物流费用、待开票、待标记等第 6 阶段 workbench 指标。
 
 缺口：
