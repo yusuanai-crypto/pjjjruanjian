@@ -1541,9 +1541,6 @@ class _FinancePointTable extends StatelessWidget {
             ),
           ),
           const DataColumn(label: Text('行类型')),
-          const DataColumn(label: Text('售后单号')),
-          const DataColumn(label: Text('原订单号')),
-          const DataColumn(label: Text('售后状态')),
           const DataColumn(label: Text('日期')),
           const DataColumn(label: Text('旅行社')),
           const DataColumn(label: Text('导游')),
@@ -1606,16 +1603,6 @@ class _FinancePointTable extends StatelessWidget {
         DataCell(_TextCell(
           value: summary.isAfterSales ? '售后调整' : '原销售',
           width: 84,
-        )),
-        DataCell(_TextCell(value: _text(summary.afterSalesNo), width: 128)),
-        DataCell(
-          _TextCell(value: _text(summary.sourceSalesOrderNo), width: 128),
-        ),
-        DataCell(_TextCell(
-          value: summary.isAfterSales
-              ? _afterSalesStatusLabel(summary.afterSalesStatus)
-              : '',
-          width: 96,
         )),
         DataCell(_TextCell(
           key: ValueKey('$rowKey:rowTapTarget'),
@@ -2472,15 +2459,75 @@ class _TableScroller extends StatefulWidget {
 }
 
 class _TableScrollerState extends State<_TableScroller> {
+  static const double _scrollbarReserve = 18;
+  static const double _viewportBottomGap = 8;
+
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _tableRegionKey = GlobalKey();
+  ScrollPosition? _verticalScrollPosition;
   bool _hasHorizontalOverflow = false;
   bool _overflowUpdateScheduled = false;
   bool? _pendingOverflow;
+  bool _geometryUpdateScheduled = false;
+  double _scrollbarBottomPadding = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextPosition =
+        Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    if (!identical(nextPosition, _verticalScrollPosition)) {
+      _verticalScrollPosition?.removeListener(_scheduleGeometryUpdate);
+      _verticalScrollPosition = nextPosition;
+      _verticalScrollPosition?.addListener(_scheduleGeometryUpdate);
+    }
+    _scheduleGeometryUpdate();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TableScroller oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scheduleGeometryUpdate();
+  }
 
   @override
   void dispose() {
+    _verticalScrollPosition?.removeListener(_scheduleGeometryUpdate);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _scheduleGeometryUpdate() {
+    if (_geometryUpdateScheduled) {
+      return;
+    }
+    _geometryUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _geometryUpdateScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      final renderObject = _tableRegionKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) {
+        return;
+      }
+
+      final tableTop = renderObject.localToGlobal(Offset.zero).dy;
+      final tableHeight = renderObject.size.height;
+      final viewportBottom = MediaQuery.sizeOf(context).height -
+          MediaQuery.viewPaddingOf(context).bottom -
+          _viewportBottomGap;
+      final minVisibleBottom =
+          tableHeight < _scrollbarReserve ? tableHeight : _scrollbarReserve;
+      final visibleBottom = (viewportBottom - tableTop)
+          .clamp(minVisibleBottom, tableHeight)
+          .toDouble();
+      final nextPadding = tableHeight - visibleBottom;
+      if ((nextPadding - _scrollbarBottomPadding).abs() < 0.5) {
+        return;
+      }
+      setState(() => _scrollbarBottomPadding = nextPadding);
+    });
   }
 
   void _scheduleOverflowUpdate(bool hasOverflow) {
@@ -2539,32 +2586,38 @@ class _TableScrollerState extends State<_TableScroller> {
 
   @override
   Widget build(BuildContext context) {
-    final scrollbarTheme = Theme.of(context).scrollbarTheme.copyWith(
-          thickness: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.dragged) ||
-                states.contains(WidgetState.hovered)) {
-              return 10;
-            }
-            return 8;
-          }),
-          radius: const Radius.circular(8),
-          minThumbLength: 48,
-          mainAxisMargin: 4,
-          crossAxisMargin: 1,
-        );
+    _scheduleGeometryUpdate();
+    final theme = Theme.of(context);
+    final scrollbarTheme = theme.scrollbarTheme;
+    final thumbColor = scrollbarTheme.thumbColor?.resolve(
+          const <WidgetState>{},
+        ) ??
+        theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.65);
+    final thickness = scrollbarTheme.thickness?.resolve(
+          const <WidgetState>{},
+        ) ??
+        8;
 
     return NotificationListener<ScrollMetricsNotification>(
       onNotification: _handleScrollMetrics,
-      child: ScrollbarTheme(
-        data: scrollbarTheme,
-        child: Scrollbar(
+      child: SizedBox(
+        key: _tableRegionKey,
+        child: RawScrollbar(
           key: const ValueKey('finance-table-scrollbar'),
           controller: _scrollController,
           thumbVisibility: _hasHorizontalOverflow,
           interactive: true,
+          thumbColor: thumbColor,
+          thickness: thickness,
+          radius: scrollbarTheme.radius ?? const Radius.circular(8),
+          minThumbLength: scrollbarTheme.minThumbLength ?? 48,
+          mainAxisMargin: 4,
+          crossAxisMargin: 1,
+          scrollbarOrientation: ScrollbarOrientation.bottom,
+          padding: EdgeInsets.only(bottom: _scrollbarBottomPadding),
           child: Padding(
             padding: EdgeInsets.only(
-              bottom: _hasHorizontalOverflow ? 10 : 0,
+              bottom: _hasHorizontalOverflow ? _scrollbarReserve : 0,
             ),
             child: SingleChildScrollView(
               key: const ValueKey('finance-table-horizontal-scroll-view'),
@@ -2751,19 +2804,6 @@ StatusTone _afterSalesImpactTone(TravelGroupFinanceSummaryRecord summary) {
     'after_sales_processing' => StatusTone.warning,
     'refund_adjusted' => StatusTone.info,
     _ => StatusTone.neutral,
-  };
-}
-
-String _afterSalesStatusLabel(String? status) {
-  return switch (status) {
-    'negotiating' => '协商中',
-    'pending_warehouse' => '待仓库确认',
-    'pending_finance' => '待财务确认',
-    'processing' => '处理中',
-    'completed' => '已完成',
-    'cancelled' => '已取消',
-    null || '' => '',
-    _ => status,
   };
 }
 

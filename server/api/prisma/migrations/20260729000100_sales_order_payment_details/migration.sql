@@ -18,7 +18,7 @@ CREATE TABLE `payment_methods` (
     INDEX `payment_methods_created_by_id_idx`(`created_by_id`),
     INDEX `payment_methods_updated_by_id_idx`(`updated_by_id`),
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO `payment_methods`
     (`id`, `code`, `name`, `category`, `is_active`, `sort_order`, `is_default`, `created_at`, `updated_at`)
@@ -64,7 +64,7 @@ CREATE TABLE `sales_order_payment_details` (
     INDEX `sales_order_payment_details_collection_confirmation_idx`(`payment_method_category_snapshot`, `collection_confirmed`),
     INDEX `sales_order_payment_details_collection_confirmed_by_id_idx`(`collection_confirmed_by_id`),
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO `sales_order_payment_details`
     (`id`, `sales_order_id`, `payment_method_id`, `payment_method_name_snapshot`, `payment_method_category_snapshot`, `amount_cents`, `sort_order`, `created_at`, `updated_at`)

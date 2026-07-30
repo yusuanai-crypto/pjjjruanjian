@@ -151,6 +151,10 @@ void main() {
     );
     expect(find.text('TG-HIDDEN-001'), findsNothing);
     expect(find.text('团号'), findsNothing);
+    expect(find.text('售后单号'), findsNothing);
+    expect(find.text('原订单号'), findsNothing);
+    expect(find.text('售后状态'), findsNothing);
+    expect(find.text('行类型'), findsOneWidget);
     expect(find.byKey(const ValueKey('finance-select-all')), findsOneWidget);
     expect(find.byKey(const ValueKey('group-1:select')), findsOneWidget);
     expect(find.byType(Checkbox), findsNWidgets(2));
@@ -200,6 +204,51 @@ void main() {
           .value,
       isFalse,
     );
+  });
+
+  testWidgets(
+      'horizontal scrollbar stays at the visible table edge and controls the table',
+      (tester) async {
+    await _pumpPage(
+      tester,
+      apiClient: _FakeFinanceApiClient(summaryCount: 20),
+    );
+
+    final verticalScrollView = find.byWidgetPredicate(
+      (widget) =>
+          widget is SingleChildScrollView &&
+          widget.scrollDirection == Axis.vertical,
+    );
+    expect(verticalScrollView, findsOneWidget);
+    await tester.drag(verticalScrollView, const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    final scrollbarFinder = find.byKey(
+      const ValueKey('finance-table-scrollbar'),
+    );
+    final scrollbar = tester.widget<RawScrollbar>(scrollbarFinder);
+    final padding = scrollbar.padding! as EdgeInsets;
+    expect(scrollbar.thumbVisibility, isTrue);
+    expect(padding.bottom, greaterThan(0));
+
+    final horizontalScrollView = tester.widget<SingleChildScrollView>(
+      find.byKey(
+        const ValueKey('finance-table-horizontal-scroll-view'),
+      ),
+    );
+    final controller = horizontalScrollView.controller!;
+    expect(controller.offset, 0);
+
+    final scrollbarRect = tester.getRect(scrollbarFinder);
+    final thumbCenterY =
+        scrollbarRect.bottom - padding.bottom - (scrollbar.thickness! / 2) - 1;
+    await tester.dragFrom(
+      Offset(scrollbarRect.left + 24, thumbCenterY),
+      const Offset(320, 0),
+    );
+    await tester.pumpAndSettle();
+
+    expect(controller.offset, greaterThan(0));
   });
 
   testWidgets(

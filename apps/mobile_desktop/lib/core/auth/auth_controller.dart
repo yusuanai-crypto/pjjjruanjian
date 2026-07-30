@@ -28,7 +28,7 @@ class AuthController {
   late final AuthService _authService;
   Future<String?>? _refreshInFlight;
 
-  String lastUsername = 'admin';
+  String lastUsername = '';
   AuthSession? session;
   String? restoreMessage;
 
@@ -44,8 +44,15 @@ class AuthController {
     return _storage.readRememberedPassword(username);
   }
 
+  Future<void> requireLoginOnLaunch() async {
+    await _storage.clearSession();
+    lastUsername = '';
+    session = null;
+    restoreMessage = null;
+  }
+
   Future<void> restore() async {
-    lastUsername = _storage.readLastUsername() ?? 'admin';
+    lastUsername = _storage.readLastUsername() ?? '';
     final storedSession = await _storage.readSession();
     if (storedSession == null) {
       await _restoreLegacyAccessToken();
@@ -213,7 +220,7 @@ class AuthController {
 
   Future<void> forgetAccount(String username) async {
     await _storage.forgetAccount(username);
-    lastUsername = _storage.readLastUsername() ?? 'admin';
+    lastUsername = _storage.readLastUsername() ?? '';
   }
 
   Future<String?> _performRefresh() async {

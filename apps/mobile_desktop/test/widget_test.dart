@@ -33,11 +33,11 @@ void main() {
     expect(find.text('员工登录'), findsOneWidget);
     expect(find.text('服务器地址'), findsNothing);
     expect(find.byType(TextField), findsNWidgets(2));
-    expect(_textFieldValue(tester, '账号'), 'admin');
+    expect(_textFieldValue(tester, '账号'), isEmpty);
     expect(_textFieldValue(tester, '密码'), isEmpty);
   });
 
-  testWidgets('fills the last successful username without filling a password',
+  testWidgets('starts with empty credentials even when a username was saved',
       (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{
       SessionStorage.lastUsernameKey: 'remembered.user',
@@ -55,8 +55,55 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(_textFieldValue(tester, '账号'), 'remembered.user');
+    expect(_textFieldValue(tester, '账号'), isEmpty);
     expect(_textFieldValue(tester, '密码'), isEmpty);
+  });
+
+  testWidgets('clears a saved session and requires credentials on launch',
+      (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      SessionStorage.lastUsernameKey: 'super.admin',
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final secureStorage = FakeSecureTokenStorage();
+    final storage = await SessionStorage.create(
+      preferences: preferences,
+      secureStorage: secureStorage,
+    );
+    await storage.saveSession(
+      AuthSession.fromJson(<String, dynamic>{
+        'accessToken': 'saved-access',
+        'accessTokenExpiresAt': '2099-01-01T00:00:00.000Z',
+        'refreshToken': 'saved-refresh',
+        'refreshTokenExpiresAt': '2099-02-01T00:00:00.000Z',
+        'user': <String, dynamic>{
+          'id': 'super-admin-1',
+          'name': '超级管理员',
+          'username': 'super.admin',
+          'role': 'super_admin',
+          'isActive': true,
+          'mustChangePassword': false,
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'updatedAt': '2026-01-01T00:00:00.000Z',
+        },
+        'permissions': <String>[],
+        'menus': <Map<String, dynamic>>[],
+        'dataScope': <String, dynamic>{},
+      }),
+    );
+
+    await tester.pumpWidget(
+      JiangjiuApp(
+        sessionStorageFactory: () async => storage,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('员工登录'), findsOneWidget);
+    expect(_textFieldValue(tester, '账号'), isEmpty);
+    expect(_textFieldValue(tester, '密码'), isEmpty);
+    expect(await storage.readSession(), isNull);
+    expect(secureStorage.values, isNot(contains(SessionStorage.sessionKey)));
   });
 
   testWidgets('discards a legacy saved API address during bootstrap',
@@ -81,7 +128,7 @@ void main() {
     expect(preferences.containsKey('jiangjiu.config.apiBaseUrl'), isFalse);
     expect(find.text('服务器地址'), findsNothing);
     expect(find.byType(TextField), findsNWidgets(2));
-    expect(_textFieldValue(tester, '账号'), 'admin');
+    expect(_textFieldValue(tester, '账号'), isEmpty);
   });
 
   testWidgets('shows a bootstrap error page and retries successfully',
@@ -187,7 +234,7 @@ class _LifecycleAuthController extends AuthController {
   int refreshCount = 0;
 
   @override
-  Future<void> restore() async {
+  Future<void> requireLoginOnLaunch() async {
     session = AuthSession.fromJson(<String, dynamic>{
       'accessToken': 'test-access',
       'accessTokenExpiresAt': '2099-01-01T00:00:00.000Z',

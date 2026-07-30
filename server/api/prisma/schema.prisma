@@ -2097,8 +2097,8 @@ model SalesOrder {
   createdAt                    DateTime                      @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt                    DateTime                      @updatedAt @map("updated_at") @db.DateTime(0)
 
-  customer                   Customer?                 @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  sourceSalesOrder           SalesOrder?               @relation("SalesOrderAfterSalesSource", fields: [sourceSalesOrderId], references: [id], onDelete: Restrict)
+  customer                   Customer?                 @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceSalesOrder           SalesOrder?               @relation("SalesOrderAfterSalesSource", fields: [sourceSalesOrderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   afterSalesSalesOrders      SalesOrder[]              @relation("SalesOrderAfterSalesSource")
   travelGroup                TravelGroup?              @relation(fields: [travelGroupId], references: [id], onDelete: SetNull)
   salesUser                  User?                     @relation("SalesOrderSalesUser", fields: [salesUserId], references: [id], onDelete: SetNull)
@@ -2112,7 +2112,7 @@ model SalesOrder {
   paymentDetailsUnlockedBy   User?                     @relation("SalesOrderPaymentDetailsUnlockedBy", fields: [paymentDetailsUnlockedById], references: [id], onDelete: SetNull)
   profitFeeSnapshottedBy     User?                     @relation("SalesOrderProfitFeeSnapshottedBy", fields: [profitFeeSnapshottedById], references: [id], onDelete: SetNull)
   fulfillmentWarehouse       Warehouse?                @relation("SalesOrderFulfillmentWarehouse", fields: [fulfillmentWarehouseId], references: [id], onDelete: Restrict)
-  internalEmployee           User?                     @relation("SpecialOrderInternalEmployee", fields: [internalEmployeeId], references: [id], onDelete: Restrict)
+  internalEmployee           User?                     @relation("SpecialOrderInternalEmployee", fields: [internalEmployeeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   approvedBy                 User?                     @relation("SpecialOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   createdBy                  User?                     @relation("SpecialOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy                  User?                     @relation("SpecialOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
@@ -2346,8 +2346,8 @@ model SpecialOrderSettlement {
   createdAt            DateTime                        @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt            DateTime                        @updatedAt @map("updated_at") @db.DateTime(0)
 
-  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
-  reversedBy User?      @relation("SpecialOrderSettlementReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reversedBy User?      @relation("SpecialOrderSettlementReversedBy", fields: [reversedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
   payments   SpecialOrderPayment[]
 
   @@index([salesOrderId, createdAt], map: "special_order_settlements_order_created_idx")

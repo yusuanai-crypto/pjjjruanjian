@@ -1,11 +1,11 @@
 # Jiangjiu Flutter Client
 
-Flutter 手机和 Windows 客户端。当前已完成第 2 阶段 UI 骨架，并接入登录、会话恢复、后端菜单、全局标记查询开关和一部分业务 API。
+Flutter 手机和 Windows 客户端。当前已完成第 2 阶段 UI 骨架，并接入登录、后端菜单、全局标记查询开关和一部分业务 API。
 
 ## 当前状态
 
 - 登录页调用后端 `/api/auth/login`。
-- App 启动时读取本地 token，并调用 `/api/auth/me` 恢复会话。
+- App 每次启动时清除上一次会话并显示登录页，必须重新输入账号和密码。
 - 登录成功后，菜单来自后端返回的 `menus`，再由 `destinations.dart` 映射到 Flutter 页面。
 - 服务器地址和 token 使用 `shared_preferences` 保存在本机。
 - Shell 顶部的全局标记查询开关调用 `/api/settings/global-mark-query`、`/enable`、`/restore`。
@@ -42,11 +42,11 @@ flutter pub get
 flutter run -d windows --dart-define=JIANGJIU_API_BASE_URL=http://127.0.0.1:3000
 ```
 
-登录默认值：
+登录信息：
 
 | 字段 | 值 |
 | --- | --- |
-| 账号 | `admin` |
+| 账号 | 不预填，由用户输入 |
 | 密码 | 部署人员通过 `SEED_ADMIN_PASSWORD` 设置的管理员密码 |
 | 服务器地址 | `http://127.0.0.1:3000` |
 

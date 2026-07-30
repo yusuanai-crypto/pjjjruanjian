@@ -46,7 +46,7 @@ CREATE TABLE `special_order_item_serialized_units` (
     UNIQUE (`sales_order_item_id`, `normalized_logistics_code`),
   INDEX `special_order_item_serials_code_idx` (`normalized_logistics_code`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `special_order_workflow_events` (
   `id` CHAR(36) NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE `special_order_workflow_events` (
   INDEX `special_order_events_type_created_idx` (`event_type`, `created_at`),
   INDEX `special_order_workflow_events_actor_user_id_idx` (`actor_user_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `special_order_attachments` (
   `id` CHAR(36) NOT NULL,
@@ -103,7 +103,7 @@ CREATE TABLE `special_order_attachments` (
   INDEX `special_order_attachments_order_uploaded_idx` (`sales_order_id`, `uploaded_at`),
   INDEX `special_order_attachments_uploaded_by_id_idx` (`uploaded_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `special_order_settlements` (
   `id` CHAR(36) NOT NULL,
@@ -144,7 +144,7 @@ CREATE TABLE `special_order_settlements` (
   INDEX `special_order_settlements_direction_status_idx` (`direction`, `payment_status`),
   INDEX `special_order_settlements_reversed_by_id_idx` (`reversed_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE `special_order_payments` (
   `id` CHAR(36) NOT NULL,
@@ -176,7 +176,7 @@ CREATE TABLE `special_order_payments` (
   INDEX `special_order_payments_payment_method_id_idx` (`payment_method_id`),
   INDEX `special_order_payments_recorded_by_id_idx` (`recorded_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE UNIQUE INDEX `sales_orders_special_create_key`
   ON `sales_orders`(`special_order_create_key`);
@@ -194,6 +194,21 @@ CREATE INDEX `sales_orders_approved_by_id_idx`
   ON `sales_orders`(`approved_by_id`);
 CREATE INDEX `sales_order_items_warehouse_product_idx`
   ON `sales_order_items`(`warehouse_id`, `product_id`);
+
+-- MySQL does not allow cascading or SET NULL referential actions on columns
+-- used by CHECK constraints. Recreate the two pre-existing relationships with
+-- restrictive actions before adding the special-order invariants below.
+ALTER TABLE `sales_orders`
+  DROP FOREIGN KEY `sales_orders_customer_id_fkey`,
+  DROP FOREIGN KEY `sales_orders_source_sales_order_id_fkey`;
+
+ALTER TABLE `sales_orders`
+  ADD CONSTRAINT `sales_orders_customer_id_fkey`
+    FOREIGN KEY (`customer_id`) REFERENCES `customers`(`id`)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  ADD CONSTRAINT `sales_orders_source_sales_order_id_fkey`
+    FOREIGN KEY (`source_sales_order_id`) REFERENCES `sales_orders`(`id`)
+    ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 ALTER TABLE `sales_orders`
   ADD CONSTRAINT `sales_orders_special_workflow_identity_check`
@@ -250,7 +265,7 @@ ALTER TABLE `sales_order_items`
 
 ALTER TABLE `sales_orders`
   ADD CONSTRAINT `sales_orders_internal_employee_id_fkey`
-    FOREIGN KEY (`internal_employee_id`) REFERENCES `users`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (`internal_employee_id`) REFERENCES `users`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `sales_orders_approved_by_id_fkey`
     FOREIGN KEY (`approved_by_id`) REFERENCES `users`(`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   ADD CONSTRAINT `sales_orders_created_by_id_fkey`
@@ -280,9 +295,9 @@ ALTER TABLE `special_order_attachments`
 
 ALTER TABLE `special_order_settlements`
   ADD CONSTRAINT `special_order_settlements_order_id_fkey`
-    FOREIGN KEY (`sales_order_id`) REFERENCES `sales_orders`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (`sales_order_id`) REFERENCES `sales_orders`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `special_order_settlements_reversed_by_id_fkey`
-    FOREIGN KEY (`reversed_by_id`) REFERENCES `users`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+    FOREIGN KEY (`reversed_by_id`) REFERENCES `users`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 ALTER TABLE `special_order_payments`
   ADD CONSTRAINT `special_order_payments_order_id_fkey`

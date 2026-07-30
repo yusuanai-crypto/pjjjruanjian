@@ -72,7 +72,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
 
   Future<void> _bootstrapAuth() async {
     try {
-      final authController = await _createAndRestoreAuthController().timeout(
+      final authController = await _createAuthControllerForLogin().timeout(
         widget.bootstrapTimeout,
       );
 
@@ -126,7 +126,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
     }
   }
 
-  Future<AuthController> _createAndRestoreAuthController() async {
+  Future<AuthController> _createAuthControllerForLogin() async {
     final storage = await widget.sessionStorageFactory();
     final authController = widget.authControllerFactory?.call(
           storage,
@@ -136,7 +136,7 @@ class _JiangjiuAppState extends State<JiangjiuApp> with WidgetsBindingObserver {
           storage: storage,
           onSessionRevoked: _handleSessionRevoked,
         );
-    await authController.restore();
+    await authController.requireLoginOnLaunch();
     return authController;
   }
 
