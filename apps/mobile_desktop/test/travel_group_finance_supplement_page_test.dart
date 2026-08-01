@@ -1393,9 +1393,90 @@ void main() {
     );
     await _pumpUntil(tester, () => apiClient.getPaths.length == 2);
     expect(
-      find.text('未找到适用的旅行社返点规则，日返和月返未更新'),
+      find.textContaining('未生成日返或月返：没有适用且唯一的旅行社返点规则'),
       findsOneWidget,
     );
+    expect(find.textContaining('order-1'), findsOneWidget);
+  });
+
+  testWidgets(
+      'recalculate feedback distinguishes updates protected skips and failures',
+      (tester) async {
+    final apiClient = _FakeFinanceApiClient(
+      recalculationGeneratedRecords: const [
+        {
+          'id': 'daily-record',
+          'targetType': 'agency_daily_rebate',
+          'travelGroupId': 'group-1',
+          'salesOrderId': 'order-1',
+        },
+        {
+          'id': 'monthly-record',
+          'targetType': 'agency_monthly_rebate',
+          'travelGroupId': 'group-1',
+          'salesOrderId': 'order-1',
+        },
+      ],
+      recalculationWarnings: const [
+        {
+          'code': 'manual_override',
+          'message': 'manual',
+          'context': {'travelGroupId': 'group-manual'},
+        },
+        {
+          'code': 'agency_deduction_confirmed',
+          'message': 'confirmed',
+          'context': {'travelGroupId': 'group-confirmed'},
+        },
+        {
+          'code': 'daily_rebate_paid',
+          'message': 'daily paid',
+          'context': {'travelGroupId': 'group-daily-paid'},
+        },
+        {
+          'code': 'monthly_rebate_paid',
+          'message': 'monthly paid',
+          'context': {'travelGroupId': 'group-monthly-paid'},
+        },
+        {
+          'code': 'order_recalculation_failed',
+          'message': 'order failed',
+          'context': {'salesOrderId': 'order-failed'},
+        },
+        {
+          'code': 'travel_group_summary_refresh_failed',
+          'message': 'summary failed',
+          'context': {'travelGroupId': 'group-summary-failed'},
+        },
+        {
+          'code': 'agency_name_legacy_fallback',
+          'message': 'legacy',
+          'context': {'salesOrderId': 'order-legacy'},
+        },
+      ],
+    );
+    await _pumpPage(tester, apiClient: apiClient);
+    await tester.tap(find.byKey(const ValueKey('group-1:select')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('finance-recalculate-button')),
+    );
+    await _pumpUntil(tester, () => apiClient.getPaths.length == 2);
+
+    for (final expected in const [
+      '已生成或更新日返 1 条、月返 1 条',
+      '人工维护扣酒成本',
+      '扣酒成本已确认',
+      '日返已返款',
+      '月返已返款',
+      '订单积分重算失败',
+      '旅行团汇总刷新失败',
+      '未绑定 ID 的历史返点规则',
+      'order-failed',
+      'group-summary-failed',
+    ]) {
+      expect(find.textContaining(expected), findsOneWidget);
+    }
   });
 
   testWidgets('after-sales pending impact overrides ordinary row status',
@@ -1528,6 +1609,7 @@ class _FakeFinanceApiClient extends ApiClient {
     String afterSalesImpactStatus = 'none',
     int pendingAfterSalesRefundAmountCents = 0,
     this.recalculationWarnings = const [],
+    this.recalculationGeneratedRecords = const [],
     this.failExcelExport = false,
     this.excelDownloadFileName = 'points-table-selected.xlsx',
   }) : super(baseUrl: 'http://127.0.0.1:3000') {
@@ -1552,6 +1634,7 @@ class _FakeFinanceApiClient extends ApiClient {
   late List<Map<String, dynamic>> _summaries;
   final bool failAgencyDeduction;
   final List<Map<String, dynamic>> recalculationWarnings;
+  final List<Map<String, dynamic>> recalculationGeneratedRecords;
   final bool failExcelExport;
   final String excelDownloadFileName;
   final getPaths = <String>[];
@@ -1667,7 +1750,7 @@ class _FakeFinanceApiClient extends ApiClient {
         'skippedCount': 0,
         'skippedConfirmedCount': 0,
         'skippedManualOverrideCount': 0,
-        'generatedRecords': const [],
+        'generatedRecords': recalculationGeneratedRecords,
         'updatedRecords': const [],
         'unchangedRecords': const [],
         'warnings': recalculationWarnings,

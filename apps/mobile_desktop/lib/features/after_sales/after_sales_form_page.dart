@@ -56,6 +56,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   bool _searched = false;
   bool _historyLoading = false;
   bool _savingAfterSales = false;
+  bool _financeCreationMode = false;
   bool _statusUpdating = false;
   bool _todoLoading = false;
   bool _unfinishedLoading = false;
@@ -82,7 +83,20 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   bool get _canManageAfterSales =>
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
-      widget.role == UserRole.afterSales;
+      widget.role == UserRole.afterSales ||
+      widget.role == UserRole.finance ||
+      widget.role == UserRole.boss;
+
+  bool get _canCreateForSelectedOrder {
+    final order = _selectedOrder;
+    if (order == null) return false;
+    if (widget.role == UserRole.finance || widget.role == UserRole.boss) {
+      return order.isWorkflowSpecialOrder;
+    }
+    return widget.role == UserRole.superAdmin ||
+        widget.role == UserRole.admin ||
+        widget.role == UserRole.afterSales;
+  }
 
   bool get _isWarehouseWorkflow => widget.role == UserRole.warehouse;
 
@@ -136,9 +150,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       _loadRoleTodos();
       return;
     }
-    if (_usesUnfinishedWorkflow) {
-      _loadUnfinishedOrders();
-    }
+    if (_usesUnfinishedWorkflow) _loadUnfinishedOrders();
   }
 
   @override
@@ -355,7 +367,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
 
   Future<void> _saveAfterSalesOrder() async {
     final order = _selectedOrder;
-    if (!_canManageAfterSales) {
+    if (!_canCreateForSelectedOrder) {
       setState(() => _formErrorMessage = '当前角色只能查看售后记录。');
       return;
     }
@@ -477,7 +489,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
 
   Future<void> _updateAfterSalesStatus(String status) async {
     final record = _selectedAfterSales;
-    if (!_canManageAfterSales) {
+    if (!_canCreateForSelectedOrder) {
       setState(() => _statusErrorMessage = '当前角色只能查看售后记录。');
       return;
     }
@@ -855,7 +867,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
     if (_isWarehouseWorkflow) {
       return _buildWarehouseWorkflow();
     }
-    if (_isFinanceWorkflow) {
+    if (_isFinanceWorkflow && !_financeCreationMode) {
       return _buildFinanceWorkflow();
     }
     return _buildAfterSalesWorkflow();
@@ -864,6 +876,16 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
   Widget _buildAfterSalesWorkflow() {
     return ResponsivePage(
       children: [
+        if (_isFinanceWorkflow)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('after-sales-finance-back-to-todos'),
+              onPressed: () => setState(() => _financeCreationMode = false),
+              icon: const Icon(Icons.arrow_back_rounded),
+              label: const Text('返回财务退款待办'),
+            ),
+          ),
         if (_usesUnfinishedWorkflow) ...[
           FormSection(
             title: '未完成售后单',
@@ -943,7 +965,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 ],
               ),
               if (_selectedOrder != null) ...[
-                if (_canManageAfterSales) ...[
+                if (_canCreateForSelectedOrder) ...[
                   const SizedBox(height: 16),
                   FormSection(
                     title: '创建售后单',
@@ -987,7 +1009,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                   ),
                 ],
                 if (_selectedAfterSales != null &&
-                    _canManageAfterSales &&
+                    _canCreateForSelectedOrder &&
                     _isWarehouseWorkflow == false) ...[
                   const SizedBox(height: 16),
                   AfterSalesReceiptProgressPanel(
@@ -1072,13 +1094,28 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
       children: [
         FormSection(
           title: '财务退款待办',
-          trailing: StatusTag(
-            label: _todoLoading ? '刷新中' : '${_roleTodos.length} 笔',
-            tone: _todoLoading ? StatusTone.warning : StatusTone.info,
+          trailing: Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              StatusTag(
+                label: _todoLoading ? '刷新中' : '${_roleTodos.length} 笔',
+                tone: _todoLoading ? StatusTone.warning : StatusTone.info,
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey(
+                  'after-sales-finance-create-special-refund',
+                ),
+                onPressed: () {
+                  setState(() => _financeCreationMode = true);
+                  _loadUnfinishedOrders();
+                },
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('新建特殊订单退款'),
+              ),
+            ],
           ),
-          children: [
-            _buildRoleTodoList(),
-          ],
+          children: [_buildRoleTodoList()],
         ),
       ],
     );
@@ -1661,7 +1698,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         _InfoLine(label: '问题描述', value: record.description),
         _InfoLine(label: '处理方案', value: _fieldValue(record.resolution)),
         _InfoLine(label: '备注', value: _fieldValue(record.notes)),
-        if (_canManageAfterSales) ...[
+        if (_canCreateForSelectedOrder) ...[
           const SizedBox(height: 8),
           Text(
             '状态流转',

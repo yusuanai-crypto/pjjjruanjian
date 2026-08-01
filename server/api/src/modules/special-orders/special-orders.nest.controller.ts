@@ -13,6 +13,7 @@ import {
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
+import { SpecialOrderCommissionService } from '../commissions/special-order-commission.service';
 import { SpecialOrdersNestService } from './special-orders.nest.service';
 
 @Controller('special-orders')
@@ -20,6 +21,7 @@ export class SpecialOrdersNestController {
   constructor(
     private readonly auth: AuthNestService,
     private readonly specialOrders: SpecialOrdersNestService,
+    private readonly commissions: SpecialOrderCommissionService,
   ) {}
 
   @Get()
@@ -81,6 +83,77 @@ export class SpecialOrdersNestController {
     const actor = await this.auth.authenticateRequest(request);
     return {
       specialOrder: await this.specialOrders.get(actor, id),
+    };
+  }
+
+  @Get(':id/commissions')
+  async listCommissions(
+    @Param('id') id: string,
+    @Query() query: any,
+    @Req() request: any,
+  ) {
+    const actor = await this.auth.authenticateRequest(request);
+    return {
+      commissions: await this.commissions.list(
+        actor,
+        id,
+        String(query?.includeInactive || '').toLowerCase() === 'true',
+      ),
+    };
+  }
+
+  @Post(':id/commissions')
+  async createCommission(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.auth.authenticateRequest(request);
+    return {
+      commission: await this.commissions.create(
+        actor,
+        id,
+        body,
+        requestMetadata(request),
+      ),
+    };
+  }
+
+  @Patch(':id/commissions/:commissionId')
+  async updateCommission(
+    @Param('id') id: string,
+    @Param('commissionId') commissionId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.auth.authenticateRequest(request);
+    return {
+      commission: await this.commissions.update(
+        actor,
+        id,
+        commissionId,
+        body,
+        requestMetadata(request),
+      ),
+    };
+  }
+
+  @Delete(':id/commissions/:commissionId')
+  async deleteCommission(
+    @Param('id') id: string,
+    @Param('commissionId') commissionId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.auth.authenticateRequest(request);
+    return {
+      commission: await this.commissions.remove(
+        actor,
+        id,
+        commissionId,
+        body,
+        requestMetadata(request),
+      ),
     };
   }
 

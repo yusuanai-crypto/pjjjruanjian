@@ -89,6 +89,10 @@ export function calculateTravelGroupProfit(
     commissionRecords,
     'TASTER_COMMISSION',
   );
+  const manualOrderCommissionCents = sumCommissionAmount(
+    commissionRecords,
+    'ORDER_MANUAL_COMMISSION',
+  );
   const employeeCommissionCents =
     salesCommissionCents +
     outreachCommissionCents +
@@ -179,11 +183,19 @@ export function calculateTravelGroupProfit(
     (cigaretteFeeCents ?? 0) +
     employeeCommissionCents +
     tasterCommissionCents +
+    manualOrderCommissionCents +
     dailyAgencyRebateCents +
     monthlyAgencyRebateCents +
     knownTaxFeeCents +
     knownPaymentServiceFeeCents;
   const warnings = normalizeWarnings(productProfit.warnings);
+  const employeeCommissionDiagnostics = diagnoseEmployeeCommissions(
+    effectiveOrders,
+    commissionRecords,
+  );
+  for (const warning of employeeCommissionDiagnostics.warnings) {
+    addWarning(warnings, warning);
+  }
 
   if (cigaretteFeeCents === null) {
     addWarning(warnings, {
@@ -221,6 +233,10 @@ export function calculateTravelGroupProfit(
     warnings,
     cigaretteFeeMissing: cigaretteFeeCents === null,
     profitFeeSnapshotMissing,
+    employeeCommissionIncomplete:
+      !employeeCommissionDiagnostics.salesCommissionCalculated ||
+      !employeeCommissionDiagnostics.outreachCommissionCalculated ||
+      !employeeCommissionDiagnostics.leaderCommissionCalculated,
   });
   const estimatedProfitCents =
     calculationStatus === 'incomplete'
@@ -252,8 +268,15 @@ export function calculateTravelGroupProfit(
     salesCommissionCents,
     outreachCommissionCents,
     leaderCommissionCents,
+    salesCommissionCalculated:
+      employeeCommissionDiagnostics.salesCommissionCalculated,
+    outreachCommissionCalculated:
+      employeeCommissionDiagnostics.outreachCommissionCalculated,
+    leaderCommissionCalculated:
+      employeeCommissionDiagnostics.leaderCommissionCalculated,
     employeeCommissionCents,
     tasterCommissionCents,
+    manualOrderCommissionCents,
     dailyAgencyRebateCents,
     monthlyAgencyRebateCents,
     taxFeeCents,
@@ -274,10 +297,12 @@ function resolveCalculationStatus(input: {
   warnings: TravelGroupProfitWarning[];
   cigaretteFeeMissing: boolean;
   profitFeeSnapshotMissing: boolean;
+  employeeCommissionIncomplete: boolean;
 }): TravelGroupProfitCalculationStatus {
   if (
     input.cigaretteFeeMissing ||
-    input.profitFeeSnapshotMissing
+    input.profitFeeSnapshotMissing ||
+    input.employeeCommissionIncomplete
   ) {
     return 'incomplete';
   }
@@ -299,6 +324,90 @@ function resolveCalculationStatus(input: {
     return 'estimated';
   }
   return 'complete';
+}
+
+function diagnoseEmployeeCommissions(
+  effectiveOrders: any[],
+  commissionRecords: any[],
+) {
+  const diagnostics = [
+    {
+      targetType: 'SALES_COMMISSION',
+      calculatedKey: 'salesCommissionCalculated',
+      missingPersonCode: 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
+      missingPersonMessage: '销售提成未计算：订单缺少销售人员。',
+      missingRuleCode: 'SALES_COMMISSION_NOT_CALCULATED_MISSING_RULE',
+      missingRuleMessage: '销售提成未计算：订单日期缺少适用的销售提成规则。',
+      hasPerson: (order: any) => Boolean(optionalString(order?.salesUserId)),
+    },
+    {
+      targetType: 'OUTREACH_COMMISSION',
+      calculatedKey: 'outreachCommissionCalculated',
+      missingPersonCode:
+        'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER',
+      missingPersonMessage: '外联提成未计算：订单缺少外联人员。',
+      missingRuleCode: 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_RULE',
+      missingRuleMessage: '外联提成未计算：订单日期缺少适用的外联提成规则。',
+      hasPerson: (order: any) =>
+        Boolean(optionalString(order?.outreachUserId)),
+    },
+    {
+      targetType: 'LEADER_COMMISSION',
+      calculatedKey: 'leaderCommissionCalculated',
+      missingPersonCode: 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER',
+      missingPersonMessage: '组长提成未计算：销售人员未配置组长。',
+      missingRuleCode: 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_RULE',
+      missingRuleMessage: '组长提成未计算：订单日期缺少适用的组长提成规则。',
+      hasPerson: (order: any) =>
+        Boolean(optionalString(order?.salesUser?.leaderId)),
+    },
+  ];
+  const result: any = { warnings: [] as TravelGroupProfitWarning[] };
+  for (const diagnostic of diagnostics) {
+    const missingPersonOrderIds: string[] = [];
+    const missingRuleOrderIds: string[] = [];
+    for (const order of effectiveOrders) {
+      const orderId = optionalString(order?.id);
+      if (!orderId) continue;
+      const hasCalculatedRecord = commissionRecords.some(
+        (record: any) =>
+          optionalString(record?.salesOrderId) === orderId &&
+          !optionalString(record?.afterSalesOrderId) &&
+          normalizeEnum(record?.targetType) === diagnostic.targetType &&
+          (Boolean(record?.manualInput) ||
+            Boolean(optionalString(record?.commissionRuleId))),
+      );
+      if (hasCalculatedRecord) continue;
+      if (!diagnostic.hasPerson(order)) {
+        missingPersonOrderIds.push(orderId);
+      } else {
+        missingRuleOrderIds.push(orderId);
+      }
+    }
+    result[diagnostic.calculatedKey] =
+      missingPersonOrderIds.length === 0 && missingRuleOrderIds.length === 0;
+    if (missingPersonOrderIds.length > 0) {
+      result.warnings.push({
+        code: diagnostic.missingPersonCode,
+        message: diagnostic.missingPersonMessage,
+        context: {
+          orderCount: missingPersonOrderIds.length,
+          sampleOrderId: missingPersonOrderIds[0],
+        },
+      });
+    }
+    if (missingRuleOrderIds.length > 0) {
+      result.warnings.push({
+        code: diagnostic.missingRuleCode,
+        message: diagnostic.missingRuleMessage,
+        context: {
+          orderCount: missingRuleOrderIds.length,
+          sampleOrderId: missingRuleOrderIds[0],
+        },
+      });
+    }
+  }
+  return result;
 }
 
 function buildTravelGroupPaymentMethodFeeBreakdown(

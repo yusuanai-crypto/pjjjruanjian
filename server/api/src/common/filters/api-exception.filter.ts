@@ -8,6 +8,7 @@ import {
 import {
   GENERIC_SERVER_ERROR_MESSAGE,
   mapErrorToPublicResponse,
+  sanitizeErrorForLogging,
 } from '../errors';
 import {
   logSanitizedError,
@@ -86,7 +87,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
         errorCode: publicError.code,
         method: String(request?.method || ''),
         path: safeRequestPath(request),
-        exception,
+        exception: sanitizeErrorForLogging(exception),
       });
     } catch (_loggingError) {
       // Error reporting must never replace the stable API error response.

@@ -69,16 +69,18 @@ export class SalesOrderInventoryService {
         'Inventory-enabled sales orders are temporarily unavailable during inventory maintenance.',
       );
     }
-    const defaults = await transaction.warehouse.findMany({
+    const defaultCandidates = await transaction.warehouse.findMany({
       where: {
         isActive: true,
         isDefault: true,
         activeDefaultKey: 'ACTIVE_DEFAULT',
       },
-      select: { id: true },
+      select: { id: true, parentWarehouseId: true },
       orderBy: { id: 'asc' },
-      take: 2,
     });
+    const defaults = defaultCandidates.filter(
+      (warehouse: any) => !warehouse.parentWarehouseId,
+    );
     if (defaults.length !== 1) {
       throw createHttpError(
         409,
@@ -678,13 +680,20 @@ export class SalesOrderInventoryService {
   ) {
     const warehouse = await transaction.warehouse.findUnique({
       where: { id: warehouseId },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, parentWarehouseId: true },
     });
     if (!warehouse?.isActive) {
       throw createHttpError(
         409,
         'INVENTORY_FULFILLMENT_WAREHOUSE_INACTIVE',
         'The fulfillment warehouse is missing or inactive.',
+      );
+    }
+    if (warehouse.parentWarehouseId) {
+      throw createHttpError(
+        409,
+        'INVENTORY_FULFILLMENT_WAREHOUSE_MUST_BE_PARENT',
+        '销售订单的履约仓只能选择启用的父仓，子仓不能直接履约。',
       );
     }
   }

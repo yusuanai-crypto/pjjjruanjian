@@ -122,3 +122,36 @@ test('special-order CHECK columns use restrictive foreign-key actions', () => {
     /FOREIGN KEY \(`reversed_by_id`\)[^\n]*ON DELETE RESTRICT ON UPDATE RESTRICT/,
   );
 });
+
+test('manual order commissions and their idempotent adjustment ledger are additive', () => {
+  const schema = fs.readFileSync(
+    path.join(apiRoot, 'prisma', 'schema.prisma'),
+    'utf8',
+  );
+  const migration = fs.readFileSync(
+    path.join(
+      apiRoot,
+      'prisma',
+      'migrations',
+      '20260801000100_special_order_direct_entry_commissions',
+      'migration.sql',
+    ),
+    'utf8',
+  );
+
+  for (const token of [
+    'ORDER_MANUAL_COMMISSION',
+    'model CommissionAdjustment',
+    'recipientNameSnapshot',
+    'originalAmountCents',
+    'adjustmentAmountCents',
+    'manualVersion',
+    'refundSpecialPaymentId',
+  ]) {
+    assert.equal(schema.includes(token), true, token);
+  }
+  assert.match(migration, /commission_adjustments_operation_key/);
+  assert.match(migration, /ADD COLUMN `refund_special_payment_id`/);
+  assert.doesNotMatch(migration, /\bUPDATE\s+`?commission_records`?/i);
+  assert.doesNotMatch(migration, /utf8mb4_unicode_ci/);
+});

@@ -20,6 +20,7 @@ const sensitiveDestinationIds = <String>{
   'moutai_inventory',
   'reconciliation_table',
   'warehouse_management',
+  'warehouse_directory',
   'after_sales_form',
   'analytics',
   'profit_analysis',

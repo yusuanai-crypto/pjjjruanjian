@@ -76,6 +76,25 @@ void main() {
     expect(fallback.message, contains('502'));
   });
 
+  test('parses a top-level requestId into ApiException', () {
+    final parsed = apiExceptionFromResponseBytes(
+      503,
+      utf8.encode(
+        jsonEncode({
+          'error': {
+            'code': 'DATABASE_SCHEMA_MISMATCH',
+            'message': '数据库结构暂不可用，请联系管理员处理。',
+          },
+          'requestId': 'schema-mismatch-123',
+        }),
+      ),
+    );
+
+    expect(parsed.statusCode, 503);
+    expect(parsed.code, 'DATABASE_SCHEMA_MISMATCH');
+    expect(parsed.requestId, 'schema-mismatch-123');
+  });
+
   test('SSE parser handles chunks, multiline data, and heartbeat comments',
       () async {
     final source = Stream<List<int>>.fromIterable([

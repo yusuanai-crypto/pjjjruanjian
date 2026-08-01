@@ -22,10 +22,12 @@ const AUTO_TARGET_TYPES = [
 const WRITE_COMMISSION_ROLES = ['admin', 'finance'];
 const READ_ALL_COMMISSION_ROLES = ['admin', 'finance', 'boss'];
 const TASTER_COMMISSION_TARGET_TYPE = 'TASTER_COMMISSION';
+const ORDER_MANUAL_COMMISSION_TARGET_TYPE = 'ORDER_MANUAL_COMMISSION';
 const COMMISSION_RECORD_EXPORT_MAX_ROWS = 5000;
 const COMMISSION_TARGET_TYPES = [
   ...AUTO_TARGET_TYPES,
   TASTER_COMMISSION_TARGET_TYPE,
+  ORDER_MANUAL_COMMISSION_TARGET_TYPE,
 ];
 const MANUAL_TASTER_RULE_SNAPSHOT = {
   targetType: TASTER_COMMISSION_TARGET_TYPE,
@@ -141,6 +143,249 @@ export class CommissionRecordsNestService {
     return records.map(toCommissionRecordListDto);
   }
 
+  async preflightEmployeeCommissionAssignments(actor: any, filters: any = {}) {
+    requireAnyRole(actor, ['admin']);
+    const [orders, rules] = await Promise.all([
+      this.prisma.salesOrder.findMany({
+        where: {
+          orderType: { not: 'BUYBACK' },
+          status: { in: ['VALID', 'PARTIAL_REFUND'] },
+          OR: [
+            { workflowStatus: null },
+            { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+          ],
+        },
+        select: {
+          id: true,
+          orderNo: true,
+          orderDate: true,
+          salesUserId: true,
+          outreachUserId: true,
+          salesUser: { select: { leaderId: true } },
+        },
+        orderBy: [{ orderDate: 'asc' }, { orderNo: 'asc' }],
+      }),
+      this.prisma.commissionRule.findMany({
+        where: { isActive: true },
+        select: {
+          targetType: true,
+          effectiveFrom: true,
+          effectiveTo: true,
+        },
+      }),
+    ]);
+    const problems = orders
+      .map((order: any) => {
+        const activeTargets = activeEmployeeRuleTargetsForDate(
+          rules,
+          order.orderDate,
+        );
+        return {
+          salesOrderId: order.id,
+          orderNo: order.orderNo,
+          orderDate: toDateOnly(order.orderDate),
+          missingSalesUser: !order.salesUserId,
+          missingOutreachUser:
+            activeTargets.has('OUTREACH_COMMISSION') &&
+            !order.outreachUserId,
+          missingLeader:
+            activeTargets.has('LEADER_COMMISSION') &&
+            Boolean(order.salesUserId) &&
+            !order.salesUser?.leaderId,
+        };
+      })
+      .filter(
+        (row: any) =>
+          row.missingSalesUser ||
+          row.missingOutreachUser ||
+          row.missingLeader,
+      );
+    const sampleLimit = Math.min(
+      200,
+      Math.max(1, Number(filters?.limit || 50)),
+    );
+    return {
+      readOnly: true,
+      orderCount: orders.length,
+      affectedOrderCount: problems.length,
+      missingSalesUserCount: problems.filter(
+        (row: any) => row.missingSalesUser,
+      ).length,
+      missingOutreachUserCount: problems.filter(
+        (row: any) => row.missingOutreachUser,
+      ).length,
+      missingLeaderCount: problems.filter((row: any) => row.missingLeader)
+        .length,
+      orders: problems.slice(0, sampleLimit),
+      truncated: problems.length > sampleLimit,
+    };
+  }
+
+  async repairEmployeeCommissionAssignments(
+    actor: any,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin']);
+    const assignments = Array.isArray(payload?.assignments)
+      ? payload.assignments
+      : null;
+    if (!assignments || assignments.length === 0 || assignments.length > 200) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'assignments must contain between 1 and 200 explicit assignments.',
+      );
+    }
+    const results: any[] = [];
+    for (const assignment of assignments) {
+      const salesOrderId = normalizeRequiredString(
+        assignment?.salesOrderId,
+        'salesOrderId',
+      );
+      try {
+        const result = await this.prisma.$transaction(async (tx: any) => {
+          const current = await tx.salesOrder.findUnique({
+            where: { id: salesOrderId },
+            select: {
+              id: true,
+              orderNo: true,
+              orderDate: true,
+              orderType: true,
+              workflowStatus: true,
+              salesUserId: true,
+              outreachUserId: true,
+            },
+          });
+          if (!current) {
+            throw createHttpError(
+              404,
+              'SALES_ORDER_NOT_FOUND',
+              'Sales order does not exist.',
+            );
+          }
+          if (!isCommissionEligibleSalesOrder(current)) {
+            throw createHttpError(
+              400,
+              'SALES_ORDER_NOT_COMMISSION_ELIGIBLE',
+              'Only commission-eligible non-buyback orders can have employee commission assignments repaired.',
+            );
+          }
+          const salesUserId = normalizeRequiredString(
+            assignment?.salesUserId,
+            'salesUserId',
+          );
+          if (!Object.prototype.hasOwnProperty.call(assignment, 'outreachUserId')) {
+            throw createHttpError(
+              400,
+              'VALIDATION_FAILED',
+              'outreachUserId must be supplied explicitly; use null only when no outreach rule applies.',
+            );
+          }
+          const outreachUserId = normalizeOptionalString(
+            assignment?.outreachUserId,
+          );
+          const salesUser = await findActiveSalesAssignee(
+            tx,
+            salesUserId,
+            'salesUserId',
+          );
+          if (outreachUserId) {
+            await findActiveSalesAssignee(
+              tx,
+              outreachUserId,
+              'outreachUserId',
+            );
+          }
+          const rules = await tx.commissionRule.findMany({
+            where: { isActive: true },
+            select: {
+              targetType: true,
+              effectiveFrom: true,
+              effectiveTo: true,
+            },
+          });
+          const activeTargets = activeEmployeeRuleTargetsForDate(
+            rules,
+            current.orderDate,
+          );
+          if (
+            activeTargets.has('OUTREACH_COMMISSION') &&
+            !outreachUserId
+          ) {
+            throw createHttpError(
+              400,
+              'MISSING_OUTREACH_USER',
+              'An outreach user is required for the order date.',
+            );
+          }
+          const updated = await tx.salesOrder.update({
+            where: { id: salesOrderId },
+            data: {
+              salesUserId,
+              outreachUserId,
+              updatedById: actor.id,
+              updatedAt: new Date(),
+            },
+          });
+          const recalculation = await this.recalculateSalesOrderRecords(
+            salesOrderId,
+            {
+              prisma: tx,
+              actor,
+              ipAddress: metadata.ipAddress || null,
+              targetTypes: [
+                'SALES_COMMISSION',
+                'OUTREACH_COMMISSION',
+                'LEADER_COMMISSION',
+              ],
+            },
+          );
+          await this.operationLogsService.appendLog(
+            {
+              userId: actor.id,
+              action: 'commission_assignments.repair',
+              entityType: 'sales_order',
+              entityId: salesOrderId,
+              beforeData: {
+                salesUserId: current.salesUserId,
+                outreachUserId: current.outreachUserId,
+              },
+              afterData: {
+                salesUserId: updated.salesUserId,
+                outreachUserId: updated.outreachUserId,
+                orderDate: toDateOnly(current.orderDate),
+              },
+              ipAddress: metadata.ipAddress || null,
+            },
+            tx,
+          );
+          return {
+            salesOrderId,
+            orderNo: current.orderNo,
+            success: true,
+            leaderMissing:
+              activeTargets.has('LEADER_COMMISSION') && !salesUser.leaderId,
+            recalculation,
+          };
+        });
+        results.push(result);
+      } catch (error: any) {
+        results.push({
+          salesOrderId,
+          success: false,
+          error: error?.message || 'Repair failed.',
+        });
+      }
+    }
+    return {
+      orderCount: assignments.length,
+      successCount: results.filter((result) => result.success).length,
+      failureCount: results.filter((result) => !result.success).length,
+      results,
+    };
+  }
+
   async recalculateSalesOrderRecords(
     salesOrderId: string,
     options: any = {},
@@ -224,7 +469,12 @@ export class CommissionRecordsNestService {
         businessKey,
         line,
       );
-      const data = buildCommissionRecordData(line, calculation, actor);
+      const data = buildCommissionRecordData(
+        line,
+        calculation,
+        actor,
+        current,
+      );
 
       if (!current) {
         const created = await prisma.commissionRecord.create({
@@ -587,6 +837,7 @@ export class CommissionRecordsNestService {
         globalSalesOrderScope,
         globalGroupScope,
       ),
+      { isActive: { not: false } },
     ];
 
     const recordId = normalizeOptionalString(filters?.id);
@@ -940,7 +1191,12 @@ async function findExistingCommissionRecord(
   });
 }
 
-function buildCommissionRecordData(line: any, calculation: any, actor: any) {
+function buildCommissionRecordData(
+  line: any,
+  calculation: any,
+  actor: any,
+  current: any = null,
+) {
   const ruleSnapshot = {
     targetType: line.targetType,
     primaryRuleId: line.commissionRuleId || line.agencyRebateRuleId || null,
@@ -972,9 +1228,9 @@ function buildCommissionRecordData(line: any, calculation: any, actor: any) {
     amountCents: toInteger(line.amountCents),
     pointsCents: toInteger(line.pointsCents),
     manualInput: false,
-    isConfirmed: false,
-    confirmedById: null,
-    confirmedAt: null,
+    isConfirmed: Boolean(current?.isConfirmed),
+    confirmedById: current?.confirmedById || null,
+    confirmedAt: current?.confirmedAt || null,
     calculationVersion: line.calculationVersion,
     calculationNote: calculation.calculationNote,
     ruleSnapshot,
@@ -1036,9 +1292,9 @@ function buildStaleCommissionRecordData(
     amountCents: 0,
     pointsCents: 0,
     manualInput: false,
-    isConfirmed: false,
-    confirmedById: null,
-    confirmedAt: null,
+    isConfirmed: Boolean(current?.isConfirmed),
+    confirmedById: current?.confirmedById || null,
+    confirmedAt: current?.confirmedAt || null,
     calculationVersion: calculation.calculationVersion,
     calculationNote: `${calculation.calculationNote}; stale auto record zeroed`,
     ruleSnapshot,
@@ -1375,6 +1631,9 @@ function getCommissionRecordListInclude(): any {
     targetUser: true,
     agency: true,
     confirmedBy: true,
+    adjustments: {
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    },
   };
 }
 
@@ -1421,12 +1680,20 @@ const COMMISSION_RECORD_EXPORT_COLUMNS = [
   { header: '品鉴师', key: 'taster', width: 16 },
   { header: '旅行社', key: 'agency', width: 24 },
   { header: 'targetType', key: 'targetType', width: 22 },
+  { header: '订单类型', key: 'orderType', width: 14 },
+  { header: '对象类型', key: 'recipientType', width: 14 },
+  { header: '提成对象', key: 'recipientName', width: 18 },
+  { header: '来源类型', key: 'sourceType', width: 18 },
   { header: '原始金额', key: 'grossAmountYuan', width: 14 },
   { header: '已确认退款', key: 'confirmedRefundYuan', width: 14 },
   { header: '基础金额', key: 'baseAmountYuan', width: 14 },
   { header: '扣减成本', key: 'deductionAmountYuan', width: 14 },
   { header: '比例', key: 'rateSnapshot', width: 12 },
   { header: '提成金额', key: 'amountYuan', width: 14 },
+  { header: '原提成金额', key: 'originalAmountYuan', width: 14 },
+  { header: '冲减金额', key: 'adjustmentAmountYuan', width: 14 },
+  { header: '归属日期', key: 'attributionDate', width: 14 },
+  { header: '调整记录', key: 'adjustmentLog', width: 42 },
   { header: '积分金额', key: 'pointsYuan', width: 14 },
   { header: '确认状态', key: 'confirmedStatus', width: 12 },
   { header: '确认人', key: 'confirmedBy', width: 16 },
@@ -1440,6 +1707,8 @@ const COMMISSION_RECORD_EXPORT_AMOUNT_KEYS = new Set([
   'baseAmountYuan',
   'deductionAmountYuan',
   'amountYuan',
+  'originalAmountYuan',
+  'adjustmentAmountYuan',
   'pointsYuan',
 ]);
 
@@ -1494,6 +1763,11 @@ function toCommissionRecordExportRow(record: any) {
     taster: getCommissionRecordTasterName(record, travelGroup, targetType),
     agency: record.agencyName || record.agency?.name || travelGroup?.travelAgency || '',
     targetType: targetType || '',
+    orderType: String(salesOrder?.orderType || '').toLowerCase(),
+    recipientType: String(record.recipientType || '').toLowerCase(),
+    recipientName:
+      record.recipientNameSnapshot || record.targetUser?.name || '',
+    sourceType: String(record.sourceType || '').toLowerCase(),
     grossAmountYuan: centsToYuanNumber(record.grossAmountCents),
     confirmedRefundYuan: centsToYuanNumber(
       record.confirmedRefundAmountCents,
@@ -1502,6 +1776,19 @@ function toCommissionRecordExportRow(record: any) {
     deductionAmountYuan: centsToYuanNumber(record.deductionAmountCents),
     rateSnapshot: normalizeNullableRate(record.rateSnapshot) || '',
     amountYuan: centsToYuanNumber(record.amountCents),
+    originalAmountYuan: centsToYuanNumber(
+      record.originalAmountCents ?? record.amountCents,
+    ),
+    adjustmentAmountYuan: centsToYuanNumber(
+      record.adjustmentAmountCents,
+    ),
+    attributionDate: toDateOnly(record.attributionDate),
+    adjustmentLog: (record.adjustments || [])
+      .map(
+        (item: any) =>
+          `${toIsoString(item.createdAt) || ''} ${item.adjustmentType || ''} ${item.adjustmentAmountCents || 0}`,
+      )
+      .join('\n'),
     pointsYuan: centsToYuanNumber(record.pointsCents),
     confirmedStatus: booleanLabel(record.isConfirmed),
     confirmedBy: record.confirmedBy?.name || '',
@@ -1560,6 +1847,11 @@ function buildCommissionRecordSearchWhere(query: string) {
       },
       {
         calculationNote: {
+          contains: query,
+        },
+      },
+      {
+        recipientNameSnapshot: {
           contains: query,
         },
       },
@@ -1660,6 +1952,14 @@ function toCommissionRecordListDto(record: any) {
     travelGroupId: record.travelGroupId || null,
     targetType: targetTypeToApi(record.targetType),
     targetUserId: record.targetUserId || null,
+    recipientType: record.recipientType
+      ? String(record.recipientType).toLowerCase()
+      : null,
+    recipientName:
+      record.recipientNameSnapshot || record.targetUser?.name || null,
+    sourceType: record.sourceType
+      ? String(record.sourceType).toLowerCase()
+      : null,
     agencyId: record.agencyId || null,
     agencyName: record.agencyName || record.agency?.name || null,
     salesOrderNo: salesOrder?.orderNo || null,
@@ -1676,6 +1976,13 @@ function toCommissionRecordListDto(record: any) {
     deductionAmountCents: toInteger(record.deductionAmountCents),
     rateSnapshot: normalizeNullableRate(record.rateSnapshot),
     amountCents: toInteger(record.amountCents),
+    originalAmountCents: toInteger(
+      record.originalAmountCents ?? record.amountCents,
+    ),
+    adjustmentAmountCents: toInteger(record.adjustmentAmountCents),
+    attributionDate: toDateOnly(record.attributionDate),
+    isActive: record.isActive !== false,
+    adjustments: summarizeCommissionAdjustments(record.adjustments),
     pointsCents: toInteger(record.pointsCents),
     manualInput: Boolean(record.manualInput),
     isConfirmed: Boolean(record.isConfirmed),
@@ -1720,6 +2027,9 @@ function summarizeSalesOrderForCommission(order: any, sourceSnapshot: any) {
     id: order?.id || snapshotOrder?.id || null,
     orderNo: order?.orderNo || snapshotOrder?.orderNo || null,
     orderDate: toDateOnly(order?.orderDate || snapshotOrder?.orderDate),
+    orderType: String(order?.orderType || snapshotOrder?.orderType || '')
+      .trim()
+      .toLowerCase() || null,
     status: targetStatusToApi(order?.status || snapshotOrder?.status),
     customerName:
       normalizeOptionalString(order?.customerName) ||
@@ -1785,6 +2095,28 @@ function summarizePublicUser(user: any) {
   };
 }
 
+function summarizeCommissionAdjustments(adjustments: any) {
+  return (Array.isArray(adjustments) ? adjustments : []).map((item: any) => ({
+    id: item.id,
+    adjustmentType: String(item.adjustmentType || '').toLowerCase(),
+    afterSalesOrderId: item.afterSalesOrderId || null,
+    previousEffectiveBaseAmountCents: toInteger(
+      item.previousEffectiveBaseAmountCents,
+    ),
+    effectiveBaseAmountCents: toInteger(item.effectiveBaseAmountCents),
+    previousEffectiveAmountCents: toInteger(
+      item.previousEffectiveAmountCents,
+    ),
+    adjustmentAmountCents: toInteger(item.adjustmentAmountCents),
+    effectiveAmountCents: toInteger(item.effectiveAmountCents),
+    refundAmountCents: toInteger(item.refundAmountCents),
+    actorName: item.actorNameSnapshot || null,
+    actorRole: item.actorRoleSnapshot || null,
+    reason: item.reason || null,
+    createdAt: toIsoString(item.createdAt),
+  }));
+}
+
 function summarizeText(value: unknown, maxLength: number) {
   const text = normalizeOptionalString(value);
   if (!text) {
@@ -1803,6 +2135,13 @@ function toCommissionRecordDto(record: any) {
     agencyRebateRuleId: record.agencyRebateRuleId || null,
     targetType: targetTypeToApi(record.targetType),
     targetUserId: record.targetUserId || null,
+    recipientType: record.recipientType
+      ? String(record.recipientType).toLowerCase()
+      : null,
+    recipientName: record.recipientNameSnapshot || null,
+    sourceType: record.sourceType
+      ? String(record.sourceType).toLowerCase()
+      : null,
     agencyId: record.agencyId || null,
     agencyName: record.agencyName || null,
     grossAmountCents: toInteger(record.grossAmountCents),
@@ -1813,6 +2152,14 @@ function toCommissionRecordDto(record: any) {
     deductionAmountCents: toInteger(record.deductionAmountCents),
     rateSnapshot: normalizeNullableRate(record.rateSnapshot),
     amountCents: toInteger(record.amountCents),
+    originalAmountCents: toInteger(
+      record.originalAmountCents ?? record.amountCents,
+    ),
+    adjustmentAmountCents: toInteger(record.adjustmentAmountCents),
+    attributionDate: toDateOnly(record.attributionDate),
+    isActive: record.isActive !== false,
+    manualVersion: toInteger(record.manualVersion),
+    adjustments: summarizeCommissionAdjustments(record.adjustments),
     pointsCents: toInteger(record.pointsCents),
     manualInput: Boolean(record.manualInput),
     isConfirmed: Boolean(record.isConfirmed),
@@ -2172,6 +2519,45 @@ function isCommissionEligibleSalesOrder(order: any) {
     !workflowStatus ||
     workflowStatus === 'APPROVED' ||
     workflowStatus === 'COMPLETED'
+  );
+}
+
+async function findActiveSalesAssignee(
+  prisma: any,
+  id: string,
+  fieldName: string,
+) {
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) {
+    throw createHttpError(
+      404,
+      'ASSIGNEE_NOT_FOUND',
+      `${fieldName} does not reference an existing user.`,
+    );
+  }
+  if (!user.isActive || String(user.role).toUpperCase() !== 'SALES') {
+    throw createHttpError(
+      400,
+      'INVALID_ASSIGNEE',
+      `${fieldName} must reference an active sales user.`,
+    );
+  }
+  return user;
+}
+
+function activeEmployeeRuleTargetsForDate(rules: any[], value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value));
+  const time = date.getTime();
+  return new Set(
+    (Array.isArray(rules) ? rules : [])
+      .filter((rule: any) => {
+        const from = new Date(rule.effectiveFrom).getTime();
+        const to = rule.effectiveTo
+          ? new Date(rule.effectiveTo).getTime()
+          : Number.POSITIVE_INFINITY;
+        return Boolean(rule.isActive ?? true) && from <= time && time <= to;
+      })
+      .map((rule: any) => String(rule.targetType).toUpperCase()),
   );
 }
 

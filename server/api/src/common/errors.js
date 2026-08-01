@@ -12,6 +12,11 @@ const PRISMA_ERROR_MAPPINGS = Object.freeze({
     code: 'FOREIGN_KEY_CONFLICT',
     message: 'The requested operation conflicts with a related record.',
   },
+  P2022: {
+    statusCode: 503,
+    code: 'DATABASE_SCHEMA_MISMATCH',
+    message: '数据库结构暂不可用，请联系管理员处理。',
+  },
   P2025: {
     statusCode: 404,
     code: 'RECORD_NOT_FOUND',
@@ -149,6 +154,21 @@ function mapInfrastructureError(error) {
   return null;
 }
 
+function sanitizeErrorForLogging(error) {
+  if (!error || typeof error !== 'object' || error.code !== 'P2022') {
+    return error;
+  }
+
+  // Prisma P2022 messages and metadata can contain table names, column names,
+  // SQL fragments, and connection details. The correlation ID and stable
+  // Prisma/public error codes are sufficient to diagnose a schema mismatch
+  // without copying those details into application or PM2 logs.
+  return {
+    name: 'PrismaClientKnownRequestError',
+    code: 'P2022',
+  };
+}
+
 function internalErrorResponse() {
   return {
     statusCode: 500,
@@ -207,4 +227,5 @@ module.exports = {
   createHttpError,
   isExpectedHttpError,
   mapErrorToPublicResponse,
+  sanitizeErrorForLogging,
 };

@@ -9,6 +9,7 @@ const WAREHOUSE_SELECT = {
   name: true,
   address: true,
   managerUserId: true,
+  parentWarehouseId: true,
   isActive: true,
   isDefault: true,
   createdAt: true,
@@ -17,6 +18,48 @@ const WAREHOUSE_SELECT = {
     select: {
       id: true,
       name: true,
+    },
+  },
+  parentWarehouse: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      isActive: true,
+    },
+  },
+  childWarehouses: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      isActive: true,
+      isDefault: true,
+    },
+  },
+  _count: {
+    select: {
+      childWarehouses: true,
+      stocks: true,
+      productConfigurations: true,
+      batches: true,
+      documents: true,
+      outboundDocuments: true,
+      inboundDocuments: true,
+      movements: true,
+      reservations: true,
+      outboundTransfers: true,
+      inboundTransfers: true,
+      transferReceipts: true,
+      afterSalesReceipts: true,
+      previousAfterSalesReceiptUnits: true,
+      stockAlertConfigs: true,
+      inventoryAlerts: true,
+      stocktakes: true,
+      stocktakeExpectedScans: true,
+      fulfillmentSalesOrders: true,
+      serializedUnits: true,
+      specialOrderItems: true,
     },
   },
 } as const;
@@ -115,10 +158,23 @@ export class InventoryQueryPrismaRepository {
     if (filters.isDefault !== null) {
       where.isDefault = filters.isDefault;
     }
-    if (filters.query) {
+    if (filters.parentFilterSet) {
+      where.parentWarehouseId = filters.parentWarehouseId;
+    }
+    if (filters.manager) {
       where.OR = [
+        { managerUserId: filters.manager },
+        { manager: { name: { contains: filters.manager } } },
+      ];
+    }
+    if (filters.query) {
+      const queryConditions = [
         { code: { contains: filters.query } },
         { name: { contains: filters.query } },
+      ];
+      where.AND = [
+        ...(where.AND || []),
+        { OR: queryConditions },
       ];
     }
     const [rows, total] = await Promise.all([
@@ -150,6 +206,13 @@ export class InventoryQueryPrismaRepository {
         createdById: true,
         updatedById: true,
       },
+    });
+  }
+
+  async findWarehouse(id: string, db: any = this.prisma) {
+    return await db.warehouse.findUnique({
+      where: { id },
+      select: WAREHOUSE_SELECT,
     });
   }
 
@@ -304,6 +367,338 @@ export class InventoryQueryPrismaRepository {
       hasUnfinishedTransfer: Boolean(unfinishedTransfer),
       hasActiveStocktake: Boolean(activeStocktake),
     };
+  }
+
+  async warehouseDeleteBlockers(transaction: any, warehouseId: string) {
+    const [
+      childWarehouses,
+      stocks,
+      productConfigurations,
+      batches,
+      documents,
+      movements,
+      reservations,
+      transfers,
+      transferReceipts,
+      afterSalesReceipts,
+      previousAfterSalesUnits,
+      stockAlertConfigs,
+      inventoryAlerts,
+      stocktakes,
+      stocktakeExpectedScans,
+      fulfillmentOrders,
+      serializedUnits,
+      specialOrderItems,
+    ] = await Promise.all([
+      transaction.warehouse.count({
+        where: { parentWarehouseId: warehouseId },
+      }),
+      transaction.warehouseProductStock.count({ where: { warehouseId } }),
+      transaction.warehouseProductConfiguration.count({
+        where: { warehouseId },
+      }),
+      transaction.inventoryBatch.count({ where: { warehouseId } }),
+      transaction.inventoryDocument.count({
+        where: {
+          OR: [
+            { warehouseId },
+            { fromWarehouseId: warehouseId },
+            { toWarehouseId: warehouseId },
+          ],
+        },
+      }),
+      transaction.inventoryMovement.count({ where: { warehouseId } }),
+      transaction.inventoryReservation.count({ where: { warehouseId } }),
+      transaction.inventoryTransfer.count({
+        where: {
+          OR: [
+            { fromWarehouseId: warehouseId },
+            { toWarehouseId: warehouseId },
+          ],
+        },
+      }),
+      transaction.inventoryTransferReceipt.count({ where: { warehouseId } }),
+      transaction.afterSalesReceipt.count({ where: { warehouseId } }),
+      transaction.afterSalesReceiptSerializedUnit.count({
+        where: { previousWarehouseId: warehouseId },
+      }),
+      transaction.stockAlertConfig.count({ where: { warehouseId } }),
+      transaction.inventoryAlert.count({ where: { warehouseId } }),
+      transaction.stocktake.count({ where: { warehouseId } }),
+      transaction.stocktakeSerializedScan.count({
+        where: { expectedWarehouseId: warehouseId },
+      }),
+      transaction.salesOrder.count({
+        where: { fulfillmentWarehouseId: warehouseId },
+      }),
+      transaction.serializedInventoryUnit.count({ where: { warehouseId } }),
+      transaction.salesOrderItem.count({ where: { warehouseId } }),
+    ]);
+    return {
+      childWarehouses,
+      stocks,
+      productConfigurations,
+      batches,
+      documents,
+      movements,
+      reservations,
+      transfers,
+      transferReceipts,
+      afterSalesReceipts,
+      previousAfterSalesUnits,
+      stockAlertConfigs,
+      inventoryAlerts,
+      stocktakes,
+      stocktakeExpectedScans,
+      fulfillmentOrders,
+      serializedUnits,
+      specialOrderItems,
+    };
+  }
+
+  async warehouseHasHistory(transaction: any, warehouseId: string) {
+    const blockers = await this.warehouseDeleteBlockers(
+      transaction,
+      warehouseId,
+    );
+    return Object.entries(blockers).some(
+      ([key, value]) => key !== 'childWarehouses' && Number(value) > 0,
+    );
+  }
+
+  async deleteWarehouse(transaction: any, warehouseId: string) {
+    return await transaction.warehouse.delete({ where: { id: warehouseId } });
+  }
+
+  async findWarehouseProductConfiguration(
+    transaction: any,
+    warehouseId: string,
+    productId: string,
+  ) {
+    return await transaction.warehouseProductConfiguration.findUnique({
+      where: {
+        warehouseId_productId: { warehouseId, productId },
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            unit: true,
+            inventoryTrackingMode: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+  }
+
+  async createWarehouseProductConfiguration(transaction: any, data: any) {
+    return await transaction.warehouseProductConfiguration.create({
+      data,
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            unit: true,
+            inventoryTrackingMode: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateWarehouseProductConfiguration(
+    transaction: any,
+    id: string,
+    data: any,
+  ) {
+    return await transaction.warehouseProductConfiguration.update({
+      where: { id },
+      data,
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            unit: true,
+            inventoryTrackingMode: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+  }
+
+  async listWarehouseProductConfigurations(
+    warehouseId: string,
+    filters: any,
+  ) {
+    const where: any = { warehouseId };
+    if (filters.isActive !== null) {
+      where.isActive = filters.isActive;
+    }
+    if (filters.query || filters.inventoryTrackingMode) {
+      where.product = {};
+      if (filters.query) {
+        where.product.OR = [
+          { id: { contains: filters.query } },
+          { name: { contains: filters.query } },
+        ];
+      }
+      if (filters.inventoryTrackingMode) {
+        where.product.inventoryTrackingMode =
+          filters.inventoryTrackingMode;
+      }
+    }
+    return await this.prisma.warehouseProductConfiguration.findMany({
+      where,
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            unit: true,
+            inventoryTrackingMode: true,
+            isActive: true,
+          },
+        },
+      },
+      orderBy: [
+        { isActive: 'desc' },
+        { product: { name: 'asc' } },
+        { id: 'asc' },
+      ],
+    });
+  }
+
+  async aggregateWarehouseProductStocks(
+    warehouseIds: string[],
+    productIds: string[],
+  ) {
+    if (warehouseIds.length === 0 || productIds.length === 0) return [];
+    return await this.prisma.warehouseProductStock.groupBy({
+      by: ['warehouseId', 'productId'],
+      where: {
+        warehouseId: { in: warehouseIds },
+        productId: { in: productIds },
+      },
+      _sum: {
+        onHandQty: true,
+        reservedQty: true,
+        unavailableQty: true,
+        inTransitQty: true,
+      },
+    });
+  }
+
+  async aggregateSerializedWarehouseProductUnits(
+    warehouseIds: string[],
+    productIds: string[],
+  ) {
+    if (warehouseIds.length === 0 || productIds.length === 0) return [];
+    return await this.prisma.serializedInventoryUnit.groupBy({
+      by: ['warehouseId', 'productId', 'status'],
+      where: {
+        warehouseId: { in: warehouseIds },
+        productId: { in: productIds },
+        status: {
+          in: [
+            'PENDING_COST',
+            'AVAILABLE',
+            'ALLOCATED',
+            'RESERVED',
+            'OUTBOUND',
+            'UNAVAILABLE',
+          ],
+        },
+      },
+      _count: { _all: true },
+    });
+  }
+
+  async latestWarehouseProductMovements(
+    warehouseIds: string[],
+    productIds: string[],
+  ) {
+    if (warehouseIds.length === 0 || productIds.length === 0) return [];
+    return await this.prisma.inventoryMovement.groupBy({
+      by: ['productId'],
+      where: {
+        warehouseId: { in: warehouseIds },
+        productId: { in: productIds },
+      },
+      _max: { businessAt: true },
+    });
+  }
+
+  async warehouseProductHasHistory(
+    transaction: any,
+    warehouseId: string,
+    productId: string,
+  ) {
+    const [batches, movements, reservations, serializedUnits, documentLines] =
+      await Promise.all([
+        transaction.inventoryBatch.count({
+          where: { warehouseId, productId },
+        }),
+        transaction.inventoryMovement.count({
+          where: { warehouseId, productId },
+        }),
+        transaction.inventoryReservation.count({
+          where: { warehouseId, productId },
+        }),
+        transaction.serializedInventoryUnit.count({
+          where: { warehouseId, productId },
+        }),
+        transaction.inventoryDocumentLine.count({
+          where: {
+            productId,
+            document: {
+              OR: [
+                { warehouseId },
+                { fromWarehouseId: warehouseId },
+                { toWarehouseId: warehouseId },
+              ],
+            },
+          },
+        }),
+      ]);
+    return batches + movements + reservations + serializedUnits + documentLines > 0;
+  }
+
+  async findWarehouseProductStock(
+    transaction: any,
+    warehouseId: string,
+    productId: string,
+  ) {
+    return await transaction.warehouseProductStock.findUnique({
+      where: { warehouseId_productId: { warehouseId, productId } },
+    });
+  }
+
+  async countActiveSerializedUnits(
+    transaction: any,
+    warehouseId: string,
+    productId: string,
+  ) {
+    return await transaction.serializedInventoryUnit.count({
+      where: {
+        warehouseId,
+        productId,
+        status: {
+          in: [
+            'PENDING_COST',
+            'AVAILABLE',
+            'ALLOCATED',
+            'RESERVED',
+            'UNAVAILABLE',
+          ],
+        },
+      },
+    });
   }
 
   async listStockRows(filters: any) {

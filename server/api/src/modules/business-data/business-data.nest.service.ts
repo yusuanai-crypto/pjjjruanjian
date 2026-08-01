@@ -13,6 +13,7 @@ import {
 import { PROFIT_TAX_RATE } from '../analytics/profit-tax-service-fee.helper';
 import { resolveSalesOrderPersonalAmountCents } from '../commissions/commission-calculation.helper';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
+import { SpecialOrderCommissionService } from '../commissions/special-order-commission.service';
 import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
 import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
 import {
@@ -399,6 +400,7 @@ const TASTER_COMMISSION_TARGET_TYPE = 'TASTER_COMMISSION';
 const TRAVEL_GROUP_EXPORT_MAX_ROWS = 5000;
 const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '系统单号', key: 'orderNo', width: 18 },
+  { header: '订单类型', key: 'orderType', width: 14 },
   { header: '销售单号', key: 'salesFormNo', width: 18 },
   { header: '订单日期', key: 'orderDate', width: 14 },
   { header: '发货日期', key: 'shippingDate', width: 14 },
@@ -411,6 +413,14 @@ const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '酒品明细', key: 'itemsSummary', width: 36 },
   { header: '配送摘要', key: 'deliverySummary', width: 14 },
   { header: '订单总额', key: 'totalAmountYuan', width: 14 },
+  { header: '上单金额', key: 'entryAmountYuan', width: 14 },
+  { header: '已支付金额', key: 'paidAmountYuan', width: 14 },
+  { header: '未支付金额', key: 'unpaidAmountYuan', width: 14 },
+  { header: '支付方式汇总', key: 'paymentMethodsSummary', width: 32 },
+  { header: '提成对象汇总', key: 'commissionRecipients', width: 28 },
+  { header: '提成比例汇总', key: 'commissionRates', width: 22 },
+  { header: '有效提成总额', key: 'effectiveCommissionYuan', width: 16 },
+  { header: '提成状态', key: 'commissionStatus', width: 14 },
   { header: '是否走个人', key: 'hasPersonalAmount', width: 14 },
   { header: '走个人金额', key: 'personalAmountYuan', width: 14 },
   { header: '正常金额', key: 'normalAmountYuan', width: 14 },
@@ -434,11 +444,17 @@ const SALES_ORDER_EXPORT_COLUMNS = [
   { header: '是否需要开票', key: 'invoiceRequired', width: 14 },
   { header: '是否已开票', key: 'invoiceIssued', width: 14 },
   { header: '创建时间', key: 'createdAt', width: 24 },
+  { header: '创建人', key: 'createdBy', width: 16 },
+  { header: '作废/退款状态', key: 'voidRefundStatus', width: 16 },
   { header: '更新时间', key: 'updatedAt', width: 24 },
 ];
 
 const SALES_ORDER_EXPORT_AMOUNT_KEYS = new Set([
   'totalAmountYuan',
+  'entryAmountYuan',
+  'paidAmountYuan',
+  'unpaidAmountYuan',
+  'effectiveCommissionYuan',
   'personalAmountYuan',
   'normalAmountYuan',
   'paymentAmountYuan',
@@ -650,6 +666,8 @@ export class BusinessDataNestService {
     @Optional()
     @Inject(TODO_REMINDERS_RECONCILER)
     private readonly todoReminders?: TodoRemindersReconciler,
+    @Optional()
+    private readonly specialOrderCommissionService?: SpecialOrderCommissionService,
   ) {}
 
   async listGroups(kind: string, actor: any, filters: any = {}) {
@@ -1669,6 +1687,7 @@ export class BusinessDataNestService {
       );
     }
     assertCanReadSalesOrder(actor, current);
+    assertSpecialOrderUsesWorkflowMutationApi(current);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
     assertFinanceMarkAllowsPaymentDetailsMutation(current);
     assertPaymentDetailsUnlocked(current);
@@ -2177,6 +2196,7 @@ export class BusinessDataNestService {
       submittedAt,
     );
     const inventoryReceiptIds: string[] = [];
+    let commissionRecalculation: any = null;
     const order = await this.prisma.$transaction(async (tx: any) => {
       const inventoryActivation =
         await this.salesOrderInventoryService.prepareNewOrder(
@@ -2234,18 +2254,9 @@ export class BusinessDataNestService {
           await assertTravelGroupFrontDeskInfoComplete(tx, travelGroup);
         }
       }
-      if (data.salesUserId) {
-        await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
-          'SALES',
-          'sales',
-        ]);
-      }
-      if (data.outreachUserId) {
-        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
-          'SALES',
-          'sales',
-        ]);
-      }
+      await assertCommissionAssignmentReady(tx, data, {
+        allowMissingAssignments: true,
+      });
 
       const orderItems = await resolveSalesOrderItemSnapshots(
         tx,
@@ -2356,7 +2367,8 @@ export class BusinessDataNestService {
             },
             tx,
           );
-          await this.refreshStage7SalesOrderCommissionAndSummary(
+          const commissionImpact =
+            await this.refreshStage7SalesOrderCommissionAndSummary(
             tx,
             createdOrder.id,
             actor,
@@ -2367,6 +2379,9 @@ export class BusinessDataNestService {
               entityId: createdOrder.id,
               affectedTravelGroupIds: [orderForLog?.travelGroupId],
             },
+            );
+          commissionRecalculation = buildSalesOrderRecalculationResponse(
+            commissionImpact?.recalculation,
           );
           return orderForLog;
         },
@@ -2380,7 +2395,10 @@ export class BusinessDataNestService {
       { sourceType: 'SALES_ORDER', sourceId: order.id },
       { sourceType: 'TRAVEL_GROUP', sourceId: order.travelGroupId },
     ]);
-    return toSalesOrderDtoForActor(order, actor);
+    return {
+      salesOrder: toSalesOrderDtoForActor(order, actor),
+      recalculation: commissionRecalculation,
+    };
   }
 
   async salesEditSalesOrder(
@@ -2392,11 +2410,13 @@ export class BusinessDataNestService {
     requireAnyRole(actor, ['sales']);
     assertSalesOrderSalesEditAllowedFields(payload);
     const current = await this.findReadableSalesOrderOrThrow(actor, id);
+    assertSpecialOrderUsesWorkflowMutationApi(current);
     const submittedItemInputs = hasOwn(payload, 'items')
       ? buildSalesOrderItems(payload.items)
       : null;
 
     const inventoryReceiptIds: string[] = [];
+    let commissionRecalculation: any = null;
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = {
         ...buildSalesOrderUpdateData(payload, actor),
@@ -2469,14 +2489,19 @@ export class BusinessDataNestService {
         }
         assertSalesCanUseTravelGroup(actor, travelGroup);
       }
-      if (data.outreachUserId) {
-        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
-          'SALES',
-          'sales',
-        ]);
-      }
-
       const finalOrderDate = data.orderDate || current.orderDate;
+      await assertCommissionAssignmentReady(
+        tx,
+        {
+          ...current,
+          ...data,
+          orderType: finalOrderType,
+          orderDate: finalOrderDate,
+        },
+        {
+          allowMissingAssignments: true,
+        },
+      );
       const orderDateChanged =
         data.orderDate !== undefined &&
         formatDate(data.orderDate) !== formatDate(current.orderDate);
@@ -2607,7 +2632,8 @@ export class BusinessDataNestService {
           payload,
         )
       ) {
-        await this.refreshStage7SalesOrderCommissionAndSummary(
+        const commissionImpact =
+          await this.refreshStage7SalesOrderCommissionAndSummary(
           tx,
           orderForLog.id,
           actor,
@@ -2622,6 +2648,9 @@ export class BusinessDataNestService {
             ),
           },
         );
+        commissionRecalculation = buildSalesOrderRecalculationResponse(
+          commissionImpact?.recalculation,
+        );
       }
       return orderForLog;
     }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
@@ -2634,7 +2663,10 @@ export class BusinessDataNestService {
       { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
       { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
     ]);
-    return toSalesOrderDtoForActor(updated, actor);
+    return {
+      salesOrder: toSalesOrderDtoForActor(updated, actor),
+      recalculation: commissionRecalculation,
+    };
   }
 
   async updateSalesOrder(
@@ -2660,11 +2692,13 @@ export class BusinessDataNestService {
       );
     }
     assertCanUpdateSalesOrder(actor, current);
+    assertSpecialOrderUsesWorkflowMutationApi(current);
     const submittedItemInputs = hasOwn(payload, 'items')
       ? buildSalesOrderItems(payload.items)
       : null;
 
     const inventoryReceiptIds: string[] = [];
+    let commissionRecalculation: any = null;
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const data = buildSalesOrderUpdateData(payload, actor);
       const customerResult = await resolveSalesOrderPatchCustomer(
@@ -2734,20 +2768,19 @@ export class BusinessDataNestService {
           );
         }
       }
-      if (data.salesUserId) {
-        await findActiveRoleUser(tx, data.salesUserId, 'salesUserId', [
-          'SALES',
-          'sales',
-        ]);
-      }
-      if (data.outreachUserId) {
-        await findActiveRoleUser(tx, data.outreachUserId, 'outreachUserId', [
-          'SALES',
-          'sales',
-        ]);
-      }
-
       const finalOrderDate = data.orderDate || current.orderDate;
+      await assertCommissionAssignmentReady(
+        tx,
+        {
+          ...current,
+          ...data,
+          orderType: finalOrderType,
+          orderDate: finalOrderDate,
+        },
+        {
+          allowMissingAssignments: true,
+        },
+      );
       const orderDateChanged =
         data.orderDate !== undefined &&
         formatDate(data.orderDate) !== formatDate(current.orderDate);
@@ -2855,7 +2888,8 @@ export class BusinessDataNestService {
         tx,
       );
       if (shouldRecalculateStage7ForSalesOrderUpdate(current, orderForLog, payload)) {
-        await this.refreshStage7SalesOrderCommissionAndSummary(
+        const commissionImpact =
+          await this.refreshStage7SalesOrderCommissionAndSummary(
           tx,
           orderForLog.id,
           actor,
@@ -2870,6 +2904,9 @@ export class BusinessDataNestService {
             ),
           },
         );
+        commissionRecalculation = buildSalesOrderRecalculationResponse(
+          commissionImpact?.recalculation,
+        );
       }
       return orderForLog;
     }, SALES_ORDER_INVENTORY_TRANSACTION_OPTIONS);
@@ -2882,7 +2919,10 @@ export class BusinessDataNestService {
       { sourceType: 'TRAVEL_GROUP', sourceId: current.travelGroupId },
       { sourceType: 'TRAVEL_GROUP', sourceId: updated.travelGroupId },
     ]);
-    return toSalesOrderDtoForActor(updated, actor);
+    return {
+      salesOrder: toSalesOrderDtoForActor(updated, actor),
+      recalculation: commissionRecalculation,
+    };
   }
 
   async updateSalesOrderFinance(
@@ -3189,6 +3229,7 @@ export class BusinessDataNestService {
         'Sales order does not exist.',
       );
     }
+    assertSpecialOrderUsesWorkflowMutationApi(current);
 
     const inventoryReceiptIds: string[] = [];
     const updated = await this.prisma.$transaction(async (tx: any) => {
@@ -3292,7 +3333,7 @@ export class BusinessDataNestService {
           404,
           'SALES_ORDER_NOT_FOUND',
           'Sales order does not exist.',
-        );
+          );
       }
       if (Boolean(current.financeMark) === marked) {
         return {
@@ -3406,9 +3447,63 @@ export class BusinessDataNestService {
     return toSalesOrderDtoForActor(result.order, actor);
   }
 
+  async getSalesOrderAssignmentOptions(actor: any, query: any = {}) {
+    requireAnyRole(actor, ['admin', 'sales', 'finance']);
+    const calculationDate = parseDate(
+      query?.date || new Date(),
+      'date',
+      true,
+    );
+    const [salesUsers, activeRules] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          isActive: true,
+          role: 'SALES',
+        },
+        select: {
+          id: true,
+          name: true,
+          username: true,
+          leaderId: true,
+          leader: {
+            select: {
+              id: true,
+              name: true,
+              isActive: true,
+            },
+          },
+        },
+        orderBy: [{ name: 'asc' }, { username: 'asc' }],
+      }),
+      this.prisma.commissionRule.findMany({
+        where: buildActiveCommissionRuleWhere(calculationDate),
+        select: { targetType: true },
+      }),
+    ]);
+    const role = String(actor?.role || '').toLowerCase();
+    return {
+      calculationDate: formatDate(calculationDate),
+      currentUserId: actor?.id || null,
+      currentUserRole: role,
+      canChangeSalesUser: role !== 'sales',
+      activeCommissionTargetTypes: Array.from(
+        new Set(activeRules.map((rule: any) => String(rule.targetType))),
+      ),
+      salesUsers: salesUsers.map((user: any) => ({
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        leaderId: user.leaderId || null,
+        leaderName: user.leader?.name || null,
+        leaderActive: user.leader ? Boolean(user.leader.isActive) : null,
+      })),
+    };
+  }
+
   async listAfterSalesOrders(actor: any, filters: any = {}) {
     requireAnyRole(actor, [
       'admin',
+      'boss',
       'finance',
       'after_sales',
       'sales',
@@ -3433,7 +3528,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'after_sales', 'finance', 'boss']);
     const body = normalizeOptionalObjectPayload(payload);
     const salesOrderId = normalizeRequiredString(
       body.sourceSalesOrderId || body.salesOrderId,
@@ -3443,9 +3538,15 @@ export class BusinessDataNestService {
       actor,
       salesOrderId,
     );
+    if (isWorkflowSpecialOrder(readableSalesOrder)) {
+      assertCanMaintainWorkflowSpecialOrder(actor);
+    } else {
+      requireAnyRole(actor, ['admin', 'after_sales']);
+    }
     if (
       readableSalesOrder.orderType === 'AFTER_SALES' ||
-      readableSalesOrder.orderType === 'BUYBACK'
+      (readableSalesOrder.orderType === 'BUYBACK' &&
+        !isWorkflowSpecialOrder(readableSalesOrder))
     ) {
       throw createHttpError(
         400,
@@ -3485,6 +3586,11 @@ export class BusinessDataNestService {
                 sortOrder: 'asc',
               },
             },
+            specialPayments: {
+              where: { reversedAt: null },
+              include: { paymentMethod: true },
+              orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
+            },
             afterSalesOrders: {
               include: {
                 items: true,
@@ -3499,9 +3605,15 @@ export class BusinessDataNestService {
             'Sales order does not exist.',
           );
         }
+        if (isWorkflowSpecialOrder(salesOrder)) {
+          assertCanMaintainWorkflowSpecialOrder(actor);
+        } else {
+          requireAnyRole(actor, ['admin', 'after_sales']);
+        }
         if (
           salesOrder.orderType === 'AFTER_SALES' ||
-          salesOrder.orderType === 'BUYBACK'
+          (salesOrder.orderType === 'BUYBACK' &&
+            !isWorkflowSpecialOrder(salesOrder))
         ) {
           throw createHttpError(
             400,
@@ -3552,7 +3664,7 @@ export class BusinessDataNestService {
         );
         const refundPaymentDetail = resolveRefundPaymentDetail(
           body.refundPaymentDetailId,
-          salesOrder.paymentDetails,
+          getRefundableSourcePayments(salesOrder),
         );
         const personalPointsRefundAmountCents =
           normalizePersonalPointsRefundAmountCents(
@@ -3698,6 +3810,7 @@ export class BusinessDataNestService {
   async getAfterSalesOrder(actor: any, id: string) {
     requireAnyRole(actor, [
       'admin',
+      'boss',
       'finance',
       'after_sales',
       'sales',
@@ -3727,7 +3840,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'after_sales', 'finance', 'boss']);
     assertAfterSalesOrderPatchAllowedFields(payload);
     const current = await this.prisma.afterSalesOrder.findUnique({
       where: {
@@ -3741,6 +3854,11 @@ export class BusinessDataNestService {
         'AFTER_SALES_ORDER_NOT_FOUND',
         'After-sales order does not exist.',
       );
+    }
+    if (isWorkflowSpecialOrder(current.salesOrder)) {
+      assertCanMaintainWorkflowSpecialOrder(actor);
+    } else {
+      requireAnyRole(actor, ['admin', 'after_sales']);
     }
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
 
@@ -3794,7 +3912,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'after_sales', 'finance', 'boss']);
     assertAfterSalesOrderStatusPatchAllowedFields(payload);
     const body = normalizeOptionalObjectPayload(payload);
     const status = toPrismaAfterSalesStatus(
@@ -3812,6 +3930,11 @@ export class BusinessDataNestService {
         'AFTER_SALES_ORDER_NOT_FOUND',
         'After-sales order does not exist.',
       );
+    }
+    if (isWorkflowSpecialOrder(current.salesOrder)) {
+      assertCanMaintainWorkflowSpecialOrder(actor);
+    } else {
+      requireAnyRole(actor, ['admin', 'after_sales']);
     }
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
 
@@ -4001,7 +4124,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'finance']);
+    requireAnyRole(actor, ['admin', 'finance', 'boss']);
     const body = normalizeOptionalObjectPayload(payload);
     const confirmationTime = new Date();
     const current = await this.prisma.afterSalesOrder.findUnique({
@@ -4017,6 +4140,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
+    assertCanConfirmAfterSalesForOrder(actor, current.salesOrder);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     if (current.financeConfirmed === true) {
       return toAfterSalesOrderMutationResult(current, actor);
@@ -4166,7 +4290,7 @@ export class BusinessDataNestService {
     id: string,
     attachmentId: string,
   ) {
-    requireAnyRole(actor, ['admin', 'finance', 'after_sales']);
+    requireAnyRole(actor, ['admin', 'finance', 'boss', 'after_sales']);
     const current = await this.prisma.afterSalesOrder.findUnique({
       where: {
         id,
@@ -4348,7 +4472,7 @@ export class BusinessDataNestService {
     payload: any,
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'finance']);
+    requireAnyRole(actor, ['admin', 'finance', 'boss']);
     assertAfterSalesOrderFinanceConfirmPatchAllowedFields(payload);
     const body = normalizeOptionalObjectPayload(payload);
     const financeConfirmed = normalizeBoolean(
@@ -4368,6 +4492,7 @@ export class BusinessDataNestService {
         'After-sales order does not exist.',
       );
     }
+    assertCanConfirmAfterSalesForOrder(actor, current.salesOrder);
     await this.assertPassesGlobalSalesOrderMarkScope(actor, current.salesOrder);
     if (Number(current.refundAmountCents || 0) <= 0) {
       throw createHttpError(
@@ -5199,6 +5324,14 @@ export class BusinessDataNestService {
       });
     }
 
+    const manualCommissionImpact = this.specialOrderCommissionService
+      ? await this.specialOrderCommissionService.applyAfterSalesInTransaction(
+          tx,
+          { ...afterSalesOrder, salesOrder: sourceSalesOrder },
+          actor,
+        )
+      : { recordIds: [] };
+
     const summaryResults: any[] = [];
     if (sourceSalesOrder.travelGroupId) {
       summaryResults.push(
@@ -5235,7 +5368,10 @@ export class BusinessDataNestService {
         },
       },
       summaryResults,
-      adjustmentRecordIds: touchedRecordIds,
+      adjustmentRecordIds: [
+        ...touchedRecordIds,
+        ...(manualCommissionImpact.recordIds || []),
+      ],
       warnings: [],
       metadata: {
         ipAddress: metadata.ipAddress || null,
@@ -5918,7 +6054,14 @@ function buildReadableSalesOrderWhere(actor: any, filters: any = {}) {
   );
   const role = String(actor?.role || '').toLowerCase();
   if (
-    !['sales', 'after_sales', 'boss', 'admin', 'super_admin'].includes(role)
+    ![
+      'sales',
+      'after_sales',
+      'finance',
+      'boss',
+      'admin',
+      'super_admin',
+    ].includes(role)
   ) {
     return andWhere(baseWhere, { workflowStatus: null });
   }
@@ -6420,6 +6563,46 @@ function assertCanUpdateSalesOrder(actor: any, order: any) {
     'SALES_ORDER_NOT_FOUND',
     'Sales order does not exist.',
   );
+}
+
+function assertSpecialOrderUsesWorkflowMutationApi(order: any) {
+  if (isWorkflowSpecialOrder(order)) {
+    throw createHttpError(
+      409,
+      'SPECIAL_ORDER_WORKFLOW_API_REQUIRED',
+      'Internal, external, and buyback orders must be changed through the special-order workflow API.',
+    );
+  }
+}
+
+function isWorkflowSpecialOrder(order: any) {
+  return Boolean(
+    order?.workflowStatus &&
+      ['INTERNAL', 'EXTERNAL', 'BUYBACK'].includes(
+        String(order?.orderType || '').toUpperCase(),
+      ),
+  );
+}
+
+function assertCanMaintainWorkflowSpecialOrder(actor: any) {
+  if (
+    ['finance', 'boss', 'admin', 'super_admin'].includes(
+      String(actor?.role || '').trim().toLowerCase(),
+    )
+  ) {
+    return;
+  }
+  throw createHttpError(
+    403,
+    'SPECIAL_ORDER_MAINTENANCE_PERMISSION_DENIED',
+    'Only finance, boss, or administrators may edit, cancel, or refund a special order.',
+  );
+}
+
+function assertCanConfirmAfterSalesForOrder(actor: any, order: any) {
+  if (isWorkflowSpecialOrder(order)) {
+    assertCanMaintainWorkflowSpecialOrder(actor);
+  }
 }
 
 function buildFinanceEligibleSalesOrderWhere(filters: any = {}) {
@@ -7238,7 +7421,7 @@ function buildSalesOrderData(
     markedAt: null,
     outreachUserId: normalizeOptionalString(payload?.outreachUserId),
     salesUserId:
-      actor.role === 'sales'
+      String(actor?.role || '').toLowerCase() === 'sales'
         ? actor.id
         : normalizeOptionalString(payload?.salesUserId),
     createdById: actor.id,
@@ -7586,7 +7769,14 @@ function buildAfterSalesOrderCreateData(
     description: normalizeRequiredString(payload?.description, 'description'),
     resolution: normalizeOptionalString(payload?.resolution),
     refundAmountCents: options.refundAmountCents,
-    refundPaymentDetailId: options.refundPaymentDetail?.id || null,
+    refundPaymentDetailId:
+      options.refundPaymentDetail?.sourceKind === 'special'
+        ? null
+        : options.refundPaymentDetail?.id || null,
+    refundSpecialPaymentId:
+      options.refundPaymentDetail?.sourceKind === 'special'
+        ? options.refundPaymentDetail.id
+        : null,
     refundPaymentMethodNameSnapshot:
       options.refundPaymentDetail?.paymentMethodNameSnapshot || null,
     refundOccurredAt: null,
@@ -8004,6 +8194,24 @@ function resolveRefundPaymentDetail(
   return detail;
 }
 
+function getRefundableSourcePayments(sourceOrder: any) {
+  const regularPayments = Array.isArray(sourceOrder?.paymentDetails)
+    ? sourceOrder.paymentDetails.map((detail: any) => ({
+        ...detail,
+        sourceKind: 'regular',
+      }))
+    : [];
+  const specialPayments = Array.isArray(sourceOrder?.specialPayments)
+    ? sourceOrder.specialPayments
+        .filter((detail: any) => !detail.reversedAt)
+        .map((detail: any) => ({
+          ...detail,
+          sourceKind: 'special',
+        }))
+    : [];
+  return [...regularPayments, ...specialPayments];
+}
+
 async function resolveAfterSalesRefundPaymentAllocation(
   prisma: any,
   current: any,
@@ -8019,6 +8227,7 @@ async function resolveAfterSalesRefundPaymentAllocation(
     return {
       sameDay: false,
       refundPaymentDetail: null,
+      refundSpecialPayment: null,
       confirmedSameDayRefundAmountCents: 0,
       remainingRefundableAmountCents: null,
       financialEffectStatus: current.financialEffectStatus,
@@ -8040,11 +8249,9 @@ async function resolveAfterSalesRefundPaymentAllocation(
     refundPaymentDetailIdValue,
     'refundPaymentDetailId',
   );
-  const refundPaymentDetail = (
-    Array.isArray(sourceOrder?.paymentDetails)
-      ? sourceOrder.paymentDetails
-      : []
-  ).find((detail: any) => detail.id === refundPaymentDetailId);
+  const refundPaymentDetail = getRefundableSourcePayments(sourceOrder).find(
+    (detail: any) => detail.id === refundPaymentDetailId,
+  );
   if (!refundPaymentDetail) {
     throw createHttpError(
       409,
@@ -8062,6 +8269,7 @@ async function resolveAfterSalesRefundPaymentAllocation(
       id: true,
       refundAmountCents: true,
       refundPaymentDetailId: true,
+      refundSpecialPaymentId: true,
       refundOccurredAt: true,
     },
   });
@@ -8069,7 +8277,9 @@ async function resolveAfterSalesRefundPaymentAllocation(
     (sum: number, refund: any) => {
       if (
         refund.id === current.id ||
-        refund.refundPaymentDetailId !== refundPaymentDetailId ||
+        (refundPaymentDetail.sourceKind === 'special'
+          ? refund.refundSpecialPaymentId !== refundPaymentDetailId
+          : refund.refundPaymentDetailId !== refundPaymentDetailId) ||
         !refund.refundOccurredAt ||
         !isSameShanghaiNaturalDay(
           sourceOrder.orderDate,
@@ -8105,7 +8315,14 @@ async function resolveAfterSalesRefundPaymentAllocation(
 
   return {
     sameDay: true,
-    refundPaymentDetail,
+    refundPaymentDetail:
+      refundPaymentDetail.sourceKind === 'special'
+        ? null
+        : refundPaymentDetail,
+    refundSpecialPayment:
+      refundPaymentDetail.sourceKind === 'special'
+        ? refundPaymentDetail
+        : null,
     confirmedSameDayRefundAmountCents,
     remainingRefundableAmountCents,
     financialEffectStatus: current.financialEffectStatus,
@@ -8273,6 +8490,12 @@ export function buildAfterSalesCommissionAdjustmentRecords(options: any) {
 
   for (const sourceRecord of sourceRecords) {
     const targetType = String(sourceRecord.targetType || '').toUpperCase();
+    if (targetType === 'ORDER_MANUAL_COMMISSION') {
+      // Manual order commissions are recalculated in place and receive their
+      // own idempotent adjustment ledger; creating a second negative record
+      // here would count the same refund twice in reports and profit.
+      continue;
+    }
     if (
       ['AGENCY_DAILY_REBATE', 'AGENCY_MONTHLY_REBATE'].includes(
         targetType,
@@ -8496,8 +8719,10 @@ function buildAfterSalesOrderFinanceRefundConfirmData(
     financeConfirmedAt: confirmationTime,
     refundPaymentDetailId:
       allocation.refundPaymentDetail?.id || null,
+    refundSpecialPaymentId:
+      allocation.refundSpecialPayment?.id || null,
     refundPaymentMethodNameSnapshot:
-      allocation.refundPaymentDetail
+      (allocation.refundPaymentDetail || allocation.refundSpecialPayment)
         ?.paymentMethodNameSnapshot || null,
     refundOccurredAt: confirmationTime,
     deductsPaymentServiceFee: allocation.sameDay === true,
@@ -8524,7 +8749,7 @@ function buildAfterSalesOrderFinanceConfirmData(
     refundOccurredAt: financeConfirmed ? now : null,
     deductsPaymentServiceFee: Boolean(
       financeConfirmed &&
-        current.refundPaymentDetailId &&
+        (current.refundPaymentDetailId || current.refundSpecialPaymentId) &&
         isSameShanghaiNaturalDay(
           current.salesOrder?.orderDate,
           now,
@@ -8544,6 +8769,7 @@ function buildAfterSalesOrderFinanceConfirmData(
   if (!financeConfirmed) {
     data.refundProofAttachments = [];
     data.refundPaymentDetailId = null;
+    data.refundSpecialPaymentId = null;
     data.refundPaymentMethodNameSnapshot = null;
   }
   return data;
@@ -8782,6 +9008,21 @@ function buildSalesOrderCustomerSnapshotData(customer: any) {
   };
 }
 
+const DEFAULT_SALES_ORDER_ITEM_UNIT = '瓶';
+const SALES_ORDER_ITEM_UNITS = new Set(['瓶', '盒']);
+
+function normalizeSalesOrderItemUnit(value: unknown, index: number) {
+  const unit = normalizeRequiredString(value, `items[${index}].unit`);
+  if (!SALES_ORDER_ITEM_UNITS.has(unit)) {
+    throw createHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `items[${index}].unit must be 瓶 or 盒.`,
+    );
+  }
+  return unit;
+}
+
 function buildSalesOrderItems(items: any[]) {
   if (!Array.isArray(items) || items.length === 0) {
     throw createHttpError(
@@ -8792,6 +9033,7 @@ function buildSalesOrderItems(items: any[]) {
   }
   const now = new Date();
   return items.map((item, index) => {
+    const unitSubmitted = hasOwn(item || {}, 'unit');
     const quantity = normalizeInt(item?.quantity, `items[${index}].quantity`);
     if (quantity <= 0) {
       throw createHttpError(
@@ -8832,6 +9074,10 @@ function buildSalesOrderItems(items: any[]) {
         item?.productId,
         `items[${index}].productId`,
       ),
+      unit: unitSubmitted
+        ? normalizeSalesOrderItemUnit(item?.unit, index)
+        : DEFAULT_SALES_ORDER_ITEM_UNIT,
+      unitSubmitted,
       quantity,
       unitPriceCents,
       subtotalCents:
@@ -8875,6 +9121,8 @@ async function resolveSalesOrderItemSnapshots(
         : normalizeProductSnapshotName(current.productName) ===
           normalizeProductSnapshotName(product.name)
       : false;
+    const snapshotUnit =
+      item.unitSubmitted === false && current ? current.unit : item.unit;
     const requiresCostRefresh =
       forceCostRefresh ||
       !current ||
@@ -8907,7 +9155,7 @@ async function resolveSalesOrderItemSnapshots(
         inventoryTrackingMode: product.inventoryTrackingMode,
         productId: product.id,
         productName: product.name,
-        unit: product.unit,
+        unit: snapshotUnit,
         subtotalCents,
         actualUnitCostCents,
         actualCostSubtotalCents,
@@ -8958,7 +9206,7 @@ async function resolveSalesOrderItemSnapshots(
       inventoryTrackingMode: product.inventoryTrackingMode,
       productId: product.id,
       productName: product.name,
-      unit: product.unit,
+      unit: snapshotUnit,
       subtotalCents,
       actualUnitCostCents,
       actualCostSubtotalCents,
@@ -8976,6 +9224,7 @@ function toSalesOrderItemCreateData(item: any) {
   const {
     serializedUnitIds,
     inventoryTrackingMode: _inventoryTrackingMode,
+    unitSubmitted: _unitSubmitted,
     ...data
   } = item;
   return data;
@@ -9032,6 +9281,7 @@ function salesOrderItemToSnapshotInput(item: any) {
   return {
     id: item.id,
     productId: item.productId,
+    unit: item.unit,
     quantity: Number(item.quantity || 0),
     unitPriceCents: Number(item.unitPriceCents || 0),
     subtotalCents: Number(item.subtotalCents || 0),
@@ -9884,7 +10134,31 @@ function getSalesOrderInclude(options: any = {}): any {
     customer: true,
     travelGroup: getSalesOrderTravelGroupInclude(),
     personalPointsGuide: true,
-    commissionRecords: getSalesOrderTasterCommissionInclude(),
+    commissionRecords: {
+      include: {
+        confirmedBy: {
+          select: { id: true, name: true },
+        },
+        targetUser: {
+          select: { id: true, name: true, username: true, role: true },
+        },
+        adjustments: {
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    },
+    specialPayments: {
+      where: { reversedAt: null },
+      include: { paymentMethod: true, recordedBy: true },
+      orderBy: [{ paidAt: 'asc' }, { id: 'asc' }],
+    },
+    createdBy: {
+      select: { id: true, name: true, username: true, role: true },
+    },
+    updatedBy: {
+      select: { id: true, name: true, username: true, role: true },
+    },
     ...(options.includeSalesUser ? { salesUser: true } : {}),
   };
 }
@@ -9928,6 +10202,7 @@ function getAfterSalesOrderInclude(): any {
             id: true,
             refundAmountCents: true,
             refundPaymentDetailId: true,
+            refundSpecialPaymentId: true,
             refundOccurredAt: true,
             deductsPaymentServiceFee: true,
             financeConfirmed: true,
@@ -10006,6 +10281,7 @@ function toAfterSalesOrderDto(order: any, actor?: any) {
     resolution: order.resolution || null,
     refundAmountCents,
     refundPaymentDetailId: order.refundPaymentDetailId || null,
+    refundSpecialPaymentId: order.refundSpecialPaymentId || null,
     refundPaymentMethodNameSnapshot:
       order.refundPaymentMethodNameSnapshot || null,
     refundOccurredAt: order.refundOccurredAt
@@ -10052,7 +10328,7 @@ function toAfterSalesOrderDto(order: any, actor?: any) {
 }
 
 function canViewAfterSalesRefundPaymentSelection(actor: any) {
-  return ['super_admin', 'admin', 'finance'].includes(
+  return ['super_admin', 'admin', 'finance', 'boss'].includes(
     String(actor?.role || '').trim().toLowerCase(),
   );
 }
@@ -10074,15 +10350,14 @@ function buildAfterSalesRefundPaymentSelectionDto(
     ? sourceOrder.afterSalesOrders
     : [];
   const refundPaymentDetailOptions = isSameDayRefund
-    ? (Array.isArray(sourceOrder?.paymentDetails)
-        ? sourceOrder.paymentDetails
-        : []
-      ).map((detail: any) => {
+    ? getRefundableSourcePayments(sourceOrder).map((detail: any) => {
         const confirmedSameDayRefundAmountCents =
           confirmedRefunds.reduce((sum: number, refund: any) => {
             if (
               refund?.financeConfirmed !== true ||
-              refund?.refundPaymentDetailId !== detail.id ||
+              (detail.sourceKind === 'special'
+                ? refund?.refundSpecialPaymentId !== detail.id
+                : refund?.refundPaymentDetailId !== detail.id) ||
               !refund?.refundOccurredAt ||
               !isSameShanghaiNaturalDay(
                 sourceOrder.orderDate,
@@ -10104,6 +10379,7 @@ function buildAfterSalesRefundPaymentSelectionDto(
           id: detail.id,
           paymentMethodNameSnapshot:
             detail.paymentMethodNameSnapshot || '',
+          sourceKind: detail.sourceKind,
           originalAmountCents,
           confirmedSameDayRefundAmountCents,
           remainingRefundableAmountCents: Math.max(
@@ -10203,8 +10479,13 @@ function toAfterSalesOrderMutationResult(order: any, actor?: any) {
 function toSalesOrderDto(order: any) {
   const tasterCommission = toSalesOrderTasterCommissionDto(order);
   const tasterCommissionCents = tasterCommission?.amountCents ?? 0;
-  const paymentSummary = buildPaymentSummary(order.paymentDetails);
+  const normalizedPaymentDetails = normalizeOrderPaymentDetails(order);
+  const paymentSummary = buildPaymentSummary(normalizedPaymentDetails);
   const totalAmountCents = Number(order.totalAmountCents || 0);
+  const paidAmountCents = normalizedPaymentDetails.reduce(
+    (sum: number, detail: any) => sum + Number(detail.amountCents || 0),
+    0,
+  );
   const personalAmountCents =
     resolveSalesOrderPersonalAmountCents(order);
   return {
@@ -10241,17 +10522,29 @@ function toSalesOrderDto(order: any) {
     tasterName: order.travelGroup?.tasterName || null,
     cashOnDeliveryAmountCents:
       getSalesOrderCollectOnDeliveryAmountCents(order),
-    paymentDetails: Array.isArray(order.paymentDetails)
-      ? order.paymentDetails.map(toSalesOrderPaymentDetailDto)
-      : [],
-    paymentDetailsSummary: buildPaymentDetailsSummary(order.paymentDetails),
+    paymentDetails: normalizedPaymentDetails.map(toSalesOrderPaymentDetailDto),
+    paymentDetailsSummary: buildPaymentDetailsSummary(normalizedPaymentDetails),
+    paidAmountCents,
+    unpaidAmountCents: Math.max(0, totalAmountCents - paidAmountCents),
     paymentSummary,
-    paymentStatus: paymentSummary.hasPendingCollectOnDelivery
-      ? 'collect_on_delivery'
-      : 'received',
-    paymentStatusLabel: paymentSummary.hasPendingCollectOnDelivery
-      ? '代收款'
-      : '已到账',
+    paymentStatus: order.workflowStatus
+      ? paidAmountCents >= totalAmountCents
+        ? 'received'
+        : paidAmountCents > 0
+          ? 'partial'
+          : 'unpaid'
+      : paymentSummary.hasPendingCollectOnDelivery
+        ? 'collect_on_delivery'
+        : 'received',
+    paymentStatusLabel: order.workflowStatus
+      ? paidAmountCents >= totalAmountCents
+        ? '已结清'
+        : paidAmountCents > 0
+          ? '部分支付'
+          : '未支付'
+      : paymentSummary.hasPendingCollectOnDelivery
+        ? '代收款'
+        : '已到账',
     completedAt: order.completedAt ? toIsoString(order.completedAt) : null,
     completedById: order.completedById || null,
     isCompleted: Boolean(order.completedAt),
@@ -10344,6 +10637,24 @@ function toSalesOrderDto(order: any) {
       ? toIsoString(order.salesEditedAt)
       : null,
     canEditByCurrentUser: false,
+    workflowStatus: order.workflowStatus
+      ? String(order.workflowStatus).toLowerCase()
+      : null,
+    workflowVersion:
+      order.workflowVersion === null || order.workflowVersion === undefined
+        ? null
+        : Number(order.workflowVersion),
+    createdById: order.createdById || null,
+    createdBy: toPublicOrderUser(order.createdBy),
+    updatedBy: toPublicOrderUser(order.updatedBy),
+    manualCommissions: toSalesOrderManualCommissionDtos(order),
+    effectiveCommissionTotalCents: toSalesOrderManualCommissionDtos(order)
+      .filter((record: any) => record.isActive)
+      .reduce(
+        (sum: number, record: any) =>
+          sum + Number(record.effectiveAmountCents || 0),
+        0,
+      ),
     items: Array.isArray(order.items)
       ? order.items.map(toSalesOrderItemDto)
       : [],
@@ -10371,13 +10682,12 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
   };
   if (canViewSalesOrderProfitFeeSnapshots(actor)) {
     Object.assign(dto, toSalesOrderProfitFeeSnapshotDto(order));
-    dto.paymentDetails = Array.isArray(order.paymentDetails)
-      ? order.paymentDetails.map((detail: any) =>
+    dto.paymentDetails = normalizeOrderPaymentDetails(order)
+      .map((detail: any) =>
           toSalesOrderPaymentDetailDto(detail, {
             includeProfitFeeSnapshot: true,
           }),
-        )
-      : [];
+        );
   }
   if (!canViewOrderPersonalSplit(actor)) {
     for (const field of [
@@ -10396,6 +10706,10 @@ function toSalesOrderDtoForActor(order: any, actor: any) {
     ]) {
       delete dto[field];
     }
+  }
+  if (!canMaintainSpecialOrderForActor(actor)) {
+    delete dto.manualCommissions;
+    delete dto.effectiveCommissionTotalCents;
   }
   if (actor?.role !== 'taster') {
     return dto;
@@ -10424,6 +10738,101 @@ function canViewSalesOrderProfitFeeSnapshots(actor: any) {
   return ['super_admin', 'admin', 'finance'].includes(
     String(actor?.role || '').trim().toLowerCase(),
   );
+}
+
+function canMaintainSpecialOrderForActor(actor: any) {
+  return ['super_admin', 'admin', 'finance', 'boss'].includes(
+    String(actor?.role || '').trim().toLowerCase(),
+  );
+}
+
+function normalizeOrderPaymentDetails(order: any) {
+  if (
+    order?.workflowStatus &&
+    Array.isArray(order?.specialPayments)
+  ) {
+    return order.specialPayments
+      .filter((payment: any) => !payment.reversedAt)
+      .map((payment: any, index: number) => ({
+        id: payment.id,
+        salesOrderId: order.id,
+        paymentMethodId: payment.paymentMethodId,
+        paymentMethodNameSnapshot:
+          payment.paymentMethodNameSnapshot || payment.paymentMethod?.name || '',
+        paymentMethodCategorySnapshot:
+          payment.paymentMethod?.category || 'DIRECT_RECEIPT',
+        amountCents: Number(payment.amountCents || 0),
+        collectionConfirmed: true,
+        collectionConfirmedAt: payment.paidAt,
+        collectionConfirmedById: payment.recordedById,
+        collectionConfirmedBy: payment.recordedBy,
+        sortOrder: index,
+        createdAt: payment.createdAt,
+        updatedAt: payment.createdAt,
+        referenceNo: payment.referenceNo || null,
+        remark: payment.remark || null,
+      }));
+  }
+  return Array.isArray(order?.paymentDetails) ? order.paymentDetails : [];
+}
+
+function toPublicOrderUser(user: any) {
+  return user
+    ? {
+        id: user.id,
+        name: user.name || null,
+        username: user.username || null,
+        role: String(user.role || '').toLowerCase(),
+      }
+    : null;
+}
+
+function toSalesOrderManualCommissionDtos(order: any) {
+  return (Array.isArray(order?.commissionRecords)
+    ? order.commissionRecords
+    : [])
+    .filter(
+      (record: any) =>
+        String(record?.targetType || '').toUpperCase() ===
+          'ORDER_MANUAL_COMMISSION' && Boolean(record?.manualInput),
+    )
+    .map((record: any) => ({
+      id: record.id,
+      recipientType: String(record.recipientType || '').toLowerCase(),
+      targetUserId: record.targetUserId || null,
+      recipientName:
+        record.recipientNameSnapshot || record.targetUser?.name || '',
+      rateSnapshot: String(record.rateSnapshot || '0'),
+      ratePercent: Number(record.rateSnapshot || 0) * 100,
+      originalBaseAmountCents: Number(record.grossAmountCents || 0),
+      effectiveBaseAmountCents: Number(record.baseAmountCents || 0),
+      originalAmountCents: Number(
+        record.originalAmountCents ?? record.amountCents ?? 0,
+      ),
+      adjustmentAmountCents: Number(record.adjustmentAmountCents || 0),
+      effectiveAmountCents: Number(record.amountCents || 0),
+      attributionDate: formatDate(record.attributionDate || order.orderDate),
+      note: record.calculationNote || null,
+      sourceType: String(record.sourceType || '').toLowerCase(),
+      isActive: record.isActive !== false,
+      manualVersion: Number(record.manualVersion || 0),
+      adjustments: (record.adjustments || []).map((adjustment: any) => ({
+        id: adjustment.id,
+        adjustmentType: String(
+          adjustment.adjustmentType || '',
+        ).toLowerCase(),
+        afterSalesOrderId: adjustment.afterSalesOrderId || null,
+        adjustmentAmountCents: Number(
+          adjustment.adjustmentAmountCents || 0,
+        ),
+        effectiveAmountCents: Number(
+          adjustment.effectiveAmountCents || 0,
+        ),
+        actorName: adjustment.actorNameSnapshot || null,
+        reason: adjustment.reason || null,
+        createdAt: toIsoString(adjustment.createdAt),
+      })),
+    }));
 }
 
 function toSalesOrderProfitFeeSnapshotDto(order: any) {
@@ -10458,6 +10867,12 @@ function nullableDecimalString(value: any) {
 }
 
 function canEditSalesOrderForActor(order: any, actor: any) {
+  if (
+    order?.workflowStatus &&
+    canMaintainSpecialOrderForActor(actor)
+  ) {
+    return true;
+  }
   if (
     actor?.role === 'super_admin' ||
     actor?.role === 'admin' ||
@@ -10687,14 +11102,72 @@ function buildSalesOrdersExportWorkbook(orders: any[]) {
   };
 
   for (const order of orders) {
+    const normalizedPayments = normalizeOrderPaymentDetails(order);
     const paymentDetails =
-      Array.isArray(order.paymentDetails) &&
-      order.paymentDetails.length > 0
-        ? order.paymentDetails
-        : [null];
+      normalizedPayments.length > 0 ? normalizedPayments : [null];
     for (const paymentDetail of paymentDetails) {
       worksheet.addRow(toSalesOrderExportRow(order, paymentDetail));
     }
+  }
+
+  const commissionSheet = workbook.addWorksheet('提成明细');
+  commissionSheet.columns = [
+    { header: '订单号', key: 'orderNo', width: 20 },
+    { header: '订单类型', key: 'orderType', width: 14 },
+    { header: '提成对象类型', key: 'recipientType', width: 16 },
+    { header: '员工账号/人员姓名', key: 'recipient', width: 24 },
+    { header: '提成基数', key: 'baseYuan', width: 14 },
+    { header: '比例', key: 'rate', width: 12 },
+    { header: '原提成金额', key: 'originalYuan', width: 16 },
+    { header: '冲减金额', key: 'adjustmentYuan', width: 14 },
+    { header: '有效金额', key: 'effectiveYuan', width: 14 },
+    { header: '归属日期', key: 'attributionDate', width: 14 },
+    { header: '操作记录', key: 'operations', width: 46 },
+  ];
+  for (const order of orders) {
+    for (const record of order.commissionRecords || []) {
+      if (
+        String(record.targetType || '').toUpperCase() !==
+        'ORDER_MANUAL_COMMISSION'
+      ) {
+        continue;
+      }
+      commissionSheet.addRow({
+        orderNo: order.orderNo || '',
+        orderType: String(order.orderType || '').toLowerCase(),
+        recipientType:
+          String(record.recipientType || '').toUpperCase() === 'EMPLOYEE'
+            ? '内部员工'
+            : '非员工/其他人员',
+        recipient:
+          record.targetUser?.username ||
+          record.recipientNameSnapshot ||
+          '',
+        baseYuan: centsToYuanNumber(record.baseAmountCents),
+        rate: `${(Number(record.rateSnapshot || 0) * 100).toFixed(2)}%`,
+        originalYuan: centsToYuanNumber(
+          record.originalAmountCents ?? record.amountCents,
+        ),
+        adjustmentYuan: centsToYuanNumber(record.adjustmentAmountCents),
+        effectiveYuan: centsToYuanNumber(record.amountCents),
+        attributionDate: formatDate(record.attributionDate),
+        operations: (record.adjustments || [])
+          .map(
+            (item: any) =>
+              `${toIsoString(item.createdAt) || ''} ${item.adjustmentType || ''} ${item.reason || ''}`,
+          )
+          .join('\n'),
+      });
+    }
+  }
+  commissionSheet.getRow(1).font = { bold: true };
+  for (const key of [
+    'baseYuan',
+    'originalYuan',
+    'adjustmentYuan',
+    'effectiveYuan',
+  ]) {
+    commissionSheet.getColumn(key).numFmt = '0.00';
   }
 
   return workbook;
@@ -10706,9 +11179,7 @@ function countSalesOrderExportRows(orders: any[]) {
       total +
       Math.max(
         1,
-        Array.isArray(order?.paymentDetails)
-          ? order.paymentDetails.length
-          : 0,
+        normalizeOrderPaymentDetails(order).length,
       ),
     0,
   );
@@ -10821,8 +11292,19 @@ function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
   const packingStatus = order.packingStatus
     ? String(order.packingStatus).toLowerCase()
     : null;
+  const allPayments = normalizeOrderPaymentDetails(order);
+  const paidAmountCents = allPayments.reduce(
+    (sum: number, detail: any) => sum + Number(detail.amountCents || 0),
+    0,
+  );
+  const manualCommissions = (order.commissionRecords || []).filter(
+    (record: any) =>
+      String(record.targetType || '').toUpperCase() ===
+        'ORDER_MANUAL_COMMISSION' && record.isActive !== false,
+  );
   return {
     orderNo: order.orderNo || '',
+    orderType: String(order.orderType || '').toLowerCase(),
     salesFormNo: order.salesFormNo || '',
     orderDate: formatDate(order.orderDate) || '',
     shippingDate: formatDate(order.shippingDate) || '',
@@ -10838,6 +11320,39 @@ function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
       deliverySummary ||
       '',
     totalAmountYuan: centsToYuanNumber(totalAmountCents),
+    entryAmountYuan: centsToYuanNumber(totalAmountCents),
+    paidAmountYuan: centsToYuanNumber(paidAmountCents),
+    unpaidAmountYuan: centsToYuanNumber(
+      Math.max(0, totalAmountCents - paidAmountCents),
+    ),
+    paymentMethodsSummary: allPayments
+      .map(
+        (detail: any) =>
+          `${detail.paymentMethodNameSnapshot || ''} ${centsToYuanNumber(detail.amountCents).toFixed(2)}`,
+      )
+      .join('；'),
+    commissionRecipients: manualCommissions
+      .map(
+        (record: any) =>
+          record.recipientNameSnapshot || record.targetUser?.name || '',
+      )
+      .filter(Boolean)
+      .join('；'),
+    commissionRates: manualCommissions
+      .map(
+        (record: any) =>
+          `${(Number(record.rateSnapshot || 0) * 100).toFixed(2)}%`,
+      )
+      .join('；'),
+    effectiveCommissionYuan: centsToYuanNumber(
+      manualCommissions.reduce(
+        (sum: number, record: any) =>
+          sum + Number(record.amountCents || 0),
+        0,
+      ),
+    ),
+    commissionStatus:
+      manualCommissions.length > 0 ? '已维护' : '未维护',
     hasPersonalAmount: personalAmountCents > 0 ? '是' : '否',
     personalAmountYuan: centsToYuanNumber(personalAmountCents),
     normalAmountYuan: centsToYuanNumber(
@@ -10887,6 +11402,8 @@ function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
     invoiceRequired: booleanLabel(order.invoiceRequired),
     invoiceIssued: booleanLabel(order.invoiceIssued),
     createdAt: toIsoString(order.createdAt) || '',
+    createdBy: order.createdBy?.name || '',
+    voidRefundStatus: `${String(order.workflowStatus || '').toLowerCase()}/${ORDER_STATUS_EXPORT_LABELS[status] || status || ''}`,
     updatedAt: toIsoString(order.updatedAt) || '',
   };
 }
@@ -12782,6 +13299,112 @@ async function findActiveRoleUser(
     );
   }
   return user;
+}
+
+function buildActiveCommissionRuleWhere(calculationDate: Date) {
+  return {
+    isActive: true,
+    effectiveFrom: { lte: calculationDate },
+    OR: [
+      { effectiveTo: null },
+      { effectiveTo: { gte: calculationDate } },
+    ],
+  };
+}
+
+function buildSalesOrderRecalculationResponse(recalculation: any) {
+  if (!recalculation) {
+    return null;
+  }
+  const warnings = Array.isArray(recalculation.warnings)
+    ? recalculation.warnings
+    : [];
+  const skipped = warnings.some(
+    (warning: any) => warning?.code === 'sales_order_not_commission_eligible',
+  );
+  return {
+    source: 'sales_order_mutation',
+    orderCount: 1,
+    travelGroupCount: normalizeIdList(
+      recalculation.records?.map((record: any) => record.travelGroupId),
+    ).length,
+    successCount: skipped ? 0 : 1,
+    failureCount: 0,
+    skippedCount: skipped ? 1 : 0,
+    skippedConfirmedCount: 0,
+    skippedManualOverrideCount: 0,
+    generatedRecords: recalculation.generatedRecords || [],
+    updatedRecords: recalculation.updatedRecords || [],
+    unchangedRecords: recalculation.unchangedRecords || [],
+    warnings,
+    travelGroupFinanceSummaries: [],
+  };
+}
+
+async function assertCommissionAssignmentReady(
+  prisma: any,
+  order: any,
+  options: any = {},
+) {
+  const orderType = String(order?.orderType || '').toUpperCase();
+  const workflowStatus = String(order?.workflowStatus || '').toUpperCase();
+  const isCommissionEligible =
+    orderType !== 'BUYBACK' &&
+    (!workflowStatus ||
+      workflowStatus === 'APPROVED' ||
+      workflowStatus === 'COMPLETED');
+  if (!isCommissionEligible) {
+    return;
+  }
+
+  const salesUserId = normalizeOptionalString(order?.salesUserId);
+  if (!salesUserId) {
+    if (!options.allowMissingAssignments) {
+      throw createHttpError(
+        400,
+        'MISSING_SALES_USER',
+        'salesUserId is required for a commission-eligible sales order.',
+      );
+    }
+  } else {
+    await findActiveRoleUser(prisma, salesUserId, 'salesUserId', [
+      'SALES',
+      'sales',
+    ]);
+  }
+
+  const calculationDate =
+    order?.orderDate instanceof Date
+      ? order.orderDate
+      : parseDate(order?.orderDate, 'orderDate', true);
+  const activeTargetTypes = new Set(
+    (
+      await prisma.commissionRule.findMany({
+        where: buildActiveCommissionRuleWhere(calculationDate),
+        select: { targetType: true },
+      })
+    ).map((rule: any) => String(rule.targetType)),
+  );
+  const outreachUserId = normalizeOptionalString(order?.outreachUserId);
+  if (
+    activeTargetTypes.has('OUTREACH_COMMISSION') &&
+    !outreachUserId &&
+    !options.allowMissingAssignments
+  ) {
+    throw createHttpError(
+      400,
+      'MISSING_OUTREACH_USER',
+      'outreachUserId is required while an outreach commission rule is active.',
+    );
+  }
+  if (outreachUserId) {
+    await findActiveRoleUser(
+      prisma,
+      outreachUserId,
+      'outreachUserId',
+      ['SALES', 'sales'],
+    );
+  }
 }
 
 function isActiveTasterUser(user: any) {

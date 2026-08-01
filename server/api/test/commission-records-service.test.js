@@ -248,6 +248,10 @@ test('unit: stage7 commission record recalculation is idempotent and does not du
   const service = createService(prisma);
 
   await service.recalculateSalesOrderRecords('order-stage7');
+  const confirmedSales = findRecord(prisma, 'SALES_COMMISSION');
+  confirmedSales.isConfirmed = true;
+  confirmedSales.confirmedById = 'user-finance';
+  confirmedSales.confirmedAt = new Date('2026-07-20T08:00:00.000Z');
   const second = await service.recalculateSalesOrderRecords('order-stage7');
 
   assert.equal(prisma.__store.commissionRecords.length, 5);
@@ -255,6 +259,53 @@ test('unit: stage7 commission record recalculation is idempotent and does not du
   assert.equal(second.updatedRecords.length, 0);
   assert.equal(second.unchangedRecords.length, 5);
   assert.equal(prisma.__store.operationLogs.length, 5);
+  assert.equal(findRecord(prisma, 'SALES_COMMISSION').isConfirmed, true);
+  assert.equal(
+    findRecord(prisma, 'SALES_COMMISSION').confirmedById,
+    'user-finance',
+  );
+});
+
+test('unit: changing employee attribution recalculates idempotently without duplicate records', async () => {
+  const prisma = createCommissionPrisma();
+  const service = createService(prisma);
+  await service.recalculateSalesOrderRecords('order-stage7');
+
+  prisma.__store.salesOrder.salesUserId = 'user-sales-next';
+  prisma.__store.salesOrder.salesUser = {
+    ...prisma.__store.salesOrder.salesUser,
+    id: 'user-sales-next',
+  };
+  prisma.__store.salesOrder.outreachUserId = 'user-outreach-next';
+  prisma.__store.salesOrder.outreachUser = {
+    id: 'user-outreach-next',
+    name: 'next outreach',
+  };
+  const changed = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: [
+      'SALES_COMMISSION',
+      'OUTREACH_COMMISSION',
+      'LEADER_COMMISSION',
+    ],
+  });
+  const repeated = await service.recalculateSalesOrderRecords('order-stage7', {
+    targetTypes: [
+      'SALES_COMMISSION',
+      'OUTREACH_COMMISSION',
+      'LEADER_COMMISSION',
+    ],
+  });
+
+  assert.equal(changed.generatedRecords.length, 0);
+  assert.equal(changed.updatedRecords.length, 3);
+  assert.equal(prisma.__store.commissionRecords.length, 5);
+  assert.equal(findRecord(prisma, 'SALES_COMMISSION').targetUserId, 'user-sales-next');
+  assert.equal(
+    findRecord(prisma, 'OUTREACH_COMMISSION').targetUserId,
+    'user-outreach-next',
+  );
+  assert.equal(repeated.generatedRecords.length, 0);
+  assert.equal(repeated.updatedRecords.length, 0);
 });
 
 test('unit: commission record manual fallback creates rebates once with audited match mode', async () => {

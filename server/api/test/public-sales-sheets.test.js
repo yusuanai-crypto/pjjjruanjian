@@ -25,24 +25,6 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
       assert.match(result.html, /13812340000/);
       assert.match(result.html, /GuizhouZunyiRenhuaiTest Road 1/);
       assert.match(result.html, /Product A/);
-      assert.match(result.html, /收款明细/);
-      assert.match(result.html, /<table class="payment-table">/);
-      assert.match(result.html, /收款方式/);
-      assert.match(result.html, /收款金额/);
-      assert.match(result.html, /收款属性/);
-      assert.match(result.html, /确认状态/);
-      assert.equal(
-        (result.html.match(/class="payment-row"/g) || []).length,
-        2,
-      );
-      assert.match(result.html, /收钱吧/);
-      assert.match(result.html, /799\.00/);
-      assert.match(result.html, /即时收款/);
-      assert.match(result.html, /无需确认/);
-      assert.match(result.html, /货到付款/);
-      assert.match(result.html, /200\.00/);
-      assert.match(result.html, /代收营业款/);
-      assert.match(result.html, /代收款（待确认）/);
       assert.match(result.html, /@media print/);
       assert.match(result.html, /顺丰速运/);
       assert.match(result.html, /SF123456789/);
@@ -51,6 +33,25 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
       assert.match(result.html, /茅台集团茅乡酱酒体验馆/);
       assert.match(result.html, /177-8530-5984/);
       for (const forbidden of [
+        '收款明细',
+        '暂无收款明细',
+        '收款方式',
+        '收款金额',
+        '收款属性',
+        '确认状态',
+        '收钱吧',
+        '货到付款',
+        '即时收款',
+        '代收营业款',
+        '无需确认',
+        '代收款（待确认）',
+        '799.00',
+        '200.00',
+        'payment-table',
+        'payment-row',
+        'DIRECT_RECEIPT',
+        'COLLECT_ON_DELIVERY',
+        'agencyCollectionConfirmed',
         '999.00',
         'Test Agency',
         'Seller Alpha',

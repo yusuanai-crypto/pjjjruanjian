@@ -877,15 +877,30 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                 ),
                 _DetailLine(
                   label: '销售提成',
-                  value: formatMoneyCents(item.salesCommissionCents),
+                  value: _employeeCommissionDisplay(
+                    item,
+                    target: 'sales',
+                    calculated: item.salesCommissionCalculated,
+                    cents: item.salesCommissionCents,
+                  ),
                 ),
                 _DetailLine(
                   label: '组长提成',
-                  value: formatMoneyCents(item.leaderCommissionCents),
+                  value: _employeeCommissionDisplay(
+                    item,
+                    target: 'leader',
+                    calculated: item.leaderCommissionCalculated,
+                    cents: item.leaderCommissionCents,
+                  ),
                 ),
                 _DetailLine(
                   label: '外联提成',
-                  value: formatMoneyCents(item.outreachCommissionCents),
+                  value: _employeeCommissionDisplay(
+                    item,
+                    target: 'outreach',
+                    calculated: item.outreachCommissionCalculated,
+                    cents: item.outreachCommissionCents,
+                  ),
                 ),
                 _DetailLine(
                   label: '品鉴师提成（汇总）',
@@ -1405,6 +1420,18 @@ Color? _profitColor(BuildContext context, int? cents) {
 
 String _warningText(AnalyticsWarning warning) {
   switch (warning.code) {
+    case 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER':
+      return '未计算：订单缺少销售人员。';
+    case 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER':
+      return '未计算：订单缺少外联人员。';
+    case 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER':
+      return '未计算：订单缺少组长配置。';
+    case 'SALES_COMMISSION_NOT_CALCULATED_MISSING_RULE':
+      return '销售提成未计算：订单日期缺少适用规则。';
+    case 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_RULE':
+      return '外联提成未计算：订单日期缺少适用规则。';
+    case 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_RULE':
+      return '组长提成未计算：订单日期缺少适用规则。';
     case 'REFUND_COST_REVERSAL_UNAVAILABLE':
       return '退款成本未冲回，利润为估算。';
     case 'PENDING_REFUND_CONFIRMATION':
@@ -1419,6 +1446,31 @@ String _warningText(AnalyticsWarning warning) {
     default:
       return warning.message.isEmpty ? warning.code : warning.message;
   }
+}
+
+String _employeeCommissionDisplay(
+  TravelGroupProfitRecord item, {
+  required String target,
+  required bool calculated,
+  required int cents,
+}) {
+  if (calculated) {
+    return formatMoneyCents(cents);
+  }
+  final missingPersonCodes = <String, String>{
+    'sales': 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
+    'outreach': 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER',
+    'leader': 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER',
+  };
+  final labels = <String, String>{
+    'sales': '销售人员',
+    'outreach': '外联人员',
+    'leader': '组长配置',
+  };
+  if (item.hasWarning(missingPersonCodes[target] ?? '')) {
+    return '未计算：订单缺少${labels[target]}';
+  }
+  return '未计算：订单日期缺少适用提成规则';
 }
 
 String _display(String value) => value.trim().isEmpty ? '—' : value.trim();

@@ -45,7 +45,7 @@ test('roles outside the special-order matrix are rejected before repository acce
   const service = new SpecialOrdersNestService(prisma, {}, {}, {});
 
   await assert.rejects(
-    service.get({ id: 'finance-user', role: 'finance' }, 'any-order'),
+    service.get({ id: 'warehouse-user', role: 'warehouse' }, 'any-order'),
     (error) =>
       error.statusCode === 403 &&
       error.code === 'SPECIAL_ORDER_PERMISSION_DENIED',

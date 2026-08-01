@@ -17,17 +17,17 @@ const {
 test('special-order role matrix grants only creators and reviewers', () => {
   assert.deepEqual(
     [...SPECIAL_ORDER_READ_ROLES].sort(),
-    ['admin', 'after_sales', 'boss', 'sales', 'super_admin'],
+    ['admin', 'after_sales', 'boss', 'finance', 'sales', 'super_admin'],
   );
   assert.deepEqual(
     [...SPECIAL_ORDER_CREATOR_ROLES].sort(),
-    ['admin', 'after_sales', 'boss', 'sales', 'super_admin'],
+    ['admin', 'after_sales', 'boss', 'finance', 'sales', 'super_admin'],
   );
   assert.deepEqual(
     [...SPECIAL_ORDER_REVIEW_ROLES].sort(),
-    ['admin', 'boss', 'super_admin'],
+    ['admin', 'boss', 'finance', 'super_admin'],
   );
-  for (const role of ['finance', 'warehouse', 'front_desk', 'taster']) {
+  for (const role of ['warehouse', 'front_desk', 'taster']) {
     assert.throws(
       () => requireSpecialOrderRead({ id: `user-${role}`, role }),
       (error) =>
@@ -49,6 +49,7 @@ test('special-order workflow contains only the declared transitions', () => {
     ['APPROVED', 'COMPLETED'],
     ['APPROVED', 'PENDING'],
     ['COMPLETED', 'PENDING'],
+    ['COMPLETED', 'CANCELLED'],
   ];
   for (const [from, to] of allowed) {
     assert.equal(canSpecialOrderTransition(from, to), true, `${from} -> ${to}`);
@@ -57,7 +58,6 @@ test('special-order workflow contains only the declared transitions', () => {
     ['DRAFT', 'APPROVED'],
     ['REJECTED', 'APPROVED'],
     ['CANCELLED', 'PENDING'],
-    ['COMPLETED', 'CANCELLED'],
   ]) {
     assert.equal(canSpecialOrderTransition(from, to), false, `${from} -> ${to}`);
   }

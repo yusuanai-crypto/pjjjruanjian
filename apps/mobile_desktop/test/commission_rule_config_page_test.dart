@@ -233,12 +233,17 @@ void main() {
     await _tapRuleTab(tester, 'agencyRebate');
     await tester.tap(find.byKey(const ValueKey('stage7-rule-add-button')));
     await tester.pumpAndSettle();
-    await tester.enterText(
+    expect(
       find.byKey(const ValueKey('stage7-rule-agency-id-field')),
-      'agency-payload-2',
+      findsNothing,
     );
-    await tester.enterText(
+    expect(
       find.byKey(const ValueKey('stage7-rule-agency-name-field')),
+      findsNothing,
+    );
+    await _selectDropdownValue(
+      tester,
+      const ValueKey('stage7-rule-agency-field'),
       'test rebate agency',
     );
     await tester.enterText(
@@ -267,6 +272,124 @@ void main() {
     expect(apiClient.lastPostBody?['monthlyRebateRate'], '0.0200');
     expect(apiClient.lastPostBody?['totalRebateRate'], '0.0500');
     expect(apiClient.lastPostBody?['effectiveFrom'], '2026-07-04');
+  });
+
+  testWidgets(
+      'agency rebate requires master selection and rebinds historical name rules',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final emptyClient = _FakeRuleApiClient(emptyResponses: true);
+    await tester.pumpWidget(_page(emptyClient, UserRole.finance));
+    await tester.pumpAndSettle();
+    await _tapRuleTab(tester, 'agencyRebate');
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-add-button')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('stage7-rule-agency-field')),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-daily-rate-field')),
+      '0.0300',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-monthly-rate-field')),
+      '0.0200',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-effective-from-field')),
+      '2026-07-01',
+    );
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-save-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('必须选择有效的旅行社主档后才能保存'), findsOneWidget);
+    expect(emptyClient.postPaths, isEmpty);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
+    final historyClient = _FakeRuleApiClient(unmatchedHistoricalRebate: true);
+    await tester.pumpWidget(_page(historyClient, UserRole.finance));
+    await tester.pumpAndSettle();
+    await _tapRuleTab(tester, 'agencyRebate');
+    _pressTextButton(
+      tester,
+      const ValueKey(
+        'stage7-rule-edit-agencyRebate-rule-agency-rebate-1',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('未匹配到旅行社主档'), findsOneWidget);
+    await _selectDropdownValue(
+      tester,
+      const ValueKey('stage7-rule-agency-field'),
+      'test rebate agency',
+    );
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-save-button')));
+    await tester.pumpAndSettle();
+    expect(historyClient.lastPatchBody?['agencyId'], 'agency-payload-2');
+    expect(historyClient.lastPatchBody?['agencyName'], 'test rebate agency');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    final uniqueHistoryClient =
+        _FakeRuleApiClient(uniqueHistoricalRebate: true);
+    await tester.pumpWidget(_page(uniqueHistoryClient, UserRole.finance));
+    await tester.pumpAndSettle();
+    await _tapRuleTab(tester, 'agencyRebate');
+    _pressTextButton(
+      tester,
+      const ValueKey(
+        'stage7-rule-edit-agencyRebate-rule-agency-rebate-1',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('唯一匹配旅行社主档'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-save-button')));
+    await tester.pumpAndSettle();
+    expect(uniqueHistoryClient.lastPatchBody?['agencyId'], 'agency-payload-2');
+    expect(
+      uniqueHistoryClient.lastPatchBody?['agencyName'],
+      'test rebate agency',
+    );
+  });
+
+  testWidgets(
+      'agency rebate import shows every missing or invalid agencyId row',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeRuleApiClient();
+    await tester.pumpWidget(_page(apiClient, UserRole.finance));
+    await tester.pumpAndSettle();
+    await _tapRuleTab(tester, 'agencyRebate');
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-import-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-import-json-field')),
+      '[{"dailyRebateRate":"0.03","monthlyRebateRate":"0.02","effectiveFrom":"2026-07-01"},'
+      '{"agencyId":"missing-agency","dailyRebateRate":"0.03","monthlyRebateRate":"0.02","effectiveFrom":"2026-07-01"}]',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('stage7-rule-import-submit-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('第 1 行：缺少 agencyId'), findsOneWidget);
+    expect(
+      find.textContaining('第 2 行：旅行社 ID“missing-agency”无效'),
+      findsOneWidget,
+    );
+    expect(
+      apiClient.postPaths,
+      isNot(contains('/api/agency-rebate-rules/batch-import')),
+    );
   });
 
   testWidgets('boss can view rule config as read only', (tester) async {
@@ -310,6 +433,55 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('RULE_EFFECTIVE_RANGE_OVERLAP'), findsOneWidget);
+  });
+
+  testWidgets('shows failure count and missing warning after rule save',
+      (tester) async {
+    final apiClient = _FakeRuleApiClient(
+      emptyResponses: true,
+      commissionRecalculation: const {
+        'source': 'commission_rule_mutation',
+        'orderCount': 2,
+        'travelGroupCount': 1,
+        'successCount': 1,
+        'failureCount': 1,
+        'skippedCount': 0,
+        'skippedConfirmedCount': 0,
+        'skippedManualOverrideCount': 0,
+        'generatedRecords': <dynamic>[],
+        'updatedRecords': <dynamic>[],
+        'unchangedRecords': <dynamic>[],
+        'warnings': [
+          {
+            'code': 'missing_sales_user',
+            'message': 'Missing sales user.',
+          },
+        ],
+        'travelGroupFinanceSummaries': <dynamic>[],
+      },
+    );
+    await tester.pumpWidget(_page(apiClient, UserRole.admin));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-add-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-name-field')),
+      'test failed recalculation',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-rate-field')),
+      '0.0304',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stage7-rule-effective-from-field')),
+      '2026-07-01',
+    );
+    await tester.tap(find.byKey(const ValueKey('stage7-rule-save-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('失败 1 单'), findsOneWidget);
+    expect(find.textContaining('missing_sales_user'), findsOneWidget);
+    expect(find.text('规则已保存，相关订单重算已完成。'), findsNothing);
   });
 }
 
@@ -364,11 +536,17 @@ class _FakeRuleApiClient extends ApiClient {
     this.emptyResponses = false,
     this.getError,
     this.loadGate,
+    this.unmatchedHistoricalRebate = false,
+    this.uniqueHistoricalRebate = false,
+    this.commissionRecalculation,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool emptyResponses;
   final ApiException? getError;
   final Completer<void>? loadGate;
+  final bool unmatchedHistoricalRebate;
+  final bool uniqueHistoricalRebate;
+  final Map<String, dynamic>? commissionRecalculation;
   bool failPatch = false;
   final getPaths = <String>[];
   final postPaths = <String>[];
@@ -409,8 +587,23 @@ class _FakeRuleApiClient extends ApiClient {
       case '/api/agency-rebate-rules':
         return {
           'data': {
-            'agencyRebateRules':
-                emptyResponses ? const [] : [_agencyRebateRule],
+            'agencyRebateRules': emptyResponses
+                ? const []
+                : [
+                    unmatchedHistoricalRebate
+                        ? {
+                            ..._agencyRebateRule,
+                            'agencyId': null,
+                            'agencyName': '未建档历史旅行社',
+                          }
+                        : uniqueHistoricalRebate
+                            ? {
+                                ..._agencyRebateRule,
+                                'agencyId': null,
+                                'agencyName': 'test rebate agency',
+                              }
+                            : _agencyRebateRule,
+                  ],
           },
         };
       case '/api/products/options':
@@ -438,6 +631,14 @@ class _FakeRuleApiClient extends ApiClient {
                 'id': 'agency-payload-1',
                 'name': 'test payload agency',
               },
+              {
+                'id': 'agency-payload-2',
+                'name': 'test rebate agency',
+              },
+              {
+                'id': 'agency-1',
+                'name': 'test agency',
+              },
             ],
           },
         };
@@ -463,6 +664,8 @@ class _FakeRuleApiClient extends ApiClient {
               ...?body,
               'id': 'rule-commission-new',
             },
+            if (commissionRecalculation != null)
+              'recalculation': commissionRecalculation,
           },
         };
       case '/api/sales-deduction-rules':
@@ -526,6 +729,8 @@ class _FakeRuleApiClient extends ApiClient {
       return {
         'data': {
           'commissionRule': {..._commissionRule, ...?body},
+          if (commissionRecalculation != null)
+            'recalculation': commissionRecalculation,
         },
       };
     }

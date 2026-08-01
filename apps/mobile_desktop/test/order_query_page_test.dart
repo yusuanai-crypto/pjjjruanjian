@@ -116,6 +116,7 @@ void main() {
     expect(find.text('明细备注'), findsNothing);
     expect(find.text('订单明细'), findsOneWidget);
     expect(find.text('酱香珍藏'), findsOneWidget);
+    expect(find.text('数量：2盒'), findsOneWidget);
     expect(find.text('单价 ¥399.00'), findsOneWidget);
     expect(find.text('小计 ¥798.00'), findsOneWidget);
     expect(find.textContaining('礼盒装'), findsOneWidget);
@@ -153,6 +154,7 @@ void main() {
       find.byKey(const ValueKey('order-payment-details-table')),
       findsOneWidget,
     );
+    expect(find.text('收款明细'), findsOneWidget);
     expect(find.text('收款方式'), findsOneWidget);
     expect(find.text('金额'), findsOneWidget);
     expect(find.text('类型'), findsOneWidget);
@@ -307,6 +309,56 @@ void main() {
     );
   });
 
+  testWidgets('shows the request ID when adjusting personal points gets a 5xx',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final apiClient = _FakeApiClient(
+      failPointsDestinationWithServerError: true,
+    );
+    await _pumpOrderQuery(tester, apiClient, role: UserRole.finance);
+    await _openOrderDetailDialog(tester);
+
+    final adjustButton = find.byKey(
+      const ValueKey('order-points-destination-personal-button'),
+    );
+    await tester.ensureVisible(adjustButton);
+    await tester.tap(adjustButton);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('personal-points-amount')),
+      '100.00',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('personal-points-confirm-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(apiClient.pointsDestinationPatchPaths, [
+      '/api/sales-orders/order-1/points-destination',
+    ]);
+    expect(apiClient.lastPointsDestinationBody?['personalAmountCents'], 10000);
+    expect(
+      apiClient.lastPointsDestinationBody?.containsKey('pointsDestination'),
+      isFalse,
+    );
+    expect(
+      apiClient.lastPointsDestinationBody?.containsKey('destination'),
+      isFalse,
+    );
+    expect(
+      find.text(
+        '服务器处理失败，请联系管理员。错误编号：schema-mismatch-123',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Unexpected server error.'), findsNothing);
+  });
+
   testWidgets(
       'order edit relinks travel groups by taster or exact tasting room',
       (tester) async {
@@ -402,8 +454,12 @@ void main() {
     expect(find.text('财务与物流'), findsOneWidget);
     expect(find.text('货到付款（已停用）'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('order-edit-sales-user-id-field')),
+      find.byKey(const ValueKey('order-edit-sales-user-sales-1')),
       findsOneWidget,
+    );
+    expect(
+      _selectedDropdownValue(tester, 'order-edit-item-unit-0'),
+      '盒',
     );
 
     await tester.enterText(
@@ -534,6 +590,10 @@ void main() {
       'product-2',
     );
     expect(
+      (apiClient.lastOrderUpdateBody?['items'] as List).first['unit'],
+      '盒',
+    );
+    expect(
       (apiClient.lastOrderUpdateBody?['items'] as List)
           .first
           .containsKey('productName'),
@@ -633,7 +693,7 @@ void main() {
     expect(find.text('酒品明细'), findsOneWidget);
     expect(find.text('财务与物流'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('order-edit-sales-user-id-field')),
+      find.byKey(const ValueKey('order-edit-sales-user-sales-1')),
       findsNothing,
     );
 
@@ -839,7 +899,9 @@ void main() {
     expect(find.textContaining(exportedFile.path), findsOneWidget);
   });
 
-  testWidgets('shows friendly export error from ApiException', (tester) async {
+  testWidgets(
+      'shows a generic admin message for an export 5xx without requestId',
+      (tester) async {
     final tempDirectory = Directory(
       'build/order-export-fail-${DateTime.now().microsecondsSinceEpoch}',
     )..createSync(recursive: true);
@@ -858,7 +920,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('测试错误：导出失败。'), findsWidgets);
+    expect(find.text('服务器处理失败，请联系管理员。'), findsWidgets);
+    expect(find.text('测试错误：导出失败。'), findsNothing);
   });
 
   testWidgets('QR sales sheet dialog allows admin to generate QR code',
@@ -887,29 +950,46 @@ void main() {
     expect(find.text('顺丰速运'), findsOneWidget);
     expect(find.text('SF123456789'), findsWidgets);
     expect(find.text('运输中'), findsOneWidget);
-    final paymentTable = find.byKey(
-      const ValueKey('order-qr-sales-payment-details-table'),
+    final customerPreview = find.byKey(
+      const ValueKey('order-qr-sales-sheet-customer-preview'),
     );
-    expect(paymentTable, findsOneWidget);
+    expect(customerPreview, findsOneWidget);
     expect(
-      find.descendant(of: paymentTable, matching: find.text('即时收款')),
+      find.descendant(of: customerPreview, matching: find.text('订单金额')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: paymentTable, matching: find.text('代收营业款')),
+      find.descendant(of: customerPreview, matching: find.text('¥798.00')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: paymentTable, matching: find.text('无需确认')),
-      findsOneWidget,
+      find.byKey(const ValueKey('order-qr-sales-payment-details-table')),
+      findsNothing,
     );
-    expect(
-      find.descendant(
-        of: paymentTable,
-        matching: find.text('代收款（待确认）'),
-      ),
-      findsOneWidget,
-    );
+    for (final sensitiveText in [
+      '收款明细',
+      '暂无收款明细',
+      '收款方式',
+      '收款属性',
+      '确认状态',
+      '收钱吧',
+      '货到付款',
+      '即时收款',
+      '代收营业款',
+      '无需确认',
+      '代收款（待确认）',
+      '¥698.00',
+      '¥100.00',
+    ]) {
+      expect(
+        find.descendant(
+          of: customerPreview,
+          matching: find.text(sensitiveText),
+        ),
+        findsNothing,
+        reason: sensitiveText,
+      );
+    }
     expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('尚未生成二维码'), findsWidgets);
     expect(
@@ -992,6 +1072,15 @@ Future<void> _selectDropdownValue(
   await tester.pumpAndSettle();
 }
 
+String? _selectedDropdownValue(WidgetTester tester, String key) {
+  final field = find.byKey(ValueKey(key));
+  final dropdown = find.descendant(
+    of: field,
+    matching: find.byType(DropdownButton<String>),
+  );
+  return tester.widget<DropdownButton<String>>(dropdown).value;
+}
+
 Future<void> _openOrderDetailDialog(WidgetTester tester) async {
   final orderTile = find.text('SO20260630001').first;
   await tester.ensureVisible(orderTile);
@@ -1018,6 +1107,7 @@ class _FakeApiClient extends ApiClient {
     this.salesSheetQrUrl,
     this.failDownload = false,
     this.failUpdateWithLockedError = false,
+    this.failPointsDestinationWithServerError = false,
     this.legacyPaymentPayload = false,
     this.logisticsNo = 'SF123456789',
     this.packingStatus = 'pending',
@@ -1036,11 +1126,13 @@ class _FakeApiClient extends ApiClient {
   final String? salesSheetQrUrl;
   final bool failDownload;
   final bool failUpdateWithLockedError;
+  final bool failPointsDestinationWithServerError;
   final bool legacyPaymentPayload;
   final String? logisticsNo;
   final String packingStatus;
   final List<String> paymentLockPatchPaths = <String>[];
   final List<String> paymentConfirmationPatchPaths = <String>[];
+  final List<String> pointsDestinationPatchPaths = <String>[];
   Map<String, dynamic>? lastCustomerMarkBody;
   Map<String, dynamic>? lastOrderMarkBody;
   Map<String, dynamic>? lastOrderUpdateBody;
@@ -1050,6 +1142,7 @@ class _FakeApiClient extends ApiClient {
   Map<String, dynamic>? lastQrCodeBody;
   Map<String, dynamic>? lastPaymentLockBody;
   Map<String, dynamic>? lastPaymentConfirmationBody;
+  Map<String, dynamic>? lastPointsDestinationBody;
   String? lastDownloadDefaultFileName;
   Completer<void>? downloadGate;
   bool customerMark = false;
@@ -1061,6 +1154,43 @@ class _FakeApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (Uri.parse(path).path == '/api/sales-orders/assignment-options') {
+      return {
+        'data': {
+          'assignmentOptions': {
+            'calculationDate': '2026-06-30',
+            'currentUserId': 'finance-1',
+            'currentUserRole': 'finance',
+            'canChangeSalesUser': true,
+            'activeCommissionTargetTypes': ['SALES_COMMISSION'],
+            'salesUsers': [
+              {
+                'id': 'sales-1',
+                'name': '测试销售',
+                'username': 'test-sales',
+                'leaderId': null,
+                'leaderName': null,
+                'leaderActive': null,
+              },
+            ],
+          },
+        },
+      };
+    }
+    if (Uri.parse(path).path == '/api/guides') {
+      return {
+        'data': {
+          'guides': const [
+            {
+              'id': 'guide-1',
+              'name': '李导',
+              'phone': '13900000000',
+              'isActive': true,
+            },
+          ],
+        },
+      };
+    }
     if (path == '/api/payment-methods') {
       return {
         'data': {
@@ -1197,6 +1327,23 @@ class _FakeApiClient extends ApiClient {
     Map<String, dynamic>? body,
     String? token,
   }) async {
+    if (path == '/api/sales-orders/order-1/points-destination') {
+      pointsDestinationPatchPaths.add(path);
+      lastPointsDestinationBody = Map<String, dynamic>.from(body ?? {});
+      if (failPointsDestinationWithServerError) {
+        throw const ApiException(
+          statusCode: 503,
+          code: 'DATABASE_SCHEMA_MISMATCH',
+          message: 'Unexpected server error.',
+          requestId: 'schema-mismatch-123',
+        );
+      }
+      return {
+        'data': {
+          'salesOrder': _currentOrderJson(),
+        },
+      };
+    }
     if (path == '/api/customers/customer-1/finance-mark') {
       lastCustomerMarkBody = Map<String, dynamic>.from(body ?? {});
       customerMark = body?['financeMark'] == true;
@@ -1437,7 +1584,7 @@ Map<String, dynamic> _orderJson({
         'salesOrderId': 'order-1',
         'productId': 'product-1',
         'productName': '酱香珍藏',
-        'unit': '瓶',
+        'unit': '盒',
         'quantity': 2,
         'unitPriceCents': 39900,
         'subtotalCents': 79800,

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 
 import { createHttpError } from '../../common/errors';
@@ -12,7 +12,13 @@ import {
   requireInventoryManage,
   requireInventoryRead,
 } from './inventory-access.policy';
-import { calculateStockMetrics } from './inventory-command.policy';
+import {
+  calculateInventoryRequestHash,
+  calculateStockMetrics,
+  canonicalJson,
+  normalizedBusinessKey,
+} from './inventory-command.policy';
+import { InventoryAccountingService } from './inventory-accounting.service';
 import {
   actorId,
   actorName,
@@ -59,6 +65,8 @@ export class InventoryQueryService {
     private readonly operationLogsService: OperationLogsNestService,
     @Inject(TODO_REMINDERS_RECONCILER)
     private readonly todoReminders: TodoRemindersReconciler,
+    @Optional()
+    private readonly accountingService?: InventoryAccountingService,
   ) {}
 
   async getConfiguration(actor: any) {
@@ -182,6 +190,27 @@ export class InventoryQueryService {
     };
   }
 
+  async getWarehouse(actor: any, warehouseIdInput: unknown) {
+    requireInventoryRead(actor);
+    const warehouseId = requiredId(warehouseIdInput, 'warehouseId');
+    const row = await this.repository.findWarehouse(warehouseId);
+    if (!row) {
+      throw createHttpError(
+        404,
+        'INVENTORY_WAREHOUSE_NOT_FOUND',
+        '仓库不存在。',
+      );
+    }
+    const blockers = await this.repository.warehouseDeleteBlockers(
+      this.repository.root(),
+      warehouseId,
+    );
+    return {
+      ...toWarehouseDto(row),
+      businessStatus: toWarehouseBusinessStatus(blockers, row),
+    };
+  }
+
   async createWarehouse(
     actor: any,
     input: any,
@@ -194,6 +223,7 @@ export class InventoryQueryService {
       'name',
       'address',
       'managerUserId',
+      'parentWarehouseId',
       'isActive',
       'isDefault',
     ]);
@@ -201,6 +231,10 @@ export class InventoryQueryService {
     const name = requiredString(input.name, 'name', 160);
     const address = optionalString(input.address, 'address', 255);
     const managerUserId = optionalId(input.managerUserId, 'managerUserId');
+    const parentWarehouseId = optionalId(
+      input.parentWarehouseId,
+      'parentWarehouseId',
+    );
     const isActive =
       input.isActive === undefined
         ? true
@@ -212,6 +246,13 @@ export class InventoryQueryService {
     if (isDefault && !isActive) {
       throw validationError(
         'An inactive warehouse cannot be the default warehouse.',
+      );
+    }
+    if (isDefault && parentWarehouseId) {
+      throw createHttpError(
+        409,
+        'INVENTORY_CHILD_WAREHOUSE_CANNOT_BE_DEFAULT',
+        '子仓不能设为默认仓库。',
       );
     }
     const normalizedCode = normalizedWarehouseValue(code);
@@ -226,6 +267,11 @@ export class InventoryQueryService {
             normalizedName,
           );
           await this.assertManager(transaction, managerUserId);
+          await this.assertParentWarehouse(
+            transaction,
+            parentWarehouseId,
+            id,
+          );
           if (isDefault) {
             await this.repository.clearOtherDefaults(transaction, id);
           }
@@ -239,6 +285,7 @@ export class InventoryQueryService {
               normalizedName,
               address,
               managerUserId,
+              parentWarehouseId,
               isActive,
               isDefault,
               activeDefaultKey:
@@ -283,6 +330,7 @@ export class InventoryQueryService {
       'name',
       'address',
       'managerUserId',
+      'parentWarehouseId',
       'isActive',
       'isDefault',
     ]);
@@ -332,6 +380,45 @@ export class InventoryQueryService {
             );
             await this.assertManager(transaction, data.managerUserId);
           }
+          const effectiveParentWarehouseId = hasOwn(
+            input,
+            'parentWarehouseId',
+          )
+            ? optionalId(input.parentWarehouseId, 'parentWarehouseId')
+            : current.parentWarehouseId ?? null;
+          const parentChanged =
+            effectiveParentWarehouseId !==
+            (current.parentWarehouseId ?? null);
+          if (parentChanged) {
+            if (
+              effectiveParentWarehouseId &&
+              Number(current._count?.childWarehouses || 0) > 0
+            ) {
+              throw createHttpError(
+                409,
+                'INVENTORY_WAREHOUSE_WITH_CHILDREN_CANNOT_BECOME_CHILD',
+                '该仓库已有子仓，不能再改为子仓。请先处理全部子仓。',
+              );
+            }
+            if (
+              await this.repository.warehouseHasHistory(
+                transaction,
+                warehouseId,
+              )
+            ) {
+              throw createHttpError(
+                409,
+                'INVENTORY_WAREHOUSE_PARENT_CHANGE_HAS_HISTORY',
+                '该仓库已有库存或业务历史，不能变更所属父仓，以免改变历史库存归属。',
+              );
+            }
+            await this.assertParentWarehouse(
+              transaction,
+              effectiveParentWarehouseId,
+              warehouseId,
+            );
+            data.parentWarehouseId = effectiveParentWarehouseId;
+          }
           if (
             data.normalizedCode &&
             data.normalizedCode !== current.normalizedCode
@@ -368,6 +455,13 @@ export class InventoryQueryService {
           if (effectiveDefault && !effectiveActive) {
             throw validationError(
               'An inactive warehouse cannot be the default warehouse.',
+            );
+          }
+          if (effectiveDefault && effectiveParentWarehouseId) {
+            throw createHttpError(
+              409,
+              'INVENTORY_CHILD_WAREHOUSE_CANNOT_BE_DEFAULT',
+              '子仓不能设为默认仓库。',
             );
           }
           if (!effectiveActive && current.isActive) {
@@ -422,6 +516,551 @@ export class InventoryQueryService {
     } catch (error) {
       throw mapWarehouseWriteError(error);
     }
+  }
+
+  async deleteWarehouse(
+    actor: any,
+    warehouseIdInput: unknown,
+    metadata: any = {},
+  ) {
+    requireInventoryManage(actor);
+    const warehouseId = requiredId(warehouseIdInput, 'warehouseId');
+    return await this.repository.runInTransaction(async (transaction) => {
+      const current = await this.repository.findWarehouseForMutation(
+        transaction,
+        warehouseId,
+      );
+      if (!current) {
+        throw createHttpError(
+          404,
+          'INVENTORY_WAREHOUSE_NOT_FOUND',
+          '仓库不存在。',
+        );
+      }
+      if (current.isDefault) {
+        throw createHttpError(
+          409,
+          'INVENTORY_DEFAULT_WAREHOUSE_CANNOT_DELETE',
+          '默认仓库不能直接删除。请先设置新的默认父仓，再停用或删除当前仓库。',
+        );
+      }
+      const blockers = await this.repository.warehouseDeleteBlockers(
+        transaction,
+        warehouseId,
+      );
+      if (Number(blockers.childWarehouses || 0) > 0) {
+        throw createHttpError(
+          409,
+          'INVENTORY_WAREHOUSE_HAS_CHILDREN',
+          '该父仓仍有子仓，必须先处理全部子仓后才能删除。',
+        );
+      }
+      const reasons = warehouseDeleteReasons(blockers);
+      if (reasons.length > 0) {
+        throw createHttpError(
+          409,
+          'INVENTORY_WAREHOUSE_DELETE_BLOCKED',
+          `该仓库已有${reasons.join('、')}，不能物理删除。请改为停用仓库。`,
+        );
+      }
+      const before = toWarehouseDto(current);
+      await this.repository.deleteWarehouse(transaction, warehouseId);
+      await this.appendSafeLog(
+        transaction,
+        actor,
+        'inventory.warehouse.delete',
+        'DELETE',
+        'warehouse',
+        warehouseId,
+        before,
+        null,
+        metadata,
+      );
+      return { id: warehouseId, deleted: true };
+    });
+  }
+
+  async listWarehouseProducts(
+    actor: any,
+    warehouseIdInput: unknown,
+    input: any = {},
+  ) {
+    requireInventoryRead(actor);
+    const warehouseId = requiredId(warehouseIdInput, 'warehouseId');
+    const warehouse = await this.repository.findWarehouse(warehouseId);
+    if (!warehouse) {
+      throw createHttpError(
+        404,
+        'INVENTORY_WAREHOUSE_NOT_FOUND',
+        '仓库不存在。',
+      );
+    }
+    const filters = parseWarehouseProductFilters(input);
+    const configurations =
+      await this.repository.listWarehouseProductConfigurations(
+        warehouseId,
+        filters,
+      );
+    const productIds = configurations.map((row: any) => row.productId);
+    const serializedProductIds = configurations
+      .filter(
+        (row: any) =>
+          String(row.product?.inventoryTrackingMode).toUpperCase() ===
+          'SERIALIZED',
+      )
+      .map((row: any) => row.productId);
+    const childRows = warehouse.parentWarehouseId
+      ? []
+      : await this.repository.root().warehouse.findMany({
+          where: { parentWarehouseId: warehouseId },
+          select: { id: true },
+        });
+    const inclusiveWarehouseIds = [
+      warehouseId,
+      ...childRows.map((row: any) => row.id),
+    ];
+    const [
+      stockRows,
+      serializedUnitRows,
+      latestMovements,
+      alertConfigs,
+    ] = await Promise.all([
+      this.repository.aggregateWarehouseProductStocks(
+        inclusiveWarehouseIds,
+        productIds,
+      ),
+      serializedProductIds.length > 0
+        ? this.repository.aggregateSerializedWarehouseProductUnits(
+            inclusiveWarehouseIds,
+            serializedProductIds,
+          )
+        : [],
+      this.repository.latestWarehouseProductMovements(
+        inclusiveWarehouseIds,
+        productIds,
+      ),
+      this.repository.listAlertConfigsForPairs(
+        productIds.map((productId: string) => ({
+          warehouseId,
+          productId,
+        })),
+      ),
+    ]);
+    const stockByPair = new Map(
+      stockRows.map((row: any) => [
+        `${row.warehouseId}\u0000${row.productId}`,
+        stockMetricsFromAggregate(row._sum),
+      ]),
+    );
+    const serializedStockByPair = buildSerializedStockMetrics(
+      serializedUnitRows,
+      stockByPair,
+    );
+    const latestByProduct = new Map(
+      latestMovements.map((row: any) => [
+        row.productId,
+        row._max?.businessAt ? toIso(row._max.businessAt) : null,
+      ]),
+    );
+    const alertsByProduct = new Map(
+      alertConfigs.map((row: any) => [row.productId, row]),
+    );
+    let products = configurations.map((configuration: any) => {
+      const serialized =
+        String(configuration.product.inventoryTrackingMode).toUpperCase() ===
+        'SERIALIZED';
+      const stockSource = serialized ? serializedStockByPair : stockByPair;
+      const localStock =
+        stockSource.get(`${warehouseId}\u0000${configuration.productId}`) ||
+        zeroStockMetrics();
+      const inclusiveStock = inclusiveWarehouseIds.reduce(
+        (sum: any, currentWarehouseId: string) =>
+          addStockMetrics(
+            sum,
+            stockSource.get(
+              `${currentWarehouseId}\u0000${configuration.productId}`,
+            ) || zeroStockMetrics(),
+          ),
+        zeroStockMetrics(),
+      );
+      const alert = alertsByProduct.get(configuration.productId);
+      const minimumAvailableQty = alert?.enabled
+        ? Number(alert.minimumAvailableQty || 0)
+        : null;
+      return {
+        id: configuration.id,
+        warehouseId: configuration.warehouseId,
+        productId: configuration.productId,
+        product: {
+          id: configuration.product.id,
+          name: configuration.product.name,
+          unit: configuration.product.unit,
+          inventoryTrackingMode: configuration.product.inventoryTrackingMode,
+          isActive: Boolean(configuration.product.isActive),
+        },
+        isActive: Boolean(configuration.isActive),
+        localStock,
+        inclusiveStock,
+        includesChildWarehouses: inclusiveWarehouseIds.length > 1,
+        minimumAvailableQty,
+        isLowStock:
+          minimumAvailableQty !== null &&
+          localStock.availableQty <= minimumAvailableQty,
+        lastMovementAt: latestByProduct.get(configuration.productId) ?? null,
+        createdAt: toIso(configuration.createdAt),
+        updatedAt: toIso(configuration.updatedAt),
+      };
+    });
+    products = products.filter((product: any) => {
+      if (filters.isLowStock !== null && product.isLowStock !== filters.isLowStock) {
+        return false;
+      }
+      if (
+        filters.hasShortage !== null &&
+        (product.localStock.shortageQty > 0) !== filters.hasShortage
+      ) {
+        return false;
+      }
+      return true;
+    });
+    const total = products.length;
+    const offset = (filters.page - 1) * filters.pageSize;
+    return {
+      warehouse: toWarehouseDto(warehouse),
+      products: products.slice(offset, offset + filters.pageSize),
+      pagination: pagination(filters.page, filters.pageSize, total),
+    };
+  }
+
+  async addWarehouseProduct(
+    actor: any,
+    warehouseIdInput: unknown,
+    input: any,
+    metadata: any = {},
+  ) {
+    requireInventoryManage(actor);
+    if (!this.accountingService) {
+      throw createHttpError(
+        503,
+        'INVENTORY_ACCOUNTING_UNAVAILABLE',
+        '库存记账服务暂不可用。',
+      );
+    }
+    const warehouseId = requiredId(warehouseIdInput, 'warehouseId');
+    const command = parseWarehouseProductAddInput(warehouseId, input);
+    const result = await this.repository.runInTransaction(
+      async (transaction) => {
+        const currentWarehouse =
+          await this.repository.findWarehouseForMutation(
+            transaction,
+            warehouseId,
+          );
+        if (!currentWarehouse) {
+          throw createHttpError(
+            404,
+            'INVENTORY_WAREHOUSE_NOT_FOUND',
+            '仓库不存在。',
+          );
+        }
+        if (!currentWarehouse.isActive) {
+          throw createHttpError(
+            409,
+            'INVENTORY_WAREHOUSE_INACTIVE',
+            '停用仓库不能新增仓库商品。',
+          );
+        }
+        const existingReceipt =
+          await transaction.inventoryCommandReceipt.findUnique({
+            where: { idempotencyKey: command.idempotencyKey },
+          });
+        if (existingReceipt) {
+          if (
+            existingReceipt.commandType !== 'WAREHOUSE_PRODUCT_ADD' ||
+            existingReceipt.requestHash !== command.requestHash
+          ) {
+            throw createHttpError(
+              409,
+              'INVENTORY_IDEMPOTENCY_CONFLICT',
+              '同一幂等键已用于不同的仓库商品请求。',
+            );
+          }
+          if (
+            existingReceipt.status === 'SUCCEEDED' &&
+            existingReceipt.resultSnapshot
+          ) {
+            return {
+              ...(existingReceipt.resultSnapshot as any),
+              replayed: true,
+            };
+          }
+          throw createHttpError(
+            409,
+            'INVENTORY_COMMAND_IN_PROGRESS',
+            '该仓库商品请求正在处理中，请稍后重试。',
+          );
+        }
+        const product = await transaction.product.findUnique({
+          where: { id: command.productId },
+          select: {
+            id: true,
+            name: true,
+            unit: true,
+            inventoryTrackingMode: true,
+            isActive: true,
+          },
+        });
+        if (!product?.isActive) {
+          throw createHttpError(
+            409,
+            'INVENTORY_PRODUCT_UNAVAILABLE',
+            '商品不存在或已停用，不能加入仓库。',
+          );
+        }
+        if (product.inventoryTrackingMode === 'NONE') {
+          throw createHttpError(
+            409,
+            'INVENTORY_TRACKING_DISABLED',
+            '该商品尚未启用库存跟踪，不能加入仓库。',
+          );
+        }
+        if (
+          product.inventoryTrackingMode === 'SERIALIZED' &&
+          command.initialQuantity > 0
+        ) {
+          throw createHttpError(
+            409,
+            'INVENTORY_SERIALIZED_OPENING_REQUIRES_UNITS',
+            '逐瓶商品不能只录入汇总期初数量。请先以零库存添加，再到逐瓶库存页面扫描或导入真实物流码。',
+          );
+        }
+        if (
+          command.initialQuantity > 0 &&
+          (await this.repository.warehouseProductHasHistory(
+            transaction,
+            warehouseId,
+            command.productId,
+          ))
+        ) {
+          throw createHttpError(
+            409,
+            'INVENTORY_WAREHOUSE_PRODUCT_HAS_HISTORY',
+            '该仓库商品已有库存历史，不能再次录入期初数量。请发起盘点或库存调整。',
+          );
+        }
+        const receiptId = crypto.randomUUID();
+        const receipt = await transaction.inventoryCommandReceipt.create({
+          data: {
+            id: receiptId,
+            sourceKey: `warehouse-product-add:${receiptId}`,
+            idempotencyKey: command.idempotencyKey,
+            commandType: 'WAREHOUSE_PRODUCT_ADD',
+            requestHash: command.requestHash,
+            status: 'PROCESSING',
+            actorUserId: actorId(actor),
+            actorNameSnapshot: actorName(actor),
+            actorRoleSnapshot: actorRole(actor),
+            requestId: boundedTraceId(metadata?.requestId),
+          },
+        });
+        const existing =
+          await this.repository.findWarehouseProductConfiguration(
+            transaction,
+            warehouseId,
+            command.productId,
+          );
+        if (existing?.isActive) {
+          throw createHttpError(
+            409,
+            'INVENTORY_WAREHOUSE_PRODUCT_ALREADY_ACTIVE',
+            '该商品已经在当前仓库中，无需重复添加。',
+          );
+        }
+        const configuration = existing
+          ? await this.repository.updateWarehouseProductConfiguration(
+              transaction,
+              existing.id,
+              {
+                isActive: true,
+                updatedById: actorId(actor),
+                updatedAt: new Date(),
+              },
+            )
+          : await this.repository.createWarehouseProductConfiguration(
+              transaction,
+              {
+                id: crypto.randomUUID(),
+                warehouseId,
+                productId: command.productId,
+                isActive: true,
+                createdById: actorId(actor),
+                updatedById: actorId(actor),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            );
+        let opening: any = null;
+        if (command.initialQuantity > 0) {
+          const inventoryConfiguration =
+            await transaction.inventoryConfiguration.findUnique({
+              where: { singletonKey: 'INVENTORY' },
+              select: { goLiveAt: true },
+            });
+          const innerSourceKey = `warehouse-product-opening:${receipt.id}`;
+          const innerIdempotencyKey =
+            `warehouse-product-opening-idem:${receipt.id}`;
+          const openingPayload: any = {
+            warehouseId,
+            productId: command.productId,
+            quantity: command.initialQuantity,
+            kind: 'OPENING',
+            businessAt:
+              inventoryConfiguration?.goLiveAt?.toISOString() ??
+              new Date().toISOString(),
+            batch: {
+              sourceLineKey: `${innerSourceKey}:line`,
+            },
+            sourceKey: innerSourceKey,
+            idempotencyKey: innerIdempotencyKey,
+          };
+          openingPayload.requestHash = calculateInventoryRequestHash(
+            'INBOUND',
+            openingPayload,
+          );
+          opening =
+            await this.accountingService!.executeAutomaticInTransaction(
+              'INBOUND',
+              actor,
+              openingPayload,
+              transaction,
+              metadata,
+            );
+        }
+        const productDto = toWarehouseProductConfigurationDto(configuration);
+        const snapshot = {
+          product: productDto,
+          opening,
+          commandReceiptId: receipt.id,
+          replayed: false,
+        };
+        await transaction.inventoryCommandReceipt.update({
+          where: { id: receipt.id },
+          data: {
+            status: 'SUCCEEDED',
+            resultDocumentId: opening?.documentId ?? null,
+            resultSnapshot: snapshot,
+            completedAt: new Date(),
+          },
+        });
+        await this.appendSafeLog(
+          transaction,
+          actor,
+          existing
+            ? 'inventory.warehouse_product.restore'
+            : 'inventory.warehouse_product.create',
+          existing ? 'STATUS_CHANGE' : 'CREATE',
+          'warehouse_product_configuration',
+          configuration.id,
+          existing
+            ? toWarehouseProductConfigurationDto(existing)
+            : null,
+          productDto,
+          metadata,
+        );
+        return snapshot;
+      },
+    );
+    if (result.opening?.commandReceiptId) {
+      await this.accountingService.dispatchCommittedReceipts([
+        result.opening.commandReceiptId,
+      ]);
+    }
+    return result;
+  }
+
+  async deactivateWarehouseProduct(
+    actor: any,
+    warehouseIdInput: unknown,
+    productIdInput: unknown,
+    metadata: any = {},
+  ) {
+    requireInventoryManage(actor);
+    const warehouseId = requiredId(warehouseIdInput, 'warehouseId');
+    const productId = requiredId(productIdInput, 'productId');
+    return await this.repository.runInTransaction(async (transaction) => {
+      const configuration =
+        await this.repository.findWarehouseProductConfiguration(
+          transaction,
+          warehouseId,
+          productId,
+        );
+      if (!configuration) {
+        throw createHttpError(
+          404,
+          'INVENTORY_WAREHOUSE_PRODUCT_NOT_FOUND',
+          '当前仓库未配置该商品。',
+        );
+      }
+      if (!configuration.isActive) {
+        return {
+          product: toWarehouseProductConfigurationDto(configuration),
+          deactivated: true,
+          replayed: true,
+        };
+      }
+      const [stock, activeSerializedUnits] = await Promise.all([
+        this.repository.findWarehouseProductStock(
+          transaction,
+          warehouseId,
+          productId,
+        ),
+        this.repository.countActiveSerializedUnits(
+          transaction,
+          warehouseId,
+          productId,
+        ),
+      ]);
+      const nonZero = stock
+        ? [
+            stock.onHandQty,
+            stock.reservedQty,
+            stock.unavailableQty,
+            stock.inTransitQty,
+          ].some((value) => Number(value) !== 0)
+        : false;
+      if (nonZero || activeSerializedUnits > 0) {
+        throw createHttpError(
+          409,
+          'INVENTORY_WAREHOUSE_PRODUCT_HAS_ACTIVE_STOCK',
+          '该仓库商品仍有现存、占用、不可售、在途数量或有效逐瓶记录，不能移除。请先通过现有库存流程处理为零。',
+        );
+      }
+      const updated =
+        await this.repository.updateWarehouseProductConfiguration(
+          transaction,
+          configuration.id,
+          {
+            isActive: false,
+            updatedById: actorId(actor),
+            updatedAt: new Date(),
+          },
+        );
+      await this.appendSafeLog(
+        transaction,
+        actor,
+        'inventory.warehouse_product.disable',
+        'STATUS_CHANGE',
+        'warehouse_product_configuration',
+        configuration.id,
+        toWarehouseProductConfigurationDto(configuration),
+        toWarehouseProductConfigurationDto(updated),
+        metadata,
+      );
+      return {
+        product: toWarehouseProductConfigurationDto(updated),
+        deactivated: true,
+        replayed: false,
+      };
+    });
   }
 
   async listStocks(actor: any, input: any = {}) {
@@ -834,6 +1473,39 @@ export class InventoryQueryService {
     }
   }
 
+  private async assertParentWarehouse(
+    transaction: any,
+    parentWarehouseId: string | null,
+    warehouseId: string,
+  ) {
+    if (!parentWarehouseId) return;
+    if (parentWarehouseId === warehouseId) {
+      throw createHttpError(
+        409,
+        'INVENTORY_WAREHOUSE_PARENT_SELF_REFERENCE',
+        '仓库不能把自己设为所属父仓。',
+      );
+    }
+    const parent = await this.repository.findWarehouseForMutation(
+      transaction,
+      parentWarehouseId,
+    );
+    if (!parent) {
+      throw createHttpError(
+        404,
+        'INVENTORY_PARENT_WAREHOUSE_NOT_FOUND',
+        '所属父仓不存在。',
+      );
+    }
+    if (parent.parentWarehouseId) {
+      throw createHttpError(
+        409,
+        'INVENTORY_WAREHOUSE_MAX_DEPTH_EXCEEDED',
+        '仓库最多只允许两级，子仓不能继续创建下级仓库。',
+      );
+    }
+  }
+
   private async assertManager(
     transaction: any,
     managerUserId: string | null,
@@ -926,6 +1598,9 @@ export class InventoryQueryService {
 }
 
 function parseWarehouseFilters(input: any) {
+  const parentFilter = parseParentWarehouseFilter(
+    input?.parentWarehouseId,
+  );
   return {
     query: optionalString(
       input?.q ?? input?.query,
@@ -934,6 +1609,13 @@ function parseWarehouseFilters(input: any) {
     ),
     isActive: optionalBoolean(input?.isActive, 'isActive'),
     isDefault: optionalBoolean(input?.isDefault, 'isDefault'),
+    manager: optionalString(
+      input?.manager ?? input?.managerUserId,
+      'manager',
+      160,
+    ),
+    parentFilterSet: parentFilter.set,
+    parentWarehouseId: parentFilter.value,
     page: positiveInteger(input?.page, 'page', 1, 1_000_000),
     pageSize: positiveInteger(
       input?.pageSize ?? input?.limit,
@@ -941,6 +1623,50 @@ function parseWarehouseFilters(input: any) {
       20,
       100,
     ),
+  };
+}
+
+function parseWarehouseProductFilters(input: any) {
+  return {
+    query: optionalString(input?.q ?? input?.query, 'query', 160),
+    inventoryTrackingMode: optionalEnum(
+      input?.inventoryTrackingMode,
+      'inventoryTrackingMode',
+      TRACKING_MODES,
+    ),
+    isActive: optionalBoolean(input?.isActive, 'isActive'),
+    isLowStock: optionalBoolean(
+      input?.isLowStock ?? input?.lowStock,
+      'isLowStock',
+    ),
+    hasShortage: optionalBoolean(
+      input?.hasShortage ?? input?.shortage,
+      'hasShortage',
+    ),
+    page: positiveInteger(input?.page, 'page', 1, 1_000_000),
+    pageSize: positiveInteger(
+      input?.pageSize ?? input?.limit,
+      'pageSize',
+      20,
+      100,
+    ),
+  };
+}
+
+function parseParentWarehouseFilter(value: unknown) {
+  if (value === undefined || value === '') {
+    return { set: false, value: null };
+  }
+  if (
+    value === null ||
+    (typeof value === 'string' &&
+      ['root', 'parent', 'null'].includes(value.trim().toLowerCase()))
+  ) {
+    return { set: true, value: null };
+  }
+  return {
+    set: true,
+    value: requiredId(value, 'parentWarehouseId'),
   };
 }
 
@@ -1093,6 +1819,29 @@ function parseAlertFilters(input: any) {
 }
 
 function toWarehouseDto(row: any) {
+  const relationCount = row._count || {};
+  const businessRelationCount = [
+    'stocks',
+    'productConfigurations',
+    'batches',
+    'documents',
+    'outboundDocuments',
+    'inboundDocuments',
+    'movements',
+    'reservations',
+    'outboundTransfers',
+    'inboundTransfers',
+    'transferReceipts',
+    'afterSalesReceipts',
+    'previousAfterSalesReceiptUnits',
+    'stockAlertConfigs',
+    'inventoryAlerts',
+    'stocktakes',
+    'stocktakeExpectedScans',
+    'fulfillmentSalesOrders',
+    'serializedUnits',
+    'specialOrderItems',
+  ].reduce((sum, key) => sum + Number(relationCount[key] || 0), 0);
   return {
     id: row.id,
     code: row.code,
@@ -1105,11 +1854,245 @@ function toWarehouseDto(row: any) {
           name: row.manager.name,
         }
       : null,
+    parentWarehouseId: row.parentWarehouseId ?? null,
+    parentWarehouse: row.parentWarehouse
+      ? {
+          id: row.parentWarehouse.id,
+          code: row.parentWarehouse.code,
+          name: row.parentWarehouse.name,
+          isActive: Boolean(row.parentWarehouse.isActive),
+        }
+      : null,
+    childWarehouses: (row.childWarehouses || []).map((child: any) => ({
+      id: child.id,
+      code: child.code,
+      name: child.name,
+      isActive: Boolean(child.isActive),
+      isDefault: Boolean(child.isDefault),
+    })),
+    childWarehouseCount: Number(relationCount.childWarehouses || 0),
     isActive: Boolean(row.isActive),
     isDefault: Boolean(row.isDefault),
+    canDelete:
+      !row.isDefault &&
+      Number(relationCount.childWarehouses || 0) === 0 &&
+      businessRelationCount === 0,
     createdAt: toIso(row.createdAt),
     updatedAt: toIso(row.updatedAt),
   };
+}
+
+function toWarehouseProductConfigurationDto(row: any) {
+  return {
+    id: row.id,
+    warehouseId: row.warehouseId,
+    productId: row.productId,
+    product: row.product
+      ? {
+          id: row.product.id,
+          name: row.product.name,
+          unit: row.product.unit,
+          inventoryTrackingMode: row.product.inventoryTrackingMode,
+          isActive: Boolean(row.product.isActive),
+        }
+      : null,
+    isActive: Boolean(row.isActive),
+    createdAt: toIso(row.createdAt),
+    updatedAt: toIso(row.updatedAt),
+  };
+}
+
+function toWarehouseBusinessStatus(
+  blockers: Record<string, unknown>,
+  warehouse?: any,
+) {
+  return {
+    canDelete:
+      !warehouse?.isDefault && warehouseDeleteReasons(blockers).length === 0,
+    hasChildren: Number(blockers.childWarehouses || 0) > 0,
+    hasInventoryFacts:
+      Number(blockers.stocks || 0) > 0 ||
+      Number(blockers.batches || 0) > 0 ||
+      Number(blockers.movements || 0) > 0 ||
+      Number(blockers.serializedUnits || 0) > 0,
+    hasBusinessDocuments:
+      Number(blockers.documents || 0) > 0 ||
+      Number(blockers.transfers || 0) > 0 ||
+      Number(blockers.transferReceipts || 0) > 0 ||
+      Number(blockers.afterSalesReceipts || 0) > 0 ||
+      Number(blockers.stocktakes || 0) > 0,
+    hasFulfillmentHistory:
+      Number(blockers.reservations || 0) > 0 ||
+      Number(blockers.fulfillmentOrders || 0) > 0 ||
+      Number(blockers.specialOrderItems || 0) > 0,
+  };
+}
+
+function warehouseDeleteReasons(blockers: Record<string, unknown>) {
+  const groups = [
+    ['childWarehouses', '子仓'],
+    ['stocks', '库存余额记录'],
+    ['productConfigurations', '仓库商品关联历史'],
+    ['batches', '库存批次'],
+    ['documents', '库存单据'],
+    ['movements', '库存流水'],
+    ['reservations', '订单占用'],
+    ['transfers', '调拨记录'],
+    ['transferReceipts', '调拨收货记录'],
+    ['afterSalesReceipts', '售后收货记录'],
+    ['previousAfterSalesUnits', '逐瓶售后归属记录'],
+    ['stockAlertConfigs', '库存预警配置'],
+    ['inventoryAlerts', '库存预警历史'],
+    ['stocktakes', '盘点记录'],
+    ['stocktakeExpectedScans', '逐瓶盘点记录'],
+    ['fulfillmentOrders', '订单履约关系'],
+    ['serializedUnits', '逐瓶库存记录'],
+    ['specialOrderItems', '特殊订单仓库关系'],
+  ];
+  return groups
+    .filter(([key]) => Number(blockers[key] || 0) > 0)
+    .map(([, label]) => label);
+}
+
+function zeroStockMetrics() {
+  return calculateStockMetrics({
+    onHandQty: 0,
+    reservedQty: 0,
+    unavailableQty: 0,
+    inTransitQty: 0,
+  });
+}
+
+function stockMetricsFromAggregate(sum: any) {
+  return calculateStockMetrics({
+    onHandQty: Number(sum?.onHandQty || 0),
+    reservedQty: Number(sum?.reservedQty || 0),
+    unavailableQty: Number(sum?.unavailableQty || 0),
+    inTransitQty: Number(sum?.inTransitQty || 0),
+  });
+}
+
+function addStockMetrics(left: any, right: any) {
+  return calculateStockMetrics({
+    onHandQty: Number(left.onHandQty) + Number(right.onHandQty),
+    reservedQty: Number(left.reservedQty) + Number(right.reservedQty),
+    unavailableQty:
+      Number(left.unavailableQty) + Number(right.unavailableQty),
+    inTransitQty: Number(left.inTransitQty) + Number(right.inTransitQty),
+  });
+}
+
+function buildSerializedStockMetrics(
+  rows: any[],
+  projectedStocks: Map<string, any>,
+) {
+  const raw = new Map<
+    string,
+    {
+      onHandQty: number;
+      reservedQty: number;
+      unavailableQty: number;
+    }
+  >();
+  for (const row of rows) {
+    if (!row.warehouseId) continue;
+    const key = `${row.warehouseId}\u0000${row.productId}`;
+    const current = raw.get(key) || {
+      onHandQty: 0,
+      reservedQty: 0,
+      unavailableQty: 0,
+    };
+    const count = Number(row._count?._all || 0);
+    const status = String(row.status).toUpperCase();
+    if (status !== 'OUTBOUND') {
+      current.onHandQty += count;
+    }
+    if (status === 'RESERVED' || status === 'ALLOCATED') {
+      current.reservedQty += count;
+    }
+    if (status === 'PENDING_COST' || status === 'UNAVAILABLE') {
+      current.unavailableQty += count;
+    }
+    raw.set(key, current);
+  }
+  return new Map(
+    [...raw.entries()].map(([key, value]) => [
+      key,
+      calculateStockMetrics({
+        ...value,
+        inTransitQty: Number(projectedStocks.get(key)?.inTransitQty || 0),
+      }),
+    ]),
+  );
+}
+
+function parseWarehouseProductAddInput(warehouseId: string, input: any) {
+  assertObject(input);
+  assertAllowedFields(input, [
+    'productId',
+    'initialQuantity',
+    'idempotencyKey',
+    'requestHash',
+  ]);
+  const productId = requiredId(input.productId, 'productId');
+  const initialQuantity = warehouseNonNegativeInteger(
+    input.initialQuantity,
+    'initialQuantity',
+  );
+  const idempotencyKey = normalizedBusinessKey(
+    input.idempotencyKey,
+    'idempotencyKey',
+  );
+  const requestHash =
+    typeof input.requestHash === 'string'
+      ? input.requestHash.trim().toLowerCase()
+      : '';
+  if (!/^[0-9a-f]{64}$/.test(requestHash)) {
+    throw validationError('requestHash must be a SHA-256 hexadecimal value.');
+  }
+  const expectedHash = crypto
+    .createHash('sha256')
+    .update(
+      canonicalJson({
+        warehouseId,
+        productId,
+        initialQuantity,
+      }),
+      'utf8',
+    )
+    .digest('hex');
+  if (requestHash !== expectedHash) {
+    throw createHttpError(
+      400,
+      'INVENTORY_REQUEST_HASH_MISMATCH',
+      'requestHash 与规范化的仓库商品请求不一致。',
+    );
+  }
+  return {
+    productId,
+    initialQuantity,
+    idempotencyKey,
+    requestHash,
+  };
+}
+
+function warehouseNonNegativeInteger(value: unknown, field: string) {
+  let parsed: number;
+  if (value === undefined || value === null || value === '') {
+    parsed = 0;
+  } else if (typeof value === 'number') {
+    parsed = value;
+  } else {
+    const text = String(value).trim();
+    if (!/^(0|[1-9]\d*)$/.test(text)) {
+      throw validationError(`${field} must be a non-negative integer.`);
+    }
+    parsed = Number(text);
+  }
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw validationError(`${field} must be a non-negative integer.`);
+  }
+  return parsed;
 }
 
 function toInventoryConfigurationDto(row: any) {

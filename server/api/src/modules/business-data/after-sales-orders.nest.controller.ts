@@ -199,7 +199,7 @@ export class AfterSalesOrdersNestController {
 
   @Post(':id/finance-refund-confirm')
   @UseGuards(AuthUserGuard, RolesGuard)
-  @RequireRoles('admin', 'finance')
+  @RequireRoles('admin', 'finance', 'boss')
   @UseInterceptors(SecureAttachmentUploadInterceptor)
   async confirmFinanceRefund(
     @Param('id') id: string,

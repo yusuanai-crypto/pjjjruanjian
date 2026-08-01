@@ -603,6 +603,14 @@ function translateCalculationWarnings(warnings: any[], order: any) {
           context,
         });
         break;
+      case 'agency_name_legacy_fallback':
+        result.push({
+          code: warning.code,
+          message:
+            '该订单通过旅行社名称兼容命中未绑定 ID 的历史返点规则，请尽快完成规则回填。',
+          context,
+        });
+        break;
       case 'ambiguous_agency_rebate_rule':
         result.push({
           code: warning.code,

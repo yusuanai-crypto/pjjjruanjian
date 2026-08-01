@@ -79,7 +79,7 @@ CREATE TABLE `serialized_inventory_units` (
   INDEX `serialized_inventory_units_updated_by_id_idx` (`updated_by_id`),
   INDEX `serialized_inventory_units_corrected_by_id_idx` (`corrected_by_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 ALTER TABLE `serialized_inventory_units`
   ADD CONSTRAINT `serialized_inventory_units_product_id_fkey`

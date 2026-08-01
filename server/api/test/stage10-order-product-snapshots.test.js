@@ -52,7 +52,7 @@ test('contract: sales order items snapshot active products and date-effective ac
         {
           productId: product.id,
           productName: 'client name must be ignored',
-          unit: 'client unit',
+          unit: '盒',
           quantity: 2,
           unitPriceCents: 10000,
           subtotalCents: 25000,
@@ -60,11 +60,11 @@ test('contract: sales order items snapshot active products and date-effective ac
         },
       ],
     });
-    assert.equal(created.response.status, 201);
+    assert.equal(created.response.status, 201, JSON.stringify(created.body));
     const order = created.body.data.salesOrder;
     assert.equal(order.items[0].productId, product.id);
     assert.equal(order.items[0].productName, 'Snapshot Product');
-    assert.equal(order.items[0].unit, 'case');
+    assert.equal(order.items[0].unit, '盒');
     assert.equal(order.totalAmountCents, 25000);
     assert.equal(order.items[0].subtotalCents, 25000);
     let storedItem = findStoredOrderItem(stores, order.id);
@@ -73,6 +73,34 @@ test('contract: sales order items snapshot active products and date-effective ac
       actualCostSubtotalCents: 2000,
       grossProfitCents: 23000,
     });
+
+    const legacyUnit = await createOrder(baseUrl, admin.token, {
+      orderDate: '2026-07-15',
+      items: [
+        {
+          productId: product.id,
+          quantity: 1,
+          unitPriceCents: 10000,
+          deliveryType: 'shipping',
+        },
+      ],
+    });
+    assert.equal(legacyUnit.response.status, 201);
+    assert.equal(legacyUnit.body.data.salesOrder.items[0].unit, '瓶');
+
+    const invalidUnit = await createOrder(baseUrl, admin.token, {
+      orderDate: '2026-07-15',
+      items: [
+        {
+          productId: product.id,
+          unit: '箱',
+          quantity: 1,
+          unitPriceCents: 10000,
+          deliveryType: 'shipping',
+        },
+      ],
+    });
+    assertErrorContract(invalidUnit, 400, 'VALIDATION_FAILED');
 
     const changedCost = await requestJson(
       baseUrl,
@@ -112,6 +140,7 @@ test('contract: sales order items snapshot active products and date-effective ac
     });
     assert.equal(priceOnly.response.status, 200);
     storedItem = findStoredOrderItem(stores, order.id);
+    assert.equal(storedItem.unit, '盒');
     assert.deepEqual(costSnapshot(storedItem), {
       actualUnitCostCents: 1000,
       actualCostSubtotalCents: 2000,
@@ -140,6 +169,7 @@ test('contract: sales order items snapshot active products and date-effective ac
     );
     assert.equal(quantityChanged.response.status, 200);
     storedItem = findStoredOrderItem(stores, order.id);
+    assert.equal(storedItem.unit, '盒');
     assert.deepEqual(costSnapshot(storedItem), {
       actualUnitCostCents: 2500,
       actualCostSubtotalCents: 7500,
@@ -153,6 +183,7 @@ test('contract: sales order items snapshot active products and date-effective ac
     });
     assert.equal(backdated.response.status, 200);
     storedItem = findStoredOrderItem(stores, order.id);
+    assert.equal(storedItem.unit, '盒');
     assert.deepEqual(costSnapshot(storedItem), {
       actualUnitCostCents: 800,
       actualCostSubtotalCents: 2400,
@@ -227,7 +258,7 @@ test('contract: tasting items require active productId but never require or writ
         },
       ],
     });
-    assert.equal(created.response.status, 201);
+    assert.equal(created.response.status, 201, JSON.stringify(created.body));
     const group = created.body.data.travelGroup;
     assert.equal(group.tastingItems[0].productId, product.id);
     assert.equal(group.tastingItems[0].productName, product.name);
@@ -413,7 +444,7 @@ function createTravelGroup(baseUrl, token, overrides) {
       cigaretteFeeCents: 100,
       tastingRoomNo: 'Stage10 Room',
       tasterId: overrides.tasterId,
-      groupType: 'test',
+      groupType: '其他',
       tastingItems: overrides.tastingItems,
     },
   });

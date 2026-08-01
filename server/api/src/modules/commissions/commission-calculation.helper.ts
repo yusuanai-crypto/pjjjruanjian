@@ -138,6 +138,7 @@ export function calculateStage7CommissionAndPoints(
     null,
     calculationDate,
     {
+      agencyRebate: true,
       allowLatestActiveFallback:
         input?.allowLatestAgencyRebateRuleFallback === true,
       warnings,
@@ -145,11 +146,20 @@ export function calculateStage7CommissionAndPoints(
     },
   );
   if (pointsSplit.normalAmountCents > 0 && !agencyRebateRule.rule) {
-    addWarning(warnings, 'missing_agency_rebate_rule', 'Missing agency rebate rule.', {
-      agencyId: agencyMatch.agencyId,
-      agencyName: agencyMatch.agencyName,
-      date: toDateOnly(calculationDate),
-    });
+    addWarning(
+      warnings,
+      'missing_agency_rebate_rule',
+      '未找到订单日期适用且唯一的旅行社返点规则，日返和月返均未生成。',
+      {
+        salesOrderId: normalizeOptionalString(salesOrder?.id),
+        travelGroupId:
+          normalizeOptionalString(salesOrder?.travelGroupId) ||
+          normalizeOptionalString(salesOrder?.travelGroup?.id),
+        agencyId: agencyMatch.agencyId,
+        agencyName: agencyMatch.agencyName,
+        date: toDateOnly(calculationDate),
+      },
+    );
   }
   const dailyRebateRate = agencyRebateRule.rule
     ? normalizeRate(agencyRebateRule.rule.dailyRebateRate)
@@ -621,14 +631,14 @@ function buildCommissionLines(options: any) {
   const salesUserId =
     normalizeOptionalString(options.salesOrder.salesUserId) ||
     normalizeOptionalString(options.salesOrder.salesUser?.id);
-  if (!salesUserId) {
+  if (options.rules[SALES_COMMISSION] && !salesUserId) {
     addWarning(
       options.warnings,
       'missing_sales_user',
       'Missing sales user.',
       {},
     );
-  } else {
+  } else if (options.rules[SALES_COMMISSION]) {
     lines.push(
       buildCommissionLine(options, SALES_COMMISSION, salesUserId),
     );
@@ -637,7 +647,7 @@ function buildCommissionLines(options: any) {
   const outreachUserId =
     normalizeOptionalString(options.salesOrder.outreachUserId) ||
     normalizeOptionalString(options.salesOrder.outreachUser?.id);
-  if (!outreachUserId) {
+  if (options.rules[OUTREACH_COMMISSION] && !outreachUserId) {
     addWarning(
       options.warnings,
       'missing_outreach_user',
@@ -646,7 +656,7 @@ function buildCommissionLines(options: any) {
         salesOrderId: normalizeOptionalString(options.salesOrder.id),
       },
     );
-  } else {
+  } else if (options.rules[OUTREACH_COMMISSION]) {
     lines.push(
       buildCommissionLine(options, OUTREACH_COMMISSION, outreachUserId),
     );
@@ -655,11 +665,11 @@ function buildCommissionLines(options: any) {
   const leaderUserId =
     normalizeOptionalString(options.salesOrder.salesUser?.leaderId) ||
     normalizeOptionalString(options.salesOrder.salesUser?.leader?.id);
-  if (!leaderUserId) {
+  if (options.rules[LEADER_COMMISSION] && !leaderUserId) {
     addWarning(options.warnings, 'missing_leader', 'Missing sales leader.', {
       salesUserId,
     });
-  } else {
+  } else if (options.rules[LEADER_COMMISSION]) {
     lines.push(buildCommissionLine(options, LEADER_COMMISSION, leaderUserId));
   }
   return lines.filter(Boolean);
@@ -885,6 +895,10 @@ function matchAgencyRule(
   date: Date,
   options: any = {},
 ) {
+  if (options.agencyRebate === true) {
+    return matchAgencyRebateRule(rules, agencyMatch, date, options);
+  }
+
   let agencyRules: any[];
   let strictMatchMode: string;
   if (agencyMatch.agencyId) {
@@ -956,6 +970,215 @@ function matchAgencyRule(
     rule: fallback.rule,
     matchMode: 'latest_active_manual_fallback',
   };
+}
+
+function matchAgencyRebateRule(
+  rules: any[],
+  agencyMatch: any,
+  date: Date,
+  options: any,
+) {
+  const agencyId = normalizeOptionalString(agencyMatch.agencyId);
+  const idRules = agencyId
+    ? rules.filter(
+        (candidate: any) =>
+          normalizeOptionalString(candidate.agencyId) === agencyId,
+      )
+    : [];
+  const legacyNames = uniqueNormalizedAgencyNames([
+    agencyMatch.matchedTravelAgencyName,
+    agencyMatch.agencyName,
+    agencyMatch.inputAgencyName,
+  ]);
+  const legacyNameRules = rules.filter(
+    (candidate: any) =>
+      !normalizeOptionalString(candidate.agencyId) &&
+      legacyNames.has(normalizeComparable(candidate.agencyName)),
+  );
+
+  if (agencyId) {
+    const primary = selectUniqueMostRecentEffectiveRule(idRules, date);
+    if (primary.ambiguous) {
+      addAmbiguousAgencyRebateWarning(
+        options,
+        agencyMatch,
+        date,
+        primary.ruleIds,
+        'agency_id',
+      );
+      return { rule: null, matchMode: 'agency_id' };
+    }
+    if (primary.rule) {
+      return { rule: primary.rule, matchMode: 'agency_id' };
+    }
+  }
+
+  const legacy = selectUniqueMostRecentEffectiveRule(legacyNameRules, date);
+  if (legacy.ambiguous) {
+    addAmbiguousAgencyRebateWarning(
+      options,
+      agencyMatch,
+      date,
+      legacy.ruleIds,
+      'agency_name_legacy_fallback',
+    );
+    return {
+      rule: null,
+      matchMode: agencyId ? 'agency_id' : 'agency_name',
+    };
+  }
+  if (legacy.rule) {
+    addWarning(
+      options.warnings || [],
+      'agency_name_legacy_fallback',
+      '已通过旅行社规范名称兼容命中尚未绑定 agencyId 的历史返点规则。',
+      buildAgencyRebateFallbackContext(
+        options.salesOrder,
+        agencyMatch,
+        date,
+        legacy.rule,
+        {
+          matchMode: 'agency_name_legacy_fallback',
+          matchedAgencyName: normalizeOptionalString(
+            legacy.rule.agencyName,
+          ),
+        },
+      ),
+    );
+    return {
+      rule: legacy.rule,
+      matchMode: 'agency_name_legacy_fallback',
+    };
+  }
+
+  const strictMatchMode = agencyId ? 'agency_id' : 'agency_name';
+  if (options.allowLatestActiveFallback !== true) {
+    return { rule: null, matchMode: strictMatchMode };
+  }
+
+  const activeIdRules = idRules.filter((rule: any) => rule?.isActive !== false);
+  const activeLegacyRules = legacyNameRules.filter(
+    (rule: any) => rule?.isActive !== false,
+  );
+  const fallbackCandidates =
+    activeIdRules.length > 0 ? activeIdRules : activeLegacyRules;
+  const fallbackMode =
+    activeIdRules.length > 0
+      ? 'agency_id'
+      : 'agency_name_legacy_fallback';
+  const fallback = selectOnlyActiveAgencyRebateFallback(fallbackCandidates);
+  if (fallback.ambiguous) {
+    addAmbiguousAgencyRebateWarning(
+      options,
+      agencyMatch,
+      date,
+      fallback.ruleIds,
+      fallbackMode,
+    );
+    return { rule: null, matchMode: strictMatchMode };
+  }
+  if (!fallback.rule) {
+    return { rule: null, matchMode: strictMatchMode };
+  }
+  addWarning(
+    options.warnings || [],
+    'agency_rebate_rule_fallback_applied',
+    '该历史订单已使用唯一可用的当前启用旅行社返点规则补算。',
+    buildAgencyRebateFallbackContext(
+      options.salesOrder,
+      agencyMatch,
+      date,
+      fallback.rule,
+      { sourceMatchMode: fallbackMode },
+    ),
+  );
+  if (fallbackMode === 'agency_name_legacy_fallback') {
+    addWarning(
+      options.warnings || [],
+      'agency_name_legacy_fallback',
+      '手工历史补算通过旅行社规范名称命中尚未绑定 agencyId 的历史返点规则。',
+      buildAgencyRebateFallbackContext(
+        options.salesOrder,
+        agencyMatch,
+        date,
+        fallback.rule,
+        { matchMode: fallbackMode },
+      ),
+    );
+  }
+  return {
+    rule: fallback.rule,
+    matchMode:
+      fallbackMode === 'agency_name_legacy_fallback'
+        ? 'agency_name_legacy_fallback'
+        : 'latest_active_manual_fallback',
+  };
+}
+
+function uniqueNormalizedAgencyNames(values: unknown[]) {
+  return new Set(
+    values
+      .map((value) => normalizeComparable(value))
+      .filter((value) => Boolean(value)),
+  );
+}
+
+function selectUniqueMostRecentEffectiveRule(rules: any[], date: Date) {
+  const effectiveRules = rules
+    .filter((rule: any) => rule?.isActive !== false && isEffectiveOn(rule, date))
+    .sort(
+      (left: any, right: any) =>
+        normalizeDateOnly(right.effectiveFrom).getTime() -
+        normalizeDateOnly(left.effectiveFrom).getTime(),
+    );
+  if (effectiveRules.length === 0) {
+    return { rule: null, ambiguous: false, ruleIds: [] };
+  }
+  const highestPriorityTime = normalizeDateOnly(
+    effectiveRules[0].effectiveFrom,
+  ).getTime();
+  const highestPriorityRules = effectiveRules.filter(
+    (rule: any) =>
+      normalizeDateOnly(rule.effectiveFrom).getTime() === highestPriorityTime,
+  );
+  return {
+    rule: highestPriorityRules.length === 1 ? highestPriorityRules[0] : null,
+    ambiguous: highestPriorityRules.length > 1,
+    ruleIds: highestPriorityRules
+      .map((rule: any) => normalizeOptionalString(rule?.id))
+      .filter(Boolean),
+  };
+}
+
+function selectOnlyActiveAgencyRebateFallback(rules: any[]) {
+  return {
+    rule: rules.length === 1 ? rules[0] : null,
+    ambiguous: rules.length > 1,
+    ruleIds: rules
+      .map((rule: any) => normalizeOptionalString(rule?.id))
+      .filter(Boolean),
+  };
+}
+
+function addAmbiguousAgencyRebateWarning(
+  options: any,
+  agencyMatch: any,
+  date: Date,
+  ruleIds: string[],
+  matchMode: string,
+) {
+  addWarning(
+    options.warnings || [],
+    'ambiguous_agency_rebate_rule',
+    '存在多条同优先级旅行社返点规则，系统未自动选择，日返和月返均未生成。',
+    buildAgencyRebateFallbackContext(
+      options.salesOrder,
+      agencyMatch,
+      date,
+      null,
+      { ruleIds, matchMode },
+    ),
+  );
 }
 
 function selectLatestActiveAgencyRebateFallback(rules: any[], date: Date) {

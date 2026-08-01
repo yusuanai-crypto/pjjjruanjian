@@ -19,8 +19,12 @@ export type GeneratedSalesOrderNoWriter<T> = (orderNo: string, attempt: number) 
 const SALES_ORDER_NO_PREFIX = 'SO';
 const SALES_ORDER_NO_SERIAL_WIDTH = 3;
 
-export async function generateSalesOrderNo(delegate: SalesOrderNoDelegate, orderDate: string | Date) {
-  const prefix = buildSalesOrderNoPrefix(orderDate);
+export async function generateSalesOrderNo(
+  delegate: SalesOrderNoDelegate,
+  orderDate: string | Date,
+  orderType?: string,
+) {
+  const prefix = buildSalesOrderNoPrefix(orderDate, orderType);
   const existingOrders = await delegate.findMany({
     where: {
       orderNo: {
@@ -47,10 +51,11 @@ export async function withGeneratedSalesOrderNo<T>(
   delegate: SalesOrderNoDelegate,
   orderDate: string | Date,
   writer: GeneratedSalesOrderNoWriter<T>,
+  orderType?: string,
 ) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= 1; attempt += 1) {
-    const orderNo = await generateSalesOrderNo(delegate, orderDate);
+    const orderNo = await generateSalesOrderNo(delegate, orderDate, orderType);
     try {
       return await writer(orderNo, attempt);
     } catch (error) {
@@ -64,8 +69,24 @@ export async function withGeneratedSalesOrderNo<T>(
   throw lastError;
 }
 
-export function buildSalesOrderNoPrefix(orderDate: string | Date) {
-  return `${SALES_ORDER_NO_PREFIX}${formatOrderDatePart(orderDate)}`;
+export function buildSalesOrderNoPrefix(
+  orderDate: string | Date,
+  orderType?: string,
+) {
+  return `${SALES_ORDER_NO_PREFIX}${specialOrderTypeCode(orderType)}${formatOrderDatePart(orderDate)}`;
+}
+
+function specialOrderTypeCode(orderType?: string) {
+  switch (String(orderType || '').trim().toUpperCase()) {
+    case 'INTERNAL':
+      return 'I';
+    case 'EXTERNAL':
+      return 'E';
+    case 'BUYBACK':
+      return 'B';
+    default:
+      return '';
+  }
 }
 
 function formatOrderDatePart(orderDate: string | Date) {

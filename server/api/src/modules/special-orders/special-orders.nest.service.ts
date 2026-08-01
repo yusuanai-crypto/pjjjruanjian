@@ -5,6 +5,7 @@ import * as ExcelJS from 'exceljs';
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
+import { SpecialOrderCommissionService } from '../commissions/special-order-commission.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { withGeneratedSalesOrderNo } from '../business-data/sales-order-no.helper';
 import {
@@ -111,6 +112,27 @@ const SPECIAL_ORDER_INCLUDE = {
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   },
+  commissionRecords: {
+    where: {
+      targetType: 'ORDER_MANUAL_COMMISSION',
+      manualInput: true,
+    },
+    include: {
+      targetUser: {
+        select: { id: true, name: true, username: true, role: true },
+      },
+      createdBy: {
+        select: { id: true, name: true, username: true, role: true },
+      },
+      updatedBy: {
+        select: { id: true, name: true, username: true, role: true },
+      },
+      adjustments: {
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      },
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  },
 } as const;
 
 const MUTATION_TRANSACTION_OPTIONS = {
@@ -126,6 +148,7 @@ export class SpecialOrdersNestService {
     private readonly operationLogs: OperationLogsNestService,
     private readonly inventory: SpecialOrderInventoryService,
     private readonly commissions: CommissionRecordsNestService,
+    private readonly specialOrderCommissions: SpecialOrderCommissionService,
   ) {}
 
   async list(actor: any, filters: any = {}) {
@@ -212,6 +235,7 @@ export class SpecialOrdersNestService {
           id: true,
           name: true,
           unit: true,
+          notes: true,
           inventoryTrackingMode: true,
         },
         orderBy: { name: 'asc' },
@@ -262,6 +286,7 @@ export class SpecialOrdersNestService {
           city: true,
           district: true,
           address: true,
+          notes: true,
         },
         orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
         take: normalizeTake(filters?.limit, 100),
@@ -347,11 +372,7 @@ export class SpecialOrdersNestService {
           return replay;
         }
 
-        const input = await resolveSpecialOrderInput(
-          tx,
-          actor,
-          body,
-        );
+        const input = await resolveSpecialOrderInput(tx, actor, body);
         const now = new Date();
         return withGeneratedSalesOrderNo(
           tx.salesOrder,
@@ -386,8 +407,10 @@ export class SpecialOrdersNestService {
                 pointsDestination: 'TRAVEL_AGENCY',
                 fulfillmentWarehouseId:
                   input.singleWarehouseId || null,
-                workflowStatus: 'DRAFT',
-                workflowVersion: 0,
+                completedAt: now,
+                completedById: actor.id,
+                workflowStatus: 'COMPLETED',
+                workflowVersion: 1,
                 specialOrderCreateKey: idempotencyKey,
                 specialOrderCreateHash: hash,
                 hasOriginalPurchase: input.hasOriginalPurchase,
@@ -397,6 +420,10 @@ export class SpecialOrdersNestService {
                 externalPartyId: input.externalPartyId,
                 externalPartyNameSnapshot:
                   input.externalPartyNameSnapshot,
+                approvedById: actor.id,
+                approvedAt: now,
+                inventoryAppliedAt: now,
+                inventoryPolicyVersion: 1,
                 createdById: actor.id,
                 updatedById: actor.id,
                 createdAt: now,
@@ -419,18 +446,57 @@ export class SpecialOrdersNestService {
               },
               include: SPECIAL_ORDER_INCLUDE,
             });
+            const postedOrder = await this.reload(tx, order.id);
+            const approvalPosting =
+              await this.inventory.postApprovalInTransaction(
+                tx,
+                actor,
+                postedOrder,
+                1,
+                metadata,
+              );
+            const completionPosting =
+              await this.inventory.postCompletionInTransaction(
+                tx,
+                actor,
+                postedOrder,
+                1,
+                metadata,
+              );
+            receiptIds.push(
+              ...approvalPosting.commandReceiptIds,
+              ...completionPosting.commandReceiptIds,
+            );
+            const settlement = await createSettlement(tx, postedOrder, now);
+            await replaceSettlementPayments(
+              tx,
+              actor,
+              postedOrder,
+              settlement,
+              input.payments,
+              idempotencyKey,
+              now,
+            );
+            const completedOrder = await this.reload(tx, order.id);
             await this.appendWorkflowEvent(
               tx,
               actor,
-              order,
+              completedOrder,
               {
                 eventType: 'CREATED',
                 fromStatus: null,
-                toStatus: 'DRAFT',
-                workflowVersion: 0,
+                toStatus: 'COMPLETED',
+                workflowVersion: 1,
                 idempotencyKey,
                 requestHash: hash,
-                payloadSnapshot: eventOrderSnapshot(order),
+                payloadSnapshot: {
+                  ...eventOrderSnapshot(completedOrder),
+                  directCompleted: true,
+                  inventoryDocumentIds: [
+                    ...approvalPosting.documentIds,
+                    ...completionPosting.documentIds,
+                  ],
+                },
               },
             );
             await this.appendOperationLog(
@@ -438,11 +504,12 @@ export class SpecialOrdersNestService {
               actor,
               'create',
               null,
-              order,
+              completedOrder,
               metadata,
             );
             return this.reload(tx, order.id);
           },
+          input.orderType,
         );
       },
       MUTATION_TRANSACTION_OPTIONS,
@@ -463,6 +530,7 @@ export class SpecialOrdersNestService {
     const idempotencyKey = requiredIdempotencyKey(body.idempotencyKey);
     const expectedVersion = requiredWorkflowVersion(body.workflowVersion);
     const hash = requestHash(body);
+    const receiptIds: string[] = [];
     const updated = await this.db().$transaction(
       async (tx: any) => {
         const replay = await this.resolveEventReplay(
@@ -476,6 +544,154 @@ export class SpecialOrdersNestService {
           return replay;
         }
         const current = await this.loadScopedOrder(tx, actor, orderId);
+        if (current.workflowStatus === 'COMPLETED') {
+          requireSpecialOrderReviewer(actor);
+          assertVersion(current, expectedVersion);
+          const merged = payloadFromExisting(current, body);
+          const input = await resolveSpecialOrderInput(
+            tx,
+            actor,
+            merged,
+            current,
+          );
+          const nextVersion = expectedVersion + 1;
+          const reason = optionalReason(body.reason) || 'Completed order edited.';
+          const reversal = await this.inventory.reverseInTransaction(
+            tx,
+            actor,
+            current,
+            nextVersion,
+            reason,
+            metadata,
+          );
+          receiptIds.push(...reversal.commandReceiptIds);
+          const claimed = await tx.salesOrder.updateMany({
+            where: {
+              id: orderId,
+              workflowStatus: 'COMPLETED',
+              workflowVersion: expectedVersion,
+            },
+            data: {
+              customerId: input.customer.id,
+              customerName: input.customerName,
+              customerPhone: input.customer.phone || null,
+              province: input.customer.province || null,
+              city: input.customer.city || null,
+              district: input.customer.district || null,
+              address: input.customer.address || null,
+              orderDate: input.orderDate,
+              totalAmountCents: input.totalAmountCents,
+              remark: input.remark,
+              packingStatus: input.hasShipping ? 'PENDING' : 'PACKED',
+              fulfillmentWarehouseId: input.singleWarehouseId || null,
+              workflowVersion: nextVersion,
+              inventoryAppliedAt: new Date(),
+              inventoryVersion: { increment: 1 },
+              updatedById: actor.id,
+              updatedAt: new Date(),
+            },
+          });
+          assertClaimed(claimed);
+          const existingItemIds = (current.items || []).map(
+            (item: any) => item.id,
+          );
+          if (existingItemIds.length > 0) {
+            await tx.specialOrderItemSerializedUnit.deleteMany({
+              where: { salesOrderItemId: { in: existingItemIds } },
+            });
+            await tx.salesOrderItem.deleteMany({
+              where: { id: { in: existingItemIds } },
+            });
+          }
+          for (const item of input.items) {
+            await tx.salesOrderItem.create({
+              data: {
+                ...item.data,
+                salesOrderId: orderId,
+                specialSerializedUnits: { create: item.serials },
+              },
+            });
+          }
+          const changedOrder = await this.reload(tx, orderId);
+          const approvalPosting =
+            await this.inventory.postApprovalInTransaction(
+              tx,
+              actor,
+              changedOrder,
+              nextVersion,
+              metadata,
+            );
+          const completionPosting =
+            await this.inventory.postCompletionInTransaction(
+              tx,
+              actor,
+              changedOrder,
+              nextVersion,
+              metadata,
+            );
+          receiptIds.push(
+            ...approvalPosting.commandReceiptIds,
+            ...completionPosting.commandReceiptIds,
+          );
+          let settlement = await tx.specialOrderSettlement.findUnique({
+            where: { activeOrderKey: orderId },
+          });
+          if (!settlement) {
+            settlement = await createSettlement(tx, changedOrder, new Date());
+          }
+          await replaceSettlementPayments(
+            tx,
+            actor,
+            changedOrder,
+            settlement,
+            input.payments,
+            idempotencyKey,
+            new Date(),
+          );
+          await this.specialOrderCommissions.recalculateOrderInTransaction(
+            tx,
+            orderId,
+            actor,
+            {
+              operationKey: `special-order:update:${idempotencyKey}`,
+              adjustmentType: 'ORDER_RECALC',
+              reason,
+              sourceSnapshot: {
+                previousTotalAmountCents: Number(
+                  current.totalAmountCents || 0,
+                ),
+                totalAmountCents: input.totalAmountCents,
+              },
+            },
+          );
+          const next = await this.reload(tx, orderId);
+          await this.appendWorkflowEvent(tx, actor, next, {
+            eventType: 'UPDATED',
+            fromStatus: 'COMPLETED',
+            toStatus: 'COMPLETED',
+            workflowVersion: nextVersion,
+            idempotencyKey,
+            requestHash: hash,
+            reason,
+            payloadSnapshot: {
+              ...eventOrderSnapshot(next),
+              reversalDocumentIds: reversal.documentIds,
+              inventoryDocumentIds: [
+                ...approvalPosting.documentIds,
+                ...completionPosting.documentIds,
+              ],
+            },
+          });
+          await this.appendOperationLog(
+            tx,
+            actor,
+            'update_completed',
+            current,
+            next,
+            metadata,
+          );
+          return this.reload(tx, orderId);
+        }
         if (!['DRAFT', 'REJECTED'].includes(current.workflowStatus)) {
           invalidTransition(current.workflowStatus, 'update');
         }
@@ -585,6 +801,7 @@ export class SpecialOrdersNestService {
       },
       MUTATION_TRANSACTION_OPTIONS,
     );
+    await this.inventory.dispatchCommittedReceipts(receiptIds);
     return toSpecialOrderDto(updated);
   }
 
@@ -596,6 +813,119 @@ export class SpecialOrdersNestService {
   ) {
     requireSpecialOrderRead(actor);
     const body = normalizeObject(payload, 'special order cancellation');
+    const orderId = requiredId(id, 'id');
+    const candidate = await this.loadScopedOrder(this.db(), actor, orderId);
+    if (candidate.workflowStatus === 'CANCELLED') {
+      requireSpecialOrderReviewer(actor);
+      const idempotencyKey = requiredIdempotencyKey(body.idempotencyKey);
+      const event = await this.db().specialOrderWorkflowEvent.findUnique({
+        where: { idempotencyKey },
+      });
+      if (
+        event?.salesOrderId === orderId &&
+        event?.requestHash === requestHash(body)
+      ) {
+        return toSpecialOrderDto(candidate);
+      }
+      invalidTransition(candidate.workflowStatus, 'cancel');
+    }
+    if (candidate.workflowStatus === 'COMPLETED') {
+      requireSpecialOrderReviewer(actor);
+      const reason = requiredReason(body.reason);
+      const idempotencyKey = requiredIdempotencyKey(body.idempotencyKey);
+      const expectedVersion = requiredWorkflowVersion(body.workflowVersion);
+      const hash = requestHash(body);
+      const receiptIds: string[] = [];
+      const cancelled = await this.db().$transaction(
+        async (tx: any) => {
+          const replay = await this.resolveEventReplay(
+            tx,
+            actor,
+            orderId,
+            idempotencyKey,
+            hash,
+          );
+          if (replay) return replay;
+          const current = await this.loadScopedOrder(tx, actor, orderId);
+          if (current.workflowStatus !== 'COMPLETED') {
+            invalidTransition(current.workflowStatus, 'cancel');
+          }
+          assertVersion(current, expectedVersion);
+          const nextVersion = expectedVersion + 1;
+          const posting = await this.inventory.reverseInTransaction(
+            tx,
+            actor,
+            current,
+            nextVersion,
+            reason,
+            metadata,
+          );
+          receiptIds.push(...posting.commandReceiptIds);
+          const changed = await tx.salesOrder.updateMany({
+            where: {
+              id: orderId,
+              workflowStatus: 'COMPLETED',
+              workflowVersion: expectedVersion,
+            },
+            data: {
+              workflowStatus: 'CANCELLED',
+              workflowVersion: nextVersion,
+              status: 'CANCELLED',
+              inventoryAppliedAt: null,
+              updatedById: actor.id,
+              updatedAt: new Date(),
+            },
+          });
+          assertClaimed(changed);
+          await reverseActiveSettlement(tx, current, actor, reason);
+          await tx.specialOrderPayment.updateMany({
+            where: { salesOrderId: orderId, reversedAt: null },
+            data: {
+              reversedAt: new Date(),
+              reversedById: actor.id,
+              reversalReason: reason,
+            },
+          });
+          await this.specialOrderCommissions.recalculateOrderInTransaction(
+            tx,
+            orderId,
+            actor,
+            {
+              operationKey: `special-order:void:${idempotencyKey}`,
+              adjustmentType: 'VOID',
+              reason,
+            },
+          );
+          const next = await this.reload(tx, orderId);
+          await this.appendWorkflowEvent(tx, actor, next, {
+            eventType: 'CANCELLED',
+            fromStatus: 'COMPLETED',
+            toStatus: 'CANCELLED',
+            workflowVersion: nextVersion,
+            idempotencyKey,
+            requestHash: hash,
+            reason,
+            payloadSnapshot: {
+              reversalDocumentIds: posting.documentIds,
+              financialReversed: true,
+              commissionReversed: true,
+            },
+          });
+          await this.appendOperationLog(
+            tx,
+            actor,
+            'void',
+            current,
+            next,
+            metadata,
+          );
+          return this.reload(tx, orderId);
+        },
+        MUTATION_TRANSACTION_OPTIONS,
+      );
+      await this.inventory.dispatchCommittedReceipts(receiptIds);
+      return toSpecialOrderDto(cancelled);
+    }
     return this.transition(actor, id, body, metadata, {
       action: 'cancel',
       allowedFrom: ['DRAFT', 'REJECTED'],
@@ -1265,7 +1595,7 @@ export class SpecialOrdersNestService {
   }
 
   async exportXlsx(actor: any, filters: any = {}) {
-    requireSpecialOrderRead(actor);
+    requireSpecialOrderReviewer(actor);
     const orders = await this.db().salesOrder.findMany({
       where: buildListWhere(actor, filters),
       include: SPECIAL_ORDER_INCLUDE,
@@ -1282,63 +1612,163 @@ export class SpecialOrdersNestService {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Jiangjiu Special Orders';
     workbook.created = new Date();
-    const sheet = workbook.addWorksheet('内购外销回购', {
+    const sheet = workbook.addWorksheet('内购外销回购订单', {
       views: [{ state: 'frozen', ySplit: 1 }],
     });
     sheet.columns = [
       { header: '订单号', key: 'orderNo', width: 20 },
-      { header: '类型', key: 'orderType', width: 12 },
-      { header: '工作流状态', key: 'workflowStatus', width: 14 },
+      { header: '订单类型', key: 'orderType', width: 12 },
+      { header: '客户姓名', key: 'customerName', width: 18 },
+      { header: '手机号', key: 'customerPhone', width: 16 },
+      { header: '地址', key: 'customerAddress', width: 32 },
+      { header: '商品明细', key: 'items', width: 42 },
+      { header: '上单金额(元)', key: 'totalAmount', width: 16 },
+      { header: '已支付金额(元)', key: 'paidAmount', width: 16 },
+      { header: '未支付金额(元)', key: 'unpaidAmount', width: 16 },
+      { header: '支付方式汇总', key: 'paymentSummary', width: 34 },
+      { header: '结算状态', key: 'paymentStatus', width: 14 },
+      { header: '提成对象汇总', key: 'commissionRecipients', width: 28 },
+      { header: '提成比例汇总', key: 'commissionRates', width: 22 },
+      { header: '有效提成总额(元)', key: 'commissionTotal', width: 18 },
+      { header: '提成状态', key: 'commissionStatus', width: 14 },
       { header: '订单日期', key: 'orderDate', width: 14 },
       { header: '创建人', key: 'creator', width: 16 },
-      { header: '往来对象', key: 'counterparty', width: 22 },
-      { header: '商品', key: 'product', width: 26 },
-      { header: '仓库', key: 'warehouse', width: 18 },
-      { header: '数量', key: 'quantity', width: 10 },
-      { header: '成交单价(元)', key: 'unitPrice', width: 16 },
-      { header: '行金额(元)', key: 'subtotal', width: 16 },
-      { header: '应收(元)', key: 'receivable', width: 14 },
-      { header: '应付(元)', key: 'payable', width: 14 },
-      { header: '已结算(元)', key: 'settled', width: 14 },
-      { header: '结算状态', key: 'paymentStatus', width: 12 },
+      { header: '创建时间', key: 'createdAt', width: 22 },
+      { header: '作废/退款状态', key: 'status', width: 16 },
       { header: '备注', key: 'remark', width: 30 },
     ];
     for (const raw of orders) {
       const order = toSpecialOrderDto(raw);
       const activeSettlement = order.settlement;
-      for (const item of order.items) {
-        sheet.addRow({
-          orderNo: order.orderNo,
-          orderType: orderTypeLabel(order.orderType),
-          workflowStatus: workflowStatusLabel(order.workflowStatus),
-          orderDate: order.orderDate,
-          creator: order.createdBy?.name || '',
-          counterparty: counterpartyName(order),
-          product: item.productName,
-          warehouse: item.warehouse?.name || '',
-          quantity: item.quantity,
-          unitPrice: item.unitPriceCents / 100,
-          subtotal: item.subtotalCents / 100,
-          receivable:
-            activeSettlement?.direction === 'receivable'
-              ? activeSettlement.totalAmountCents / 100
-              : 0,
-          payable:
-            activeSettlement?.direction === 'payable'
-              ? activeSettlement.totalAmountCents / 100
-              : 0,
-          settled:
-            (activeSettlement?.settledAmountCents || 0) / 100,
-          paymentStatus: activeSettlement?.paymentStatus || '',
-          remark: order.remark || '',
-        });
-      }
+      const commissions = (raw.commissionRecords || []).filter(
+        (record: any) => record.isActive !== false,
+      );
+      const paidAmountCents = Number(
+        activeSettlement?.settledAmountCents || 0,
+      );
+      sheet.addRow({
+        orderNo: order.orderNo,
+        orderType: orderTypeLabel(order.orderType),
+        customerName: order.customerName,
+        customerPhone: order.customerPhone || '',
+        customerAddress: [
+          order.province,
+          order.city,
+          order.district,
+          order.address,
+        ]
+          .filter(Boolean)
+          .join(''),
+        items: order.items
+          .map(
+            (item: any) =>
+              `${item.productName} × ${item.quantity} = ${(item.subtotalCents / 100).toFixed(2)}`,
+          )
+          .join('\n'),
+        totalAmount: order.totalAmountCents / 100,
+        paidAmount: paidAmountCents / 100,
+        unpaidAmount:
+          Math.max(0, order.totalAmountCents - paidAmountCents) / 100,
+        paymentSummary: (activeSettlement?.payments || [])
+          .map(
+            (payment: any) =>
+              `${payment.paymentMethodNameSnapshot} ${(payment.amountCents / 100).toFixed(2)}`,
+          )
+          .join('；'),
+        paymentStatus: activeSettlement?.paymentStatus || 'unpaid',
+        commissionRecipients: commissions
+          .map(
+            (record: any) =>
+              record.recipientNameSnapshot || record.targetUser?.name || '',
+          )
+          .filter(Boolean)
+          .join('；'),
+        commissionRates: commissions
+          .map(
+            (record: any) =>
+              `${(Number(record.rateSnapshot || 0) * 100).toFixed(2)}%`,
+          )
+          .join('；'),
+        commissionTotal:
+          commissions.reduce(
+            (sum: number, record: any) =>
+              sum + Number(record.amountCents || 0),
+            0,
+          ) / 100,
+        commissionStatus: commissions.length > 0 ? '已维护' : '未维护',
+        orderDate: order.orderDate,
+        creator: order.createdBy?.name || '',
+        createdAt: order.createdAt || '',
+        status: `${workflowStatusLabel(order.workflowStatus)}/${String(raw.status || '').toLowerCase()}`,
+        remark: order.remark || '',
+      });
     }
     sheet.getRow(1).font = { bold: true };
     sheet.autoFilter = {
       from: { row: 1, column: 1 },
       to: { row: 1, column: sheet.columns.length },
     };
+    for (const key of [
+      'totalAmount',
+      'paidAmount',
+      'unpaidAmount',
+      'commissionTotal',
+    ]) {
+      sheet.getColumn(key).numFmt = '0.00';
+    }
+
+    const commissionSheet = workbook.addWorksheet('提成明细', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    commissionSheet.columns = [
+      { header: '订单号', key: 'orderNo', width: 20 },
+      { header: '订单类型', key: 'orderType', width: 12 },
+      { header: '对象类型', key: 'recipientType', width: 16 },
+      { header: '员工账号/人员姓名', key: 'recipient', width: 24 },
+      { header: '提成基数(元)', key: 'base', width: 16 },
+      { header: '比例', key: 'rate', width: 12 },
+      { header: '原提成金额(元)', key: 'original', width: 18 },
+      { header: '冲减金额(元)', key: 'adjustment', width: 16 },
+      { header: '有效金额(元)', key: 'effective', width: 16 },
+      { header: '归属日期', key: 'attributionDate', width: 14 },
+      { header: '操作记录', key: 'operations', width: 48 },
+    ];
+    for (const raw of orders) {
+      for (const record of raw.commissionRecords || []) {
+        commissionSheet.addRow({
+          orderNo: raw.orderNo,
+          orderType: orderTypeLabel(
+            String(raw.orderType || '').toLowerCase(),
+          ),
+          recipientType:
+            String(record.recipientType || '').toUpperCase() === 'EMPLOYEE'
+              ? '内部员工'
+              : '非员工/其他人员',
+          recipient:
+            record.targetUser?.username ||
+            record.recipientNameSnapshot ||
+            '',
+          base: Number(record.baseAmountCents || 0) / 100,
+          rate: `${(Number(record.rateSnapshot || 0) * 100).toFixed(2)}%`,
+          original: Number(record.originalAmountCents || 0) / 100,
+          adjustment: Number(record.adjustmentAmountCents || 0) / 100,
+          effective: Number(record.amountCents || 0) / 100,
+          attributionDate: formatDate(
+            record.attributionDate || raw.orderDate,
+          ),
+          operations: (record.adjustments || [])
+            .map(
+              (item: any) =>
+                `${toIso(item.createdAt) || ''} ${item.adjustmentType || ''} ${item.reason || ''}`,
+            )
+            .join('\n'),
+        });
+      }
+    }
+    commissionSheet.getRow(1).font = { bold: true };
+    for (const key of ['base', 'original', 'adjustment', 'effective']) {
+      commissionSheet.getColumn(key).numFmt = '0.00';
+    }
     const data = await workbook.xlsx.writeBuffer();
     return {
       fileName: `special-orders-${new Date().toISOString().slice(0, 10)}.xlsx`,
@@ -1617,178 +2047,20 @@ async function resolveSpecialOrderInput(
     orderType === 'BUYBACK'
       ? await requireDefaultWarehouse(tx)
       : null;
-  let customer: any = null;
-  let customerName = '';
-  let sourceSalesOrderId: string | null = null;
-  let sourceRemark: string | null = null;
-  let hasOriginalPurchase: boolean | null = null;
-  let internalEmployeeId: string | null = null;
-  let externalPartyType: string | null = null;
-  let externalPartyId: string | null = null;
-  let externalPartyNameSnapshot: string | null = null;
-
-  if (orderType === 'BUYBACK') {
-    const customerId = requiredId(
-      body.customerId ?? existing?.customerId,
-      'customerId',
-    );
-    customer = await tx.customer.findUnique({
-      where: { id: customerId },
-    });
-    if (!customer) {
-      throw createHttpError(
-        404,
-        'CUSTOMER_NOT_FOUND',
-        'Buyback customer does not exist.',
-      );
-    }
-    customerName = customer.name;
-    hasOriginalPurchase = requiredBoolean(
-      body.hasOriginalPurchase ??
-        existing?.hasOriginalPurchase,
-      'hasOriginalPurchase',
-    );
-    if (hasOriginalPurchase) {
-      sourceSalesOrderId = requiredId(
-        body.sourceSalesOrderId ??
-          existing?.sourceSalesOrderId,
-        'sourceSalesOrderId',
-      );
-      const source = await tx.salesOrder.findUnique({
-        where: { id: sourceSalesOrderId },
-      });
-      if (
-        !source ||
-        source.customerId !== customer.id ||
-        normalizeEnum(source.orderType) === 'BUYBACK' ||
-        (source.workflowStatus &&
-          !SPECIAL_ORDER_EFFECTIVE_STATUSES.has(
-            normalizeEnum(source.workflowStatus),
-          ))
-      ) {
-        throw createHttpError(
-          409,
-          'BUYBACK_SOURCE_ORDER_INVALID',
-          'Original purchase order must be an effective sales order belonging to the selected customer.',
-        );
-      }
-      sourceRemark = null;
-    } else {
-      if (body.sourceSalesOrderId) {
-        validation(
-          'sourceSalesOrderId must be empty when hasOriginalPurchase is false.',
-        );
-      }
-      sourceSalesOrderId = null;
-      sourceRemark = requiredText(
-        body.sourceRemark ?? existing?.sourceRemark,
-        'sourceRemark',
-        2_000,
-      );
-    }
-  } else if (orderType === 'INTERNAL') {
-    internalEmployeeId = requiredId(
-      body.internalEmployeeId ??
-        existing?.internalEmployeeId,
-      'internalEmployeeId',
-    );
-    const employee = await tx.user.findUnique({
-      where: { id: internalEmployeeId },
-    });
-    if (!employee?.isActive) {
-      throw createHttpError(
-        404,
-        'INTERNAL_EMPLOYEE_NOT_FOUND',
-        'Active internal employee account does not exist.',
-      );
-    }
-    customerName = employee.name;
-    const optionalCustomerId = optionalId(
-      body.customerId ?? existing?.customerId,
-      'customerId',
-    );
-    if (optionalCustomerId) {
-      customer = await tx.customer.findUnique({
-        where: { id: optionalCustomerId },
-      });
-      if (!customer) {
-        throw createHttpError(
-          404,
-          'CUSTOMER_NOT_FOUND',
-          'Related customer does not exist.',
-        );
-      }
-    }
-  } else {
-    externalPartyType = normalizeExternalPartyType(
-      body.externalPartyType ??
-        existing?.externalPartyType,
-    );
-    if (externalPartyType === 'GUIDE') {
-      externalPartyId = requiredId(
-        body.externalPartyId ?? existing?.externalPartyId,
-        'externalPartyId',
-      );
-      const guide = await tx.guide.findUnique({
-        where: { id: externalPartyId },
-      });
-      if (!guide) {
-        throw createHttpError(
-          404,
-          'GUIDE_NOT_FOUND',
-          'External guide does not exist.',
-        );
-      }
-      externalPartyNameSnapshot = guide.name;
-    } else if (externalPartyType === 'TRAVEL_AGENCY') {
-      externalPartyId = requiredId(
-        body.externalPartyId ?? existing?.externalPartyId,
-        'externalPartyId',
-      );
-      const agency = await tx.travelAgency.findUnique({
-        where: { id: externalPartyId },
-      });
-      if (!agency) {
-        throw createHttpError(
-          404,
-          'TRAVEL_AGENCY_NOT_FOUND',
-          'External travel agency does not exist.',
-        );
-      }
-      externalPartyNameSnapshot = agency.name;
-    } else {
-      if (body.externalPartyId) {
-        validation(
-          'externalPartyId must be empty for externalPartyType=other.',
-        );
-      }
-      externalPartyId = null;
-      externalPartyNameSnapshot = requiredText(
-        body.externalPartyName ??
-          body.externalPartyNameSnapshot ??
-          existing?.externalPartyNameSnapshot,
-        'externalPartyName',
-        160,
-      );
-    }
-    customerName = externalPartyNameSnapshot;
-    const optionalCustomerId = optionalId(
-      body.customerId ?? existing?.customerId,
-      'customerId',
-    );
-    if (optionalCustomerId) {
-      customer = await tx.customer.findUnique({
-        where: { id: optionalCustomerId },
-      });
-      if (!customer) {
-        throw createHttpError(
-          404,
-          'CUSTOMER_NOT_FOUND',
-          'Related customer does not exist.',
-        );
-      }
-    }
-  }
+  const customer = await resolveSpecialOrderCustomer(
+    tx,
+    actor,
+    body,
+    existing,
+  );
+  const customerName = customer.name;
+  const sourceSalesOrderId: string | null = null;
+  const sourceRemark: string | null = null;
+  const hasOriginalPurchase: boolean | null = null;
+  const internalEmployeeId: string | null = null;
+  const externalPartyType: string | null = null;
+  const externalPartyId: string | null = null;
+  const externalPartyNameSnapshot: string | null = null;
 
   const itemBodies = Array.isArray(body.items)
     ? body.items
@@ -1837,64 +2109,20 @@ async function resolveSpecialOrderInput(
     const quantity = requiredInteger(
       item.quantity,
       `items[${index}].quantity`,
-      { nonZero: true, min: -100_000, max: 100_000 },
+      { min: 1, max: 100_000 },
     );
-    const adjustmentReason =
-      quantity < 0
-        ? requiredReason(
-            item.adjustmentReason,
-            `items[${index}].adjustmentReason`,
-          )
-        : optionalReason(
-            item.adjustmentReason,
-            `items[${index}].adjustmentReason`,
-          );
-    const listUnitPriceCents = requiredInteger(
-      item.listUnitPriceCents ?? item.unitPriceCents ?? 0,
-      `items[${index}].listUnitPriceCents`,
+    const subtotalCents = requiredInteger(
+      item.totalPriceCents ?? item.subtotalCents,
+      `items[${index}].totalPriceCents`,
       { min: 0 },
     );
-    const isGift = optionalBoolean(
-      item.isGift,
-      `items[${index}].isGift`,
-      false,
-    );
-    const unitPriceCents = isGift
-      ? 0
-      : requiredInteger(
-          item.unitPriceCents ?? 0,
-          `items[${index}].unitPriceCents`,
-          { min: 0 },
-        );
-    const priceOverrideReason =
-      !isGift && unitPriceCents !== listUnitPriceCents
-        ? requiredReason(
-            item.priceOverrideReason,
-            `items[${index}].priceOverrideReason`,
-          )
-        : optionalReason(
-            item.priceOverrideReason,
-            `items[${index}].priceOverrideReason`,
-          );
-    const subtotalCents = safeMultiply(quantity, unitPriceCents);
+    const unitPriceCents = Math.round(subtotalCents / quantity);
+    const listUnitPriceCents = unitPriceCents;
+    const isGift = false;
+    const priceOverrideReason = null;
+    const adjustmentReason = null;
     totalAmountCents = safeAdd(totalAmountCents, subtotalCents);
-    const discountAmountCents =
-      optionalInteger(
-        item.discountAmountCents,
-        `items[${index}].discountAmountCents`,
-      ) ??
-      (quantity > 0
-        ? Math.max(
-            0,
-            safeMultiply(quantity, listUnitPriceCents) -
-              subtotalCents,
-          )
-        : 0);
-    if (discountAmountCents < 0) {
-      validation(
-        `items[${index}].discountAmountCents must be non-negative.`,
-      );
-    }
+    const discountAmountCents = 0;
     const deliveryType = normalizeDeliveryType(item.deliveryType);
     hasShipping = hasShipping || deliveryType === 'SHIPPING';
     const warehouseId =
@@ -1969,6 +2197,28 @@ async function resolveSpecialOrderInput(
         `items[${index}].logisticsCodes is only accepted for serialized buyback lines.`,
       );
     }
+    const actualCost =
+      orderType === 'BUYBACK'
+        ? null
+        : await tx.productActualCost.findFirst({
+            where: {
+              productId: product.id,
+              isActive: true,
+              effectiveFrom: { lte: orderDate },
+              OR: [
+                { effectiveTo: null },
+                { effectiveTo: { gte: orderDate } },
+              ],
+            },
+            orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+          });
+    const actualUnitCostCents = actualCost
+      ? Number(actualCost.costCents || 0)
+      : null;
+    const actualCostSubtotalCents =
+      actualUnitCostCents === null
+        ? null
+        : actualUnitCostCents * quantity;
     const itemId = crypto.randomUUID();
     items.push({
       data: {
@@ -1980,9 +2230,12 @@ async function resolveSpecialOrderInput(
         quantity,
         unitPriceCents,
         subtotalCents,
-        actualUnitCostCents: null,
-        actualCostSubtotalCents: null,
-        grossProfitCents: null,
+        actualUnitCostCents,
+        actualCostSubtotalCents,
+        grossProfitCents:
+          actualCostSubtotalCents === null
+            ? null
+            : subtotalCents - actualCostSubtotalCents,
         deliveryType,
         warehouseId,
         listUnitPriceCents,
@@ -2012,6 +2265,12 @@ async function resolveSpecialOrderInput(
         ? existing.specialAttachments
         : []),
   );
+  const payments = await resolveSpecialOrderPayments(
+    tx,
+    body.payments ??
+      (existing ? persistedPaymentsToInput(existing) : []),
+    totalAmountCents,
+  );
   return {
     orderType,
     orderDate,
@@ -2033,6 +2292,7 @@ async function resolveSpecialOrderInput(
         ? Array.from(warehouseIds)[0]
         : null,
     attachments,
+    payments,
   };
 }
 
@@ -2052,6 +2312,17 @@ function payloadFromExisting(
     orderType: String(order.orderType).toLowerCase(),
     orderDate: formatDate(order.orderDate),
     customerId: order.customerId,
+    customer: order.customer
+      ? {
+          name: order.customer.name,
+          phone: order.customer.phone,
+          province: order.customer.province,
+          city: order.customer.city,
+          district: order.customer.district,
+          address: order.customer.address,
+          notes: order.customer.notes,
+        }
+      : undefined,
     hasOriginalPurchase: order.hasOriginalPurchase,
     sourceSalesOrderId: order.sourceSalesOrderId,
     sourceRemark: order.sourceRemark,
@@ -2062,6 +2333,7 @@ function payloadFromExisting(
     externalPartyId: order.externalPartyId,
     externalPartyName: order.externalPartyNameSnapshot,
     remark: order.remark,
+    payments: persistedPaymentsToInput(order),
     items: persistedItemsToInput(order.items),
     attachments: (order.specialAttachments || []).map(
       (attachment: any) => ({
@@ -2081,12 +2353,7 @@ function persistedItemsToInput(items: any[]) {
     productId: item.productId,
     warehouseId: item.warehouseId,
     quantity: item.quantity,
-    listUnitPriceCents: item.listUnitPriceCents,
-    unitPriceCents: item.unitPriceCents,
-    discountAmountCents: item.discountAmountCents,
-    isGift: item.isGift,
-    priceOverrideReason: item.priceOverrideReason,
-    adjustmentReason: item.adjustmentReason,
+    totalPriceCents: item.subtotalCents,
     inventoryCondition: String(
       item.inventoryCondition || 'SALEABLE',
     ).toLowerCase(),
@@ -2096,6 +2363,239 @@ function persistedItemsToInput(items: any[]) {
       (serial: any) => serial.logisticsCodeSnapshot,
     ),
   }));
+}
+
+function persistedPaymentsToInput(order: any) {
+  const activeSettlement = (order?.specialSettlements || []).find(
+    (settlement: any) => settlement?.isActive,
+  );
+  return (activeSettlement?.payments || [])
+    .filter((payment: any) => !payment.reversedAt)
+    .map((payment: any) => ({
+      paymentMethodId: payment.paymentMethodId,
+      amountCents: Number(payment.amountCents || 0),
+      paidAt: payment.paidAt,
+      referenceNo: payment.referenceNo,
+      remark: payment.remark,
+    }));
+}
+
+async function resolveSpecialOrderCustomer(
+  tx: any,
+  actor: any,
+  body: Record<string, any>,
+  existing?: any,
+) {
+  const customerId = optionalId(
+    body.customerId ??
+      (body.customer === undefined ? existing?.customerId : null),
+    'customerId',
+  );
+  const customerPayload = body.customer;
+  if (customerId) {
+    const current = await tx.customer.findUnique({ where: { id: customerId } });
+    if (!current) {
+      throw createHttpError(
+        404,
+        'CUSTOMER_NOT_FOUND',
+        'Customer does not exist.',
+      );
+    }
+    if (customerPayload === undefined) return current;
+    const patch = normalizeCustomerData(customerPayload, actor, false);
+    return tx.customer.update({
+      where: { id: current.id },
+      data: patch,
+    });
+  }
+
+  if (!customerPayload || typeof customerPayload !== 'object' || Array.isArray(customerPayload)) {
+    validation('customerId or customer is required.');
+  }
+  const data = normalizeCustomerData(customerPayload, actor, true);
+  const duplicateClauses: any[] = [];
+  if (data.phone) duplicateClauses.push({ phone: data.phone });
+  duplicateClauses.push({
+    name: data.name,
+    address: data.address,
+  });
+  const duplicate = await tx.customer.findFirst({
+    where: { OR: duplicateClauses },
+    orderBy: { updatedAt: 'desc' },
+  });
+  if (duplicate) {
+    return tx.customer.update({
+      where: { id: duplicate.id },
+      data: normalizeCustomerData(customerPayload, actor, false),
+    });
+  }
+  return tx.customer.create({
+    data: {
+      id: crypto.randomUUID(),
+      ...data,
+    },
+  });
+}
+
+function normalizeCustomerData(payload: any, actor: any, creating: boolean) {
+  const now = new Date();
+  const data: any = {
+    updatedById: actor.id,
+    updatedAt: now,
+  };
+  const fields = ['phone', 'province', 'city', 'district', 'address', 'notes'];
+  if (creating || Object.prototype.hasOwnProperty.call(payload, 'name')) {
+    data.name = requiredText(payload.name, 'customer.name', 100);
+  }
+  for (const field of fields) {
+    if (creating || Object.prototype.hasOwnProperty.call(payload, field)) {
+      const maxLength = field === 'phone' ? 30 : field === 'address' ? 255 : field === 'notes' ? 2_000 : 60;
+      data[field] = optionalText(payload[field], `customer.${field}`, maxLength);
+    }
+  }
+  if (creating) {
+    Object.assign(data, {
+      financeMark: false,
+      markedById: null,
+      markedAt: null,
+      createdById: actor.id,
+      createdAt: now,
+    });
+  }
+  return data;
+}
+
+async function resolveSpecialOrderPayments(
+  tx: any,
+  value: unknown,
+  orderTotalCents: number,
+) {
+  if (!Array.isArray(value)) {
+    validation('payments must be an array.');
+  }
+  if (value.length > 50) {
+    validation('payments must not contain more than 50 entries.');
+  }
+  const payments = [];
+  let paidAmountCents = 0;
+  for (const [index, raw] of value.entries()) {
+    const payment = normalizeObject(raw, `payments[${index}]`);
+    const paymentMethodId = requiredId(
+      payment.paymentMethodId,
+      `payments[${index}].paymentMethodId`,
+    );
+    const method = await tx.paymentMethod.findUnique({
+      where: { id: paymentMethodId },
+    });
+    if (!method?.isActive) {
+      throw createHttpError(
+        404,
+        'PAYMENT_METHOD_NOT_FOUND',
+        `Active payment method does not exist for payments[${index}].`,
+      );
+    }
+    const amountCents = requiredInteger(
+      payment.amountCents,
+      `payments[${index}].amountCents`,
+      { min: 1 },
+    );
+    paidAmountCents = safeAdd(paidAmountCents, amountCents);
+    payments.push({
+      paymentMethodId: method.id,
+      paymentMethodNameSnapshot: method.name,
+      amountCents,
+      paidAt: payment.paidAt
+        ? requiredDate(payment.paidAt, `payments[${index}].paidAt`)
+        : new Date(),
+      referenceNo: optionalText(
+        payment.referenceNo ?? payment.voucherNo,
+        `payments[${index}].referenceNo`,
+        120,
+      ),
+      remark: optionalText(
+        payment.remark,
+        `payments[${index}].remark`,
+        500,
+      ),
+    });
+  }
+  if (paidAmountCents > orderTotalCents) {
+    throw createHttpError(
+      400,
+      'SPECIAL_ORDER_PAYMENT_EXCEEDS_TOTAL',
+      'Total payment amount must not exceed the order amount.',
+    );
+  }
+  return payments;
+}
+
+async function replaceSettlementPayments(
+  tx: any,
+  actor: any,
+  order: any,
+  settlement: any,
+  payments: any[],
+  operationKey: string,
+  now: Date,
+) {
+  await tx.specialOrderPayment.updateMany({
+    where: {
+      settlementId: settlement.id,
+      reversedAt: null,
+    },
+    data: {
+      reversedAt: now,
+      reversedById: actor.id,
+      reversalReason: 'Payment details replaced with the order mutation.',
+    },
+  });
+  let settledAmountCents = 0;
+  for (const [index, payment] of payments.entries()) {
+    const idempotencyKey = `${operationKey}:payment:${index + 1}`;
+    const data = {
+      salesOrderId: order.id,
+      settlementId: settlement.id,
+      direction: settlement.direction,
+      amountCents: payment.amountCents,
+      paymentMethodId: payment.paymentMethodId,
+      paymentMethodNameSnapshot: payment.paymentMethodNameSnapshot,
+      paidAt: payment.paidAt,
+      referenceNo: payment.referenceNo,
+      remark: payment.remark,
+    };
+    await tx.specialOrderPayment.create({
+      data: {
+        id: crypto.randomUUID(),
+        ...data,
+        idempotencyKey,
+        requestHash: requestHash(data),
+        recordedById: actor.id,
+        createdAt: now,
+      },
+    });
+    settledAmountCents = safeAdd(
+      settledAmountCents,
+      Number(payment.amountCents || 0),
+    );
+  }
+  const totalAmountCents = Number(order.totalAmountCents || 0);
+  const paymentStatus =
+    settledAmountCents === 0 && totalAmountCents > 0
+      ? 'UNPAID'
+      : settledAmountCents < totalAmountCents
+        ? 'PARTIAL'
+        : 'PAID';
+  const changed = await tx.specialOrderSettlement.updateMany({
+    where: { id: settlement.id, version: settlement.version, isActive: true },
+    data: {
+      totalAmountCents,
+      settledAmountCents,
+      paymentStatus,
+      version: { increment: 1 },
+      updatedAt: now,
+    },
+  });
+  assertClaimed(changed);
 }
 
 function normalizeAttachments(value: unknown) {
@@ -2363,6 +2863,12 @@ function toSpecialOrderDto(order: any): any {
     customerId: order.customerId || null,
     customerName: order.customerName || '',
     customerPhone: order.customerPhone || null,
+    province: order.province || null,
+    city: order.city || null,
+    district: order.district || null,
+    address: order.address || null,
+    customerNotes: order.customer?.notes || null,
+    status: String(order.status || '').toLowerCase(),
     hasOriginalPurchase:
       order.hasOriginalPurchase === null ||
       order.hasOriginalPurchase === undefined
@@ -2429,6 +2935,7 @@ function toSpecialOrderDto(order: any): any {
       unitPriceCents: Number(item.unitPriceCents || 0),
       discountAmountCents: Number(item.discountAmountCents || 0),
       subtotalCents: Number(item.subtotalCents || 0),
+      totalPriceCents: Number(item.subtotalCents || 0),
       isGift: Boolean(item.isGift),
       priceOverrideReason: item.priceOverrideReason || null,
       adjustmentReason: item.adjustmentReason || null,
@@ -2521,7 +3028,9 @@ function toSettlementDto(settlement: any) {
     reversedAt: toIso(settlement.reversedAt),
     reversalReason: settlement.reversalReason || null,
     reversedBy: userDto(settlement.reversedBy),
-    payments: (settlement.payments || []).map((payment: any) => ({
+    payments: (settlement.payments || [])
+      .filter((payment: any) => !payment.reversedAt)
+      .map((payment: any) => ({
       id: payment.id,
       direction: String(payment.direction).toLowerCase(),
       amountCents: Number(payment.amountCents || 0),
@@ -2533,7 +3042,7 @@ function toSettlementDto(settlement: any) {
       remark: payment.remark || null,
       recordedBy: userDto(payment.recordedBy),
       createdAt: toIso(payment.createdAt),
-    })),
+      })),
     createdAt: toIso(settlement.createdAt),
     updatedAt: toIso(settlement.updatedAt),
   };

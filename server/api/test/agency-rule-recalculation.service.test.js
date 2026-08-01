@@ -126,6 +126,10 @@ test('unit: missing rules return structured Chinese warnings and repeated recalc
     calculationWarnings: [
       { code: 'missing_agency_deduction_rule', context: {} },
       { code: 'missing_agency_rebate_rule', context: {} },
+      {
+        code: 'agency_name_legacy_fallback',
+        context: { ruleId: 'legacy-name-rule' },
+      },
     ],
   });
   const service = createService(fixture);
@@ -158,6 +162,14 @@ test('unit: missing rules return structured Chinese warnings and repeated recalc
   assert.equal(
     first.warnings.some(
       (warning) => warning.code === 'missing_agency_monthly_rebate_rule',
+    ),
+    true,
+  );
+  assert.equal(
+    first.warnings.some(
+      (warning) =>
+        warning.code === 'agency_name_legacy_fallback' &&
+        warning.message.includes('未绑定 ID'),
     ),
     true,
   );

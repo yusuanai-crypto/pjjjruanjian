@@ -34,30 +34,22 @@ export class CommissionRulesNestController {
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      commissionRule: await this.rulesService.createCommissionRule(
-        actor,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.createCommissionRule(actor, body, {
+      ipAddress: getRequestIp(request),
+    });
+    return buildRuleMutationResponse('commissionRule', result);
   }
 
   @Patch()
   async updateFromBody(@Body() body: any, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      commissionRule: await this.rulesService.updateCommissionRule(
-        actor,
-        body?.id,
-        stripId(body),
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.updateCommissionRule(
+      actor,
+      body?.id,
+      stripId(body),
+      { ipAddress: getRequestIp(request) },
+    );
+    return buildRuleMutationResponse('commissionRule', result);
   }
 
   @Patch(':id')
@@ -67,16 +59,13 @@ export class CommissionRulesNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      commissionRule: await this.rulesService.updateCommissionRule(
-        actor,
-        id,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    const result = await this.rulesService.updateCommissionRule(
+      actor,
+      id,
+      body,
+      { ipAddress: getRequestIp(request) },
+    );
+    return buildRuleMutationResponse('commissionRule', result);
   }
 }
 

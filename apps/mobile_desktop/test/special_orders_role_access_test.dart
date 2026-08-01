@@ -8,6 +8,7 @@ void main() {
     for (final role in [
       UserRole.sales,
       UserRole.afterSales,
+      UserRole.finance,
       UserRole.boss,
       UserRole.admin,
       UserRole.superAdmin,
@@ -21,7 +22,6 @@ void main() {
     }
     for (final role in [
       UserRole.frontDesk,
-      UserRole.finance,
       UserRole.warehouse,
       UserRole.taster,
     ]) {
@@ -34,7 +34,9 @@ void main() {
     }
     expect(canCreateSpecialOrders(UserRole.sales), isTrue);
     expect(canCreateSpecialOrders(UserRole.afterSales), isTrue);
-    expect(canCreateSpecialOrders(UserRole.boss), isFalse);
+    expect(canCreateSpecialOrders(UserRole.boss), isTrue);
+    expect(canCreateSpecialOrders(UserRole.finance), isTrue);
+    expect(canReviewSpecialOrders(UserRole.finance), isTrue);
     expect(canReviewSpecialOrders(UserRole.boss), isTrue);
     expect(canReviewSpecialOrders(UserRole.admin), isTrue);
     expect(canReviewSpecialOrders(UserRole.superAdmin), isTrue);

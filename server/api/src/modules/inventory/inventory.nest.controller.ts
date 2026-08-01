@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -228,6 +229,69 @@ export class InventoryNestController {
         requestMetadata(request),
       ),
     };
+  }
+
+  @Get('warehouses/:id/products')
+  async listWarehouseProducts(
+    @Param('id') id: string,
+    @Query() query: any,
+    @Req() request: any,
+  ) {
+    return await this.inventoryQueryService.listWarehouseProducts(
+      await this.authService.authenticateRequest(request),
+      id,
+      query,
+    );
+  }
+
+  @Post('warehouses/:id/products')
+  async addWarehouseProduct(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() request: any,
+  ) {
+    return await this.inventoryQueryService.addWarehouseProduct(
+      await this.authService.authenticateRequest(request),
+      id,
+      body,
+      requestMetadata(request),
+    );
+  }
+
+  @Delete('warehouses/:warehouseId/products/:productId')
+  async deactivateWarehouseProduct(
+    @Param('warehouseId') warehouseId: string,
+    @Param('productId') productId: string,
+    @Req() request: any,
+  ) {
+    return await this.inventoryQueryService.deactivateWarehouseProduct(
+      await this.authService.authenticateRequest(request),
+      warehouseId,
+      productId,
+      requestMetadata(request),
+    );
+  }
+
+  @Get('warehouses/:id')
+  async getWarehouse(@Param('id') id: string, @Req() request: any) {
+    return {
+      warehouse: await this.inventoryQueryService.getWarehouse(
+        await this.authService.authenticateRequest(request),
+        id,
+      ),
+    };
+  }
+
+  @Delete('warehouses/:id')
+  async deleteWarehouse(
+    @Param('id') id: string,
+    @Req() request: any,
+  ) {
+    return await this.inventoryQueryService.deleteWarehouse(
+      await this.authService.authenticateRequest(request),
+      id,
+      requestMetadata(request),
+    );
   }
 
   @Get('stocks')

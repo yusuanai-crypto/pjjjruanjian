@@ -1337,6 +1337,12 @@ function getSalesPerformanceAfterSalesInclude() {
 
 function getSalesOrderProfitAnalyticsInclude() {
   return {
+    salesUser: {
+      select: {
+        id: true,
+        leaderId: true,
+      },
+    },
     items: true,
     paymentDetails: {
       select: {

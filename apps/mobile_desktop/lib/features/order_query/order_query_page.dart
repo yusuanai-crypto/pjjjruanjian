@@ -20,6 +20,7 @@ import '../../shared/widgets/search_filter_bar.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
 import '../travel_groups/travel_group_picker_dialog.dart';
+import '../special_orders/special_orders_page.dart';
 
 class OrderQueryPage extends StatefulWidget {
   const OrderQueryPage({
@@ -98,6 +99,8 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   bool get _canControlPaymentLock =>
       widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
   bool get _canConfirmAgencyCollection => _canCompleteOrder;
+  bool get _canMaintainSpecialOrderRecords =>
+      canMaintainSpecialOrders(widget.role);
 
   @override
   void initState() {
@@ -250,10 +253,13 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                     loading: _detailLoading,
                     errorMessage: _detailErrorMessage,
                     canMark: _canMark,
-                    canEditBasics: _canEditBasics &&
-                        (widget.role != UserRole.sales ||
-                            selected.canEditByCurrentUser),
-                    canChangePointsDestination: _canChangePointsDestination,
+                    canEditBasics: selected.isWorkflowSpecialOrder
+                        ? _canMaintainSpecialOrderRecords
+                        : _canEditBasics &&
+                            (widget.role != UserRole.sales ||
+                                selected.canEditByCurrentUser),
+                    canChangePointsDestination: _canChangePointsDestination &&
+                        !selected.isWorkflowSpecialOrder,
                     orderBusy: _busyOrderIds.contains(selected.id),
                     customerBusy: _busyCustomerIds.contains(
                       selected.customerId ?? selected.customer?.id ?? '',
@@ -262,8 +268,17 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                         runAction(() => _toggleOrderMark(selected)),
                     onToggleCustomerMark: () =>
                         runAction(() => _toggleCustomerMark(selected)),
-                    onEditBasics: () =>
-                        runAction(() => _openBasicEditDialog(selected)),
+                    onEditBasics: () => runAction(
+                      () => selected.isWorkflowSpecialOrder
+                          ? _openSpecialOrderEdit(selected)
+                          : _openBasicEditDialog(selected),
+                    ),
+                    onManageCommissions: selected.isWorkflowSpecialOrder &&
+                            _canMaintainSpecialOrderRecords
+                        ? () => runAction(
+                              () => _openSpecialOrderCommissions(selected),
+                            )
+                        : null,
                     onEditShippingDate: selected.canEditShippingDate
                         ? () => runAction(
                               () => _openShippingDateDialog(selected),
@@ -271,21 +286,26 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
                         : null,
                     onOpenQrSalesSheet: () =>
                         runAction(() => _openQrSalesSheetDialog(selected)),
-                    onChangePointsDestination: () => runAction(
-                      () => _changePointsDestination(selected),
-                    ),
+                    onChangePointsDestination: selected.isWorkflowSpecialOrder
+                        ? null
+                        : () => runAction(
+                              () => _changePointsDestination(selected),
+                            ),
                     onEditPersonalPoints: null,
-                    onToggleCompletion: _canCompleteOrder
-                        ? () => runAction(
-                              () => _toggleOrderCompletion(selected),
-                            )
-                        : null,
-                    onTogglePaymentLock: _canControlPaymentLock
+                    onToggleCompletion:
+                        _canCompleteOrder && !selected.isWorkflowSpecialOrder
+                            ? () => runAction(
+                                  () => _toggleOrderCompletion(selected),
+                                )
+                            : null,
+                    onTogglePaymentLock: _canControlPaymentLock &&
+                            !selected.isWorkflowSpecialOrder
                         ? () => runAction(
                               () => _togglePaymentDetailsLock(selected),
                             )
                         : null,
-                    onConfirmAgencyCollection: _canConfirmAgencyCollection
+                    onConfirmAgencyCollection: _canConfirmAgencyCollection &&
+                            !selected.isWorkflowSpecialOrder
                         ? (detail) => runAction(
                               () => _toggleAgencyCollectionConfirmation(
                                 selected,
@@ -327,6 +347,55 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
         _busyOrderIds.remove(order.id);
         _detailErrorMessage = _messageForError(error);
       });
+    }
+  }
+
+  Future<void> _openSpecialOrderEdit(SalesOrderRecord order) async {
+    try {
+      final results = await Future.wait([
+        _businessApi.getSpecialOrder(order.id),
+        _businessApi.getSpecialOrderReferenceData(),
+      ]);
+      if (!mounted) return;
+      final saved = await showSpecialOrderFormDialog(
+        context: context,
+        api: _businessApi,
+        orderType: order.orderType.toLowerCase(),
+        references: results[1] as SpecialOrderReferenceData,
+        existing: results[0] as SpecialOrderRecord,
+      );
+      if (saved != null && mounted) {
+        final updated = await _businessApi.getSalesOrder(order.id);
+        if (mounted) _replaceOrder(updated);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _detailErrorMessage = _messageForError(error));
+      }
+    }
+  }
+
+  Future<void> _openSpecialOrderCommissions(SalesOrderRecord order) async {
+    try {
+      final results = await Future.wait([
+        _businessApi.getSpecialOrder(order.id),
+        _businessApi.getSpecialOrderReferenceData(),
+      ]);
+      if (!mounted) return;
+      await showSpecialOrderCommissionDialog(
+        context: context,
+        api: _businessApi,
+        order: results[0] as SpecialOrderRecord,
+        employees: (results[1] as SpecialOrderReferenceData).employees,
+      );
+      if (mounted) {
+        final updated = await _businessApi.getSalesOrder(order.id);
+        if (mounted) _replaceOrder(updated);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _detailErrorMessage = _messageForError(error));
+      }
     }
   }
 
@@ -416,8 +485,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     });
     try {
       late SalesOrderRecord updated;
+      CommissionRecalculationResult? commissionRecalculation;
       if (widget.role == UserRole.sales) {
-        updated = await _businessApi.salesEditSalesOrder(
+        final mutation =
+            await _businessApi.salesEditSalesOrderWithRecalculation(
           order.id,
           {
             ...result.orderPayload,
@@ -425,11 +496,15 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
             ...result.packingPayload,
           },
         );
+        updated = mutation.salesOrder;
+        commissionRecalculation = mutation.recalculation;
       } else {
-        updated = await _businessApi.updateSalesOrder(
+        final mutation = await _businessApi.updateSalesOrderWithRecalculation(
           order.id,
           result.orderPayload,
         );
+        updated = mutation.salesOrder;
+        commissionRecalculation = mutation.recalculation;
         if (result.financePayload.isNotEmpty) {
           updated = await _businessApi.updateSalesOrderFinance(
             order.id,
@@ -449,7 +524,13 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       _replaceOrder(updated);
       setState(() => _busyOrderIds.remove(order.id));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${updated.orderNo} 已保存订单信息。')),
+        SnackBar(
+          content: Text(
+            commissionRecalculation?.warnings.isNotEmpty == true
+                ? '${updated.orderNo} 已保存；${_orderCommissionWarningSummary(commissionRecalculation!)}'
+                : '${updated.orderNo} 已保存订单信息。',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -1188,6 +1269,7 @@ class _OrderDetailPanel extends StatelessWidget {
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
+    required this.onManageCommissions,
     required this.onEditShippingDate,
     required this.onOpenQrSalesSheet,
     required this.onChangePointsDestination,
@@ -1209,6 +1291,7 @@ class _OrderDetailPanel extends StatelessWidget {
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
+  final VoidCallback? onManageCommissions;
   final VoidCallback? onEditShippingDate;
   final VoidCallback? onOpenQrSalesSheet;
   final VoidCallback? onChangePointsDestination;
@@ -1286,6 +1369,7 @@ class _OrderDetailPanel extends StatelessWidget {
               onToggleOrderMark: onToggleOrderMark,
               onToggleCustomerMark: onToggleCustomerMark,
               onEditBasics: onEditBasics,
+              onManageCommissions: onManageCommissions,
               onOpenQrSalesSheet: onOpenQrSalesSheet,
               onChangePointsDestination: onChangePointsDestination,
               onEditPersonalPoints: onEditPersonalPoints,
@@ -1341,6 +1425,12 @@ class _OrderDetailPanel extends StatelessWidget {
               ),
             ],
             _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
+            _InfoRow(
+              label: '外联人员',
+              value: order.outreachUserId == null
+                  ? '无外联，不计算外联提成'
+                  : order.outreachUserId!,
+            ),
             const Divider(height: 24),
             const _SectionTitle('客户快照'),
             _InfoRow(label: '客户姓名', value: _display(order.customerName)),
@@ -1375,6 +1465,31 @@ class _OrderDetailPanel extends StatelessWidget {
                 cents: order.tasterCommissionCents,
               ),
               _InfoRow(label: '品鉴师', value: _display(order.tasterName)),
+            ],
+            if (order.isWorkflowSpecialOrder &&
+                onManageCommissions != null) ...[
+              const Divider(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: _SectionTitle('提成信息')),
+                  OutlinedButton.icon(
+                    key: const ValueKey('order-manual-commission-button'),
+                    onPressed: onManageCommissions,
+                    icon: const Icon(Icons.percent),
+                    label: const Text('维护提成'),
+                  ),
+                ],
+              ),
+              if (order.manualCommissions.isEmpty)
+                const Text('尚未维护提成信息')
+              else
+                for (final commission in order.manualCommissions)
+                  _InfoRow(
+                    label: commission.recipientName,
+                    value:
+                        '${commission.ratePercent}% · 有效 ${formatMoneyCents(commission.effectiveAmountCents)} · '
+                        '冲减 ${formatMoneyCents(commission.adjustmentAmountCents)}',
+                  ),
             ],
             const SizedBox(height: 8),
             const _SectionTitle('收款明细'),
@@ -1778,6 +1893,7 @@ class _ActionStrip extends StatelessWidget {
     required this.onToggleOrderMark,
     required this.onToggleCustomerMark,
     required this.onEditBasics,
+    required this.onManageCommissions,
     required this.onOpenQrSalesSheet,
     required this.onChangePointsDestination,
     required this.onEditPersonalPoints,
@@ -1795,6 +1911,7 @@ class _ActionStrip extends StatelessWidget {
   final VoidCallback? onToggleOrderMark;
   final VoidCallback? onToggleCustomerMark;
   final VoidCallback? onEditBasics;
+  final VoidCallback? onManageCommissions;
   final VoidCallback? onOpenQrSalesSheet;
   final VoidCallback? onChangePointsDestination;
   final VoidCallback? onEditPersonalPoints;
@@ -1807,8 +1924,10 @@ class _ActionStrip extends StatelessWidget {
       spacing: 10,
       runSpacing: 10,
       children: [
-        if (role == UserRole.boss)
+        if (role == UserRole.boss && onManageCommissions == null)
           const StatusTag(label: '老板只读', tone: StatusTone.neutral),
+        if (role == UserRole.boss && onManageCommissions != null)
+          const StatusTag(label: '老板可维护特殊订单', tone: StatusTone.info),
         if (role == UserRole.finance)
           const StatusTag(label: '财务可维护订单信息', tone: StatusTone.info),
         if (role == UserRole.sales)
@@ -1841,6 +1960,13 @@ class _ActionStrip extends StatelessWidget {
             onPressed: orderBusy ? null : onEditBasics,
             icon: const Icon(Icons.edit_rounded),
             label: const Text('编辑订单信息'),
+          ),
+        if (onManageCommissions != null)
+          FilledButton.tonalIcon(
+            key: const ValueKey('order-commission-manage-button'),
+            onPressed: orderBusy ? null : onManageCommissions,
+            icon: const Icon(Icons.percent),
+            label: const Text('提成信息'),
           ),
         if (canChangePointsDestination)
           FilledButton.icon(
@@ -2531,6 +2657,7 @@ class _SalesSheetDialogDetails extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
+      key: const ValueKey('order-qr-sales-sheet-customer-preview'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
@@ -2640,14 +2767,6 @@ class _SalesSheetDialogDetails extends StatelessWidget {
             MoneyText(cents: sheet.amounts.totalAmountCents, prominent: true),
           ],
         ),
-        const SizedBox(height: 10),
-        const _SectionTitle('收款明细'),
-        if (sheet.paymentDetails.isEmpty)
-          const Text('暂无收款明细')
-        else
-          _SalesSheetDialogPaymentDetailsTable(
-            details: sheet.paymentDetails,
-          ),
         const SizedBox(height: 12),
         Text(
           '如需售后服务，请联系：${_display(sheet.afterSalesPhone)}',
@@ -2656,70 +2775,6 @@ class _SalesSheetDialogDetails extends StatelessWidget {
       ],
     );
   }
-}
-
-class _SalesSheetDialogPaymentDetailsTable extends StatelessWidget {
-  const _SalesSheetDialogPaymentDetailsTable({required this.details});
-
-  final List<SalesSheetPaymentDetailRecord> details;
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        key: const ValueKey('order-qr-sales-payment-details-table'),
-        columnSpacing: 22,
-        dataRowMinHeight: 52,
-        dataRowMaxHeight: 92,
-        columns: const [
-          DataColumn(label: Text('收款方式')),
-          DataColumn(label: Text('金额'), numeric: true),
-          DataColumn(label: Text('收款属性')),
-          DataColumn(label: Text('确认状态')),
-        ],
-        rows: [
-          for (final detail in details)
-            DataRow(
-              key: ValueKey('order-qr-sales-payment-detail-${detail.id}'),
-              cells: [
-                DataCell(
-                  Text(
-                    detail.paymentMethodNameSnapshot,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                DataCell(MoneyText(cents: detail.amountCents)),
-                DataCell(Text(detail.paymentMethodCategoryLabel)),
-                DataCell(
-                  Text(
-                    _salesSheetDialogPaymentConfirmationText(detail),
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-String _salesSheetDialogPaymentConfirmationText(
-  SalesSheetPaymentDetailRecord detail,
-) {
-  if (!detail.agencyCollectionConfirmed) {
-    return detail.confirmationStatusLabel;
-  }
-  final confirmer = detail.agencyCollectionConfirmedByName ??
-      detail.agencyCollectionConfirmedById;
-  return <String>[
-    detail.confirmationStatusLabel,
-    if (confirmer != null && confirmer.trim().isNotEmpty)
-      '确认人：${confirmer.trim()}',
-    if (detail.agencyCollectionConfirmedAt != null &&
-        detail.agencyCollectionConfirmedAt!.trim().isNotEmpty)
-      '确认时间：${_formatDateTimeText(detail.agencyCollectionConfirmedAt)}',
-  ].join('\n');
 }
 
 class _SalesSheetQrPreview extends StatelessWidget {
@@ -2857,7 +2912,7 @@ class _OrderItemLine extends StatelessWidget {
               spacing: 12,
               runSpacing: 6,
               children: [
-                Text('数量 x${item.quantity}'),
+                Text('数量：${item.quantity}${item.unit ?? ''}'),
                 Text('单价 ${formatMoneyCents(item.unitPriceCents)}'),
                 Text('小计 ${formatMoneyCents(item.subtotalCents)}'),
                 if (item.notes != null) Text('备注：${item.notes}'),
@@ -2930,7 +2985,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   late String _packingStatus;
   late String _logisticsProviderCode;
   late final TextEditingController _salesFormNoController;
-  late final TextEditingController _salesUserIdController;
   late final TextEditingController _remarkController;
   late final TextEditingController _travelGroupIdController;
   late final TextEditingController _customerNameController;
@@ -2957,6 +3011,13 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   late bool _invoiceRequired;
   late bool _invoiceIssued;
   String? _errorMessage;
+  SalesOrderAssignmentOptions? _assignmentOptions;
+  bool _loadingAssignmentOptions = false;
+  String? _assignmentOptionsError;
+  String? _selectedSalesUserId;
+  String? _selectedOutreachUserId;
+
+  static const _noOutreachValue = '__no_outreach__';
 
   @override
   void initState() {
@@ -2971,8 +3032,8 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     );
     _salesFormNoController =
         TextEditingController(text: widget.order.salesFormNo ?? '');
-    _salesUserIdController =
-        TextEditingController(text: widget.order.salesUserId ?? '');
+    _selectedSalesUserId = widget.order.salesUserId;
+    _selectedOutreachUserId = widget.order.outreachUserId;
     _remarkController = TextEditingController(text: widget.order.remark ?? '');
     _travelGroupIdController =
         TextEditingController(text: widget.order.travelGroupId ?? '');
@@ -3017,10 +3078,42 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     _invoiceIssued = widget.order.invoiceIssued;
     if (widget.fullEdit) {
       _loadProductOptions();
+      _loadAssignmentOptions();
     } else {
       _loadingProductOptions = false;
     }
     _loadPaymentMethods();
+  }
+
+  Future<void> _loadAssignmentOptions() async {
+    setState(() {
+      _loadingAssignmentOptions = true;
+      _assignmentOptionsError = null;
+    });
+    try {
+      final options =
+          await widget.businessApi.getSalesOrderAssignmentOptions(_orderDate);
+      if (!mounted) return;
+      setState(() {
+        _assignmentOptions = options;
+        _loadingAssignmentOptions = false;
+        final ids = options.salesUsers.map((user) => user.id).toSet();
+        if (!ids.contains(_selectedSalesUserId)) {
+          _selectedSalesUserId =
+              options.canChangeSalesUser ? null : options.currentUserId;
+        }
+        if (!ids.contains(_selectedOutreachUserId)) {
+          _selectedOutreachUserId = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _assignmentOptions = null;
+        _loadingAssignmentOptions = false;
+        _assignmentOptionsError = _messageForError(error);
+      });
+    }
   }
 
   Future<void> _loadPaymentMethods() async {
@@ -3084,7 +3177,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   @override
   void dispose() {
     _salesFormNoController.dispose();
-    _salesUserIdController.dispose();
     _remarkController.dispose();
     _travelGroupIdController.dispose();
     _customerNameController.dispose();
@@ -3115,6 +3207,9 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     );
     if (picked != null) {
       setState(() => _orderDate = picked);
+      if (widget.fullEdit) {
+        await _loadAssignmentOptions();
+      }
     }
   }
 
@@ -3234,6 +3329,22 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       return;
     }
 
+    if (_loadingAssignmentOptions || _assignmentOptionsError != null) {
+      setState(() => _errorMessage = _assignmentOptionsError == null
+          ? '销售与外联人员正在加载，请稍后再保存。'
+          : '销售与外联人员加载失败：$_assignmentOptionsError');
+      return;
+    }
+    if (_selectedSalesUserId == null) {
+      setState(() => _errorMessage = '请选择销售人员。');
+      return;
+    }
+    if ((_assignmentOptions?.outreachCommissionRequired ?? false) &&
+        _selectedOutreachUserId == null) {
+      setState(() => _errorMessage = '当前存在启用的外联提成规则，请选择外联人员。');
+      return;
+    }
+
     final customerName = _customerNameController.text.trim();
     if (customerName.isEmpty) {
       setState(() => _errorMessage = '客户姓名不能为空。');
@@ -3285,8 +3396,8 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
 
     orderPayload.addAll({
       'orderType': _orderType,
-      if (widget.role != UserRole.sales)
-        'salesUserId': _salesUserIdController.text.trim(),
+      if (widget.role != UserRole.sales) 'salesUserId': _selectedSalesUserId,
+      'outreachUserId': _selectedOutreachUserId,
       'travelGroupId': _orderType == 'travel_group' ? travelGroupId : null,
       'remark': _remarkController.text.trim(),
       'customer': {
@@ -3351,6 +3462,7 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       }
       payloads.add({
         'productId': item.productId,
+        'unit': item.unit,
         'quantity': item.quantity,
         'unitPriceCents': item.unitPriceCentsForPayload,
         'subtotalCents': subtotalCents,
@@ -3364,6 +3476,14 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       return null;
     }
     return payloads;
+  }
+
+  SalesOrderAssignmentUser? get _selectedSalesAssignment {
+    for (final user in _assignmentOptions?.salesUsers ??
+        const <SalesOrderAssignmentUser>[]) {
+      if (user.id == _selectedSalesUserId) return user;
+    }
+    return null;
   }
 
   @override
@@ -3428,10 +3548,66 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                       decoration: const InputDecoration(labelText: '销售单号'),
                     ),
                     if (widget.role != UserRole.sales)
-                      TextField(
-                        key: const ValueKey('order-edit-sales-user-id-field'),
-                        controller: _salesUserIdController,
-                        decoration: const InputDecoration(labelText: '销售人员 ID'),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey(
+                          'order-edit-sales-user-${_selectedSalesUserId ?? ''}',
+                        ),
+                        initialValue: _selectedSalesUserId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: '销售人员 *'),
+                        hint: const Text('请选择有效的销售账号'),
+                        items: [
+                          for (final user in _assignmentOptions?.salesUsers ??
+                              const <SalesOrderAssignmentUser>[])
+                            DropdownMenuItem(
+                              value: user.id,
+                              child: Text('${user.name}（${user.username}）'),
+                            ),
+                        ],
+                        onChanged:
+                            _assignmentOptions?.canChangeSalesUser == true
+                                ? (value) => setState(
+                                      () => _selectedSalesUserId = value,
+                                    )
+                                : null,
+                      ),
+                    if (widget.role != UserRole.sales)
+                      DropdownButtonFormField<String>(
+                        key: ValueKey(
+                          'order-edit-outreach-user-${_selectedOutreachUserId ?? _noOutreachValue}',
+                        ),
+                        initialValue: _selectedOutreachUserId ??
+                            (_assignmentOptions?.outreachCommissionRequired ==
+                                    true
+                                ? null
+                                : _noOutreachValue),
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          labelText:
+                              _assignmentOptions?.outreachCommissionRequired ==
+                                      true
+                                  ? '外联人员 *'
+                                  : '外联人员',
+                        ),
+                        hint: const Text('请选择外联人员'),
+                        items: [
+                          if (_assignmentOptions?.outreachCommissionRequired !=
+                              true)
+                            const DropdownMenuItem(
+                              value: _noOutreachValue,
+                              child: Text('无外联，不计算外联提成'),
+                            ),
+                          for (final user in _assignmentOptions?.salesUsers ??
+                              const <SalesOrderAssignmentUser>[])
+                            DropdownMenuItem(
+                              value: user.id,
+                              child: Text('${user.name}（${user.username}）'),
+                            ),
+                        ],
+                        onChanged: (value) => setState(() {
+                          _selectedOutreachUserId =
+                              value == _noOutreachValue ? null : value;
+                        }),
                       ),
                   ],
                 )
@@ -3441,6 +3617,37 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                   controller: _salesFormNoController,
                   decoration: const InputDecoration(labelText: '销售单号'),
                 ),
+              ],
+              if (widget.fullEdit && _loadingAssignmentOptions) ...[
+                const SizedBox(height: 10),
+                const LinearProgressIndicator(),
+              ],
+              if (widget.fullEdit && _assignmentOptionsError != null) ...[
+                const SizedBox(height: 10),
+                StatusTag(
+                  label: '人员列表加载失败：$_assignmentOptionsError',
+                  tone: StatusTone.danger,
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _loadAssignmentOptions,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('重试加载'),
+                  ),
+                ),
+              ],
+              if (widget.fullEdit && _selectedSalesAssignment != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '销售组长：${_selectedSalesAssignment!.leaderName ?? '未配置'}',
+                ),
+                if (_assignmentOptions?.leaderCommissionEnabled == true &&
+                    _selectedSalesAssignment!.leaderId == null)
+                  const StatusTag(
+                    label: '当前组长提成规则已启用；该销售未配置组长，保存后仅组长提成不会生成。',
+                    tone: StatusTone.warning,
+                  ),
               ],
               const SizedBox(height: 12),
               if (widget.order.paymentDetailsLocked) ...[
@@ -3936,6 +4143,22 @@ class _OrderItemEditRow extends StatelessWidget {
                     labelText: '数量',
                   ),
                 ),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('order-edit-item-unit-$index'),
+                  initialValue: item.unit,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: '规格'),
+                  items: [
+                    for (final unit in _salesOrderItemUnits)
+                      DropdownMenuItem(value: unit, child: Text(unit)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      item.unit = value;
+                      onChanged();
+                    }
+                  },
+                ),
                 TextField(
                   key: ValueKey('order-edit-item-subtotal-$index'),
                   controller: item.subtotalController,
@@ -3982,6 +4205,7 @@ class _EditableOrderItemDraft {
     required this.productId,
     required this.snapshotName,
     required this.snapshotUnit,
+    required this.unit,
     required int quantity,
     required int subtotalCents,
     required this.deliveryType,
@@ -4000,6 +4224,7 @@ class _EditableOrderItemDraft {
       productId: item.productId,
       snapshotName: item.productName,
       snapshotUnit: item.unit,
+      unit: _normalizeSalesOrderItemUnit(item.unit),
       quantity: item.quantity,
       subtotalCents: item.subtotalCents,
       deliveryType: _deliveryTypeFromValue(item.deliveryType),
@@ -4014,6 +4239,7 @@ class _EditableOrderItemDraft {
       productId: null,
       snapshotName: null,
       snapshotUnit: null,
+      unit: _defaultSalesOrderItemUnit,
       quantity: 1,
       subtotalCents: 0,
       deliveryType: DeliveryType.shipping,
@@ -4023,6 +4249,7 @@ class _EditableOrderItemDraft {
   String? productId;
   String? snapshotName;
   String? snapshotUnit;
+  String unit;
   final TextEditingController quantityController;
   final TextEditingController subtotalController;
   final TextEditingController notesController;
@@ -4067,6 +4294,15 @@ class _EditableOrderItemDraft {
     subtotalController.dispose();
     notesController.dispose();
   }
+}
+
+const _defaultSalesOrderItemUnit = '瓶';
+const _salesOrderItemUnits = <String>['瓶', '盒'];
+
+String _normalizeSalesOrderItemUnit(String? value) {
+  return _salesOrderItemUnits.contains(value)
+      ? value!
+      : _defaultSalesOrderItemUnit;
 }
 
 String _knownOrderTypeValue(String value) {
@@ -4573,8 +4809,35 @@ String _moneyInputText(int cents) {
   return '$whole.${fraction.toString().padLeft(2, '0')}';
 }
 
+String _orderCommissionWarningSummary(
+  CommissionRecalculationResult recalculation,
+) {
+  final labels = recalculation.warnings.map((warning) {
+    switch (warning.code) {
+      case 'missing_sales_user':
+        return '销售提成未计算：缺少销售人员';
+      case 'missing_outreach_user':
+        return '外联提成未计算：缺少外联人员';
+      case 'missing_leader':
+        return '组长提成未计算：销售未配置组长';
+      case 'missing_commission_rule':
+        return '订单日期缺少适用提成规则';
+      default:
+        return warning.message;
+    }
+  }).toSet();
+  return labels.join('；');
+}
+
 String _messageForError(Object error) {
   if (error is ApiException) {
+    if (error.statusCode >= 500 && error.statusCode <= 599) {
+      final requestId = error.requestId?.trim();
+      if (requestId != null && requestId.isNotEmpty) {
+        return '服务器处理失败，请联系管理员。错误编号：$requestId';
+      }
+      return '服务器处理失败，请联系管理员。';
+    }
     switch (error.code) {
       case 'PAYMENT_DETAILS_LOCKED':
         return '收款明细已锁定，请联系管理员解锁后再修改。';

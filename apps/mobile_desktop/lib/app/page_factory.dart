@@ -34,6 +34,7 @@ import '../features/travel_group_order_notes/travel_group_order_notes_page.dart'
 import '../features/travel_group_query/travel_group_query_page.dart';
 import '../features/travel_groups/travel_group_form_page.dart';
 import '../features/warehouse/warehouse_packing_page.dart';
+import '../features/warehouse_directory/warehouse_directory_page.dart';
 import '../features/warehouse_management/warehouse_management_page.dart';
 import 'destinations.dart';
 
@@ -184,6 +185,13 @@ Widget buildPageForDestination({
       );
     case 'warehouse_management':
       return WarehouseManagementPage(
+        apiClient: apiClient,
+        token: token,
+        role: role,
+        onOpenDestination: onOpenDestination,
+      );
+    case 'warehouse_directory':
+      return WarehouseDirectoryPage(
         apiClient: apiClient,
         token: token,
         role: role,

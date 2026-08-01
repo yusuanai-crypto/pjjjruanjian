@@ -180,6 +180,57 @@ test('Prisma errors use stable mappings without exposing query metadata', () => 
   assert.equal(responseText.includes('SecretUser'), false);
 });
 
+test('Prisma P2022 maps to a safe 503 schema mismatch with a request ID', () => {
+  const logs = [];
+  const filter = new ApiExceptionFilter({
+    error: (entry) => logs.push(entry),
+  });
+  const { host, response } = createFilterContext({
+    headers: { 'x-correlation-id': 'schema-mismatch-123' },
+    method: 'PATCH',
+    url: '/api/sales-orders/order-1/points-destination',
+  });
+  const exception = Object.assign(
+    new Error(
+      'Invalid column hidden_column in secret_table; ' +
+        'mysql://private-user:private-password@private-host/private-db',
+    ),
+    {
+      code: 'P2022',
+      meta: {
+        modelName: 'SecretOrder',
+        column: 'secret_table.hidden_column',
+      },
+    },
+  );
+
+  filter.catch(exception, host);
+
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.body, {
+    error: {
+      code: 'DATABASE_SCHEMA_MISMATCH',
+      message: '数据库结构暂不可用，请联系管理员处理。',
+    },
+    requestId: 'schema-mismatch-123',
+  });
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /schema-mismatch-123/);
+  assert.match(logs[0], /P2022/);
+  for (const forbidden of [
+    'hidden_column',
+    'secret_table',
+    'SecretOrder',
+    'private-user',
+    'private-password',
+    'private-host',
+    'private-db',
+  ]) {
+    assert.equal(logs[0].includes(forbidden), false);
+    assert.equal(JSON.stringify(response.body).includes(forbidden), false);
+  }
+});
+
 test('foreign-key and missing-record Prisma errors have stable contracts', () => {
   const cases = [
     {

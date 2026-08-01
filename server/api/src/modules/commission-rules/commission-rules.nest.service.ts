@@ -353,7 +353,7 @@ export class CommissionRulesNestService {
           index,
           rowNumber,
           success: false,
-          error: toImportRowError(error),
+          error: toImportRowError(error, rows[index]),
         });
       }
     }
@@ -373,6 +373,9 @@ export class CommissionRulesNestService {
           rowNumber: item.rowNumber,
           code: item.error.code,
           message: item.error.message,
+          ...(item.error.agencyId
+            ? { agencyId: item.error.agencyId }
+            : {}),
         })),
       truncated: {
         createdIds: createdIds.length > 50,
@@ -414,6 +417,7 @@ export class CommissionRulesNestService {
     assertAllowedFields(payload, config.allowedFields);
     const data = config.buildData(payload, true, actor);
     await this.attachTrustedProductSnapshot(kind, data);
+    await this.attachTrustedAgencySnapshot(kind, data);
     assertFinalEffectiveDateRange(data);
     await this.assertAgencyRuleMatchable(kind, data);
     await this.assertAgencyExists(data);
@@ -436,6 +440,7 @@ export class CommissionRulesNestService {
     const current = await this.findRuleOrThrow(config, ruleId);
     const data = config.buildData(payload, false, actor);
     await this.attachTrustedProductSnapshot(kind, data, current);
+    await this.attachTrustedAgencySnapshot(kind, data, current);
     const nextForValidation = {
       ...current,
       ...data,
@@ -703,7 +708,17 @@ export class CommissionRulesNestService {
     if (kind !== 'agencyDeduction' && kind !== 'agencyRebate') {
       return;
     }
-    if (!normalizeOptionalString(rule.agencyId) && !normalizeOptionalString(rule.agencyName)) {
+    if (kind === 'agencyRebate' && !normalizeOptionalString(rule.agencyId)) {
+      throw createHttpError(
+        400,
+        'AGENCY_ID_REQUIRED',
+        '旅行社返点规则必须选择有效的旅行社主档并提供 agencyId。',
+      );
+    }
+    if (
+      !normalizeOptionalString(rule.agencyId) &&
+      !normalizeOptionalString(rule.agencyName)
+    ) {
       throw createHttpError(
         400,
         'VALIDATION_FAILED',
@@ -729,6 +744,39 @@ export class CommissionRulesNestService {
         'agencyId does not match an existing travel agency.',
       );
     }
+  }
+
+  private async attachTrustedAgencySnapshot(
+    kind: RuleKind,
+    data: any,
+    current?: any,
+  ) {
+    if (kind !== 'agencyRebate') {
+      return;
+    }
+    const agencyId =
+      normalizeOptionalString(data.agencyId) ||
+      normalizeOptionalString(current?.agencyId);
+    if (!agencyId) {
+      throw createHttpError(
+        400,
+        'AGENCY_ID_REQUIRED',
+        '旅行社返点规则必须选择有效的旅行社主档并提供 agencyId。',
+      );
+    }
+    const agency = await this.prisma.travelAgency.findUnique({
+      where: { id: agencyId },
+      select: { id: true, name: true },
+    });
+    if (!agency) {
+      throw createHttpError(
+        400,
+        'AGENCY_ID_INVALID',
+        `旅行社 ID“${agencyId}”无效：未找到对应的旅行社主档。`,
+      );
+    }
+    data.agencyId = agency.id;
+    data.agencyName = agency.name;
   }
 
   private async attachTrustedProductSnapshot(
@@ -824,13 +872,15 @@ function normalizeBatchRows(payload: any) {
   return rows;
 }
 
-function toImportRowError(error: any) {
+function toImportRowError(error: any, row: any = {}) {
+  const agencyId = normalizeOptionalString(row?.agencyId);
   return {
     code: error?.code || 'IMPORT_ROW_FAILED',
     message:
       typeof error?.message === 'string' && error.message
         ? error.message
         : 'Import row failed.',
+    ...(agencyId ? { agencyId } : {}),
   };
 }
 
@@ -1303,6 +1353,14 @@ function rulesShareDimension(
       )
     );
   }
+  if (kind === 'agencyRebate') {
+    return referencesMatch(
+      left.agencyId,
+      right.agencyId,
+      left.agencyName,
+      right.agencyName,
+    );
+  }
   const leftKeys = new Set(config.dimensionKeys(left));
   return config
     .dimensionKeys(right)
@@ -1582,7 +1640,10 @@ function normalizeOptionalString(value: unknown) {
 }
 
 function normalizeComparable(value: unknown) {
-  return String(normalizeOptionalString(value) || '').toLowerCase();
+  return String(normalizeOptionalString(value) || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLowerCase();
 }
 
 function normalizeProductComparable(value: unknown) {

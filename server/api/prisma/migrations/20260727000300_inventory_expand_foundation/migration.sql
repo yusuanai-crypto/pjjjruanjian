@@ -698,10 +698,10 @@ ALTER TABLE `inventory_documents`
     ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT `inventory_documents_from_warehouse_id_fkey`
     FOREIGN KEY (`from_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_documents_to_warehouse_id_fkey`
     FOREIGN KEY (`to_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
   ADD CONSTRAINT `inventory_documents_posted_by_id_fkey`
     FOREIGN KEY (`posted_by_id`) REFERENCES `users`(`id`)
     ON DELETE SET NULL ON UPDATE CASCADE,

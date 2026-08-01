@@ -44,21 +44,60 @@ void main() {
     expect(find.textContaining('177-8530-5984'), findsOneWidget);
     expect(find.text('生成二维码后显示'), findsWidgets);
     expect(find.text('酱香珍藏'), findsOneWidget);
+    final customerPreview = find.byKey(
+      const ValueKey('qr-sales-sheet-customer-preview'),
+    );
+    expect(customerPreview, findsOneWidget);
     expect(
       find.byKey(const ValueKey('qr-sales-payment-details-table')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: customerPreview, matching: find.text('订单总额')),
       findsOneWidget,
     );
-    expect(find.text('收款方式'), findsOneWidget);
-    expect(find.text('收款属性'), findsOneWidget);
-    expect(find.text('确认状态'), findsOneWidget);
-    expect(find.text('收钱吧'), findsOneWidget);
-    expect(find.text('即时收款'), findsOneWidget);
-    expect(find.text('无需确认'), findsOneWidget);
-    expect(find.text('货到付款'), findsNWidgets(2));
-    expect(find.text('代收营业款'), findsNWidgets(2));
-    expect(find.text('代收款（待确认）'), findsOneWidget);
-    expect(find.textContaining('确认人：财务测试员'), findsOneWidget);
-    expect(find.textContaining('确认时间：2026-07-01'), findsOneWidget);
+    expect(
+      find.descendant(of: customerPreview, matching: find.text('¥796.00')),
+      findsOneWidget,
+    );
+    for (final sensitiveText in [
+      '收款明细',
+      '暂无收款明细',
+      '收款方式',
+      '收款属性',
+      '确认状态',
+      '收钱吧',
+      '货到付款',
+      '即时收款',
+      '代收营业款',
+      '无需确认',
+      '代收款（待确认）',
+      '¥786.00',
+      '¥10.00',
+    ]) {
+      expect(
+        find.descendant(
+          of: customerPreview,
+          matching: find.text(sensitiveText),
+        ),
+        findsNothing,
+        reason: sensitiveText,
+      );
+    }
+    expect(
+      find.descendant(
+        of: customerPreview,
+        matching: find.textContaining('确认人：财务测试员'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: customerPreview,
+        matching: find.textContaining('确认时间：2026-07-01'),
+      ),
+      findsNothing,
+    );
     expect(find.textContaining('测试旅行社'), findsWidgets);
     expect(find.textContaining('FORM-001'), findsNothing);
 

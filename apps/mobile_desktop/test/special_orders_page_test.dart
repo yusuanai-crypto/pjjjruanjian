@@ -25,7 +25,7 @@ void main() {
     expect(find.text('搜索我的订单'), findsOneWidget);
   });
 
-  testWidgets('reviewers see pending count and never receive a create button',
+  testWidgets('reviewers see pending count and can open a direct order',
       (tester) async {
     final client = _FakeSpecialOrdersApiClient();
     await tester.pumpWidget(_page(client, UserRole.boss));
@@ -34,12 +34,12 @@ void main() {
     expect(find.text('待审核 3'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('special-order-create-button')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(find.text('搜索全部记录'), findsOneWidget);
   });
 
-  testWidgets('tabs open the employee, external party, and buyback forms',
+  testWidgets('all tabs open the shared customer and line-item form',
       (tester) async {
     _wide(tester);
     final client = _FakeSpecialOrdersApiClient();
@@ -51,9 +51,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('special-order-employee-field')),
+      find.byKey(const ValueKey('special-order-customer-field')),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('special-order-item-0')), findsOneWidget);
     await tester.tap(find.byIcon(Icons.close));
     await tester.pumpAndSettle();
 
@@ -64,9 +65,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('special-order-external-type-field')),
+      find.byKey(const ValueKey('special-order-customer-field')),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('special-order-item-0')), findsOneWidget);
     await tester.tap(find.byIcon(Icons.close));
     await tester.pumpAndSettle();
 
@@ -77,18 +79,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('special-order-buyback-customer-field')),
+      find.byKey(const ValueKey('special-order-customer-field')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('special-order-original-purchase-switch')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('special-order-default-warehouse-field')),
-      findsOneWidget,
-    );
-    expect(find.text('默认总仓'), findsOneWidget);
+    expect(find.byKey(const ValueKey('special-order-item-0')), findsOneWidget);
+    expect(find.text('旅行团'), findsNothing);
   });
 
   testWidgets('mobile layout renders cards without exposing reviewer actions',

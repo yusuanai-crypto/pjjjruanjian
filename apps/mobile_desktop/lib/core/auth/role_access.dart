@@ -36,13 +36,20 @@ bool canAccessSpecialOrders(UserRole role) {
 }
 
 bool canCreateSpecialOrders(UserRole role) {
-  return role == UserRole.sales || role == UserRole.afterSales;
+  return role == UserRole.sales ||
+      role == UserRole.afterSales ||
+      canReviewSpecialOrders(role);
 }
 
 bool canReviewSpecialOrders(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||
+      role == UserRole.finance ||
       role == UserRole.boss;
+}
+
+bool canMaintainSpecialOrders(UserRole role) {
+  return canReviewSpecialOrders(role);
 }
 
 bool canViewProfitAnalysis(UserRole role) {

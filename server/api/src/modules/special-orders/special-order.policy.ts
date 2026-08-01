@@ -10,6 +10,7 @@ export const SPECIAL_ORDER_TYPES = new Set([
 export const SPECIAL_ORDER_READ_ROLES = new Set([
   'sales',
   'after_sales',
+  'finance',
   'boss',
   'admin',
   'super_admin',
@@ -17,11 +18,13 @@ export const SPECIAL_ORDER_READ_ROLES = new Set([
 export const SPECIAL_ORDER_CREATOR_ROLES = new Set([
   'sales',
   'after_sales',
+  'finance',
   'boss',
   'admin',
   'super_admin',
 ]);
 export const SPECIAL_ORDER_REVIEW_ROLES = new Set([
+  'finance',
   'boss',
   'admin',
   'super_admin',
@@ -39,7 +42,7 @@ export const SPECIAL_ORDER_TRANSITIONS: Record<string, Set<string>> = {
   PENDING: new Set(['DRAFT', 'APPROVED', 'REJECTED']),
   REJECTED: new Set(['PENDING', 'CANCELLED']),
   APPROVED: new Set(['COMPLETED', 'PENDING']),
-  COMPLETED: new Set(['PENDING']),
+  COMPLETED: new Set(['PENDING', 'CANCELLED']),
   CANCELLED: new Set(),
 };
 

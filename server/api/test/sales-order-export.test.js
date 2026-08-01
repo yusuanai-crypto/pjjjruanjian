@@ -52,6 +52,25 @@ const EXPECTED_HEADERS = [
   '创建时间',
   '更新时间',
 ];
+EXPECTED_HEADERS.splice(1, 0, '\u8ba2\u5355\u7c7b\u578b');
+EXPECTED_HEADERS.splice(
+  14,
+  0,
+  '\u4e0a\u5355\u91d1\u989d',
+  '\u5df2\u652f\u4ed8\u91d1\u989d',
+  '\u672a\u652f\u4ed8\u91d1\u989d',
+  '\u652f\u4ed8\u65b9\u5f0f\u6c47\u603b',
+  '\u63d0\u6210\u5bf9\u8c61\u6c47\u603b',
+  '\u63d0\u6210\u6bd4\u4f8b\u6c47\u603b',
+  '\u6709\u6548\u63d0\u6210\u603b\u989d',
+  '\u63d0\u6210\u72b6\u6001',
+);
+EXPECTED_HEADERS.splice(
+  EXPECTED_HEADERS.length - 1,
+  0,
+  '\u521b\u5efa\u4eba',
+  '\u4f5c\u5e9f/\u9000\u6b3e\u72b6\u6001',
+);
 
 test('GET /api/sales-orders/export.xlsx allows personal-split viewers except read-hidden roles', async () => {
   await withPhase1Server(
@@ -144,6 +163,9 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
 
       const worksheet = await loadSalesOrdersWorksheet(download.buffer);
       assert.deepEqual(readHeaders(worksheet), EXPECTED_HEADERS);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(download.buffer);
+      assert.ok(workbook.getWorksheet('\u63d0\u6210\u660e\u7ec6'));
       assert.equal(readHeaders(worksheet).includes('货到付款金额'), false);
       assert.equal(worksheet.actualRowCount, 6);
 
@@ -180,11 +202,19 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(row['是否已开票'], '否');
       assert.equal(row['创建时间'], '2026-07-01T09:00:00.000Z');
       assert.equal(row['更新时间'], '2026-07-01T10:00:00.000Z');
-      assert.equal(worksheet.getCell('M2').numFmt, '0.00');
-      assert.equal(worksheet.getCell('O2').numFmt, '0.00');
-      assert.equal(worksheet.getCell('P2').numFmt, '0.00');
-      assert.equal(worksheet.getCell('R2').numFmt, '0.00');
-      assert.equal(worksheet.getCell('AC2').numFmt, '0.00');
+      for (const cell of [
+        'N2',
+        'O2',
+        'P2',
+        'Q2',
+        'U2',
+        'X2',
+        'Y2',
+        'AA2',
+        'AL2',
+      ]) {
+        assert.equal(worksheet.getCell(cell).numFmt, '0.00', cell);
+      }
 
       const collectionRow = readRowObject(worksheet, 3);
       assert.equal(collectionRow['系统单号'], 'SO-EXPORT-ALPHA');
@@ -202,13 +232,13 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(negativeRow['收款方式'], '现金');
       assert.equal(negativeRow['收款金额'], -1);
       assert.equal(typeof negativeRow['收款金额'], 'number');
-      assert.equal(worksheet.getCell('R4').numFmt, '0.00');
+      assert.equal(worksheet.getCell('AA4').numFmt, '0.00');
 
       const zeroRow = readRowObject(worksheet, 6);
       assert.equal(zeroRow['收款方式'], '现金');
       assert.equal(zeroRow['收款金额'], 0);
       assert.equal(typeof zeroRow['收款金额'], 'number');
-      assert.equal(worksheet.getCell('R6').numFmt, '0.00');
+      assert.equal(worksheet.getCell('AA6').numFmt, '0.00');
     },
     {
       prisma: buildSalesOrderExportPrismaOptions(),

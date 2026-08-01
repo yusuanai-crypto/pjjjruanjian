@@ -6,6 +6,42 @@ import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
 
+Future<SpecialOrderRecord?> showSpecialOrderFormDialog({
+  required BuildContext context,
+  required BusinessApi api,
+  required String orderType,
+  required SpecialOrderReferenceData references,
+  SpecialOrderRecord? existing,
+}) {
+  return showDialog<SpecialOrderRecord>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _SpecialOrderForm(
+      api: api,
+      orderType: orderType,
+      references: references,
+      existing: existing,
+    ),
+  );
+}
+
+Future<void> showSpecialOrderCommissionDialog({
+  required BuildContext context,
+  required BusinessApi api,
+  required SpecialOrderRecord order,
+  required List<SpecialOrderReferenceOption> employees,
+}) {
+  return showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _SpecialOrderCommissionDialog(
+      api: api,
+      order: order,
+      employees: employees,
+    ),
+  );
+}
+
 class SpecialOrdersPage extends StatefulWidget {
   const SpecialOrdersPage({
     super.key,
@@ -99,15 +135,12 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
       return;
     }
     if (!mounted) return;
-    final saved = await showDialog<SpecialOrderRecord>(
+    final saved = await showSpecialOrderFormDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (_) => _SpecialOrderForm(
-        api: _api,
-        orderType: existing?.orderType ?? _type,
-        references: refs!,
-        existing: existing,
-      ),
+      api: _api,
+      orderType: existing?.orderType ?? _type,
+      references: refs,
+      existing: existing,
     );
     if (saved != null) await _load();
   }
@@ -212,6 +245,7 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
             order.id,
             workflowVersion: order.workflowVersion,
             idempotencyKey: key,
+            reason: reason.text,
           );
       }
       if (mounted) {
@@ -419,11 +453,6 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
                               _load();
                             },
                           ),
-                        OutlinedButton.icon(
-                          onPressed: _exporting ? null : _export,
-                          icon: const Icon(Icons.download),
-                          label: const Text('导出 Excel'),
-                        ),
                         if (_creator)
                           FilledButton.icon(
                             key: const ValueKey(
@@ -432,6 +461,12 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
                             onPressed: () => _openForm(),
                             icon: const Icon(Icons.add),
                             label: const Text('开单'),
+                          ),
+                        if (_reviewer)
+                          OutlinedButton.icon(
+                            onPressed: _exporting ? null : _export,
+                            icon: const Icon(Icons.download),
+                            label: const Text('导出 Excel'),
                           ),
                       ],
                     );
@@ -569,11 +604,15 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
           _printData(order);
         } else if (action == 'payment') {
           _payment(order);
+        } else if (action == 'commission') {
+          _commissions(order);
         } else {
           _action(
             order,
             action,
-            reasonRequired: action == 'reject' || action == 'unapprove',
+            reasonRequired: action == 'reject' ||
+                action == 'unapprove' ||
+                (action == 'cancel' && order.workflowStatus == 'completed'),
           );
         }
       },
@@ -582,6 +621,12 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
         const PopupMenuItem(value: 'print', child: Text('A4 打印数据')),
         if (_creator && order.isEditable)
           const PopupMenuItem(value: 'edit', child: Text('修改')),
+        if (_reviewer && order.workflowStatus == 'completed')
+          const PopupMenuItem(value: 'edit', child: Text('修改订单')),
+        if (_reviewer && order.workflowStatus == 'completed')
+          const PopupMenuItem(value: 'commission', child: Text('提成信息')),
+        if (_reviewer && order.workflowStatus == 'completed')
+          const PopupMenuItem(value: 'cancel', child: Text('作废订单')),
         if (_creator && order.isEditable)
           const PopupMenuItem(value: 'submit', child: Text('提交审核')),
         if (_creator && order.workflowStatus == 'pending')
@@ -622,6 +667,16 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
                       ? '应付：${_money(order.payableTotalCents)}'
                       : '应收：${_money(order.receivableTotalCents)}',
                 ),
+                if (_reviewer)
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.percent),
+                      title: const Text('提成信息'),
+                      subtitle: const Text('多人提成、非员工提成及退款冲减记录'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _commissions(order),
+                    ),
+                  ),
                 const Divider(),
                 const Text('商品明细'),
                 for (final item in order.items)
@@ -666,6 +721,343 @@ class _SpecialOrdersPageState extends State<SpecialOrdersPage>
       ),
     );
   }
+
+  Future<void> _commissions(SpecialOrderRecord order) async {
+    final refs = _references ?? await _api.getSpecialOrderReferenceData();
+    if (!mounted) return;
+    await showSpecialOrderCommissionDialog(
+      context: context,
+      api: _api,
+      order: order,
+      employees: refs.employees,
+    );
+    if (mounted) await _load();
+  }
+}
+
+class _SpecialOrderCommissionDialog extends StatefulWidget {
+  const _SpecialOrderCommissionDialog({
+    required this.api,
+    required this.order,
+    required this.employees,
+  });
+
+  final BusinessApi api;
+  final SpecialOrderRecord order;
+  final List<SpecialOrderReferenceOption> employees;
+
+  @override
+  State<_SpecialOrderCommissionDialog> createState() =>
+      _SpecialOrderCommissionDialogState();
+}
+
+class _SpecialOrderCommissionDialogState
+    extends State<_SpecialOrderCommissionDialog> {
+  List<SpecialOrderCommissionRecord> _records = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final records = await widget.api.listSpecialOrderCommissions(
+        widget.order.id,
+      );
+      if (mounted) setState(() => _records = records);
+    } catch (error) {
+      if (mounted) setState(() => _error = _message(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _edit([SpecialOrderCommissionRecord? existing]) async {
+    var recipientType = existing?.recipientType ?? 'employee';
+    var targetUserId = existing?.targetUserId ??
+        (widget.employees.isEmpty ? null : widget.employees.first.id);
+    final recipientName = TextEditingController(
+      text: existing?.recipientType == 'other'
+          ? existing?.recipientName ?? ''
+          : '',
+    );
+    final rate = TextEditingController(text: existing?.ratePercent ?? '0');
+    final note = TextEditingController(text: existing?.note ?? '');
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+    String? dialogError;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(existing == null ? '添加提成对象' : '修改提成信息'),
+          content: SizedBox(
+            width: 560,
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (dialogError != null)
+                    Text(
+                      dialogError!,
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'employee', label: Text('内部员工')),
+                      ButtonSegment(value: 'other', label: Text('非员工/其他人员')),
+                    ],
+                    selected: {recipientType},
+                    onSelectionChanged: (value) =>
+                        setDialogState(() => recipientType = value.first),
+                  ),
+                  const SizedBox(height: 12),
+                  if (recipientType == 'employee')
+                    DropdownButtonFormField<String>(
+                      initialValue: targetUserId,
+                      decoration: const InputDecoration(
+                        labelText: '员工账号',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        for (final employee in widget.employees)
+                          DropdownMenuItem(
+                            value: employee.id,
+                            child: Text(employee.name),
+                          ),
+                      ],
+                      onChanged: (value) => targetUserId = value,
+                      validator: (value) => value == null ? '请选择员工' : null,
+                    )
+                  else
+                    TextFormField(
+                      controller: recipientName,
+                      decoration: const InputDecoration(
+                        labelText: '人员姓名',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: _requiredText,
+                    ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: rate,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: '提成比例（%）',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
+                    validator: (value) => RegExp(r'^\d+(?:\.\d{1,2})?$')
+                            .hasMatch(value?.trim() ?? '')
+                        ? null
+                        : '请输入非负比例（最多两位小数）',
+                  ),
+                  const SizedBox(height: 8),
+                  InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: '提成金额（自动计算，只读）',
+                      border: OutlineInputBorder(),
+                    ),
+                    child: Text(
+                      _money(_commissionPreviewCents(
+                        widget.order.totalAmountCents,
+                        rate.text,
+                      )),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: note,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: '备注',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '提成基数：${_money(widget.order.totalAmountCents)}；归属日期：${widget.order.orderDate}',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed:
+                  saving ? null : () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDialogState(() {
+                        saving = true;
+                        dialogError = null;
+                      });
+                      try {
+                        final body = <String, dynamic>{
+                          'recipientType': recipientType,
+                          if (recipientType == 'employee')
+                            'targetUserId': targetUserId
+                          else
+                            'recipientName': recipientName.text.trim(),
+                          'ratePercent': rate.text.trim(),
+                          'note': note.text.trim(),
+                          'idempotencyKey': _key(
+                            existing == null
+                                ? 'commission-create'
+                                : 'commission-update',
+                          ),
+                          if (existing != null)
+                            'manualVersion': existing.manualVersion,
+                        };
+                        if (existing == null) {
+                          await widget.api.createSpecialOrderCommission(
+                            widget.order.id,
+                            body,
+                          );
+                        } else {
+                          await widget.api.updateSpecialOrderCommission(
+                            widget.order.id,
+                            existing.id,
+                            body,
+                          );
+                        }
+                        if (dialogContext.mounted) {
+                          Navigator.pop(dialogContext, true);
+                        }
+                      } catch (error) {
+                        setDialogState(() {
+                          dialogError = _message(error);
+                          saving = false;
+                        });
+                      }
+                    },
+              child: Text(saving ? '保存中' : '保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    recipientName.dispose();
+    rate.dispose();
+    note.dispose();
+    if (saved == true) await _load();
+  }
+
+  Future<void> _remove(SpecialOrderCommissionRecord record) async {
+    try {
+      await widget.api.deleteSpecialOrderCommission(
+        widget.order.id,
+        record.id,
+        manualVersion: record.manualVersion,
+        reason: '财务删除提成信息',
+        idempotencyKey: _key('commission-delete'),
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) setState(() => _error = _message(error));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('提成信息 · ${widget.order.orderNo}'),
+      content: SizedBox(
+        width: 820,
+        height: 520,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '上单金额 ${_money(widget.order.totalAmountCents)} · 归属日期 ${widget.order.orderDate}',
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: () => _edit(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('添加提成'),
+                ),
+              ],
+            ),
+            if (_loading) const LinearProgressIndicator(),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final record in _records)
+                    Card(
+                      child: ListTile(
+                        title: Text(
+                          '${record.recipientName} · ${record.ratePercent}%',
+                        ),
+                        subtitle: Text(
+                          '${record.recipientType == 'employee' ? '内部员工' : '非员工/其他人员'} · '
+                          '基数 ${_money(record.effectiveBaseAmountCents)} · '
+                          '原提成 ${_money(record.originalAmountCents)} · '
+                          '冲减 ${_money(record.adjustmentAmountCents)}\n'
+                          '有效提成 ${_money(record.effectiveAmountCents)} · '
+                          '归属 ${record.attributionDate ?? '-'}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            IconButton(
+                              tooltip: '修改',
+                              onPressed: () => _edit(record),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              tooltip: '删除',
+                              onPressed: () => _remove(record),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
 }
 
 class _SpecialOrderForm extends StatefulWidget {
@@ -688,12 +1080,20 @@ class _SpecialOrderForm extends StatefulWidget {
 class _SpecialOrderFormState extends State<_SpecialOrderForm> {
   final _formKey = GlobalKey<FormState>();
   final _remark = TextEditingController();
-  final _sourceRemark = TextEditingController();
-  final _externalName = TextEditingController();
+  final _customerName = TextEditingController();
+  final _customerPhone = TextEditingController();
+  final _customerAddress = TextEditingController();
+  final _customerNotes = TextEditingController();
   late SpecialOrderReferenceData _refs;
   late final List<_LineDraft> _lines;
-  String? _employeeId;
   String? _customerId;
+  late final List<_PaymentDraft> _payments;
+  late final String _submissionKey;
+  // Kept only for rendering legacy draft records through the old helper;
+  // new direct-completion forms use the common customer fields below.
+  final _sourceRemark = TextEditingController();
+  final _externalName = TextEditingController();
+  String? _employeeId;
   String _externalType = 'guide';
   String? _externalId;
   bool _hasOriginal = true;
@@ -708,15 +1108,13 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
     super.initState();
     _refs = widget.references;
     final order = widget.existing;
-    _employeeId = order?.internalEmployeeId;
     _customerId = order?.customerId;
-    _externalType = order?.externalPartyType ?? 'guide';
-    _externalId = order?.externalPartyId;
-    _hasOriginal = order?.hasOriginalPurchase ?? true;
-    _sourceOrderId = order?.sourceSalesOrderId;
+    _submissionKey = _key(order == null ? 'create' : 'update');
     _remark.text = order?.remark ?? '';
-    _sourceRemark.text = order?.sourceRemark ?? '';
-    _externalName.text = order?.externalPartyName ?? '';
+    _customerName.text = order?.customerName ?? '';
+    _customerPhone.text = order?.customerPhone ?? '';
+    _customerAddress.text = order?.address ?? '';
+    _customerNotes.text = order?.customerNotes ?? '';
     _lines = order == null || order.items.isEmpty
         ? [_LineDraft(warehouseId: _defaultWarehouseId)]
         : order.items
@@ -727,18 +1125,25 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
               ),
             )
             .toList();
-    if (_customerId != null && _hasOriginal) {
-      _loadSources(_customerId!);
-    }
+    _payments = (order?.settlement?.payments ?? const [])
+        .map(_PaymentDraft.fromJson)
+        .toList();
   }
 
   @override
   void dispose() {
     _remark.dispose();
+    _customerName.dispose();
+    _customerPhone.dispose();
+    _customerAddress.dispose();
+    _customerNotes.dispose();
     _sourceRemark.dispose();
     _externalName.dispose();
     for (final line in _lines) {
       line.dispose();
+    }
+    for (final payment in _payments) {
+      payment.dispose();
     }
     super.dispose();
   }
@@ -762,8 +1167,40 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
     }
   }
 
+  int get _orderTotalCents => _lines.fold(
+        0,
+        (sum, line) => sum + _moneyCents(line.totalPrice.text),
+      );
+
+  int get _paidTotalCents => _payments.fold(
+        0,
+        (sum, payment) => sum + _moneyCents(payment.amount.text),
+      );
+
+  void _selectCustomer(String? id) {
+    final selected = _first(_refs.customers.where((row) => row.id == id));
+    setState(() {
+      _customerId = id;
+      if (selected == null) {
+        _customerName.clear();
+        _customerPhone.clear();
+        _customerAddress.clear();
+        _customerNotes.clear();
+      } else {
+        _customerName.text = selected.name;
+        _customerPhone.text = selected.phone ?? '';
+        _customerAddress.text = selected.address ?? '';
+        _customerNotes.text = selected.notes ?? '';
+      }
+    });
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_paidTotalCents > _orderTotalCents) {
+      setState(() => _error = '已支付金额不能大于商品明细合计。');
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -771,37 +1208,29 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
     try {
       final body = <String, dynamic>{
         'orderType': widget.orderType,
-        'orderDate': _date(DateTime.now()),
+        'orderDate': widget.existing?.orderDate ?? _date(DateTime.now()),
         'remark': _remark.text,
-        if (widget.orderType == 'internal') 'internalEmployeeId': _employeeId,
-        if (widget.orderType == 'external') ...{
-          'externalPartyType': _externalType,
-          if (_externalType == 'other')
-            'externalPartyName': _externalName.text
-          else
-            'externalPartyId': _externalId,
-        },
-        if (widget.orderType == 'buyback') ...{
-          'customerId': _customerId,
-          'hasOriginalPurchase': _hasOriginal,
-          if (_hasOriginal)
-            'sourceSalesOrderId': _sourceOrderId
-          else
-            'sourceRemark': _sourceRemark.text,
+        if (_customerId != null) 'customerId': _customerId,
+        'customer': {
+          'name': _customerName.text.trim(),
+          'phone': _customerPhone.text.trim(),
+          'address': _customerAddress.text.trim(),
+          'notes': _customerNotes.text.trim(),
         },
         'items': [
           for (final line in _lines) line.toJson(widget.orderType),
         ],
+        'payments': [for (final payment in _payments) payment.toJson()],
       };
       final saved = widget.existing == null
           ? await widget.api.createSpecialOrder({
               ...body,
-              'idempotencyKey': _key('create'),
+              'idempotencyKey': _submissionKey,
             })
           : await widget.api.updateSpecialOrder(widget.existing!.id, {
               ...body,
               'workflowVersion': widget.existing!.workflowVersion,
-              'idempotencyKey': _key('update'),
+              'idempotencyKey': _submissionKey,
             });
       if (mounted) Navigator.pop(context, saved);
     } catch (error) {
@@ -843,7 +1272,7 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                _counterpartyFields(),
+                _customerFields(),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _remark,
@@ -876,16 +1305,74 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
                 ),
                 for (var index = 0; index < _lines.length; index++)
                   _lineEditor(index),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.icon(
-                    key: const ValueKey('special-order-save-draft'),
-                    onPressed: _saving ? null : _save,
-                    icon: const Icon(Icons.save),
-                    label: Text(_saving ? '保存中' : '保存草稿'),
-                  ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '支付明细（可混合支付，也可留空记欠款）',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      key: const ValueKey('special-order-add-payment'),
+                      onPressed: _refs.paymentMethods.isEmpty
+                          ? null
+                          : () => setState(
+                                () => _payments.add(
+                                  _PaymentDraft(
+                                    paymentMethodId:
+                                        _refs.paymentMethods.first.id,
+                                  ),
+                                ),
+                              ),
+                      icon: const Icon(Icons.add_card),
+                      label: const Text('添加支付'),
+                    ),
+                  ],
                 ),
+                for (var index = 0; index < _payments.length; index++)
+                  _paymentEditor(index),
+                const SizedBox(height: 88),
               ],
+            ),
+          ),
+          bottomNavigationBar: Material(
+            elevation: 8,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Wrap(
+                        spacing: 24,
+                        runSpacing: 4,
+                        children: [
+                          Text('商品合计：${_money(_orderTotalCents)}'),
+                          Text('已支付：${_money(_paidTotalCents)}'),
+                          Text(
+                            '未支付：${_money(_orderTotalCents > _paidTotalCents ? _orderTotalCents - _paidTotalCents : 0)}',
+                          ),
+                        ],
+                      ),
+                    ),
+                    FilledButton.icon(
+                      key: const ValueKey('special-order-save-draft'),
+                      onPressed: _saving ? null : _save,
+                      icon: _saving
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.check),
+                      label: Text(_saving ? '提交中' : '确认开单'),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -893,6 +1380,178 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
     );
   }
 
+  Widget _customerFields() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('客户信息', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: const ValueKey('special-order-customer-field'),
+              initialValue: _customerId ?? '__new__',
+              decoration: const InputDecoration(
+                labelText: '搜索/选择已有客户，或直接新建',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(
+                  value: '__new__',
+                  child: Text('新客户 / 手工填写'),
+                ),
+                for (final customer in _refs.customers)
+                  DropdownMenuItem(
+                    value: customer.id,
+                    child: Text(
+                      '${customer.name}${customer.phone?.isNotEmpty == true ? ' · ${customer.phone}' : ''}',
+                    ),
+                  ),
+              ],
+              onChanged: (value) =>
+                  _selectCustomer(value == '__new__' ? null : value),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth < 700
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - 12) / 2;
+                Widget field(Widget child) =>
+                    SizedBox(width: width, child: child);
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    field(
+                      TextFormField(
+                        key: const ValueKey('special-order-customer-name'),
+                        controller: _customerName,
+                        decoration: const InputDecoration(
+                          labelText: '客户姓名',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: _requiredText,
+                      ),
+                    ),
+                    field(
+                      TextFormField(
+                        key: const ValueKey('special-order-customer-phone'),
+                        controller: _customerPhone,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: '手机号',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    field(
+                      TextFormField(
+                        key: const ValueKey('special-order-customer-address'),
+                        controller: _customerAddress,
+                        decoration: const InputDecoration(
+                          labelText: '地址',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    field(
+                      TextFormField(
+                        key: const ValueKey('special-order-customer-notes'),
+                        controller: _customerNotes,
+                        decoration: const InputDecoration(
+                          labelText: '客户备注',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _paymentEditor(int index) {
+    final payment = _payments[index];
+    return Card(
+      key: ValueKey('special-order-payment-$index'),
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                SizedBox(
+                  width: 230,
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey('special-order-payment-method-$index'),
+                    initialValue: payment.paymentMethodId,
+                    decoration: const InputDecoration(labelText: '支付方式'),
+                    items: [
+                      for (final method in _refs.paymentMethods)
+                        DropdownMenuItem(
+                          value: method.id,
+                          child: Text(method.name),
+                        ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => payment.paymentMethodId = value),
+                    validator: (value) => value == null ? '请选择支付方式' : null,
+                  ),
+                ),
+                SizedBox(
+                  width: 180,
+                  child: TextFormField(
+                    key: ValueKey('special-order-payment-amount-$index'),
+                    controller: payment.amount,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: '金额（元）'),
+                    onChanged: (_) => setState(() {}),
+                    validator: _positiveMoneyValidator,
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    key: ValueKey('special-order-payment-reference-$index'),
+                    controller: payment.referenceNo,
+                    decoration: const InputDecoration(labelText: '流水号/凭证号'),
+                  ),
+                ),
+              ],
+            ),
+            TextFormField(
+              key: ValueKey('special-order-payment-remark-$index'),
+              controller: payment.remark,
+              decoration: const InputDecoration(labelText: '收款备注'),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                tooltip: '删除支付明细',
+                onPressed: () => setState(() {
+                  final removed = _payments.removeAt(index);
+                  removed.dispose();
+                }),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
   Widget _counterpartyFields() {
     if (widget.orderType == 'internal') {
       return DropdownButtonFormField<String>(
@@ -1062,6 +1721,7 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
                 );
             final fields = <Widget>[
               DropdownButtonFormField<String>(
+                key: ValueKey('special-order-product-$index'),
                 initialValue: line.productId,
                 decoration: const InputDecoration(labelText: '商品'),
                 items: [
@@ -1076,6 +1736,7 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
               ),
               if (widget.orderType != 'buyback')
                 DropdownButtonFormField<String>(
+                  key: ValueKey('special-order-warehouse-$index'),
                   initialValue: line.warehouseId,
                   decoration: const InputDecoration(labelText: '仓库'),
                   items: [
@@ -1090,30 +1751,26 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
                   validator: (value) => value == null ? '请选择仓库' : null,
                 ),
               TextFormField(
+                key: ValueKey('special-order-quantity-$index'),
                 controller: line.quantity,
-                keyboardType:
-                    const TextInputType.numberWithOptions(signed: true),
-                decoration: const InputDecoration(labelText: '数量（不可为 0）'),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: '数量'),
                 validator: (value) {
                   final parsed = int.tryParse(value?.trim() ?? '');
-                  return parsed == null || parsed == 0 ? '数量不可为 0' : null;
+                  return parsed == null || parsed <= 0 ? '数量必须大于 0' : null;
                 },
               ),
               TextFormField(
-                controller: line.listPrice,
+                key: ValueKey('special-order-total-price-$index'),
+                controller: line.totalPrice,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '标价（元）'),
-                validator: _moneyValidator,
-              ),
-              TextFormField(
-                controller: line.dealPrice,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '成交价（元）'),
+                decoration: const InputDecoration(labelText: '总价（元）'),
+                onChanged: (_) => setState(() {}),
                 validator: _moneyValidator,
               ),
               DropdownButtonFormField<String>(
+                key: ValueKey('special-order-delivery-$index'),
                 initialValue: line.deliveryType,
                 decoration: const InputDecoration(labelText: '交付方式'),
                 items: const [
@@ -1135,26 +1792,10 @@ class _SpecialOrderFormState extends State<_SpecialOrderForm> {
                   runSpacing: 8,
                   children: fields.map(sized).toList(),
                 ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('赠品 / 零价'),
-                  value: line.isGift,
-                  onChanged: (value) => setState(() {
-                    line.isGift = value;
-                    if (value) line.dealPrice.text = '0';
-                  }),
-                ),
                 TextFormField(
-                  controller: line.priceReason,
-                  decoration: const InputDecoration(
-                    labelText: '手工改价原因（成交价与标价不同时必填）',
-                  ),
-                ),
-                TextFormField(
-                  controller: line.adjustmentReason,
-                  decoration: const InputDecoration(
-                    labelText: '负数调整原因（数量为负数时必填）',
-                  ),
+                  key: ValueKey('special-order-item-notes-$index'),
+                  controller: line.notes,
+                  decoration: const InputDecoration(labelText: '明细备注'),
                 ),
                 if (widget.orderType == 'buyback' &&
                     product?.inventoryTrackingMode == 'serialized')
@@ -1202,24 +1843,18 @@ class _LineDraft {
     )
       ..productId = record.productId
       ..quantity.text = '${record.quantity}'
-      ..listPrice.text = _inputMoney(record.listUnitPriceCents)
-      ..dealPrice.text = _inputMoney(record.unitPriceCents)
-      ..priceReason.text = record.priceOverrideReason ?? ''
-      ..adjustmentReason.text = record.adjustmentReason ?? ''
+      ..totalPrice.text = _inputMoney(record.subtotalCents)
+      ..notes.text = record.notes ?? ''
       ..logisticsCodes.text = record.logisticsCodes.join('\n')
-      ..isGift = record.isGift
       ..deliveryType = record.deliveryType;
   }
 
   String? productId;
   String? warehouseId;
   final quantity = TextEditingController(text: '1');
-  final listPrice = TextEditingController(text: '0');
-  final dealPrice = TextEditingController(text: '0');
-  final priceReason = TextEditingController();
-  final adjustmentReason = TextEditingController();
+  final totalPrice = TextEditingController(text: '0');
+  final notes = TextEditingController();
   final logisticsCodes = TextEditingController();
-  bool isGift = false;
   String deliveryType = 'shipping';
 
   Map<String, dynamic> toJson(String orderType) {
@@ -1227,13 +1862,10 @@ class _LineDraft {
       'productId': productId,
       if (orderType != 'buyback') 'warehouseId': warehouseId,
       'quantity': int.tryParse(quantity.text.trim()),
-      'listUnitPriceCents': _moneyCents(listPrice.text),
-      'unitPriceCents': isGift ? 0 : _moneyCents(dealPrice.text),
-      'isGift': isGift,
-      'priceOverrideReason': priceReason.text,
-      'adjustmentReason': adjustmentReason.text,
+      'totalPriceCents': _moneyCents(totalPrice.text),
       'deliveryType': deliveryType,
       'inventoryCondition': 'saleable',
+      'notes': notes.text.trim(),
       'logisticsCodes': logisticsCodes.text
           .split(RegExp(r'[\r\n,]+'))
           .map((code) => code.trim())
@@ -1244,11 +1876,40 @@ class _LineDraft {
 
   void dispose() {
     quantity.dispose();
-    listPrice.dispose();
-    dealPrice.dispose();
-    priceReason.dispose();
-    adjustmentReason.dispose();
+    totalPrice.dispose();
+    notes.dispose();
     logisticsCodes.dispose();
+  }
+}
+
+class _PaymentDraft {
+  _PaymentDraft({this.paymentMethodId});
+
+  factory _PaymentDraft.fromJson(Map<String, dynamic> json) {
+    return _PaymentDraft(
+      paymentMethodId: _string(json['paymentMethodId']),
+    )
+      ..amount.text = _inputMoney(_int(json['amountCents']))
+      ..referenceNo.text = _string(json['referenceNo']) ?? ''
+      ..remark.text = _string(json['remark']) ?? '';
+  }
+
+  String? paymentMethodId;
+  final amount = TextEditingController();
+  final referenceNo = TextEditingController();
+  final remark = TextEditingController();
+
+  Map<String, dynamic> toJson() => {
+        'paymentMethodId': paymentMethodId,
+        'amountCents': _moneyCents(amount.text),
+        'referenceNo': referenceNo.text.trim(),
+        'remark': remark.text.trim(),
+      };
+
+  void dispose() {
+    amount.dispose();
+    referenceNo.dispose();
+    remark.dispose();
   }
 }
 
@@ -1330,13 +1991,40 @@ String _date(DateTime value) =>
     '${value.day.toString().padLeft(2, '0')}';
 
 int _moneyCents(String text) {
-  final value = double.tryParse(text.trim());
-  return value == null || value < 0 ? 0 : (value * 100).round();
+  final normalized = text.trim();
+  final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(normalized);
+  if (match == null) return 0;
+  final yuan = int.tryParse(match.group(1)!) ?? 0;
+  final decimal = match.group(2) ?? '';
+  final cents = decimal.isEmpty
+      ? 0
+      : int.parse(decimal.length == 1 ? '${decimal}0' : decimal);
+  return yuan * 100 + cents;
 }
 
 String? _moneyValidator(String? text) {
-  final value = double.tryParse(text?.trim() ?? '');
-  return value == null || value < 0 ? '请输入非负金额' : null;
+  return RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(text?.trim() ?? '')
+      ? null
+      : '请输入最多两位小数的非负金额';
+}
+
+String? _positiveMoneyValidator(String? text) {
+  final validation = _moneyValidator(text);
+  if (validation != null) return validation;
+  return _moneyCents(text ?? '') > 0 ? null : '支付金额必须大于 0';
+}
+
+int _commissionPreviewCents(int baseCents, String percentText) {
+  final match =
+      RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(percentText.trim());
+  if (match == null) return 0;
+  final whole = int.tryParse(match.group(1)!) ?? 0;
+  final decimal = match.group(2) ?? '';
+  final hundredths = decimal.isEmpty
+      ? 0
+      : int.parse(decimal.length == 1 ? '${decimal}0' : decimal);
+  final percentHundredths = whole * 100 + hundredths;
+  return (baseCents * percentHundredths + 5000) ~/ 10000;
 }
 
 String? _requiredText(String? text) =>
@@ -1345,6 +2033,11 @@ String? _requiredText(String? text) =>
 String _money(int cents) => '¥${(cents / 100).toStringAsFixed(2)}';
 String _inputMoney(int cents) => (cents / 100).toStringAsFixed(2);
 int _int(Object? value) => value is int ? value : int.tryParse('$value') ?? 0;
+String? _string(Object? value) {
+  final text = value?.toString().trim() ?? '';
+  return text.isEmpty ? null : text;
+}
+
 Map<String, dynamic> _map(Object? value) => value is Map
     ? value.map((key, nested) => MapEntry('$key', nested))
     : <String, dynamic>{};

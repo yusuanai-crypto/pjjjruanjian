@@ -33,14 +33,24 @@ export class SalesOrdersNestController {
     };
   }
 
+  @Get('assignment-options')
+  async assignmentOptions(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      assignmentOptions:
+        await this.businessDataService.getSalesOrderAssignmentOptions(
+          actor,
+          query,
+        ),
+    };
+  }
+
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      salesOrder: await this.businessDataService.createSalesOrder(actor, body, {
+    return this.businessDataService.createSalesOrder(actor, body, {
         ipAddress: getRequestIp(request),
-      }),
-    };
+      });
   }
 
   @Get('export.xlsx')
@@ -112,16 +122,14 @@ export class SalesOrdersNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      salesOrder: await this.businessDataService.salesEditSalesOrder(
-        actor,
-        id,
-        body,
-        {
-          ipAddress: getRequestIp(request),
-        },
-      ),
-    };
+    return this.businessDataService.salesEditSalesOrder(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
   }
 
   @Patch(':id/finance')
@@ -268,11 +276,9 @@ export class SalesOrdersNestController {
   @Patch(':id')
   async update(@Param('id') id: string, @Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);
-    return {
-      salesOrder: await this.businessDataService.updateSalesOrder(actor, id, body, {
+    return this.businessDataService.updateSalesOrder(actor, id, body, {
         ipAddress: getRequestIp(request),
-      }),
-    };
+      });
   }
 
   @Patch(':id/finance-mark')

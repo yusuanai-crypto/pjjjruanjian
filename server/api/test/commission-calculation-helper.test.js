@@ -353,6 +353,179 @@ test('unit: stage7 agency rules prefer explicit agencyId and current name-to-id 
   );
 });
 
+test('unit: 3996 yuan employee base generates sales, outreach, and leader commissions with cent rounding', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        totalAmountCents: 399600,
+        items: [
+          {
+            id: 'item-3996',
+            productName: '核对酒品',
+            quantity: 1,
+            unitPriceCents: 399600,
+            subtotalCents: 399600,
+          },
+        ],
+        afterSalesOrders: [],
+      },
+      salesDeductionRules: [],
+      agencyDeductionRules: [],
+      agencyRebateRules: [],
+      commissionRules: [
+        commissionRule({
+          id: 'rule-sales-0304',
+          targetType: 'sales_commission',
+          rate: '0.0304',
+        }),
+        commissionRule({
+          id: 'rule-outreach-0080',
+          targetType: 'outreach_commission',
+          rate: '0.0080',
+        }),
+        commissionRule({
+          id: 'rule-leader-0024',
+          targetType: 'leader_commission',
+          rate: '0.0024',
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(result.amounts.employeeBaseAmountCents, 399600);
+  assertLine(result.commissionLines, 'SALES_COMMISSION', {
+    baseAmountCents: 399600,
+    rateSnapshot: '0.0304',
+    amountCents: 12148,
+  });
+  assertLine(result.commissionLines, 'OUTREACH_COMMISSION', {
+    baseAmountCents: 399600,
+    rateSnapshot: '0.0080',
+    amountCents: 3197,
+  });
+  assertLine(result.commissionLines, 'LEADER_COMMISSION', {
+    baseAmountCents: 399600,
+    rateSnapshot: '0.0024',
+    amountCents: 959,
+  });
+});
+
+test('unit: agency rebate falls back to a unique id-less historical name rule after master-data matching', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'legacy-canonical-name-rule',
+          agencyId: null,
+          agencyName: ' stage7 test agency ',
+          dailyRebateRate: '0.0300',
+          monthlyRebateRate: '0.0200',
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(
+    result.sourceSnapshot.travelAgencyMatch.matchedTravelAgencyId,
+    'agency-1',
+  );
+  assert.equal(
+    result.ruleSnapshot.agencyRebateRule.id,
+    'legacy-canonical-name-rule',
+  );
+  assert.equal(
+    result.ruleSnapshot.agencyRebateRule.matchMode,
+    'agency_name_legacy_fallback',
+  );
+  assert.equal(result.agencyRebateLines.length, 2);
+  assert.equal(result.amounts.dailyRebateCents, 23400);
+  assert.equal(result.amounts.monthlyRebateCents, 15600);
+  assertWarningCodes(result, ['agency_name_legacy_fallback']);
+});
+
+test('unit: agencyId rebate rule wins and another agencyId never falls back by name', () => {
+  const preferred = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'same-agency-id-rule',
+          agencyId: 'agency-1',
+          agencyName: 'stage7 test agency',
+          dailyRebateRate: '0.0300',
+        }),
+        agencyRebateRule({
+          id: 'legacy-name-rule',
+          agencyId: null,
+          agencyName: 'stage7 test agency',
+          dailyRebateRate: '0.9900',
+        }),
+      ],
+    }),
+  );
+  assert.equal(preferred.ruleSnapshot.agencyRebateRule.id, 'same-agency-id-rule');
+  assert.equal(preferred.ruleSnapshot.agencyRebateRule.matchMode, 'agency_id');
+  assert.equal(
+    preferred.warnings.some(
+      (warning) => warning.code === 'agency_name_legacy_fallback',
+    ),
+    false,
+  );
+
+  const wrongAgencyOnly = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'other-agency-same-name',
+          agencyId: 'agency-other',
+          agencyName: 'stage7 test agency',
+          dailyRebateRate: '0.9900',
+        }),
+      ],
+    }),
+  );
+  assert.equal(wrongAgencyOnly.ruleSnapshot.agencyRebateRule, null);
+  assert.equal(wrongAgencyOnly.agencyRebateLines.length, 0);
+  assertWarningCodes(wrongAgencyOnly, ['missing_agency_rebate_rule']);
+});
+
+test('unit: equal-priority historical name rules return structured ambiguity and no rebates', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      agencyRebateRules: [
+        agencyRebateRule({
+          id: 'legacy-conflict-a',
+          agencyId: null,
+          agencyName: 'stage7 test agency',
+        }),
+        agencyRebateRule({
+          id: 'legacy-conflict-b',
+          agencyId: null,
+          agencyName: 'stage7 test agency',
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(result.agencyRebateLines.length, 0);
+  assertWarningCodes(result, [
+    'ambiguous_agency_rebate_rule',
+    'missing_agency_rebate_rule',
+  ]);
+  const ambiguity = result.warnings.find(
+    (warning) => warning.code === 'ambiguous_agency_rebate_rule',
+  );
+  assert.deepEqual(ambiguity.context.ruleIds, [
+    'legacy-conflict-a',
+    'legacy-conflict-b',
+  ]);
+  assert.equal(ambiguity.context.matchMode, 'agency_name_legacy_fallback');
+  const missing = result.warnings.find(
+    (warning) => warning.code === 'missing_agency_rebate_rule',
+  );
+  assert.match(missing.message, /日返和月返均未生成/);
+  assert.equal(missing.context.salesOrderId, 'order-stage7-calc');
+});
+
 test('unit: stage7 agency matching falls back to agencyName text rules with warning', () => {
   const result = calculateStage7CommissionAndPoints(
     buildCalculationInput({

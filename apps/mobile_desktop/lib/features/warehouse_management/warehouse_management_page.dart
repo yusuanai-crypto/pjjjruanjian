@@ -12,10 +12,10 @@ import '../warehouse/warehouse_packing_page.dart';
 import 'compatibility/inventory_compatibility_entries.dart';
 import 'inventory_workspace_tabs.dart';
 import 'navigation/warehouse_secondary_navigation.dart';
+import 'navigation/inventory_navigation_handoff.dart';
 import 'overview/inventory_overview_page.dart';
 import 'returns/customer_returns_tab.dart';
 import 'shared/inventory_workspace_shared.dart';
-import 'warehouse_settings_page.dart';
 
 export 'shared/inventory_workspace_shared.dart'
     show
@@ -56,13 +56,28 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
   final Map<String, int> _moduleFilterRevisions = {};
   final Map<String, InventorySelectionContext> _moduleSelectionRequests = {};
   final Map<String, int> _createRequestRevisions = {};
-  bool _warehouseSettingsDirty = false;
 
   @override
   void initState() {
     super.initState();
     _api = _createApiIfAllowed();
     _businessApi = _createBusinessApiIfAllowed();
+    _consumeNavigationHandoff();
+  }
+
+  void _consumeNavigationHandoff() {
+    final request = InventoryNavigationHandoff.take();
+    if (request == null || !canAccessInventory(widget.role)) return;
+    _selectedModuleId = request.moduleId;
+    _visitedModuleIds = {'overview', request.moduleId};
+    _moduleSelectionRequests[request.moduleId] = InventorySelectionContext(
+      warehouseId: request.warehouseId,
+      productId: request.productId,
+    );
+    _moduleFilterRevisions[request.moduleId] = 1;
+    if (request.action == 'create') {
+      _createRequestRevisions[request.moduleId] = 1;
+    }
   }
 
   @override
@@ -86,7 +101,6 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
     _moduleFilterRevisions.clear();
     _moduleSelectionRequests.clear();
     _createRequestRevisions.clear();
-    _warehouseSettingsDirty = false;
   }
 
   @override
@@ -311,23 +325,11 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
           ),
         ],
       ),
-      if (canManageWarehouse(role) || _canUseSerializedInventory)
+      if (_canUseSerializedInventory)
         _WarehouseModuleGroup(
-          id: 'settings',
-          label: '基础设置',
+          id: 'compatibility',
+          label: '兼容入口',
           modules: [
-            if (canManageWarehouse(role))
-              _WarehouseModule(
-                id: 'warehouse_settings',
-                label: '仓库设置',
-                icon: Icons.settings_outlined,
-                description: '维护仓库资料、默认仓库和启用状态，不提供物理删除。',
-                builder: () => WarehouseSettingsPage(
-                  api: api,
-                  role: role,
-                  onDirtyChanged: (dirty) => _warehouseSettingsDirty = dirty,
-                ),
-              ),
             if (_canUseSerializedInventory)
               _WarehouseModule(
                 id: 'serialized',
@@ -345,17 +347,6 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
 
   Future<void> _selectModule(String moduleId) async {
     if (_selectedModuleId == moduleId) return;
-    if (_selectedModuleId == 'warehouse_settings' && _warehouseSettingsDirty) {
-      final discard = await confirmInventoryAction(
-        context,
-        title: '放弃未保存修改？',
-        content: '仓库资料尚未保存，切换模块将丢失这些修改。',
-        confirmLabel: '放弃并切换',
-        danger: true,
-      );
-      if (!discard || !mounted) return;
-      _warehouseSettingsDirty = false;
-    }
     setState(() {
       _selectedModuleId = moduleId;
       _visitedModuleIds = {..._visitedModuleIds, moduleId};
@@ -438,10 +429,10 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
         key: ValueKey('warehouse-management-access-denied'),
         children: [
           FormSection(
-            title: '仓库管理',
+            title: '库存管理',
             children: [
               InventoryInlineNotice(
-                message: '当前角色无权访问仓库管理模块。',
+                message: '当前角色无权访问库存管理模块。',
                 tone: StatusTone.danger,
               ),
             ],
@@ -530,7 +521,7 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            '仓库管理',
+            '库存管理',
             style: Theme.of(context)
                 .textTheme
                 .headlineSmall

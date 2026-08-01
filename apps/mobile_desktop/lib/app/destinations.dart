@@ -145,8 +145,13 @@ const appDestinations = <AppDestination>[
       phase: 6),
   AppDestination(
       id: 'warehouse_management',
-      label: '仓库管理',
+      label: '库存管理',
       icon: Icons.warehouse_rounded,
+      phase: 11),
+  AppDestination(
+      id: 'warehouse_directory',
+      label: '仓库管理',
+      icon: Icons.account_tree_rounded,
       phase: 11),
   AppDestination(
       id: 'after_sales_form',
@@ -231,6 +236,7 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
   }
   if (!canAccessInventory(role)) {
     ids.remove('warehouse_management');
+    ids.remove('warehouse_directory');
   }
   if (role != UserRole.superAdmin &&
       role != UserRole.admin &&
@@ -265,7 +271,6 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
         ..remove('finance_query')
         ..remove('reconciliation_table')
         ..remove('warehouse_packing')
-        ..remove('after_sales_form')
         ..remove('commission_rules')
         ..remove('taster_commissions')
         ..remove('travel_agency_management');
@@ -378,6 +383,8 @@ String _destinationIdForBackendMenu(String menuId) {
       return 'moutai_inventory';
     case 'warehouse_management':
       return 'warehouse_management';
+    case 'warehouse_directory':
+      return 'warehouse_directory';
     case 'own_taster_receptions':
       return 'taster_summary';
     case 'own_commissions':

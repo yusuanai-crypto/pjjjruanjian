@@ -45,6 +45,13 @@ API instance must use the same database and fingerprint secret. Startup fails
 if production is configured with the in-memory store or if the shared store's
 fingerprint secret is missing or weak.
 
+For the PM2 deployment, use `npm run deploy:pm2:safe` with
+`API_DATABASE_BACKUP_CONFIRMED=1` only after an operator has confirmed the
+target database and a restorable backup. The script runs Prisma generation,
+the API build, and `prisma migrate deploy` in that order; `set -e` prevents a
+new API process from starting or restarting when any prerequisite fails. It
+does not run a seed. Do not bypass this gate when deploying new API code.
+
 The database store performs each fixed-window increment in a transaction using
 an atomic upsert. This prevents concurrent requests on different API instances
 from passing the final remaining slot. The in-memory store is intended only for
@@ -194,16 +201,19 @@ are stored; the complete provider response is not persisted.
 The API exposes detailed messages only for application errors created through
 the shared business-error helper. Unknown exceptions never inherit a
 `statusCode`, `code`, or `message` merely because an SDK or thrown object
-contains those properties. Prisma unique, foreign-key, missing-record, and
-transaction-conflict errors and common file-system failures use explicit,
-stable mappings.
+contains those properties. Prisma unique, foreign-key, missing-record,
+missing-column, and transaction-conflict errors and common file-system failures
+use explicit, stable mappings. Prisma `P2022` returns HTTP 503 with the stable
+code `DATABASE_SCHEMA_MISMATCH`, a generic Chinese message, and a top-level
+`requestId`; table names, column names, SQL, and connection details are not
+returned or copied into the sanitized application log entry.
 
 Every error response includes `X-Correlation-ID`. A caller-provided
 `X-Correlation-ID` or `X-Request-ID` is accepted only when it is 1-64
 characters and contains the configured safe identifier character set; all
-other values are replaced with a random UUID. All 5xx responses use
-`Unexpected server error.` and add the same identifier as the top-level
-`requestId`. Their stable business code may remain specific, such as
+other values are replaced with a random UUID. All 5xx responses add the same
+identifier as the top-level `requestId` and use a safe generic message; the
+schema-mismatch message is Chinese. Their stable business code may remain specific, such as
 `SMS_SEND_FAILED` or `AI_PROVIDER_REQUEST_FAILED`, but provider response bodies
 and exception messages are never returned.
 

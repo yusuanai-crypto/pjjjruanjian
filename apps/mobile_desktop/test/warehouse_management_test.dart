@@ -431,7 +431,7 @@ void main() {
     testWidgets('sales role shows access denied', (tester) async {
       final api = _FakeApiClient();
       await _pumpPage(tester, api, role: UserRole.sales);
-      expect(find.text('当前角色无权访问仓库管理模块。'), findsOneWidget);
+      expect(find.text('当前角色无权访问库存管理模块。'), findsOneWidget);
       expect(api.requestedPaths, isEmpty);
     });
 
@@ -446,7 +446,7 @@ void main() {
         final api = _FakeApiClient();
         await _pumpPage(tester, api, role: role);
         expect(
-          find.text('当前角色无权访问仓库管理模块。'),
+          find.text('当前角色无权访问库存管理模块。'),
           findsOneWidget,
           reason: role.value,
         );
@@ -467,8 +467,8 @@ void main() {
       expect(find.text('工作台'), findsWidgets);
       expect(find.text('日常作业'), findsOneWidget);
       expect(find.text('盘点与追溯'), findsOneWidget);
-      expect(find.text('基础设置'), findsOneWidget);
-      expect(find.text('仓库管理'), findsWidgets);
+      expect(find.text('兼容入口'), findsOneWidget);
+      expect(find.text('库存管理'), findsWidgets);
     });
 
     testWidgets('mobile uses grouped module selector without horizontal tabs',
@@ -544,7 +544,7 @@ void main() {
   });
 
   group('grouped navigation permissions', () {
-    testWidgets('admin sees settings, operational links and approval',
+    testWidgets('admin uses the independent directory instead of old settings',
         (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(
@@ -555,7 +555,7 @@ void main() {
       );
       expect(
         find.byKey(const ValueKey('warehouse-module-warehouse_settings')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.byKey(const ValueKey('warehouse-module-fulfillment')),
@@ -1171,20 +1171,14 @@ void main() {
       expect(navigated, isNull);
     });
 
-    testWidgets('warehouse settings loads real management UI for admin',
+    testWidgets('old inventory workbench no longer exposes writable settings',
         (tester) async {
       final api = _FakeApiClient(warehouses: [_warehouseJson()]);
       await _pumpPage(tester, api, role: UserRole.admin);
-      await _selectModule(tester, 'warehouse_settings');
       expect(
-        find.byKey(const ValueKey('warehouse-settings-wide-layout')),
-        findsOneWidget,
+        find.byKey(const ValueKey('warehouse-module-warehouse_settings')),
+        findsNothing,
       );
-      expect(find.byKey(const ValueKey('warehouse-settings-table')),
-          findsOneWidget);
-      expect(find.text('仓库编号'), findsWidgets);
-      expect(find.text('负责人'), findsWidgets);
-      expect(find.text('物理删除'), findsNothing);
     });
   });
 

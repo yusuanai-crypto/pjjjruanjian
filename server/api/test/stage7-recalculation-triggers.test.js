@@ -52,6 +52,7 @@ test('contract: stage7 recalculation runs after sales order creation', async () 
     assert.equal(createTrigger.afterData.generatedRecordCount, 5);
     assert.deepEqual(createTrigger.afterData.warningCodes, [
       'travel_agency_id_not_matched',
+      'agency_name_legacy_fallback',
     ]);
 
     const summaryLogs = await operationLogs(
@@ -64,6 +65,136 @@ test('contract: stage7 recalculation runs after sales order creation', async () 
         (log) => log.afterData.travelGroupId === TRAVEL_GROUP_ID,
       ),
     );
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: admin order creation keeps missing assignees null and returns warnings', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const result = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: TRAVEL_GROUP_ID,
+        customer: { name: 'missing sales attribution customer' },
+        orderDate: '2026-07-01',
+        items: [
+          {
+            productName: PRODUCT_NAME,
+            quantity: 1,
+            unitPriceCents: 100000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(result.response.status, 201, JSON.stringify(result.body));
+    assert.equal(result.body.data.salesOrder.salesUserId, null);
+    assert.equal(result.body.data.salesOrder.outreachUserId, null);
+    assert.ok(
+      result.body.data.recalculation.warnings.some(
+        (warning) => warning.code === 'missing_sales_user',
+      ),
+    );
+    assert.ok(
+      result.body.data.recalculation.warnings.some(
+        (warning) => warning.code === 'missing_outreach_user',
+      ),
+    );
+  }, {
+    prisma: buildStage7RecalculationPrisma(),
+  });
+});
+
+test('contract: sales creation auto-assigns the actor while finance creation does not guess an assignee', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  const today = shanghaiDateOnly();
+  prisma.travelGroups.find((group) => group.id === TRAVEL_GROUP_ID).visitDate =
+    `${today}T00:00:00.000Z`;
+  await withPhase1Server(async (baseUrl) => {
+    const sales = await login(
+      baseUrl,
+      'stage7-recalc-sales',
+      TEST_PASSWORD,
+    );
+    const finance = await login(
+      baseUrl,
+      'stage7-recalc-finance',
+      TEST_PASSWORD,
+    );
+
+    const salesOrder = await createStage7Order(baseUrl, sales.token, {
+      orderDate: today,
+      salesUserId: OUTREACH_USER_ID,
+    });
+    assert.equal(salesOrder.salesUserId, SALES_USER_ID);
+
+    const financeOrder = await createStage7Order(baseUrl, finance.token, {
+      orderDate: today,
+      salesUserId: null,
+      outreachUserId: null,
+    });
+    assert.equal(financeOrder.salesUserId, null);
+    assert.equal(financeOrder.outreachUserId, null);
+  }, {
+    prisma,
+  });
+});
+
+test('contract: explicitly submitted invalid sales or outreach assignees are still rejected', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const result = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: TRAVEL_GROUP_ID,
+        customer: { name: 'invalid sales attribution customer' },
+        orderDate: '2026-07-01',
+        salesUserId: 'usr-stage7-recalc-finance',
+        items: [
+          {
+            productName: PRODUCT_NAME,
+            quantity: 1,
+            unitPriceCents: 100000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(result.response.status, 400, JSON.stringify(result.body));
+    assert.equal(result.body.error.code, 'INVALID_ASSIGNEE');
+
+    const invalidOutreach = await requestJson(baseUrl, '/api/sales-orders', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        orderType: 'travel_group',
+        travelGroupId: TRAVEL_GROUP_ID,
+        customer: { name: 'invalid outreach attribution customer' },
+        orderDate: '2026-07-01',
+        salesUserId: SALES_USER_ID,
+        outreachUserId: 'usr-stage7-recalc-finance',
+        items: [
+          {
+            productName: PRODUCT_NAME,
+            quantity: 1,
+            unitPriceCents: 100000,
+            deliveryType: 'shipping',
+          },
+        ],
+      },
+    });
+    assert.equal(
+      invalidOutreach.response.status,
+      400,
+      JSON.stringify(invalidOutreach.body),
+    );
+    assert.equal(invalidOutreach.body.error.code, 'INVALID_ASSIGNEE');
   }, {
     prisma: buildStage7RecalculationPrisma(),
   });
@@ -107,8 +238,7 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       201,
       JSON.stringify(createdRule.body),
     );
-    const createRecalculation =
-      createdRule.body.data.commissionRule.recalculation;
+    const createRecalculation = createdRule.body.data.recalculation;
     assert.equal(createRecalculation.source, 'commission_rules.create');
     assert.equal(createRecalculation.orderCount, 1);
     assert.equal(createRecalculation.successCount, 1);
@@ -136,8 +266,7 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       },
     );
     assert.equal(updatedRule.response.status, 200);
-    const updateRecalculation =
-      updatedRule.body.data.commissionRule.recalculation;
+    const updateRecalculation = updatedRule.body.data.recalculation;
     assert.equal(updateRecalculation.generatedCount, 0);
     assert.equal(updateRecalculation.updatedCount, 1);
     assert.equal(
@@ -170,8 +299,7 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       },
     );
     assert.equal(repeatedRule.response.status, 200);
-    const repeatedRecalculation =
-      repeatedRule.body.data.commissionRule.recalculation;
+    const repeatedRecalculation = repeatedRule.body.data.recalculation;
     assert.equal(repeatedRecalculation.generatedCount, 0);
     assert.equal(repeatedRecalculation.updatedCount, 0);
     assert.equal(repeatedRecalculation.unchangedCount, 1);
@@ -188,8 +316,7 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       },
     );
     assert.equal(disabledRule.response.status, 200);
-    const disableRecalculation =
-      disabledRule.body.data.commissionRule.recalculation;
+    const disableRecalculation = disabledRule.body.data.recalculation;
     assert.equal(disableRecalculation.generatedCount, 0);
     assert.equal(disableRecalculation.updatedCount, 1);
     assert.equal(
@@ -283,8 +410,7 @@ test('contract: creating a leader rule after the order generates the existing or
       201,
       JSON.stringify(createdRule.body),
     );
-    const recalculation =
-      createdRule.body.data.commissionRule.recalculation;
+    const recalculation = createdRule.body.data.recalculation;
     assert.equal(recalculation.orderCount, 1);
     assert.equal(recalculation.successCount, 1);
     assert.equal(recalculation.generatedCount, 1);
@@ -1396,4 +1522,10 @@ function commissionRule(id, targetType, rate) {
     isActive: true,
     effectiveFrom: '2026-01-01T00:00:00.000Z',
   };
+}
+
+function shanghaiDateOnly() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
 }

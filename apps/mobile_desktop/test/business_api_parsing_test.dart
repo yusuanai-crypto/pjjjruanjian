@@ -2359,9 +2359,38 @@ void main() {
     expect(uri.queryParameters['isActive'], 'true');
 
     apiClient.nextJson = {
-      'data': {'commissionRule': commissionRuleJson},
+      'data': {
+        'commissionRule': commissionRuleJson,
+        'recalculation': {
+          'source': 'commission_rule_mutation',
+          'orderCount': 3,
+          'travelGroupCount': 1,
+          'successCount': 2,
+          'failureCount': 1,
+          'skippedCount': 0,
+          'skippedConfirmedCount': 0,
+          'skippedManualOverrideCount': 0,
+          'generatedRecords': <dynamic>[],
+          'updatedRecords': <dynamic>[],
+          'unchangedRecords': <dynamic>[],
+          'warnings': [
+            {
+              'code': 'missing_sales_user',
+              'message': 'Missing sales user.',
+            },
+          ],
+          'travelGroupFinanceSummaries': <dynamic>[],
+        },
+      },
     };
-    await api.createCommissionRule({'ruleName': 'test sales commission'});
+    final createdCommissionRule =
+        await api.createCommissionRule({'ruleName': 'test sales commission'});
+    expect(createdCommissionRule.recalculation?.orderCount, 3);
+    expect(createdCommissionRule.recalculation?.failureCount, 1);
+    expect(
+      createdCommissionRule.recalculation?.warnings.single.code,
+      'missing_sales_user',
+    );
     expect(apiClient.lastMethod, 'POST');
     expect(apiClient.lastPath, '/api/commission-rules');
     expect(apiClient.lastBody?['ruleName'], 'test sales commission');

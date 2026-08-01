@@ -699,6 +699,7 @@ class _SalesSheetPreview extends StatelessWidget {
     final url = qrCode?.url;
     final hasUrl = url != null && url.trim().isNotEmpty;
     return Card(
+      key: const ValueKey('qr-sales-sheet-customer-preview'),
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(
@@ -845,64 +846,7 @@ class _SalesSheetCoreInfo extends StatelessWidget {
             MoneyText(cents: sheet.amounts.totalAmountCents, prominent: true),
           ],
         ),
-        const SizedBox(height: 12),
-        const _SectionTitle('收款明细'),
-        if (sheet.paymentDetails.isEmpty)
-          const Text('暂无收款明细')
-        else
-          _SalesSheetPaymentDetailsTable(
-            details: sheet.paymentDetails,
-          ),
       ],
-    );
-  }
-}
-
-class _SalesSheetPaymentDetailsTable extends StatelessWidget {
-  const _SalesSheetPaymentDetailsTable({required this.details});
-
-  final List<SalesSheetPaymentDetailRecord> details;
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        key: const ValueKey('qr-sales-payment-details-table'),
-        columnSpacing: 22,
-        dataRowMinHeight: 52,
-        dataRowMaxHeight: 92,
-        columns: const [
-          DataColumn(label: Text('收款方式')),
-          DataColumn(label: Text('金额'), numeric: true),
-          DataColumn(label: Text('收款属性')),
-          DataColumn(label: Text('确认状态')),
-        ],
-        rows: [
-          for (final detail in details)
-            DataRow(
-              key: ValueKey('qr-sales-payment-detail-${detail.id}'),
-              cells: [
-                DataCell(
-                  Text(
-                    detail.paymentMethodNameSnapshot,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                DataCell(MoneyText(cents: detail.amountCents)),
-                DataCell(Text(detail.paymentMethodCategoryLabel)),
-                DataCell(
-                  Text(
-                    _salesSheetPaymentConfirmationText(detail),
-                    key: ValueKey(
-                      'qr-sales-payment-confirmation-${detail.id}',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
     );
   }
 }
@@ -1176,23 +1120,6 @@ String _invoiceLabel(SalesSheetInvoiceRecord invoice) {
       invoice.requiredLabel ?? (invoice.required ? '需要开票' : '无需开票');
   final issued = invoice.issuedLabel ?? (invoice.issued ? '已开票' : '未开票');
   return '$required · $issued';
-}
-
-String _salesSheetPaymentConfirmationText(
-  SalesSheetPaymentDetailRecord detail,
-) {
-  if (!detail.agencyCollectionConfirmed) {
-    return detail.confirmationStatusLabel;
-  }
-  final confirmer = detail.agencyCollectionConfirmedByName ??
-      detail.agencyCollectionConfirmedById;
-  final parts = <String>[
-    detail.confirmationStatusLabel,
-    if (_hasText(confirmer)) '确认人：${confirmer!.trim()}',
-    if (_hasText(detail.agencyCollectionConfirmedAt))
-      '确认时间：${detail.agencyCollectionConfirmedAt!.trim()}',
-  ];
-  return parts.join('\n');
 }
 
 String _expiresLabel(SalesSheetQrCode? qrCode) {

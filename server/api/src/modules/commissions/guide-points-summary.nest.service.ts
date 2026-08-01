@@ -541,7 +541,7 @@ export class GuidePointsSummaryNestService {
                 monthlyPointsPaidById: isPaid ? actor.id : null,
                 monthlyPointsPaidAt: isPaid ? now : null,
               }),
-          ...amounts,
+          ...persistedPaymentAmounts(amounts),
           sourceSnapshot: mergeGuidePaidFacts(
             current.sourceSnapshot,
             paidFacts,
@@ -969,7 +969,7 @@ function buildGuideSummaryData(input: any) {
     totalNetAmountCents,
     totalDailyPointsCents,
     totalMonthlyPointsCents,
-    ...amounts,
+    ...persistedPaymentAmounts(amounts),
     dailyPointsPaid: Boolean(current?.dailyPointsPaid),
     dailyPointsPaidById: current?.dailyPointsPaid
       ? current.dailyPointsPaidById || null
@@ -1474,6 +1474,13 @@ function paymentAmounts(
       0,
       monthlyTotal - paidMonthlyPointsCents,
     ),
+  };
+}
+
+function persistedPaymentAmounts(amounts: any) {
+  return {
+    paidPointsCents: toInteger(amounts?.paidPointsCents),
+    unpaidPointsCents: toInteger(amounts?.unpaidPointsCents),
   };
 }
 

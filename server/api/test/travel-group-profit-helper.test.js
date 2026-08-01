@@ -107,9 +107,59 @@ test('unit: a stale zeroed employee commission snapshot no longer enters profit 
   });
 
   assert.equal(result.outreachCommissionCents, 0);
+  assert.equal(result.outreachCommissionCalculated, false);
   assert.equal(result.employeeCommissionCents, 0);
   assert.equal(result.totalExpenseCents, 3700);
-  assert.equal(result.estimatedProfitCents, 6300);
+  assert.equal(result.estimatedProfitCents, null);
+});
+
+test('unit: profit diagnostics distinguish calculated zero from missing employee commission records', () => {
+  const calculatedZero = calculateTravelGroupProfit({
+    travelGroup: group('group-zero'),
+    salesOrders: [
+      order('order-zero', {
+        salesUserId: 'sales-1',
+        outreachUserId: 'outreach-1',
+        salesUser: { leaderId: 'leader-1' },
+      }),
+    ],
+    commissionRecords: [
+      commission('order-zero', 'SALES_COMMISSION', 0),
+      commission('order-zero', 'OUTREACH_COMMISSION', 0),
+      commission('order-zero', 'LEADER_COMMISSION', 0),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+  assert.equal(calculatedZero.salesCommissionCalculated, true);
+  assert.equal(calculatedZero.outreachCommissionCalculated, true);
+  assert.equal(calculatedZero.leaderCommissionCalculated, true);
+  assert.equal(calculatedZero.salesCommissionCents, 0);
+
+  const missing = calculateTravelGroupProfit({
+    travelGroup: group('group-missing-commission'),
+    salesOrders: [order('order-missing-commission')],
+    commissionRecords: [],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+  assert.equal(missing.calculationStatus, 'incomplete');
+  assert.equal(missing.estimatedProfitCents, null);
+  assert.equal(missing.salesCommissionCalculated, false);
+  assert.equal(missing.outreachCommissionCalculated, false);
+  assert.equal(missing.leaderCommissionCalculated, false);
+  assert.equal(
+    missing.warnings.some(
+      (warning) =>
+        warning.code ===
+        'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
+    ),
+    true,
+  );
 });
 
 test('unit: missing cost snapshots make profit incomplete instead of treating cost as zero', () => {
@@ -217,6 +267,7 @@ test('unit: confirmed and pending refunds produce estimates and agency fallback 
       }),
     ],
     commissionRecords: [
+      ...employeeZeroCommissions('order-refund'),
       {
         ...commission('order-refund', 'AGENCY_DAILY_REBATE', 0),
         pointsCents: 100,
@@ -257,6 +308,8 @@ test('unit: travel group estimated profit preserves negative values', () => {
     ],
     commissionRecords: [
       commission('order-loss', 'SALES_COMMISSION', 300),
+      commission('order-loss', 'OUTREACH_COMMISSION', 0),
+      commission('order-loss', 'LEADER_COMMISSION', 0),
     ],
     financeSummary: {
       totalDailyRebateCents: 200,
@@ -296,6 +349,7 @@ test('unit: marked mixed payments add per-order tax and same-day adjusted servic
         ],
       }),
     ],
+    commissionRecords: employeeZeroCommissions('order-fees'),
     financeSummary: {
       totalDailyRebateCents: 0,
       totalMonthlyRebateCents: 0,
@@ -533,9 +587,18 @@ function commission(salesOrderId, targetType, amountCents) {
   return {
     salesOrderId,
     targetType,
+    commissionRuleId: `rule-${targetType.toLowerCase()}`,
     amountCents,
     pointsCents: 0,
   };
+}
+
+function employeeZeroCommissions(salesOrderId) {
+  return [
+    commission(salesOrderId, 'SALES_COMMISSION', 0),
+    commission(salesOrderId, 'OUTREACH_COMMISSION', 0),
+    commission(salesOrderId, 'LEADER_COMMISSION', 0),
+  ];
 }
 
 function paymentDetail(

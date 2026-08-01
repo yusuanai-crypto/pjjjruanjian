@@ -32,7 +32,16 @@ void main() {
     expect(find.text('订单类型'), findsNothing);
     expect(find.text('销售单号（可选）'), findsNothing);
     expect(find.text('客户需要开票'), findsNothing);
+    expect(find.text('提成人员归属'), findsNothing);
+    expect(find.text('销售人员 *'), findsNothing);
+    expect(find.textContaining('人员列表加载失败'), findsNothing);
     expect(apiClient.getPaths, contains('/api/payment-methods'));
+    expect(
+      apiClient.getPaths.where(
+        (path) => path.startsWith('/api/sales-orders/assignment-options'),
+      ),
+      isEmpty,
+    );
   });
 
   testWidgets('defaults to travel group order and saves travelGroupId',
@@ -67,13 +76,15 @@ void main() {
     expect(body.containsKey('customer'), isFalse);
     expect(body['orderType'], 'travel_group');
     expect(body['travelGroupId'], 'group-1');
+    expect(body.containsKey('salesUserId'), isFalse);
+    expect(body.containsKey('outreachUserId'), isFalse);
     expect(body.containsKey('salesFormNo'), isFalse);
     expect(body.containsKey('invoiceRequired'), isFalse);
 
     final items = body['items'] as List<dynamic>;
     expect(items.first['productId'], 'product-1');
     expect(items.first.containsKey('productName'), isFalse);
-    expect(items.first.containsKey('unit'), isFalse);
+    expect(items.first['unit'], '瓶');
     expect(items.first['quantity'], 2);
     expect(items.first['unitPriceCents'], 129900);
     expect(items.first['subtotalCents'], 259800);
@@ -88,6 +99,62 @@ void main() {
     ]);
     expect(find.text('录入成功'), findsOneWidget);
     expect(find.textContaining('SO20260630001'), findsWidgets);
+  });
+
+  testWidgets('admin saves without loading or selecting commission assignees',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(
+      tester,
+      apiClient,
+      role: UserRole.admin,
+    );
+
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '100',
+    );
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(apiClient.lastSalesOrderBody?.containsKey('salesUserId'), isFalse);
+    expect(
+      apiClient.lastSalesOrderBody?.containsKey('outreachUserId'),
+      isFalse,
+    );
+    expect(
+      apiClient.getPaths.where(
+        (path) => path.startsWith('/api/sales-orders/assignment-options'),
+      ),
+      isEmpty,
+    );
+  });
+
+  testWidgets('item unit defaults to bottle and survives product changes',
+      (tester) async {
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    expect(_selectedDropdownValue(tester, 'order-item-unit-0'), '瓶');
+    await _selectDropdownValue(
+      tester,
+      key: const ValueKey('order-item-unit-0'),
+      label: '盒',
+    );
+    await _selectProductForItem(tester, 0, 'product-1');
+    await _selectProductForItem(tester, 0, 'product-2');
+    expect(_selectedDropdownValue(tester, 'order-item-unit-0'), '盒');
+
+    final addButton = find.byKey(const ValueKey('order-item-add-button'));
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pumpAndSettle();
+    expect(_selectedDropdownValue(tester, 'order-item-unit-1'), '瓶');
   });
 
   testWidgets('default payment follows total until the user edits it',
@@ -211,6 +278,11 @@ void main() {
       find.byKey(const ValueKey('order-item-subtotal-0')),
       '100',
     );
+    await _selectDropdownValue(
+      tester,
+      key: const ValueKey('order-item-unit-0'),
+      label: '盒',
+    );
     final addButton = find.byKey(const ValueKey('payment-detail-add-button'));
     await tester.ensureVisible(addButton);
     await tester.tap(addButton);
@@ -228,6 +300,12 @@ void main() {
     await tester.ensureVisible(draftButton);
     await tester.tap(draftButton);
     await tester.pump();
+
+    await _selectDropdownValue(
+      tester,
+      key: const ValueKey('order-item-unit-0'),
+      label: '瓶',
+    );
 
     await tester.enterText(
       find.byKey(const ValueKey('payment-detail-amount-0')),
@@ -253,7 +331,8 @@ void main() {
 
     expect(_paymentAmountText(tester, 0), '70');
     expect(_paymentAmountText(tester, 1), '30');
-    expect(find.text('已恢复草稿中的收款明细。'), findsOneWidget);
+    expect(_selectedDropdownValue(tester, 'order-item-unit-0'), '盒');
+    expect(find.text('已恢复草稿中的酒品与收款明细。'), findsOneWidget);
   });
 
   testWidgets('payment method failure blocks save and offers retry',
@@ -377,9 +456,11 @@ void main() {
     final items = apiClient.lastSalesOrderBody!['items'] as List<dynamic>;
     expect(items, hasLength(2));
     expect(items.first['productId'], 'product-1');
+    expect(items.first['unit'], '瓶');
     expect(items.first['deliveryType'], 'shipping');
     expect(items.first['sortOrder'], 1);
     expect(items.last['productId'], 'product-2');
+    expect(items.last['unit'], '瓶');
     expect(items.last['quantity'], 3);
     expect(items.last['unitPriceCents'], 10000);
     expect(items.last['subtotalCents'], 30000);
@@ -442,6 +523,21 @@ void main() {
     expect(find.text('录入失败'), findsOneWidget);
     expect(find.text('第 1 条明细请选择启用商品。'), findsWidgets);
     expect(apiClient.lastSalesOrderBody, isNull);
+  });
+
+  testWidgets('unit field lays out without overflow on wide and narrow screens',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    expect(find.byKey(const ValueKey('order-item-unit-0')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    tester.view.physicalSize = const Size(360, 800);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('order-item-unit-0')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('handles a missing upstream travel group safely', (tester) async {
@@ -554,6 +650,7 @@ Future<void> _pumpOrderForm(
   WidgetTester tester,
   _FakeApiClient apiClient, {
   String? travelGroupId = 'group-1',
+  UserRole role = UserRole.sales,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -561,6 +658,7 @@ Future<void> _pumpOrderForm(
         body: OrderFormPage(
           apiClient: apiClient,
           token: 'test-token',
+          role: role,
           travelGroupId: travelGroupId,
         ),
       ),
@@ -613,6 +711,15 @@ Future<void> _selectDropdownValue(
   await tester.pumpAndSettle();
   await tester.tap(find.text(label).last);
   await tester.pumpAndSettle();
+}
+
+String? _selectedDropdownValue(WidgetTester tester, String key) {
+  final field = find.byKey(ValueKey(key));
+  final dropdown = find.descendant(
+    of: field,
+    matching: find.byType(DropdownButton<String>),
+  );
+  return tester.widget<DropdownButton<String>>(dropdown).value;
 }
 
 String _paymentAmountText(WidgetTester tester, int index) {

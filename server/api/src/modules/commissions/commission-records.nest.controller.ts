@@ -82,6 +82,31 @@ export class CommissionRecordsNestController {
     );
   }
 
+  @Get('assignment-preflight')
+  async assignmentPreflight(@Query() query: any, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      preflight:
+        await this.commissionRecordsService.preflightEmployeeCommissionAssignments(
+          actor,
+          query,
+        ),
+    };
+  }
+
+  @Post('assignment-repair')
+  async assignmentRepair(@Body() body: unknown, @Req() request: any) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      repair:
+        await this.commissionRecordsService.repairEmployeeCommissionAssignments(
+          actor,
+          body,
+          { ipAddress: getRequestIp(request) },
+        ),
+    };
+  }
+
   @Get(':id')
   async detail(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

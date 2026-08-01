@@ -281,7 +281,7 @@ CREATE TABLE `after_sales_order_items` (
     (`source_sales_order_item_id`),
   INDEX `after_sales_order_items_product_id_idx` (`product_id`),
   PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO `after_sales_order_items` (
   `id`,

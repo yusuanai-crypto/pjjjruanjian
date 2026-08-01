@@ -68,6 +68,35 @@ void main() {
     refreshApi.close(force: true);
   });
 
+  test('session refresh replaces and persists cached backend menus', () async {
+    final fixture = await _createFixture();
+    await fixture.controller.login(
+      username: 'menu.refresh',
+      password: 'test-password',
+    );
+    expect(fixture.controller.session?.menus, isEmpty);
+
+    fixture.api.currentUserMenus = const <Map<String, dynamic>>[
+      {
+        'id': 'warehouse_directory',
+        'title': '仓库管理',
+        'phase': 11,
+      },
+    ];
+    await fixture.controller.refreshSession();
+
+    expect(
+      fixture.controller.session?.menus.map((menu) => menu.id),
+      contains('warehouse_directory'),
+    );
+    final stored = await fixture.storage.readSession();
+    expect(
+      stored?.menus.map((menu) => menu.id),
+      contains('warehouse_directory'),
+    );
+    fixture.close();
+  });
+
   test('concurrent refresh requests share one in-flight rotation', () async {
     final fixture = await _createFixture();
     await fixture.controller.login(
@@ -185,6 +214,7 @@ class _PersistentAuthApiClient extends ApiClient {
   final String loginAccessTokenExpiresAt;
   ApiException? currentUserError;
   ApiException? refreshError;
+  List<Map<String, dynamic>> currentUserMenus = const [];
   Completer<void>? refreshGate;
   int refreshCalls = 0;
 
@@ -243,7 +273,10 @@ class _PersistentAuthApiClient extends ApiClient {
       throw error;
     }
     return <String, dynamic>{
-      'data': _sessionPayload('offline.user'),
+      'data': _sessionPayload(
+        'offline.user',
+        menus: currentUserMenus,
+      ),
     };
   }
 }
@@ -253,6 +286,7 @@ Map<String, dynamic> _sessionPayload(
   String? accessToken,
   String? accessTokenExpiresAt,
   String? refreshToken,
+  List<Map<String, dynamic>> menus = const [],
 }) {
   return <String, dynamic>{
     if (accessToken != null) 'accessToken': accessToken,
@@ -272,7 +306,7 @@ Map<String, dynamic> _sessionPayload(
       'updatedAt': '2026-01-01T00:00:00.000Z',
     },
     'permissions': <String>[],
-    'menus': <Map<String, dynamic>>[],
+    'menus': menus,
     'dataScope': <String, dynamic>{},
   };
 }

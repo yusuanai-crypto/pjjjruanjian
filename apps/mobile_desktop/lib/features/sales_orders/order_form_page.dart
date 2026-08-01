@@ -233,7 +233,8 @@ class _OrderFormPageState extends State<OrderFormPage> {
     });
 
     try {
-      final order = await _businessApi.createSalesOrder(_buildOrderPayload());
+      final result = await _businessApi.createSalesOrder(_buildOrderPayload());
+      final order = result.salesOrder;
       if (!mounted) {
         return;
       }
@@ -248,10 +249,20 @@ class _OrderFormPageState extends State<OrderFormPage> {
         return;
       }
       await _showOrderResultDialog(
-        title: '录入成功',
+        title: result.recalculation?.warnings.isNotEmpty == true
+            ? '录入成功（提成待处理）'
+            : '录入成功',
         message: [
           '订单录入成功。系统单号：${order.orderNo}',
           for (final warning in order.shippingRiskWarnings) warning.message,
+          if (result.recalculation != null)
+            '提成重算：生成 ${result.recalculation!.generatedCount} 条，'
+                '更新 ${result.recalculation!.updatedCount} 条，'
+                '跳过 ${result.recalculation!.skippedCount} 单，'
+                '失败 ${result.recalculation!.failureCount} 单。',
+          for (final warning in result.recalculation?.warnings ??
+              const <CommissionRecalculationWarning>[])
+            _commissionWarningText(warning),
         ].join('\n'),
       );
     } catch (error) {
@@ -312,16 +323,58 @@ class _OrderFormPageState extends State<OrderFormPage> {
   }
 
   void _restoreDraftPaymentDetails() {
+    final rawItems = _localDraft?['items'];
     final rawDetails = _localDraft?['paymentDetails'];
-    if (rawDetails is! List || rawDetails.isEmpty) {
+    if (rawItems is! List ||
+        rawItems.isEmpty ||
+        rawDetails is! List ||
+        rawDetails.isEmpty) {
       setState(() {
-        _errorMessage = '草稿中没有可恢复的收款明细。';
+        _errorMessage = '草稿中没有可恢复的酒品或收款明细。';
         _successMessage = null;
       });
       return;
     }
+    final restoredItems = <_OrderItemDraft>[];
     final restored = <PaymentDetailDraft>[];
     try {
+      for (var index = 0; index < rawItems.length; index += 1) {
+        final raw = rawItems[index];
+        if (raw is! Map) {
+          throw _OrderFormValidationError('草稿第 ${index + 1} 条酒品明细无效。');
+        }
+        final productId = _draftStringOrNull(raw['productId']);
+        final quantity = raw['quantity'];
+        final subtotalCents = raw['subtotalCents'];
+        final unit = _draftStringOrNull(raw['unit']);
+        if (productId == null ||
+            quantity is! num ||
+            quantity % 1 != 0 ||
+            subtotalCents is! num ||
+            subtotalCents % 1 != 0 ||
+            !_salesOrderItemUnits.contains(unit)) {
+          throw _OrderFormValidationError('草稿第 ${index + 1} 条酒品明细无效。');
+        }
+        ProductOptionRecord? product;
+        for (final option in _productOptions) {
+          if (option.id == productId) {
+            product = option;
+            break;
+          }
+        }
+        restoredItems.add(
+          _OrderItemDraft(
+            productId: productId,
+            snapshotName: product?.name,
+            snapshotUnit: product?.unit,
+            unit: unit!,
+            quantity: quantity.toInt(),
+            subtotalCents: subtotalCents.toInt(),
+            deliveryType: _deliveryTypeFromDraft(raw['deliveryType']),
+            notes: _draftStringOrNull(raw['notes']),
+          )..inventoryTrackingMode = product?.inventoryTrackingMode ?? 'none',
+        );
+      }
       for (var index = 0; index < rawDetails.length; index += 1) {
         final raw = rawDetails[index];
         if (raw is! Map) {
@@ -345,6 +398,9 @@ class _OrderFormPageState extends State<OrderFormPage> {
         );
       }
     } catch (error) {
+      for (final item in restoredItems) {
+        item.dispose();
+      }
       for (final detail in restored) {
         detail.dispose();
       }
@@ -355,6 +411,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
       return;
     }
     setState(() {
+      _replaceItems(restoredItems);
       for (final detail in _paymentDetails) {
         detail.dispose();
       }
@@ -363,7 +420,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
         ..addAll(restored);
       _paymentDetailsAutoDefault = false;
       _errorMessage = null;
-      _successMessage = '已恢复草稿中的收款明细。';
+      _successMessage = '已恢复草稿中的酒品与收款明细。';
       _lastSavedOrderNo = null;
     });
   }
@@ -522,6 +579,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
 
       final itemPayload = <String, dynamic>{
         'productId': item.productId,
+        'unit': item.unit,
         'quantity': item.quantity,
         'unitPriceCents': item.unitPriceCentsForPayload,
         'subtotalCents': subtotalCents,
@@ -875,7 +933,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
                         ),
                         onPressed: _restoreDraftPaymentDetails,
                         icon: const Icon(Icons.restore_rounded),
-                        label: const Text('恢复草稿收款明细'),
+                        label: const Text('恢复草稿明细'),
                       ),
                     ),
                   const SizedBox(height: 12),
@@ -1105,7 +1163,7 @@ class _ItemRow extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 680;
+        final compact = constraints.maxWidth < 800;
         final productField = ProductOptionPickerField(
           key: ValueKey('order-item-product-$index'),
           options: productOptions,
@@ -1130,6 +1188,22 @@ class _ItemRow extends StatelessWidget {
           decoration: const InputDecoration(
             labelText: '数量',
           ),
+        );
+        final unitField = DropdownButtonFormField<String>(
+          key: ValueKey('order-item-unit-$index'),
+          initialValue: item.unit,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: '规格'),
+          items: [
+            for (final unit in _salesOrderItemUnits)
+              DropdownMenuItem(value: unit, child: Text(unit)),
+          ],
+          onChanged: (value) {
+            if (value != null) {
+              item.unit = value;
+              onChanged();
+            }
+          },
         );
         final subtotalField = TextField(
           key: ValueKey('order-item-subtotal-$index'),
@@ -1178,9 +1252,11 @@ class _ItemRow extends StatelessWidget {
                   children: [
                     Expanded(child: quantityField),
                     const SizedBox(width: 10),
-                    Expanded(child: subtotalField),
+                    Expanded(child: unitField),
                   ],
                 ),
+                const SizedBox(height: 8),
+                subtotalField,
                 const SizedBox(height: 8),
                 deliveryField,
                 const SizedBox(height: 8),
@@ -1206,6 +1282,8 @@ class _ItemRow extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               SizedBox(width: 86, child: quantityField),
+              const SizedBox(width: 10),
+              SizedBox(width: 92, child: unitField),
               const SizedBox(width: 10),
               SizedBox(width: 118, child: subtotalField),
               const SizedBox(width: 10),
@@ -1324,6 +1402,7 @@ class _OrderItemDraft {
     required this.productId,
     required this.snapshotName,
     required this.snapshotUnit,
+    required this.unit,
     required int quantity,
     required int subtotalCents,
     required this.deliveryType,
@@ -1341,6 +1420,7 @@ class _OrderItemDraft {
       productId: null,
       snapshotName: null,
       snapshotUnit: null,
+      unit: _defaultSalesOrderItemUnit,
       quantity: 1,
       subtotalCents: 0,
       deliveryType: DeliveryType.shipping,
@@ -1350,6 +1430,7 @@ class _OrderItemDraft {
   String? productId;
   String? snapshotName;
   String? snapshotUnit;
+  String unit;
   final TextEditingController quantityController;
   final TextEditingController subtotalController;
   final TextEditingController notesController;
@@ -1422,6 +1503,23 @@ class _InlineNotice extends StatelessWidget {
 }
 
 const _orderEntryOrderType = 'travel_group';
+const _defaultSalesOrderItemUnit = '瓶';
+const _salesOrderItemUnits = <String>['瓶', '盒'];
+
+String _commissionWarningText(CommissionRecalculationWarning warning) {
+  switch (warning.code) {
+    case 'missing_sales_user':
+      return '提成未计算：订单缺少销售人员。';
+    case 'missing_outreach_user':
+      return '外联提成未计算：订单缺少外联人员。';
+    case 'missing_leader':
+      return '组长提成未计算：销售人员未配置组长。';
+    case 'missing_commission_rule':
+      return '提成未计算：订单日期没有适用的提成规则。';
+    default:
+      return '提成计算告警：${warning.message}';
+  }
+}
 
 DateTime _shanghaiToday() {
   final shanghaiNow = DateTime.now().toUtc().add(const Duration(hours: 8));
@@ -1467,6 +1565,16 @@ void _putNonEmpty(Map<String, dynamic> body, String key, String? value) {
 String? _draftStringOrNull(Object? value) {
   final text = '${value ?? ''}'.trim();
   return text.isEmpty ? null : text;
+}
+
+DeliveryType _deliveryTypeFromDraft(Object? value) {
+  final normalized = '${value ?? ''}'.trim();
+  for (final type in DeliveryType.values) {
+    if (type.value == normalized) {
+      return type;
+    }
+  }
+  return DeliveryType.shipping;
 }
 
 int? _moneyCentsOrNull(String value) {

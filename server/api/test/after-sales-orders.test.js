@@ -688,7 +688,8 @@ test('contract: after-sales order detail enforces role and sales ownership permi
     const bossList = await requestJson(baseUrl, '/api/after-sales-orders', {
       token: boss.token,
     });
-    assertErrorContract(bossList, 403, 'PERMISSION_DENIED');
+    assert.equal(bossList.response.status, 200);
+    assert.equal(bossList.body.data.afterSalesOrders.length > 0, true);
 
     const bossDetail = await requestJson(
       baseUrl,
@@ -697,7 +698,7 @@ test('contract: after-sales order detail enforces role and sales ownership permi
         token: boss.token,
       },
     );
-    assertErrorContract(bossDetail, 403, 'PERMISSION_DENIED');
+    assert.equal(bossDetail.response.status, 200);
 
     const warehouseList = await requestJson(baseUrl, '/api/after-sales-orders', {
       token: warehouse.token,
@@ -1443,6 +1444,7 @@ test('contract: same-day refund confirmation exposes safe payment options and re
           id: sourcePaymentDetail.id,
           paymentMethodNameSnapshot:
             sourcePaymentDetail.paymentMethodNameSnapshot,
+          sourceKind: 'regular',
           originalAmountCents: 5000,
           confirmedSameDayRefundAmountCents: 2000,
           remainingRefundableAmountCents: 3000,
@@ -1936,7 +1938,6 @@ test('contract: PATCH /api/after-sales-orders/:id/finance-confirm validates role
 
     for (const token of [
       afterSales.token,
-      boss.token,
       salesOwner.token,
       warehouse.token,
       frontDesk.token,
@@ -2868,6 +2869,7 @@ function assertAfterSalesOrderContract(order) {
     'refundPaymentDetailId',
     'refundPaymentMethodNameSnapshot',
     'refundProofAttachments',
+    'refundSpecialPaymentId',
     'resolution',
     'salesOrder',
     'salesOrderId',

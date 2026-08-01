@@ -981,12 +981,14 @@ class ApiException implements Exception {
     required this.code,
     required this.message,
     this.missingFields = const <String>[],
+    this.requestId,
   });
 
   final int statusCode;
   final String code;
   final String message;
   final List<String> missingFields;
+  final String? requestId;
 
   factory ApiException.fromPayload(
       int statusCode, Map<String, dynamic> payload) {
@@ -1003,6 +1005,7 @@ class ApiException implements Exception {
                   if (field is String && field.trim().isNotEmpty) field.trim(),
               ]
             : const <String>[],
+        requestId: _parseRequestId(payload['requestId']),
       );
     }
 
@@ -1010,11 +1013,23 @@ class ApiException implements Exception {
       statusCode: statusCode,
       code: 'HTTP_ERROR',
       message: '请求失败，HTTP $statusCode。',
+      requestId: _parseRequestId(payload['requestId']),
     );
   }
 
   @override
   String toString() => message;
+}
+
+String? _parseRequestId(Object? value) {
+  if (value is! String) {
+    return null;
+  }
+  final requestId = value.trim();
+  if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$').hasMatch(requestId)) {
+    return null;
+  }
+  return requestId;
 }
 
 String _friendlyMessage(String message) {

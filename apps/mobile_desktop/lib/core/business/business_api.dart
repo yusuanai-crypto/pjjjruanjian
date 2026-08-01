@@ -89,16 +89,83 @@ class BusinessApi {
     );
   }
 
+  Future<List<SpecialOrderCommissionRecord>> listSpecialOrderCommissions(
+    String orderId, {
+    bool includeInactive = false,
+  }) async {
+    final payload = await _apiClient.getJson(
+      _path(
+        '/api/special-orders/${Uri.encodeComponent(orderId)}/commissions',
+        {'includeInactive': '$includeInactive'},
+      ),
+      token: _token,
+    );
+    return _list(_data(payload)['commissions'])
+        .map(SpecialOrderCommissionRecord.fromJson)
+        .toList();
+  }
+
+  Future<SpecialOrderCommissionRecord> createSpecialOrderCommission(
+    String orderId,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/special-orders/${Uri.encodeComponent(orderId)}/commissions',
+      body: body,
+      token: _token,
+    );
+    return SpecialOrderCommissionRecord.fromJson(
+      _map(_data(payload)['commission']),
+    );
+  }
+
+  Future<SpecialOrderCommissionRecord> updateSpecialOrderCommission(
+    String orderId,
+    String commissionId,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.patchJson(
+      '/api/special-orders/${Uri.encodeComponent(orderId)}/commissions/'
+      '${Uri.encodeComponent(commissionId)}',
+      body: body,
+      token: _token,
+    );
+    return SpecialOrderCommissionRecord.fromJson(
+      _map(_data(payload)['commission']),
+    );
+  }
+
+  Future<void> deleteSpecialOrderCommission(
+    String orderId,
+    String commissionId, {
+    required int manualVersion,
+    required String reason,
+    required String idempotencyKey,
+  }) async {
+    await _apiClient.deleteJson(
+      '/api/special-orders/${Uri.encodeComponent(orderId)}/commissions/'
+      '${Uri.encodeComponent(commissionId)}',
+      body: {
+        'manualVersion': manualVersion,
+        'reason': reason,
+        'idempotencyKey': idempotencyKey,
+      },
+      token: _token,
+    );
+  }
+
   Future<SpecialOrderRecord> cancelSpecialOrder(
     String id, {
     required int workflowVersion,
     required String idempotencyKey,
+    String? reason,
   }) async {
     final payload = await _apiClient.deleteJson(
       '/api/special-orders/${Uri.encodeComponent(id)}',
       body: {
         'workflowVersion': workflowVersion,
         'idempotencyKey': idempotencyKey,
+        if (reason?.trim().isNotEmpty == true) 'reason': reason!.trim(),
       },
       token: _token,
     );
@@ -1315,16 +1382,39 @@ class BusinessApi {
     return salesSheet;
   }
 
-  Future<SalesOrderRecord> createSalesOrder(Map<String, dynamic> body) async {
+  Future<SalesOrderMutationResult> createSalesOrder(
+    Map<String, dynamic> body,
+  ) async {
     final payload = await _apiClient.postJson(
       '/api/sales-orders',
       body: body,
       token: _token,
     );
-    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+    return SalesOrderMutationResult.fromJson(_data(payload));
+  }
+
+  Future<SalesOrderAssignmentOptions> getSalesOrderAssignmentOptions(
+    DateTime orderDate,
+  ) async {
+    final payload = await _apiClient.getJson(
+      _path('/api/sales-orders/assignment-options', {
+        'date': formatDate(orderDate),
+      }),
+      token: _token,
+    );
+    return SalesOrderAssignmentOptions.fromJson(
+      _map(_data(payload)['assignmentOptions']),
+    );
   }
 
   Future<SalesOrderRecord> updateSalesOrder(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    return (await updateSalesOrderWithRecalculation(id, body)).salesOrder;
+  }
+
+  Future<SalesOrderMutationResult> updateSalesOrderWithRecalculation(
     String id,
     Map<String, dynamic> body,
   ) async {
@@ -1333,7 +1423,7 @@ class BusinessApi {
       body: body,
       token: _token,
     );
-    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+    return SalesOrderMutationResult.fromJson(_data(payload));
   }
 
   Future<SalesOrderRecord> replaceSalesOrderPaymentDetails(
@@ -1435,12 +1525,19 @@ class BusinessApi {
     String id,
     Map<String, dynamic> body,
   ) async {
+    return (await salesEditSalesOrderWithRecalculation(id, body)).salesOrder;
+  }
+
+  Future<SalesOrderMutationResult> salesEditSalesOrderWithRecalculation(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
     final payload = await _apiClient.patchJson(
       '/api/sales-orders/$id/sales-edit',
       body: body,
       token: _token,
     );
-    return SalesOrderRecord.fromJson(_map(_data(payload)['salesOrder']));
+    return SalesOrderMutationResult.fromJson(_data(payload));
   }
 
   Future<SalesOrderRecord> updateSalesOrderStatus(
@@ -1870,7 +1967,7 @@ class BusinessApi {
       token: _token,
     );
     return CommissionRuleRecord.fromJson(
-      _map(_data(payload)['commissionRule']),
+      _withRecalculation(_data(payload), 'commissionRule'),
     );
   }
 
@@ -1884,7 +1981,7 @@ class BusinessApi {
       token: _token,
     );
     return CommissionRuleRecord.fromJson(
-      _map(_data(payload)['commissionRule']),
+      _withRecalculation(_data(payload), 'commissionRule'),
     );
   }
 
@@ -4325,6 +4422,97 @@ class PaymentSummaryRecord {
   }
 }
 
+class SalesOrderMutationResult {
+  const SalesOrderMutationResult({
+    required this.salesOrder,
+    required this.recalculation,
+  });
+
+  final SalesOrderRecord salesOrder;
+  final CommissionRecalculationResult? recalculation;
+
+  factory SalesOrderMutationResult.fromJson(Map<String, dynamic> json) {
+    return SalesOrderMutationResult(
+      salesOrder: SalesOrderRecord.fromJson(_map(json['salesOrder'])),
+      recalculation: json['recalculation'] is Map
+          ? CommissionRecalculationResult.fromJson(
+              _map(json['recalculation']),
+            )
+          : null,
+    );
+  }
+}
+
+class SalesOrderAssignmentUser {
+  const SalesOrderAssignmentUser({
+    required this.id,
+    required this.name,
+    required this.username,
+    required this.leaderId,
+    required this.leaderName,
+    required this.leaderActive,
+  });
+
+  final String id;
+  final String name;
+  final String username;
+  final String? leaderId;
+  final String? leaderName;
+  final bool? leaderActive;
+
+  factory SalesOrderAssignmentUser.fromJson(Map<String, dynamic> json) {
+    return SalesOrderAssignmentUser(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      username: '${json['username'] ?? ''}',
+      leaderId: _stringOrNull(json['leaderId']),
+      leaderName: _stringOrNull(json['leaderName']),
+      leaderActive: json['leaderActive'] == null
+          ? null
+          : _boolValue(json['leaderActive']),
+    );
+  }
+}
+
+class SalesOrderAssignmentOptions {
+  const SalesOrderAssignmentOptions({
+    required this.calculationDate,
+    required this.currentUserId,
+    required this.currentUserRole,
+    required this.canChangeSalesUser,
+    required this.activeCommissionTargetTypes,
+    required this.salesUsers,
+  });
+
+  final String calculationDate;
+  final String? currentUserId;
+  final String currentUserRole;
+  final bool canChangeSalesUser;
+  final Set<String> activeCommissionTargetTypes;
+  final List<SalesOrderAssignmentUser> salesUsers;
+
+  bool get outreachCommissionRequired =>
+      activeCommissionTargetTypes.contains('OUTREACH_COMMISSION');
+
+  bool get leaderCommissionEnabled =>
+      activeCommissionTargetTypes.contains('LEADER_COMMISSION');
+
+  factory SalesOrderAssignmentOptions.fromJson(Map<String, dynamic> json) {
+    return SalesOrderAssignmentOptions(
+      calculationDate: '${json['calculationDate'] ?? ''}',
+      currentUserId: _stringOrNull(json['currentUserId']),
+      currentUserRole: '${json['currentUserRole'] ?? ''}',
+      canChangeSalesUser: _boolValue(json['canChangeSalesUser']),
+      activeCommissionTargetTypes:
+          _stringList(json['activeCommissionTargetTypes']).toSet(),
+      salesUsers: _list(json['salesUsers'])
+          .map(SalesOrderAssignmentUser.fromJson)
+          .where((user) => user.id.isNotEmpty)
+          .toList(),
+    );
+  }
+}
+
 class SalesOrderRecord {
   const SalesOrderRecord({
     required this.id,
@@ -4376,6 +4564,7 @@ class SalesOrderRecord {
     required this.markedById,
     required this.markedAt,
     required this.salesUserId,
+    required this.outreachUserId,
     required this.items,
     required this.createdAt,
     required this.updatedAt,
@@ -4411,6 +4600,9 @@ class SalesOrderRecord {
     this.paymentDetailsUnlockedAt,
     this.paymentDetailsUnlockedById,
     this.paymentDetailsLocked = false,
+    this.workflowStatus,
+    this.workflowVersion = 0,
+    this.manualCommissions = const <SpecialOrderCommissionRecord>[],
   });
 
   final String id;
@@ -4462,6 +4654,7 @@ class SalesOrderRecord {
   final String? markedById;
   final String? markedAt;
   final String? salesUserId;
+  final String? outreachUserId;
   final List<SalesOrderItemRecord> items;
   final String? createdAt;
   final String? updatedAt;
@@ -4497,6 +4690,14 @@ class SalesOrderRecord {
   final String? paymentDetailsUnlockedAt;
   final String? paymentDetailsUnlockedById;
   final bool paymentDetailsLocked;
+  final String? workflowStatus;
+  final int workflowVersion;
+  final List<SpecialOrderCommissionRecord> manualCommissions;
+
+  bool get isWorkflowSpecialOrder =>
+      workflowStatus != null &&
+      const {'internal', 'external', 'buyback'}
+          .contains(orderType.toLowerCase());
 
   bool get isGuidePersonal =>
       personalAmountCents > 0 ||
@@ -4602,6 +4803,11 @@ class SalesOrderRecord {
       paymentDetailsLocked: json.containsKey('paymentDetailsLocked')
           ? _boolValue(json['paymentDetailsLocked'])
           : paymentDetailsLockedAt != null && paymentDetailsUnlockedAt == null,
+      workflowStatus: _stringOrNull(json['workflowStatus'])?.toLowerCase(),
+      workflowVersion: _intValue(json['workflowVersion']),
+      manualCommissions: _list(json['manualCommissions'])
+          .map(SpecialOrderCommissionRecord.fromJson)
+          .toList(),
       status: '${json['status'] ?? 'valid'}',
       deliverySummary: _stringOrNull(json['deliverySummary']),
       logisticsMethod: _stringOrNull(json['logisticsMethod']),
@@ -4630,6 +4836,7 @@ class SalesOrderRecord {
       markedById: _stringOrNull(json['markedById']),
       markedAt: _stringOrNull(json['markedAt']),
       salesUserId: _stringOrNull(json['salesUserId']),
+      outreachUserId: _stringOrNull(json['outreachUserId']),
       items: _list(json['items'])
           .map((item) => SalesOrderItemRecord.fromJson(item))
           .toList(),
@@ -5188,6 +5395,7 @@ class CommissionRuleRecord {
     required this.updatedById,
     required this.createdAt,
     required this.updatedAt,
+    this.recalculation,
   });
 
   final String id;
@@ -5202,6 +5410,7 @@ class CommissionRuleRecord {
   final String? updatedById;
   final String? createdAt;
   final String? updatedAt;
+  final CommissionRecalculationResult? recalculation;
 
   factory CommissionRuleRecord.fromJson(Map<String, dynamic> json) {
     return CommissionRuleRecord(
@@ -5217,6 +5426,11 @@ class CommissionRuleRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+      recalculation: json['recalculation'] is Map
+          ? CommissionRecalculationResult.fromJson(
+              _map(json['recalculation']),
+            )
+          : null,
     );
   }
 }
@@ -5903,8 +6117,19 @@ class CommissionRecalculationResult {
         ...unchangedRecords,
       ];
 
+  int get generatedCount => generatedRecords.length;
+  int get updatedCount => updatedRecords.length;
+  int get unchangedCount => unchangedRecords.length;
+
   String get displayMessage {
     final warningCodes = warnings.map((warning) => warning.code).toSet();
+    final changedRecords = [...generatedRecords, ...updatedRecords];
+    final dailyChangedCount = changedRecords
+        .where((record) => record.targetType.toLowerCase().contains('daily'))
+        .length;
+    final monthlyChangedCount = changedRecords
+        .where((record) => record.targetType.toLowerCase().contains('monthly'))
+        .length;
     const noRuleCodes = {
       'missing_agency_rebate_rule',
       'missing_agency_daily_rebate_rule',
@@ -5915,18 +6140,34 @@ class CommissionRecalculationResult {
         .map((warning) => '${warning.context?['salesOrderId'] ?? ''}')
         .where((id) => id.isNotEmpty)
         .toSet();
-    if (orderCount > 0 &&
-        ordersWithoutRules.length >= orderCount &&
-        !warningCodes.contains('agency_rebate_rule_fallback_applied')) {
-      return '未找到适用的旅行社返点规则，日返和月返未更新';
+    final parts = <String>[];
+    if (dailyChangedCount > 0 && monthlyChangedCount > 0) {
+      parts.add(
+        '已生成或更新日返 $dailyChangedCount 条、月返 $monthlyChangedCount 条',
+      );
+    } else if (changedRecords.isNotEmpty) {
+      parts.add(
+        '仅生成或更新日返 $dailyChangedCount 条、月返 $monthlyChangedCount 条，请核对未更新部分的业务原因',
+      );
+    } else if (warningCodes.any(noRuleCodes.contains)) {
+      parts.add('未生成日返或月返：没有适用且唯一的旅行社返点规则');
+    } else if (warningCodes.any(_protectedAgencyRebateWarningCodes.contains)) {
+      parts.add('未覆盖积分记录：相关旅行团处于已返款、已确认或人工维护状态');
+    } else if (failureCount > 0) {
+      parts.add('未完成积分更新：重算或汇总刷新发生失败');
+    } else {
+      parts.add('重新计算已完成，没有需要生成或更新的日返/月返记录');
     }
-    final parts = <String>[
-      '重新计算：成功订单 $successCount 笔',
-      '更新记录 ${updatedRecords.length} 条',
-      '生成记录 ${generatedRecords.length} 条',
-      '跳过 $skippedCount 项',
-      '警告 ${warnings.length} 条',
-    ];
+    parts.add('涉及旅行团 $travelGroupCount 个、订单 $orderCount 笔');
+    if (unchangedRecords.isNotEmpty) {
+      parts.add('已有 ${unchangedRecords.length} 条记录金额未变化');
+    }
+    if (skippedCount > 0) {
+      parts.add('跳过 $skippedCount 项');
+    }
+    if (failureCount > 0) {
+      parts.add('失败 $failureCount 项');
+    }
     if (warningCodes.contains('agency_rebate_rule_fallback_applied')) {
       parts.add('部分历史订单使用当前启用的返点规则补算');
     }
@@ -5936,14 +6177,42 @@ class CommissionRecalculationResult {
       'missing_agency_monthly_rebate_rule': '部分订单未找到适用的月返规则',
       'ambiguous_agency_rebate_rule': '存在多条同优先级旅行社返点规则，未自动选择',
       'travel_agency_id_not_matched': '部分订单的旅行社名称未匹配到旅行社档案',
+      'manual_override': '旅行团已人工维护扣酒成本，自动重算已跳过',
+      'agency_deduction_confirmed': '旅行团扣酒成本已确认，自动重算已跳过',
+      'daily_rebate_paid': '日返已返款，受保护的日返金额未被覆盖',
+      'monthly_rebate_paid': '月返已返款，受保护的月返金额未被覆盖',
+      'order_recalculation_failed': '订单积分重算失败',
+      'travel_group_summary_refresh_failed': '订单积分已处理，但旅行团汇总刷新失败',
+      'agency_name_legacy_fallback': '通过旅行社名称兼容命中未绑定 ID 的历史返点规则，请尽快回填',
     };
     for (final entry in warningMessages.entries) {
-      if (warningCodes.contains(entry.key)) {
-        parts.add(entry.value);
+      final matchingWarnings =
+          warnings.where((warning) => warning.code == entry.key).toList();
+      if (matchingWarnings.isNotEmpty) {
+        final references = _warningReferenceSamples(matchingWarnings);
+        parts.add(
+          '${entry.value} ${matchingWarnings.length} 项'
+          '${references.isEmpty ? '' : '（$references）'}',
+        );
       }
+    }
+    if (orderCount > 0 &&
+        ordersWithoutRules.length >= orderCount &&
+        !warningCodes.contains('agency_rebate_rule_fallback_applied')) {
+      parts.add('全部 $orderCount 笔订单均未命中规则');
     }
     return parts.join('；');
   }
+
+  bool get hasFailureWarning =>
+      failureCount > 0 ||
+      warnings.any(
+        (warning) =>
+            warning.code == 'order_recalculation_failed' ||
+            warning.code == 'travel_group_summary_refresh_failed',
+      );
+
+  bool get hasBusinessWarning => warnings.isNotEmpty || skippedCount > 0;
 
   int get updatedCountOrRecords =>
       generatedRecords.length + updatedRecords.length;
@@ -5978,6 +6247,38 @@ class CommissionRecalculationResult {
           .toList(),
     );
   }
+}
+
+const _protectedAgencyRebateWarningCodes = {
+  'manual_override',
+  'agency_deduction_confirmed',
+  'daily_rebate_paid',
+  'monthly_rebate_paid',
+};
+
+String _warningReferenceSamples(
+  List<CommissionRecalculationWarning> warnings,
+) {
+  final references = <String>[];
+  for (final warning in warnings) {
+    final context = warning.context;
+    if (context == null) continue;
+    for (final key in const [
+      'travelGroupNo',
+      'travelGroupId',
+      'salesOrderNo',
+      'orderNo',
+      'salesOrderId',
+    ]) {
+      final value = '${context[key] ?? ''}'.trim();
+      if (value.isNotEmpty && !references.contains(value)) {
+        references.add(value);
+        break;
+      }
+    }
+    if (references.length >= 3) break;
+  }
+  return references.join('、');
 }
 
 class CommissionRecalculationWarning {
@@ -6905,8 +7206,11 @@ class TravelGroupProfitRecord {
     required this.parkingFeeCents,
     required this.cigaretteFeeCents,
     required this.salesCommissionCents,
+    required this.salesCommissionCalculated,
     required this.leaderCommissionCents,
+    required this.leaderCommissionCalculated,
     required this.outreachCommissionCents,
+    required this.outreachCommissionCalculated,
     required this.employeeCommissionCents,
     required this.tasterCommissionCents,
     required this.dailyAgencyRebateCents,
@@ -6937,8 +7241,11 @@ class TravelGroupProfitRecord {
   final int parkingFeeCents;
   final int? cigaretteFeeCents;
   final int salesCommissionCents;
+  final bool salesCommissionCalculated;
   final int leaderCommissionCents;
+  final bool leaderCommissionCalculated;
   final int outreachCommissionCents;
+  final bool outreachCommissionCalculated;
   final int employeeCommissionCents;
   final int tasterCommissionCents;
   final int dailyAgencyRebateCents;
@@ -6975,8 +7282,18 @@ class TravelGroupProfitRecord {
           ? null
           : _intValue(json['cigaretteFeeCents']),
       salesCommissionCents: _intValue(json['salesCommissionCents']),
+      salesCommissionCalculated: json.containsKey('salesCommissionCalculated')
+          ? _boolValue(json['salesCommissionCalculated'])
+          : true,
       leaderCommissionCents: _intValue(json['leaderCommissionCents']),
+      leaderCommissionCalculated: json.containsKey('leaderCommissionCalculated')
+          ? _boolValue(json['leaderCommissionCalculated'])
+          : true,
       outreachCommissionCents: _intValue(json['outreachCommissionCents']),
+      outreachCommissionCalculated:
+          json.containsKey('outreachCommissionCalculated')
+              ? _boolValue(json['outreachCommissionCalculated'])
+              : true,
       employeeCommissionCents: _intValue(json['employeeCommissionCents']),
       tasterCommissionCents: _intValue(json['tasterCommissionCents']),
       dailyAgencyRebateCents: _intValue(json['dailyAgencyRebateCents']),
@@ -8367,6 +8684,13 @@ class SpecialOrderRecord {
     required this.orderDate,
     required this.customerId,
     required this.customerName,
+    this.customerPhone,
+    this.province,
+    this.city,
+    this.district,
+    this.address,
+    this.customerNotes,
+    this.status,
     required this.hasOriginalPurchase,
     required this.sourceSalesOrderId,
     required this.sourceRemark,
@@ -8401,6 +8725,13 @@ class SpecialOrderRecord {
   final String orderDate;
   final String? customerId;
   final String customerName;
+  final String? customerPhone;
+  final String? province;
+  final String? city;
+  final String? district;
+  final String? address;
+  final String? customerNotes;
+  final String? status;
   final bool? hasOriginalPurchase;
   final String? sourceSalesOrderId;
   final String? sourceRemark;
@@ -8443,6 +8774,13 @@ class SpecialOrderRecord {
       orderDate: '${json['orderDate'] ?? ''}',
       customerId: _stringOrNull(json['customerId']),
       customerName: '${json['customerName'] ?? ''}',
+      customerPhone: _stringOrNull(json['customerPhone']),
+      province: _stringOrNull(json['province']),
+      city: _stringOrNull(json['city']),
+      district: _stringOrNull(json['district']),
+      address: _stringOrNull(json['address']),
+      customerNotes: _stringOrNull(json['customerNotes']),
+      status: _stringOrNull(json['status'])?.toLowerCase(),
       hasOriginalPurchase: json['hasOriginalPurchase'] == null
           ? null
           : _boolValue(json['hasOriginalPurchase']),
@@ -8610,6 +8948,68 @@ class SpecialOrderSettlementRecord {
   }
 }
 
+class SpecialOrderCommissionRecord {
+  const SpecialOrderCommissionRecord({
+    required this.id,
+    required this.recipientType,
+    required this.targetUserId,
+    required this.recipientName,
+    required this.ratePercent,
+    required this.originalBaseAmountCents,
+    required this.effectiveBaseAmountCents,
+    required this.originalAmountCents,
+    required this.adjustmentAmountCents,
+    required this.effectiveAmountCents,
+    required this.attributionDate,
+    required this.note,
+    required this.manualVersion,
+    required this.isActive,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.adjustments,
+  });
+
+  final String id;
+  final String recipientType;
+  final String? targetUserId;
+  final String recipientName;
+  final String ratePercent;
+  final int originalBaseAmountCents;
+  final int effectiveBaseAmountCents;
+  final int originalAmountCents;
+  final int adjustmentAmountCents;
+  final int effectiveAmountCents;
+  final String? attributionDate;
+  final String? note;
+  final int manualVersion;
+  final bool isActive;
+  final String? createdAt;
+  final String? updatedAt;
+  final List<Map<String, dynamic>> adjustments;
+
+  factory SpecialOrderCommissionRecord.fromJson(Map<String, dynamic> json) {
+    return SpecialOrderCommissionRecord(
+      id: '${json['id'] ?? ''}',
+      recipientType: '${json['recipientType'] ?? ''}'.toLowerCase(),
+      targetUserId: _stringOrNull(json['targetUserId']),
+      recipientName: '${json['recipientName'] ?? ''}',
+      ratePercent: '${json['ratePercent'] ?? '0'}',
+      originalBaseAmountCents: _intValue(json['originalBaseAmountCents']),
+      effectiveBaseAmountCents: _intValue(json['effectiveBaseAmountCents']),
+      originalAmountCents: _intValue(json['originalAmountCents']),
+      adjustmentAmountCents: _intValue(json['adjustmentAmountCents']),
+      effectiveAmountCents: _intValue(json['effectiveAmountCents']),
+      attributionDate: _stringOrNull(json['attributionDate']),
+      note: _stringOrNull(json['note']),
+      manualVersion: _intValue(json['manualVersion']),
+      isActive: _boolValue(json['isActive']),
+      createdAt: _stringOrNull(json['createdAt']),
+      updatedAt: _stringOrNull(json['updatedAt']),
+      adjustments: _list(json['adjustments']),
+    );
+  }
+}
+
 class SpecialOrderReferenceData {
   const SpecialOrderReferenceData({
     required this.employees,
@@ -8666,6 +9066,12 @@ class SpecialOrderReferenceOption {
     required this.phone,
     required this.inventoryTrackingMode,
     required this.isDefault,
+    this.province,
+    this.city,
+    this.district,
+    this.address,
+    this.notes,
+    this.category,
   });
 
   final String id;
@@ -8676,6 +9082,12 @@ class SpecialOrderReferenceOption {
   final String? phone;
   final String inventoryTrackingMode;
   final bool isDefault;
+  final String? province;
+  final String? city;
+  final String? district;
+  final String? address;
+  final String? notes;
+  final String? category;
 
   factory SpecialOrderReferenceOption.fromJson(Map<String, dynamic> json) {
     return SpecialOrderReferenceOption(
@@ -8688,6 +9100,12 @@ class SpecialOrderReferenceOption {
       inventoryTrackingMode:
           '${json['inventoryTrackingMode'] ?? 'none'}'.toLowerCase(),
       isDefault: _boolValue(json['isDefault']),
+      province: _stringOrNull(json['province']),
+      city: _stringOrNull(json['city']),
+      district: _stringOrNull(json['district']),
+      address: _stringOrNull(json['address']),
+      notes: _stringOrNull(json['notes']),
+      category: _stringOrNull(json['category'])?.toLowerCase(),
     );
   }
 }

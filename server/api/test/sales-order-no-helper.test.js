@@ -16,6 +16,18 @@ test('unit: sales order number formats orderDate as SOyyyyMMddNNN', async () => 
   assert.equal(await generateSalesOrderNo(delegate, new Date('2026-06-30T00:00:00.000Z')), 'SO20260630001');
 });
 
+test('unit: special order numbers reuse the generator with a type marker', async () => {
+  const delegate = createOrderNoDelegate([]);
+
+  assert.equal(buildSalesOrderNoPrefix('2026-08-01', 'INTERNAL'), 'SOI20260801');
+  assert.equal(buildSalesOrderNoPrefix('2026-08-01', 'EXTERNAL'), 'SOE20260801');
+  assert.equal(buildSalesOrderNoPrefix('2026-08-01', 'BUYBACK'), 'SOB20260801');
+  assert.equal(
+    await generateSalesOrderNo(delegate, '2026-08-01', 'INTERNAL'),
+    'SOI20260801001',
+  );
+});
+
 test('unit: sales order number increments independently for different order dates', async () => {
   const delegate = createOrderNoDelegate([
     'SO20260629001',

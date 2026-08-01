@@ -328,6 +328,7 @@ class _TravelGroupFinanceSupplementPageState
   bool _exportingExcel = false;
   String? _errorMessage;
   String? _successMessage;
+  StatusTone _successMessageTone = StatusTone.success;
   String? _lastWindowsSaveDirectory;
 
   @override
@@ -591,6 +592,7 @@ class _TravelGroupFinanceSupplementPageState
       setState(() {
         _agencyDeductionUpdatingIds.remove(rowId);
         _successMessage = '扣酒成本已保存。';
+        _successMessageTone = StatusTone.success;
       });
     } catch (error) {
       if (!mounted) {
@@ -687,6 +689,7 @@ class _TravelGroupFinanceSupplementPageState
         busySet.remove(busyKey);
         _replaceSummary(updated);
         _successMessage = successMessage;
+        _successMessageTone = StatusTone.success;
       });
     } catch (error) {
       if (!mounted) {
@@ -722,7 +725,10 @@ class _TravelGroupFinanceSupplementPageState
         .toSet()
         .toList();
     if (travelGroupIds.isEmpty) {
-      setState(() => _successMessage = '售后调整行无需重新计算原旅行团汇总。');
+      setState(() {
+        _successMessage = '售后调整行无需重新计算原旅行团汇总。';
+        _successMessageTone = StatusTone.warning;
+      });
       return;
     }
     setState(() {
@@ -745,6 +751,11 @@ class _TravelGroupFinanceSupplementPageState
       setState(() {
         _recalculating = false;
         _successMessage = message;
+        _successMessageTone = result.hasFailureWarning
+            ? StatusTone.danger
+            : result.hasBusinessWarning
+                ? StatusTone.warning
+                : StatusTone.success;
       });
     } catch (error) {
       if (!mounted) {
@@ -789,6 +800,7 @@ class _TravelGroupFinanceSupplementPageState
             Platform.isWindows ? targetFile.parent.absolute.path : null;
         _successMessage =
             '已导出 ${selected.length} 行积分信息：${targetFile.absolute.path}';
+        _successMessageTone = StatusTone.success;
       });
     } catch (error) {
       if (!mounted) {
@@ -894,6 +906,7 @@ class _TravelGroupFinanceSupplementPageState
     setState(() {
       if (failureCount == 0) {
         _successMessage = message;
+        _successMessageTone = StatusTone.success;
         _errorMessage = null;
       } else {
         _successMessage = null;
@@ -947,6 +960,7 @@ class _TravelGroupFinanceSupplementPageState
         }
         _lastWindowsSaveDirectory = saveResult.directoryPath;
         _successMessage = saveResult.successMessage;
+        _successMessageTone = StatusTone.success;
       });
       if (showSnackBar) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -1190,7 +1204,7 @@ class _TravelGroupFinanceSupplementPageState
         if (_successMessage != null)
           _InlineNotice(
             message: _successMessage!,
-            tone: StatusTone.success,
+            tone: _successMessageTone,
             action: _lastWindowsSaveDirectory == null
                 ? null
                 : TextButton.icon(

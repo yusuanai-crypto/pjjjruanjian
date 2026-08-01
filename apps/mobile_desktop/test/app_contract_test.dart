@@ -28,6 +28,7 @@ import 'package:jiangjiu_mobile_desktop/features/travel_group_query/travel_group
 import 'package:jiangjiu_mobile_desktop/features/travel_groups/travel_group_form_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse/warehouse_packing_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/warehouse_management/warehouse_management_page.dart';
+import 'package:jiangjiu_mobile_desktop/features/warehouse_directory/warehouse_directory_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
@@ -627,6 +628,7 @@ void main() {
       final ids = _destinationIds(
         [
           'warehouse_management',
+          'warehouse_directory',
           'warehouse_workspace',
           'serialized_inventory',
         ],
@@ -636,6 +638,11 @@ void main() {
         ids.contains('warehouse_management'),
         inventoryRoles.contains(role),
         reason: '${role.value} warehouse_management',
+      );
+      expect(
+        ids.contains('warehouse_directory'),
+        inventoryRoles.contains(role),
+        reason: '${role.value} warehouse_directory',
       );
       expect(
         ids.contains('moutai_inventory'),
@@ -673,6 +680,7 @@ void main() {
     expect(_page('reconciliation_table'), isA<ReconciliationTablePage>());
     expect(_page('warehouse_packing'), isA<WarehousePackingPage>());
     expect(_page('warehouse_management'), isA<WarehouseManagementPage>());
+    expect(_page('warehouse_directory'), isA<WarehouseDirectoryPage>());
     expect(_page('moutai_inventory'), isA<MoutaiInventoryPage>());
     expect(_page('after_sales_form'), isA<AfterSalesFormPage>());
     expect(_page('analytics'), isA<AnalyticsPage>());

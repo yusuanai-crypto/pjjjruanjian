@@ -31,10 +31,6 @@ export function renderPublicSalesSheetHtml(salesSheet: any) {
           ${renderItems(salesSheet?.items)}
         </section>
         <section>
-          <h2>收款明细</h2>
-          ${renderPaymentDetails(salesSheet?.paymentDetails)}
-        </section>
-        <section>
           <h2>配送</h2>
           ${renderRows([
             ['配送方式', salesSheet?.delivery?.summaryLabel],
@@ -98,65 +94,6 @@ function renderItems(items: any[]) {
         .join('')}
     </div>
   `;
-}
-
-function renderPaymentDetails(details: any[]) {
-  if (!Array.isArray(details) || details.length === 0) {
-    return '<p class="empty">暂无收款明细</p>';
-  }
-  return `
-    <div class="table-wrap">
-      <table class="payment-table">
-        <thead>
-          <tr>
-            <th scope="col">收款方式</th>
-            <th scope="col">收款金额</th>
-            <th scope="col">收款属性</th>
-            <th scope="col">确认状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${details
-            .map(
-              (detail) => `
-                <tr class="payment-row">
-                  <td>${text(detail?.paymentMethodNameSnapshot)}</td>
-                  <td class="amount">¥${text(detail?.amountYuan, '0.00')}</td>
-                  <td>${text(paymentCategoryLabel(detail))}</td>
-                  <td>${text(paymentConfirmationLabel(detail))}</td>
-                </tr>
-              `,
-            )
-            .join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function paymentCategoryLabel(detail: any) {
-  if (hasDisplayValue(detail?.paymentMethodCategoryLabel)) {
-    return detail.paymentMethodCategoryLabel;
-  }
-  const category = String(
-    detail?.paymentMethodCategorySnapshot || '',
-  ).toLowerCase();
-  return category === 'collect_on_delivery' ||
-    category === 'agency_collection'
-    ? '代收营业款'
-    : '即时收款';
-}
-
-function paymentConfirmationLabel(detail: any) {
-  if (hasDisplayValue(detail?.confirmationStatusLabel)) {
-    return detail.confirmationStatusLabel;
-  }
-  if (paymentCategoryLabel(detail) !== '代收营业款') {
-    return '无需确认';
-  }
-  return detail?.agencyCollectionConfirmed
-    ? '已确认到账'
-    : '代收款（待确认）';
 }
 
 function renderRows(rows: Array<[string, unknown]>) {
@@ -256,28 +193,6 @@ function renderDocument(input: any) {
       margin-bottom: 8px;
       overflow-wrap: anywhere;
     }
-    .table-wrap { overflow-x: auto; }
-    .payment-table {
-      border-collapse: collapse;
-      min-width: 560px;
-      width: 100%;
-    }
-    .payment-table th,
-    .payment-table td {
-      border: 1px solid #e5e9ef;
-      padding: 9px 10px;
-      text-align: left;
-      vertical-align: top;
-    }
-    .payment-table th {
-      background: #f7f8fa;
-      color: #4b5d73;
-      font-weight: 700;
-    }
-    .payment-table .amount {
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-    }
     footer {
       padding: 16px 18px 28px;
       text-align: center;
@@ -305,7 +220,6 @@ function renderDocument(input: any) {
       .sheet-header { padding-top: 0; }
       main { max-width: none; padding: 0; width: 100%; }
       section { break-inside: avoid; border-color: #cfd5dc; }
-      .payment-row { break-inside: avoid; }
       footer { padding-bottom: 0; }
     }
   </style>

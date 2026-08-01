@@ -52,10 +52,23 @@ export function calculateOrderProductProfit(order: any) {
     0,
     grossSalesAmountCents - confirmedRefundAmountCents,
   );
+  const manualCommissionCostCents = sumBy(
+    (Array.isArray(order?.commissionRecords)
+      ? order.commissionRecords
+      : []
+    ).filter(
+      (record: any) =>
+        String(record?.targetType || '').toUpperCase() ===
+          'ORDER_MANUAL_COMMISSION' && record?.isActive !== false,
+    ),
+    (record: any) => nonNegativeInteger(record?.amountCents),
+  );
   const hasRefundEstimateRisk = confirmedRefundAmountCents > 0;
   const canCalculateCompleteProfit = costCoverageStatus === 'complete';
   const calculatedProfitCents = canCalculateCompleteProfit
-    ? effectiveSalesAmountCents - recordedActualCostCents
+    ? effectiveSalesAmountCents -
+      recordedActualCostCents -
+      manualCommissionCostCents
     : null;
   const grossProfitCents =
     calculatedProfitCents !== null && !hasRefundEstimateRisk
@@ -83,6 +96,7 @@ export function calculateOrderProductProfit(order: any) {
     confirmedRefundAmountCents,
     effectiveSalesAmountCents,
     actualProductCostCents: recordedActualCostCents,
+    manualCommissionCostCents,
     salesDeductionCostCents: deductionCosts.salesDeductionCostCents,
     agencyDeductionCostCents: deductionCosts.agencyDeductionCostCents,
     grossProfitCents,
@@ -102,11 +116,12 @@ export function calculateOrderProductProfit(order: any) {
     warnings,
     costBreakdown: {
       actualProductCostCents: recordedActualCostCents,
+      manualCommissionCostCents,
       salesDeductionCostCents: deductionCosts.salesDeductionCostCents,
       agencyDeductionCostCents: deductionCosts.agencyDeductionCostCents,
       mixedForGrossProfit: false,
       note:
-        '商品实际成本、销售扣单成本和旅行社扣酒成本分别展示；毛利仅使用商品实际成本快照。',
+        '商品实际成本、手工订单提成、销售扣单成本和旅行社扣酒成本分别展示；毛利使用商品实际成本及有效手工提成。',
     },
     items: lineResults,
   };
@@ -147,6 +162,10 @@ export function calculateProductProfitSummary(orders: any[]) {
     orderResults,
     (order: any) => order.actualProductCostCents,
   );
+  const manualCommissionCostCents = sumBy(
+    orderResults,
+    (order: any) => nonNegativeInteger(order.manualCommissionCostCents),
+  );
   const confirmedRefundAmountCents = sumBy(
     orderResults,
     (order: any) => order.confirmedRefundAmountCents,
@@ -154,7 +173,9 @@ export function calculateProductProfitSummary(orders: any[]) {
   const hasRefundEstimateRisk = confirmedRefundAmountCents > 0;
   const calculatedProfitCents =
     costCoverageStatus === 'complete'
-      ? effectiveSalesAmountCents - actualProductCostCents
+      ? effectiveSalesAmountCents -
+        actualProductCostCents -
+        manualCommissionCostCents
       : null;
   const grossProfitCents =
     calculatedProfitCents !== null && !hasRefundEstimateRisk
@@ -186,6 +207,7 @@ export function calculateProductProfitSummary(orders: any[]) {
     effectiveSalesAmountCents,
     confirmedRefundAmountCents,
     actualProductCostCents,
+    manualCommissionCostCents,
     salesDeductionCostCents: salesDeductionCosts.amountCents,
     salesDeductionCoveredOrderCount: salesDeductionCosts.coveredCount,
     agencyDeductionCostCents: agencyDeductionCosts.amountCents,
@@ -209,11 +231,12 @@ export function calculateProductProfitSummary(orders: any[]) {
     warnings,
     costBreakdown: {
       actualProductCostCents,
+      manualCommissionCostCents,
       salesDeductionCostCents: salesDeductionCosts.amountCents,
       agencyDeductionCostCents: agencyDeductionCosts.amountCents,
       mixedForGrossProfit: false,
       note:
-        '商品实际成本、销售扣单成本和旅行社扣酒成本分别展示；毛利仅使用商品实际成本快照。',
+        '商品实际成本、手工订单提成、销售扣单成本和旅行社扣酒成本分别展示；毛利使用商品实际成本及有效手工提成。',
     },
     orders: orderResults,
   };

@@ -95,7 +95,10 @@ test('contract: stage7 rule CRUD enforces role permissions', async () => {
       },
     });
     assert.equal(created.response.status, 201);
-    assertCommissionRuleContract(created.body.data.commissionRule);
+    assertCommissionRuleContract(
+      created.body.data.commissionRule,
+      created.body.data.recalculation,
+    );
     assert.equal(created.body.data.commissionRule.targetType, 'sales_commission');
     assert.equal(created.body.data.commissionRule.rate, '0.0200');
 
@@ -377,7 +380,7 @@ test('contract: stage7 rule CRUD validates fields', async () => {
         },
       },
     );
-    assertErrorContract(missingAgency, 400, 'VALIDATION_FAILED');
+    assertErrorContract(missingAgency, 400, 'AGENCY_ID_REQUIRED');
 
     const blankProduct = await requestJson(
       baseUrl,
@@ -590,12 +593,18 @@ test('contract: stage7 rule CRUD rejects overlapping enabled ranges', async () =
 test('contract: stage7 rule CRUD writes operation logs with before and after', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const logAgency = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Log Agency',
+    );
 
     const created = await requestJson(baseUrl, '/api/agency-rebate-rules', {
       method: 'POST',
       token: admin.token,
       body: {
-        agencyName: 'Stage7 Smoke Log Agency',
+        agencyId: logAgency.id,
+        agencyName: '客户端伪造名称会被覆盖',
         dailyRebateRate: '0.0300',
         monthlyRebateRate: '0.0200',
         totalRebateRate: '0.0500',
@@ -605,6 +614,11 @@ test('contract: stage7 rule CRUD writes operation logs with before and after', a
     });
     assert.equal(created.response.status, 201);
     assertAgencyRebateRuleContract(created.body.data.agencyRebateRule);
+    assert.equal(created.body.data.agencyRebateRule.agencyId, logAgency.id);
+    assert.equal(
+      created.body.data.agencyRebateRule.agencyName,
+      'Stage7 Smoke Log Agency',
+    );
 
     const updated = await requestJson(
       baseUrl,
@@ -654,6 +668,11 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
       baseUrl,
       admin.token,
       'Stage7 Smoke Log Inventory Agency Wine',
+    );
+    const rebateLogAgency = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Log Inventory Agency Rebate',
     );
     const cases = [
       {
@@ -711,7 +730,8 @@ test('contract: stage7 rule CRUD writes create update and disable logs for every
         logPrefix: 'agency_rebate_rules',
         entityType: 'agency_rebate_rule',
         createBody: {
-          agencyName: 'Stage7 Smoke Log Inventory Agency Rebate',
+          agencyId: rebateLogAgency.id,
+          agencyName: 'untrusted client snapshot',
           dailyRebateRate: '0.0300',
           monthlyRebateRate: '0.0200',
           totalRebateRate: '0.0500',
@@ -813,6 +833,16 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
       admin.token,
       'Stage7 Smoke Batch Wine B',
     );
+    const batchAgencyA = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Batch Agency A',
+    );
+    const batchAgencyB = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Smoke Batch Agency B',
+    );
 
     const salesImport = await requestJson(
       baseUrl,
@@ -898,7 +928,8 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
         body: {
           rules: [
             {
-              agencyName: 'Stage7 Smoke Batch Agency A',
+              agencyId: batchAgencyA.id,
+              agencyName: 'client value ignored a',
               dailyRebateRate: '0.0300',
               monthlyRebateRate: '0.0200',
               totalRebateRate: '0.0500',
@@ -906,7 +937,8 @@ test('contract: stage7 rule batch import succeeds for structured JSON templates'
               notes: 'stage7 smoke agency rebate batch import a',
             },
             {
-              agencyName: 'Stage7 Smoke Batch Agency B',
+              agencyId: batchAgencyB.id,
+              agencyName: 'client value ignored b',
               dailyRebateRate: '0.0250',
               monthlyRebateRate: '0.0150',
               totalRebateRate: '0.0400',
@@ -1023,9 +1055,143 @@ test('contract: stage7 rule batch import reports partial failures per row', asyn
   });
 });
 
+test('contract: agency rebate batch import validates agencyId per row and trusts master name', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const agency = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Batch Canonical Agency',
+    );
+    const result = await requestJson(
+      baseUrl,
+      '/api/agency-rebate-rules/batch-import',
+      {
+        method: 'POST',
+        token: admin.token,
+        body: {
+          rules: [
+            {
+              dailyRebateRate: '0.0300',
+              monthlyRebateRate: '0.0200',
+              effectiveFrom: '2026-07-01',
+            },
+            {
+              agencyId: 'missing-agency-id',
+              dailyRebateRate: '0.0300',
+              monthlyRebateRate: '0.0200',
+              effectiveFrom: '2026-07-01',
+            },
+            {
+              agencyId: agency.id,
+              agencyName: '客户端伪造旅行社名称',
+              dailyRebateRate: '0.0300',
+              monthlyRebateRate: '0.0200',
+              effectiveFrom: '2026-07-01',
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(result.response.status, 201);
+    const importResult = result.body.data.importResult;
+    assertImportResultContract(importResult, 1, 2);
+    assert.equal(importResult.results[0].rowNumber, 1);
+    assert.equal(importResult.results[0].error.code, 'AGENCY_ID_REQUIRED');
+    assert.match(importResult.results[0].error.message, /必须选择有效的旅行社主档/);
+    assert.equal(importResult.results[1].rowNumber, 2);
+    assert.equal(importResult.results[1].error.code, 'AGENCY_ID_INVALID');
+    assert.equal(importResult.results[1].error.agencyId, 'missing-agency-id');
+    assert.match(importResult.results[1].error.message, /旅行社 ID.*无效/);
+    assert.equal(importResult.results[2].success, true);
+    assert.equal(importResult.results[2].rule.agencyId, agency.id);
+    assert.equal(
+      importResult.results[2].rule.agencyName,
+      'Stage7 Batch Canonical Agency',
+    );
+  });
+});
+
+test('contract: binding a legacy name rebate rule syncs canonical name and cannot bypass overlap', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const agency = {
+      id: 'stage7-legacy-binding-agency-id',
+      name: 'Stage7 Legacy Binding Agency',
+    };
+
+    const bound = await requestJson(
+      baseUrl,
+      '/api/agency-rebate-rules/legacy-name-rule-to-bind',
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: { agencyId: agency.id, agencyName: '伪造名称' },
+      },
+    );
+    assert.equal(bound.response.status, 200);
+    assert.equal(bound.body.data.agencyRebateRule.agencyId, agency.id);
+    assert.equal(
+      bound.body.data.agencyRebateRule.agencyName,
+      'Stage7 Legacy Binding Agency',
+    );
+
+    const overlap = await requestJson(baseUrl, '/api/agency-rebate-rules', {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        agencyId: agency.id,
+        dailyRebateRate: '0.0200',
+        monthlyRebateRate: '0.0100',
+        effectiveFrom: '2027-06-01',
+      },
+    });
+    assertErrorContract(overlap, 400, 'RULE_EFFECTIVE_RANGE_OVERLAP');
+  }, {
+    prisma: {
+      travelAgencies: [
+        {
+          id: 'stage7-legacy-binding-agency-id',
+          name: 'Stage7 Legacy Binding Agency',
+        },
+      ],
+      agencyRebateRules: [
+        {
+          id: 'legacy-name-rule-to-bind',
+          agencyId: null,
+          agencyName: 'Stage7 Legacy Binding Agency',
+          dailyRebateRate: '0.0300',
+          monthlyRebateRate: '0.0200',
+          totalRebateRate: '0.0500',
+          effectiveFrom: '2026-01-01',
+          effectiveTo: '2026-06-30',
+          isActive: true,
+        },
+        {
+          id: 'legacy-name-overlap',
+          agencyId: null,
+          agencyName: 'Stage7 Legacy Binding Agency',
+          dailyRebateRate: '0.0400',
+          monthlyRebateRate: '0.0100',
+          totalRebateRate: '0.0500',
+          effectiveFrom: '2027-01-01',
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+    },
+  });
+});
+
 test('contract: stage7 rule batch import rejects overlapping rows and keeps successes', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
+    const overlapAgency = await createRuleTestTravelAgency(
+      baseUrl,
+      admin.token,
+      'Stage7 Test Batch Overlap Agency',
+    );
 
     const result = await requestJson(
       baseUrl,
@@ -1036,7 +1202,7 @@ test('contract: stage7 rule batch import rejects overlapping rows and keeps succ
         body: {
           rules: [
             {
-              agencyName: 'Stage7 Test Batch Overlap Agency',
+              agencyId: overlapAgency.id,
               dailyRebateRate: '0.0300',
               monthlyRebateRate: '0.0200',
               effectiveFrom: '2026-01-01',
@@ -1044,7 +1210,7 @@ test('contract: stage7 rule batch import rejects overlapping rows and keeps succ
               notes: 'stage7 test batch overlap first',
             },
             {
-              agencyName: 'Stage7 Test Batch Overlap Agency',
+              agencyId: overlapAgency.id,
               dailyRebateRate: '0.0250',
               monthlyRebateRate: '0.0150',
               effectiveFrom: '2026-06-01',
@@ -1126,6 +1292,16 @@ async function createRuleTestProduct(baseUrl, token, name) {
   return result.body.data.product;
 }
 
+async function createRuleTestTravelAgency(baseUrl, token, name) {
+  const result = await requestJson(baseUrl, '/api/travel-agencies', {
+    method: 'POST',
+    token,
+    body: { name },
+  });
+  assert.equal(result.response.status, 201);
+  return result.body.data.travelAgency;
+}
+
 function assertStage7WriteLog(log, expected) {
   assertOperationLogContract(log);
   assert.equal(log.action, expected.action);
@@ -1138,7 +1314,7 @@ function assertStage7WriteLog(log, expected) {
   assert.equal(/Password123|secret-token|DATABASE_URL/i.test(serialized), false);
 }
 
-function assertCommissionRuleContract(rule) {
+function assertCommissionRuleContract(rule, recalculation) {
   assert.deepEqual(Object.keys(rule).sort(), [
     'createdAt',
     'createdById',
@@ -1148,7 +1324,6 @@ function assertCommissionRuleContract(rule) {
     'isActive',
     'notes',
     'rate',
-    'recalculation',
     'ruleName',
     'targetType',
     'updatedAt',
@@ -1172,9 +1347,9 @@ function assertCommissionRuleContract(rule) {
     'warnings',
   ]) {
     assert.equal(
-      Object.prototype.hasOwnProperty.call(rule.recalculation, field),
+      Object.prototype.hasOwnProperty.call(recalculation, field),
       true,
-      `commissionRule.recalculation.${field}`,
+      `recalculation.${field}`,
     );
   }
 }

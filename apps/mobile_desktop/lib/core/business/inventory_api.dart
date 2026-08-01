@@ -362,6 +362,10 @@ class WarehouseRecord {
     required this.managerName,
     required this.isActive,
     required this.isDefault,
+    this.parentWarehouseId,
+    this.parentWarehouseName,
+    this.childWarehouseCount = 0,
+    this.canDelete = false,
     this.createdAt,
     this.updatedAt,
   });
@@ -374,11 +378,16 @@ class WarehouseRecord {
   final String? managerName;
   final bool isActive;
   final bool isDefault;
+  final String? parentWarehouseId;
+  final String? parentWarehouseName;
+  final int childWarehouseCount;
+  final bool canDelete;
   final String? createdAt;
   final String? updatedAt;
 
   factory WarehouseRecord.fromJson(Map<String, dynamic> json) {
     final manager = _map(json['manager']);
+    final parent = _map(json['parentWarehouse']);
     return WarehouseRecord(
       id: _str(json['id']),
       code: _str(json['code']),
@@ -388,8 +397,131 @@ class WarehouseRecord {
       managerName: _strOrNull(manager['name']),
       isActive: _bool(json['isActive'], true),
       isDefault: _bool(json['isDefault']),
+      parentWarehouseId: _strOrNull(json['parentWarehouseId']),
+      parentWarehouseName: _strOrNull(parent['name']),
+      childWarehouseCount: _int(json['childWarehouseCount']),
+      canDelete: _bool(json['canDelete']),
       createdAt: _strOrNull(json['createdAt']),
       updatedAt: _strOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class WarehouseStockMetrics {
+  const WarehouseStockMetrics({
+    required this.onHandQty,
+    required this.reservedQty,
+    required this.unavailableQty,
+    required this.inTransitQty,
+    required this.availableQty,
+    required this.shortageQty,
+  });
+
+  final int onHandQty;
+  final int reservedQty;
+  final int unavailableQty;
+  final int inTransitQty;
+  final int availableQty;
+  final int shortageQty;
+
+  factory WarehouseStockMetrics.fromJson(Map<String, dynamic> json) {
+    return WarehouseStockMetrics(
+      onHandQty: _int(json['onHandQty']),
+      reservedQty: _int(json['reservedQty']),
+      unavailableQty: _int(json['unavailableQty']),
+      inTransitQty: _int(json['inTransitQty']),
+      availableQty: _int(json['availableQty']),
+      shortageQty: _int(json['shortageQty']),
+    );
+  }
+}
+
+class WarehouseProductRecord {
+  const WarehouseProductRecord({
+    required this.id,
+    required this.warehouseId,
+    required this.productId,
+    required this.productName,
+    required this.productUnit,
+    required this.inventoryTrackingMode,
+    required this.productIsActive,
+    required this.isActive,
+    required this.localStock,
+    required this.inclusiveStock,
+    required this.includesChildWarehouses,
+    required this.isLowStock,
+    required this.minimumAvailableQty,
+    required this.lastMovementAt,
+  });
+
+  final String id;
+  final String warehouseId;
+  final String productId;
+  final String productName;
+  final String productUnit;
+  final String inventoryTrackingMode;
+  final bool productIsActive;
+  final bool isActive;
+  final WarehouseStockMetrics localStock;
+  final WarehouseStockMetrics inclusiveStock;
+  final bool includesChildWarehouses;
+  final bool isLowStock;
+  final int? minimumAvailableQty;
+  final String? lastMovementAt;
+
+  bool get isSerialized => inventoryTrackingMode == 'serialized';
+
+  factory WarehouseProductRecord.fromJson(Map<String, dynamic> json) {
+    final product = _map(json['product']);
+    return WarehouseProductRecord(
+      id: _str(json['id']),
+      warehouseId: _str(json['warehouseId']),
+      productId: _str(json['productId']),
+      productName: _str(product['name']),
+      productUnit: _str(product['unit'], '瓶'),
+      inventoryTrackingMode:
+          _str(product['inventoryTrackingMode'], 'none').toLowerCase(),
+      productIsActive: _bool(product['isActive'], true),
+      isActive: _bool(json['isActive'], true),
+      localStock: WarehouseStockMetrics.fromJson(_map(json['localStock'])),
+      inclusiveStock:
+          WarehouseStockMetrics.fromJson(_map(json['inclusiveStock'])),
+      includesChildWarehouses: _bool(json['includesChildWarehouses']),
+      isLowStock: _bool(json['isLowStock']),
+      minimumAvailableQty: _intOrNull(json['minimumAvailableQty']),
+      lastMovementAt: _strOrNull(json['lastMovementAt']),
+    );
+  }
+}
+
+class WarehouseProductPage {
+  const WarehouseProductPage({
+    required this.warehouse,
+    required this.products,
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+  });
+
+  final WarehouseRecord warehouse;
+  final List<WarehouseProductRecord> products;
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+
+  factory WarehouseProductPage.fromJson(Map<String, dynamic> json) {
+    final pagination = _map(json['pagination']);
+    return WarehouseProductPage(
+      warehouse: WarehouseRecord.fromJson(_map(json['warehouse'])),
+      products: _list(json['products'])
+          .map((item) => WarehouseProductRecord.fromJson(_map(item)))
+          .toList(),
+      page: _int(pagination['page'], 1),
+      pageSize: _int(pagination['pageSize'], 20),
+      total: _int(pagination['total']),
+      totalPages: _int(pagination['totalPages']),
     );
   }
 }
@@ -2270,6 +2402,8 @@ class InventoryApi {
     String? q,
     bool? isActive,
     bool? isDefault,
+    String? manager,
+    String? parentWarehouseId,
   }) async {
     final query = <String, String>{
       'page': '$page',
@@ -2278,6 +2412,8 @@ class InventoryApi {
     _putNonEmpty(query, 'q', q);
     if (isActive != null) query['isActive'] = isActive.toString();
     if (isDefault != null) query['isDefault'] = isDefault.toString();
+    _putNonEmpty(query, 'manager', manager);
+    _putNonEmpty(query, 'parentWarehouseId', parentWarehouseId);
     final payload = await _apiClient
         .getJson(_path('/api/inventory/warehouses', query), token: _token);
     return WarehousePage.fromJson(_data(payload));
@@ -2313,6 +2449,7 @@ class InventoryApi {
     String? managerUserId,
     bool isActive = true,
     bool isDefault = false,
+    String? parentWarehouseId,
   }) async {
     if (!canManageWarehouse(role)) {
       throw const ApiException(
@@ -2332,6 +2469,10 @@ class InventoryApi {
       body['managerUserId'] =
           managerUserId.trim().isEmpty ? null : managerUserId.trim();
     }
+    if (parentWarehouseId != null) {
+      body['parentWarehouseId'] =
+          parentWarehouseId.trim().isEmpty ? null : parentWarehouseId.trim();
+    }
     final result = await _apiClient.postJson(
       '/api/inventory/warehouses',
       body: body,
@@ -2349,6 +2490,8 @@ class InventoryApi {
     bool includeManagerUserId = false,
     bool? isActive,
     bool? isDefault,
+    String? parentWarehouseId,
+    bool includeParentWarehouseId = false,
   }) async {
     if (!canManageWarehouse(role)) {
       throw const ApiException(
@@ -2369,12 +2512,131 @@ class InventoryApi {
     }
     if (isActive != null) body['isActive'] = isActive;
     if (isDefault != null) body['isDefault'] = isDefault;
+    if (includeParentWarehouseId) {
+      body['parentWarehouseId'] =
+          parentWarehouseId == null || parentWarehouseId.trim().isEmpty
+              ? null
+              : parentWarehouseId.trim();
+    }
     final result = await _apiClient.patchJson(
       '/api/inventory/warehouses/$warehouseId',
       body: body,
       token: _token,
     );
     return WarehouseRecord.fromJson(_data(result));
+  }
+
+  Future<WarehouseRecord> getWarehouse(String warehouseId) async {
+    final result = await _apiClient.getJson(
+      '/api/inventory/warehouses/${Uri.encodeComponent(warehouseId)}',
+      token: _token,
+    );
+    return WarehouseRecord.fromJson(_map(_data(result)['warehouse']));
+  }
+
+  Future<void> deleteWarehouse(String warehouseId) async {
+    if (!canManageWarehouse(role)) {
+      throw const ApiException(
+        statusCode: 403,
+        code: 'PERMISSION_DENIED',
+        message: 'Only administrators can delete warehouses.',
+      );
+    }
+    await _apiClient.deleteJson(
+      '/api/inventory/warehouses/${Uri.encodeComponent(warehouseId)}',
+      token: _token,
+    );
+  }
+
+  Future<WarehouseProductPage> listWarehouseProducts({
+    required String warehouseId,
+    int page = 1,
+    int pageSize = 20,
+    String? q,
+    String? inventoryTrackingMode,
+    bool includeInactive = false,
+    bool? isLowStock,
+    bool? hasShortage,
+  }) async {
+    final query = <String, String>{
+      'page': '$page',
+      'pageSize': '$pageSize',
+    };
+    if (!includeInactive) query['isActive'] = 'true';
+    _putNonEmpty(query, 'q', q);
+    _putNonEmpty(query, 'inventoryTrackingMode', inventoryTrackingMode);
+    if (isLowStock != null) query['isLowStock'] = '$isLowStock';
+    if (hasShortage != null) query['hasShortage'] = '$hasShortage';
+    final result = await _apiClient.getJson(
+      _path(
+        '/api/inventory/warehouses/${Uri.encodeComponent(warehouseId)}/products',
+        query,
+      ),
+      token: _token,
+    );
+    return WarehouseProductPage.fromJson(_data(result));
+  }
+
+  Future<WarehouseProductRecord?> addWarehouseProduct({
+    required String warehouseId,
+    required String productId,
+    int initialQuantity = 0,
+    String? idempotencyKey,
+  }) async {
+    if (!canManageWarehouse(role)) {
+      throw const ApiException(
+        statusCode: 403,
+        code: 'PERMISSION_DENIED',
+        message: 'Only administrators can maintain warehouse products.',
+      );
+    }
+    final normalizedPayload = <String, dynamic>{
+      'warehouseId': warehouseId.trim(),
+      'productId': productId.trim(),
+      'initialQuantity': initialQuantity,
+    };
+    final key = idempotencyKey ??
+        'warehouse-product-${DateTime.now().microsecondsSinceEpoch}';
+    final body = <String, dynamic>{
+      'productId': productId.trim(),
+      'initialQuantity': initialQuantity,
+      'idempotencyKey': key,
+      'requestHash': sha256
+          .convert(utf8.encode(canonicalJson(normalizedPayload)))
+          .toString(),
+    };
+    final result = await _apiClient.postJson(
+      '/api/inventory/warehouses/${Uri.encodeComponent(warehouseId)}/products',
+      body: body,
+      token: _token,
+    );
+    final product = _map(_data(result)['product']);
+    if (product.isEmpty) return null;
+    final enriched = <String, dynamic>{
+      ...product,
+      'localStock': const <String, dynamic>{},
+      'inclusiveStock': const <String, dynamic>{},
+      'includesChildWarehouses': false,
+      'isLowStock': false,
+    };
+    return WarehouseProductRecord.fromJson(enriched);
+  }
+
+  Future<void> deactivateWarehouseProduct({
+    required String warehouseId,
+    required String productId,
+  }) async {
+    if (!canManageWarehouse(role)) {
+      throw const ApiException(
+        statusCode: 403,
+        code: 'PERMISSION_DENIED',
+        message: 'Only administrators can maintain warehouse products.',
+      );
+    }
+    await _apiClient.deleteJson(
+      '/api/inventory/warehouses/${Uri.encodeComponent(warehouseId)}/products/${Uri.encodeComponent(productId)}',
+      token: _token,
+    );
   }
 
   // --- 商品库存 ---
