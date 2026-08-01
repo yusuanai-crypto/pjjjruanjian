@@ -7,7 +7,7 @@ ALTER TABLE `warehouses`
     CHECK (`is_default` = 0 OR `parent_warehouse_id` IS NULL),
   ADD CONSTRAINT `warehouses_parent_warehouse_id_fkey`
     FOREIGN KEY (`parent_warehouse_id`) REFERENCES `warehouses`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+    ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 CREATE TABLE `warehouse_product_configurations` (
   `id` CHAR(36) NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE `warehouse_product_configurations` (
   CONSTRAINT `warehouse_product_configurations_updated_by_id_fkey`
     FOREIGN KEY (`updated_by_id`) REFERENCES `users`(`id`)
     ON DELETE SET NULL ON UPDATE CASCADE
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TRIGGER `warehouses_two_levels_insert`
 BEFORE INSERT ON `warehouses`
