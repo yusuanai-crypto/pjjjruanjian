@@ -1,7 +1,7 @@
 -- Restore runtime tables whose original migrations were removed while their
 -- Prisma models and scheduled jobs remained in the application.
 
-CREATE TABLE `inventory_post_commit_tasks` (
+CREATE TABLE IF NOT EXISTS `inventory_post_commit_tasks` (
   `id` CHAR(36) NOT NULL,
   `source_key` VARCHAR(191) NOT NULL,
   `command_receipt_id` CHAR(36) NOT NULL,
@@ -29,13 +29,27 @@ CREATE TABLE `inventory_post_commit_tasks` (
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-ALTER TABLE `inventory_post_commit_tasks`
-  ADD CONSTRAINT `inventory_post_commit_tasks_command_receipt_id_fkey`
-    FOREIGN KEY (`command_receipt_id`)
-    REFERENCES `inventory_command_receipts`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+SET @inventory_post_commit_tasks_fk_exists = (
+  SELECT COUNT(*)
+  FROM information_schema.TABLE_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'inventory_post_commit_tasks'
+    AND CONSTRAINT_NAME = 'inventory_post_commit_tasks_command_receipt_id_fkey'
+    AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+);
 
-CREATE TABLE `todo_reconcile_cursors` (
+SET @inventory_post_commit_tasks_fk_sql = IF(
+  @inventory_post_commit_tasks_fk_exists = 0,
+  'ALTER TABLE `inventory_post_commit_tasks` ADD CONSTRAINT `inventory_post_commit_tasks_command_receipt_id_fkey` FOREIGN KEY (`command_receipt_id`) REFERENCES `inventory_command_receipts`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE',
+  'SELECT 1'
+);
+
+PREPARE inventory_post_commit_tasks_fk_statement
+  FROM @inventory_post_commit_tasks_fk_sql;
+EXECUTE inventory_post_commit_tasks_fk_statement;
+DEALLOCATE PREPARE inventory_post_commit_tasks_fk_statement;
+
+CREATE TABLE IF NOT EXISTS `todo_reconcile_cursors` (
   `id` CHAR(36) NOT NULL,
   `scan_type` VARCHAR(80) NOT NULL,
   `cursor_id` CHAR(36) NULL,
