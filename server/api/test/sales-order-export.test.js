@@ -162,11 +162,16 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(download.response.status, 200);
 
       const worksheet = await loadSalesOrdersWorksheet(download.buffer);
-      assert.deepEqual(readHeaders(worksheet), EXPECTED_HEADERS);
+      const headers = readHeaders(worksheet);
+      assert.deepEqual(headers, EXPECTED_HEADERS);
+      assert.equal(
+        headers.filter((header) => header === '上单金额').length,
+        1,
+      );
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(download.buffer);
       assert.ok(workbook.getWorksheet('\u63d0\u6210\u660e\u7ec6'));
-      assert.equal(readHeaders(worksheet).includes('货到付款金额'), false);
+      assert.equal(headers.includes('货到付款金额'), false);
       assert.equal(worksheet.actualRowCount, 6);
 
       const row = readRowObject(worksheet, 2);
@@ -182,6 +187,14 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(row['酒品明细'], 'Alpha Wine x 2；Gift Box x 1');
       assert.equal(row['配送摘要'], '混合配送');
       assert.equal(row['订单总额'], 998);
+      const effectiveAmountCents = 99800;
+      const salesDeductionAmountCents = 10000 * 2 + 5000 * 1;
+      const expectedEntryAmountYuan =
+        Math.max(0, effectiveAmountCents - salesDeductionAmountCents) / 100;
+      assert.equal(row['上单金额'], expectedEntryAmountYuan);
+      assert.notEqual(row['上单金额'], row['订单总额']);
+      assert.equal(typeof row['上单金额'], 'number');
+      assert.equal(worksheet.getCell('O2').numFmt, '0.00');
       assert.equal(row['是否走个人'], '是');
       assert.equal(row['走个人金额'], 300);
       assert.equal(row['正常金额'], 698);
@@ -228,6 +241,15 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
         '2026-07-01T11:00:00.000Z',
       );
 
+      const expandedEntryAmounts = readDataRows(worksheet).map(
+        (dataRow) => dataRow['上单金额'],
+      );
+      assert.equal(expandedEntryAmounts.length, 5);
+      assert.deepEqual(
+        [...new Set(expandedEntryAmounts)],
+        [expectedEntryAmountYuan],
+      );
+
       const negativeRow = readRowObject(worksheet, 4);
       assert.equal(negativeRow['收款方式'], '现金');
       assert.equal(negativeRow['收款金额'], -1);
@@ -239,6 +261,32 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(zeroRow['收款金额'], 0);
       assert.equal(typeof zeroRow['收款金额'], 'number');
       assert.equal(worksheet.getCell('AA6').numFmt, '0.00');
+    },
+    {
+      prisma: buildSalesOrderExportPrismaOptions(),
+    },
+  );
+});
+
+test('GET /api/sales-orders/export.xlsx floors entry amount at zero', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const download = await requestBinary(
+        baseUrl,
+        '/api/sales-orders/export.xlsx?query=Floor',
+        { token: admin.token },
+      );
+      assert.equal(download.response.status, 200);
+
+      const worksheet = await loadSalesOrdersWorksheet(download.buffer);
+      assert.equal(worksheet.actualRowCount, 2);
+      const row = readRowObject(worksheet, 2);
+      assert.equal(row['系统单号'], 'SO-EXPORT-FLOOR');
+      assert.equal(row['订单总额'], 50);
+      assert.equal(row['上单金额'], 0);
+      assert.equal(typeof row['上单金额'], 'number');
+      assert.equal(worksheet.getCell('O2').numFmt, '0.00');
     },
     {
       prisma: buildSalesOrderExportPrismaOptions(),
@@ -423,6 +471,12 @@ function buildSalesOrderExportPrismaOptions() {
         financeMark: true,
       },
       {
+        id: 'cust_export_floor',
+        name: 'Floor Customer',
+        phone: '13800007777',
+        financeMark: true,
+      },
+      {
         id: 'cust_global_standalone',
         name: 'Global Standalone',
         phone: '13800003333',
@@ -470,6 +524,32 @@ function buildSalesOrderExportPrismaOptions() {
         visitDate: '2026-07-01T00:00:00.000Z',
         travelAgency: 'Global Unmarked Agency',
         financeMark: false,
+      },
+    ],
+    salesDeductionRules: [
+      {
+        id: 'sales-deduction-alpha-wine',
+        productName: 'Alpha Wine',
+        deductionCostCents: 10000,
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        isActive: true,
+      },
+      {
+        id: 'sales-deduction-gift-box',
+        productName: 'Gift Box',
+        deductionCostCents: 5000,
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        isActive: true,
+      },
+      {
+        id: 'sales-deduction-costly-wine',
+        productName: 'Costly Wine',
+        deductionCostCents: 3000,
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        isActive: true,
       },
     ],
     salesOrders: [
@@ -575,6 +655,21 @@ function buildSalesOrderExportPrismaOptions() {
         salesFormNo: 'SF-EXPORT-BETA',
         customerId: 'cust_export_beta',
         customerName: 'Beta Customer',
+      }),
+      buildExportOrder({
+        id: 'order_export_floor',
+        orderNo: 'SO-EXPORT-FLOOR',
+        customerId: 'cust_export_floor',
+        customerName: 'Floor Customer',
+        totalAmountCents: 5000,
+        items: [
+          {
+            productName: 'Costly Wine',
+            quantity: 2,
+            unitPriceCents: 2500,
+            deliveryType: 'SHIPPING',
+          },
+        ],
       }),
       buildExportOrder({
         id: 'order_global_standalone',

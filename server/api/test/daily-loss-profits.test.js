@@ -28,7 +28,8 @@ test('contract: daily loss profits reuse profit permissions, date scope, aggrega
       'loss-super-admin',
       PASSWORD,
     );
-    for (const session of [admin, boss, superAdmin]) {
+    const warehouse = await login(baseUrl, 'loss-warehouse', PASSWORD);
+    for (const session of [admin, boss, superAdmin, warehouse]) {
       const allowed = await requestJson(baseUrl, ENDPOINT, {
         token: session.token,
       });
@@ -38,7 +39,6 @@ test('contract: daily loss profits reuse profit permissions, date scope, aggrega
       'finance',
       'sales',
       'front-desk',
-      'warehouse',
       'after-sales',
       'taster',
     ]) {
@@ -151,6 +151,7 @@ test('contract: daily loss export returns all aggregated rows with workbook styl
     await prepareDailyLossFixtures(context.prisma);
     const admin = await login(baseUrl);
     const finance = await login(baseUrl, 'loss-finance', PASSWORD);
+    const warehouse = await login(baseUrl, 'loss-warehouse', PASSWORD);
 
     const anonymous = await fetch(
       `${baseUrl}/api/analytics/daily-loss-profits/export?${RANGE}`,
@@ -170,7 +171,7 @@ test('contract: daily loss export returns all aggregated rows with workbook styl
       `${baseUrl}/api/analytics/daily-loss-profits/export?${RANGE}&page=1&pageSize=1`,
       {
         headers: {
-          authorization: `Bearer ${admin.token}`,
+          authorization: `Bearer ${warehouse.token}`,
         },
       },
     );

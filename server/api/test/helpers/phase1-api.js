@@ -199,6 +199,9 @@ function createInMemoryPrisma(options = {}) {
       statusReason: null,
       statusChangedAt: null,
       statusChangedBy: null,
+      deletedAt: null,
+      deletedById: null,
+      deleteReason: null,
       createdAt: now,
       updatedAt: now,
     },
@@ -456,6 +459,9 @@ function createInMemoryPrisma(options = {}) {
           ...data,
           id: data.id || crypto.randomUUID(),
           tokenVersion: Number(data.tokenVersion || 0),
+          deletedAt: asDate(data.deletedAt) || null,
+          deletedById: data.deletedById ?? null,
+          deleteReason: data.deleteReason ?? null,
           createdAt: asDate(data.createdAt) || new Date(),
           updatedAt: asDate(data.updatedAt) || new Date(),
         };
@@ -1334,6 +1340,7 @@ function createInMemoryPrisma(options = {}) {
           commissionRecords,
           guides,
           salesOrderPaymentDetails,
+          paymentMethods,
         );
         if (include?.inventoryAlerts) {
           const config =
@@ -1374,6 +1381,7 @@ function createInMemoryPrisma(options = {}) {
                   commissionRecords,
                   guides,
                   salesOrderPaymentDetails,
+                  paymentMethods,
                 ),
                 where,
               ),
@@ -1395,6 +1403,7 @@ function createInMemoryPrisma(options = {}) {
               commissionRecords,
               guides,
               salesOrderPaymentDetails,
+              paymentMethods,
             );
             return select ? selectRow(expanded, select) : expanded;
           });
@@ -1465,6 +1474,7 @@ function createInMemoryPrisma(options = {}) {
           commissionRecords,
           guides,
           salesOrderPaymentDetails,
+          paymentMethods,
         );
       },
       updateMany: async ({ where, data } = {}) => {
@@ -1539,12 +1549,13 @@ function createInMemoryPrisma(options = {}) {
           commissionRecords,
           guides,
           salesOrderPaymentDetails,
+          paymentMethods,
         );
       },
     },
-    salesOrderPaymentDetail: createSimpleInventoryDelegate(
+    salesOrderPaymentDetail: createSalesOrderPaymentDetailDelegate(
       salesOrderPaymentDetails,
-      { uniqueFields: ['id'] },
+      salesOrders,
     ),
     afterSalesOrder: createAfterSalesOrderDelegate(afterSalesOrders, {
       afterSalesOrders,
@@ -2817,6 +2828,9 @@ function seedUsers(rows, seeds, now) {
       statusReason: seed.statusReason ?? null,
       statusChangedAt: asDate(seed.statusChangedAt) || null,
       statusChangedBy: seed.statusChangedBy ?? null,
+      deletedAt: asDate(seed.deletedAt) || null,
+      deletedById: seed.deletedById ?? null,
+      deleteReason: seed.deleteReason ?? null,
       createdAt: asDate(seed.createdAt) || now,
       updatedAt: asDate(seed.updatedAt) || now,
     });
@@ -3499,6 +3513,10 @@ function normalizeCommissionRecordRow(data = {}) {
     agencyRebateRuleId: data.agencyRebateRuleId ?? null,
     targetType: data.targetType || 'TASTER_COMMISSION',
     targetUserId: data.targetUserId ?? null,
+    recipientType: data.recipientType ?? null,
+    automaticScopeKey: data.automaticScopeKey ?? null,
+    isActive: data.isActive === undefined ? true : Boolean(data.isActive),
+    deactivatedAt: asDate(data.deactivatedAt) || null,
     agencyId: data.agencyId ?? null,
     agencyName: data.agencyName ?? null,
     grossAmountCents: data.grossAmountCents ?? 0,
@@ -3670,6 +3688,44 @@ function createSimpleInventoryDelegate(rows, options = {}) {
       updateInventoryRows(rows, where, data),
     count: async ({ where } = {}) =>
       rows.filter((item) => matchesWhere(item, where)).length,
+  };
+}
+
+function createSalesOrderPaymentDetailDelegate(rows, salesOrders) {
+  const delegate = createSimpleInventoryDelegate(rows, {
+    uniqueFields: ['id'],
+  });
+  return {
+    ...delegate,
+    updateMany: async ({ where, data } = {}) => {
+      let count = 0;
+      const normalizedWhere =
+        where?.salesOrder && where.salesOrder.is === undefined
+          ? {
+              ...where,
+              salesOrder: { is: where.salesOrder },
+            }
+          : where;
+      for (let index = 0; index < rows.length; index += 1) {
+        const salesOrder = salesOrders.find(
+          (order) => order.id === rows[index].salesOrderId,
+        );
+        if (
+          !matchesWhere(
+            {
+              ...rows[index],
+              salesOrder: salesOrder ? copyRow(salesOrder) : null,
+            },
+            normalizedWhere,
+          )
+        ) {
+          continue;
+        }
+        rows[index] = applyAtomicUpdateData(rows[index], data);
+        count += 1;
+      }
+      return { count };
+    },
   };
 }
 
@@ -4086,6 +4142,7 @@ function withSalesOrderIncludes(
   commissionRecords = [],
   guides = [],
   salesOrderPaymentDetails = [],
+  paymentMethods = [],
 ) {
   const row = copyRow(order);
   if (include?.paymentDetails) {
@@ -4104,6 +4161,14 @@ function withSalesOrderIncludes(
             );
             expanded.collectionConfirmedBy = confirmedBy
               ? copyRow(confirmedBy)
+              : null;
+          }
+          if (includeConfig.include?.paymentMethod) {
+            const paymentMethod = paymentMethods.find(
+              (method) => method.id === detail.paymentMethodId,
+            );
+            expanded.paymentMethod = paymentMethod
+              ? copyRow(paymentMethod)
               : null;
           }
           return expanded;

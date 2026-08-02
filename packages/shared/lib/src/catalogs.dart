@@ -32,7 +32,10 @@ const roleDefinitions = <RoleDefinition>[
     description: '录入客户订单、补充旅行团离店信息、生成二维码销售单',
   ),
   RoleDefinition(role: UserRole.finance, description: '核对金额、标记信息、物流和提成'),
-  RoleDefinition(role: UserRole.warehouse, description: '处理待发货订单、物流方式和打包状态'),
+  RoleDefinition(
+    role: UserRole.warehouse,
+    description: '处理发货与库存，并只读查看数据分析、利润分析和使用 AI 助手',
+  ),
   RoleDefinition(role: UserRole.afterSales, description: '查询订单并创建售后处理记录'),
   RoleDefinition(
     role: UserRole.taster,
@@ -217,6 +220,9 @@ const roleMenuIds = <UserRole, List<String>>{
     'warehouse_management',
     'warehouse_directory',
     'after_sales_form',
+    'analytics',
+    'profit_analysis',
+    'ai_assistant',
   ],
   UserRole.afterSales: [
     'dashboard',

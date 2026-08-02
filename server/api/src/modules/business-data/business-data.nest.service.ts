@@ -11,7 +11,11 @@ import {
   buildGlobalTravelGroupMarkScope as buildSharedGlobalTravelGroupMarkScope,
 } from '../analytics/analytics-scope.helper';
 import { PROFIT_TAX_RATE } from '../analytics/profit-tax-service-fee.helper';
-import { resolveSalesOrderPersonalAmountCents } from '../commissions/commission-calculation.helper';
+import { repairOrderProfitFeeSnapshots } from '../analytics/profit-fee-snapshot-repair.helper';
+import {
+  calculateSalesOrderEntryAmount,
+  resolveSalesOrderPersonalAmountCents,
+} from '../commissions/commission-calculation.helper';
 import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
 import { SpecialOrderCommissionService } from '../commissions/special-order-commission.service';
 import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
@@ -1628,15 +1632,20 @@ export class BusinessDataNestService {
 
   async exportSalesOrdersXlsx(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin', 'finance', 'boss', 'after_sales']);
-    const orders = await this.prisma.salesOrder.findMany({
-      where: await this.buildScopedSalesOrderWhere(
-        actor,
-        buildSalesOrderWhere(filters),
-      ),
-      include: getSalesOrderInclude({ includeSalesUser: true }),
-      orderBy: buildSalesOrderOrderBy(filters),
-      take: SALES_ORDER_EXPORT_MAX_ROWS + 1,
-    });
+    const [orders, salesDeductionRules] = await Promise.all([
+      this.prisma.salesOrder.findMany({
+        where: await this.buildScopedSalesOrderWhere(
+          actor,
+          buildSalesOrderWhere(filters),
+        ),
+        include: getSalesOrderInclude({ includeSalesUser: true }),
+        orderBy: buildSalesOrderOrderBy(filters),
+        take: SALES_ORDER_EXPORT_MAX_ROWS + 1,
+      }),
+      this.prisma.salesDeductionRule.findMany({
+        where: { isActive: true },
+      }),
+    ]);
 
     const expandedRowCount = countSalesOrderExportRows(orders);
     if (expandedRowCount > SALES_ORDER_EXPORT_MAX_ROWS) {
@@ -1647,7 +1656,10 @@ export class BusinessDataNestService {
       );
     }
 
-    const workbook = buildSalesOrdersExportWorkbook(orders);
+    const workbook = buildSalesOrdersExportWorkbook(
+      orders,
+      salesDeductionRules,
+    );
     const xlsxData = await workbook.xlsx.writeBuffer();
     return {
       fileName: buildSalesOrdersExportFileName(),
@@ -3336,6 +3348,38 @@ export class BusinessDataNestService {
           );
       }
       if (Boolean(current.financeMark) === marked) {
+        if (marked) {
+          const repair = await repairOrderProfitFeeSnapshots(tx, id, {
+            actorId: actor.id,
+          });
+          if (repair.issues.length > 0) {
+            const firstIssue = repair.issues[0];
+            throw createHttpError(
+              409,
+              firstIssue.code,
+              firstIssue.message,
+            );
+          }
+          if (repair.changedCount > 0) {
+            const repairedOrder = await tx.salesOrder.findUnique({
+              where: { id },
+              include: getSalesOrderInclude(),
+            });
+            await this.operationLogsService.appendLog(
+              {
+                userId: actor.id,
+                action: 'sales_orders.profit_fee_snapshots.repair',
+                entityType: 'sales_order',
+                entityId: id,
+                beforeData: toSalesOrderAuditDto(current),
+                afterData: toSalesOrderAuditDto(repairedOrder),
+                ipAddress: metadata.ipAddress || null,
+              },
+              tx,
+            );
+            return { changed: true, order: repairedOrder };
+          }
+        }
         return {
           changed: false,
           order: current,
@@ -3347,6 +3391,17 @@ export class BusinessDataNestService {
         const paymentDetails = Array.isArray(current.paymentDetails)
           ? current.paymentDetails
           : [];
+        if (paymentDetails.length === 0) {
+          throw createHttpError(
+            409,
+            'PAYMENT_DETAILS_MISSING',
+            'At least one payment detail is required before marking the sales order.',
+          );
+        }
+        assertPaymentDetailsMatchOrderTotal(
+          paymentDetails,
+          Number(current.totalAmountCents || 0),
+        );
         const paymentMethodIds = [
           ...new Set(
             paymentDetails.map((detail: any) => detail.paymentMethodId),
@@ -3464,14 +3519,6 @@ export class BusinessDataNestService {
           id: true,
           name: true,
           username: true,
-          leaderId: true,
-          leader: {
-            select: {
-              id: true,
-              name: true,
-              isActive: true,
-            },
-          },
         },
         orderBy: [{ name: 'asc' }, { username: 'asc' }],
       }),
@@ -3493,9 +3540,9 @@ export class BusinessDataNestService {
         id: user.id,
         name: user.name,
         username: user.username,
-        leaderId: user.leaderId || null,
-        leaderName: user.leader?.name || null,
-        leaderActive: user.leader ? Boolean(user.leader.isActive) : null,
+        leaderId: null,
+        leaderName: null,
+        leaderActive: null,
       })),
     };
   }
@@ -6735,7 +6782,7 @@ function shouldRecalculateStage7ForSalesOrderUpdate(
     hasOwn(payload, 'items') ||
     current.travelGroupId !== updated.travelGroupId ||
     current.salesUserId !== updated.salesUserId ||
-    current.outreachUserId !== updated.outreachUserId ||
+    formatDate(current.orderDate) !== formatDate(updated.orderDate) ||
     current.orderType !== updated.orderType ||
     current.status !== updated.status ||
     Number(current.totalAmountCents || 0) !==
@@ -7419,7 +7466,9 @@ function buildSalesOrderData(
     financeMark: false,
     markedById: null,
     markedAt: null,
-    outreachUserId: normalizeOptionalString(payload?.outreachUserId),
+    // Kept in the schema for historical audit only. New outreach commission
+    // records are order-level accrued costs and have no person assignment.
+    outreachUserId: null,
     salesUserId:
       String(actor?.role || '').toLowerCase() === 'sales'
         ? actor.id
@@ -7444,9 +7493,6 @@ function buildSalesOrderUpdateData(payload: any, actor: any) {
   }
   if (hasOwn(payload, 'salesUserId')) {
     data.salesUserId = normalizeOptionalString(payload.salesUserId);
-  }
-  if (hasOwn(payload, 'outreachUserId')) {
-    data.outreachUserId = normalizeOptionalString(payload.outreachUserId);
   }
   if (hasOwn(payload, 'salesFormNo')) {
     data.salesFormNo = normalizeOptionalString(payload.salesFormNo);
@@ -11077,7 +11123,10 @@ function toSalesOrderSerializedUnitDto(unit: any) {
   };
 }
 
-function buildSalesOrdersExportWorkbook(orders: any[]) {
+function buildSalesOrdersExportWorkbook(
+  orders: any[],
+  salesDeductionRules: any[],
+) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'jiangjiu-api';
   workbook.created = new Date();
@@ -11102,11 +11151,17 @@ function buildSalesOrdersExportWorkbook(orders: any[]) {
   };
 
   for (const order of orders) {
+    const entryAmountCents = calculateSalesOrderEntryAmount({
+      salesOrder: order,
+      salesDeductionRules,
+    }).entryAmountCents;
     const normalizedPayments = normalizeOrderPaymentDetails(order);
     const paymentDetails =
       normalizedPayments.length > 0 ? normalizedPayments : [null];
     for (const paymentDetail of paymentDetails) {
-      worksheet.addRow(toSalesOrderExportRow(order, paymentDetail));
+      worksheet.addRow(
+        toSalesOrderExportRow(order, entryAmountCents, paymentDetail),
+      );
     }
   }
 
@@ -11273,7 +11328,11 @@ function buildTravelGroupTastingSummary(group: any) {
   return group.wineDetails || '';
 }
 
-function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
+function toSalesOrderExportRow(
+  order: any,
+  entryAmountCents: number,
+  paymentDetail: any = null,
+) {
   const deliverySummary = toSalesOrderDeliverySummary(order.items);
   const status = ORDER_STATUS_FROM_PRISMA[order.status] || order.status;
   const totalAmountCents = Number(order.totalAmountCents || 0);
@@ -11320,7 +11379,7 @@ function toSalesOrderExportRow(order: any, paymentDetail: any = null) {
       deliverySummary ||
       '',
     totalAmountYuan: centsToYuanNumber(totalAmountCents),
-    entryAmountYuan: centsToYuanNumber(totalAmountCents),
+    entryAmountYuan: centsToYuanNumber(entryAmountCents),
     paidAmountYuan: centsToYuanNumber(paidAmountCents),
     unpaidAmountYuan: centsToYuanNumber(
       Math.max(0, totalAmountCents - paidAmountCents),
@@ -13373,38 +13432,6 @@ async function assertCommissionAssignmentReady(
     ]);
   }
 
-  const calculationDate =
-    order?.orderDate instanceof Date
-      ? order.orderDate
-      : parseDate(order?.orderDate, 'orderDate', true);
-  const activeTargetTypes = new Set(
-    (
-      await prisma.commissionRule.findMany({
-        where: buildActiveCommissionRuleWhere(calculationDate),
-        select: { targetType: true },
-      })
-    ).map((rule: any) => String(rule.targetType)),
-  );
-  const outreachUserId = normalizeOptionalString(order?.outreachUserId);
-  if (
-    activeTargetTypes.has('OUTREACH_COMMISSION') &&
-    !outreachUserId &&
-    !options.allowMissingAssignments
-  ) {
-    throw createHttpError(
-      400,
-      'MISSING_OUTREACH_USER',
-      'outreachUserId is required while an outreach commission rule is active.',
-    );
-  }
-  if (outreachUserId) {
-    await findActiveRoleUser(
-      prisma,
-      outreachUserId,
-      'outreachUserId',
-      ['SALES', 'sales'],
-    );
-  }
 }
 
 function isActiveTasterUser(user: any) {

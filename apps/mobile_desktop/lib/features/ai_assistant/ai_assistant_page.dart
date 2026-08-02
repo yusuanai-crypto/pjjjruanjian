@@ -1121,9 +1121,10 @@ String _visibleScopeLabel(UserRole role) {
       return '退款、费用、提成、积分和经营统计';
     case UserRole.afterSales:
       return '客户订单、售后记录和物流信息';
+    case UserRole.warehouse:
+      return '经营概况、趋势、品鉴师排名和数据来源明细';
     case UserRole.frontDesk:
     case UserRole.sales:
-    case UserRole.warehouse:
     case UserRole.taster:
       return '当前账号可以查看的数据';
   }

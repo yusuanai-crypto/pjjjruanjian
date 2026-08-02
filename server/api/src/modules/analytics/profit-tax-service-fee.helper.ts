@@ -20,9 +20,28 @@ export type DecimalRateInput =
 export interface ProfitFeeSnapshotIssue {
   code:
     | 'TAX_RATE_SNAPSHOT_MISSING'
-    | 'PAYMENT_SERVICE_FEE_RATE_SNAPSHOT_MISSING'
-    | 'PAYMENT_SERVICE_FEE_BASE_SNAPSHOT_MISSING';
+    | 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING'
+    | 'PAYMENT_FEE_BASE_SNAPSHOT_MISSING';
   paymentDetailId?: string | null;
+}
+
+export type ProfitComponentStatus =
+  | 'calculated'
+  | 'not_applicable'
+  | 'blocked'
+  | 'failed';
+
+export interface ProfitCalculationIssue {
+  code: string;
+  message: string;
+  actionHint: string;
+  paymentDetailId?: string | null;
+}
+
+export interface ProfitComponentCalculation {
+  status: ProfitComponentStatus;
+  amountCents: number | null;
+  issues: ProfitCalculationIssue[];
 }
 
 export interface ProfitFeeSnapshotInspection {
@@ -69,6 +88,11 @@ export interface OrderProfitFeeCalculation {
   paymentDetails: PaymentDetailServiceFeeResult[];
   paymentMethods: PaymentMethodServiceFeeBreakdown[];
   missingSnapshots: ProfitFeeSnapshotInspection;
+  issues: ProfitCalculationIssue[];
+  components: {
+    tax: ProfitComponentCalculation;
+    paymentServiceFee: ProfitComponentCalculation;
+  };
 }
 
 /**
@@ -276,14 +300,14 @@ export function findMissingProfitFeeSnapshots(
       if (isMissing(detail?.serviceFeeRateSnapshot)) {
         missingFields.push('serviceFeeRateSnapshot');
         issues.push({
-          code: 'PAYMENT_SERVICE_FEE_RATE_SNAPSHOT_MISSING',
+          code: 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING',
           paymentDetailId,
         });
       }
       if (isMissing(detail?.serviceFeeBaseAmountSnapshotCents)) {
         missingFields.push('serviceFeeBaseAmountSnapshotCents');
         issues.push({
-          code: 'PAYMENT_SERVICE_FEE_BASE_SNAPSHOT_MISSING',
+          code: 'PAYMENT_FEE_BASE_SNAPSHOT_MISSING',
           paymentDetailId,
         });
       }
@@ -316,22 +340,39 @@ export function calculateOrderProfitFees(
   const financeMarked = order?.financeMark === true;
   const missingSnapshots = findMissingProfitFeeSnapshots(order);
   if (!financeMarked) {
+    const issues = [
+      calculationIssue(
+        'ORDER_NOT_FINANCE_MARKED',
+        '订单尚未完成财务标记，税费和付款手续费无法计算。',
+        '请由财务核对收款明细后完成订单财务标记。',
+      ),
+    ];
     return {
       financeMarked: false,
       effectiveAmountCents: 0,
       taxRateSnapshot: null,
-      taxCents: 0,
-      paymentServiceFeeCents: 0,
-      totalTaxAndServiceFeeCents: 0,
+      taxCents: null,
+      paymentServiceFeeCents: null,
+      totalTaxAndServiceFeeCents: null,
       paymentDetails: [],
       paymentMethods: [],
       missingSnapshots,
+      issues,
+      components: {
+        tax: { status: 'blocked', amountCents: null, issues },
+        paymentServiceFee: {
+          status: 'blocked',
+          amountCents: null,
+          issues,
+        },
+      },
     };
   }
 
   const effectiveAmountCents = calculateEffectiveOrderAmountCents(order);
+  const calculationIssues = inspectMarkedOrderProfitFeeInputs(order);
   const normalizedTaxRate = normalizeDecimalRate(order?.taxRateSnapshot);
-  const taxCents = calculateOrderTaxCents({
+  const calculatedTaxCents = calculateOrderTaxCents({
     financeMark: true,
     effectiveAmountCents,
     taxRateSnapshot: order?.taxRateSnapshot,
@@ -388,9 +429,20 @@ export function calculateOrderProfitFees(
     },
   );
   const paymentMethods = buildPaymentMethodBreakdown(paymentDetails);
-  const paymentServiceFeeCents = sumNullableCents(
+  const calculatedPaymentServiceFeeCents = sumNullableCents(
     paymentDetails.map((detail) => detail.serviceFeeCents),
   );
+  const taxIssues = calculationIssues.filter((issue) =>
+    issue.code === 'TAX_RATE_SNAPSHOT_MISSING',
+  );
+  const paymentIssues = calculationIssues.filter(
+    (issue) => issue.code !== 'TAX_RATE_SNAPSHOT_MISSING',
+  );
+  const taxCents = taxIssues.length === 0 ? calculatedTaxCents : null;
+  const paymentServiceFeeCents =
+    paymentIssues.length === 0
+      ? calculatedPaymentServiceFeeCents
+      : null;
   const totalTaxAndServiceFeeCents =
     taxCents === null || paymentServiceFeeCents === null
       ? null
@@ -406,11 +458,108 @@ export function calculateOrderProfitFees(
     paymentDetails,
     paymentMethods,
     missingSnapshots,
+    issues: calculationIssues,
+    components: {
+      tax: {
+        status: taxIssues.length === 0 ? 'calculated' : 'blocked',
+        amountCents: taxCents,
+        issues: taxIssues,
+      },
+      paymentServiceFee: {
+        status: paymentIssues.length === 0 ? 'calculated' : 'blocked',
+        amountCents: paymentServiceFeeCents,
+        issues: paymentIssues,
+      },
+    },
   };
 }
 
 export const calculateOrderTaxAndServiceFees =
   calculateOrderProfitFees;
+
+function inspectMarkedOrderProfitFeeInputs(
+  order: any,
+): ProfitCalculationIssue[] {
+  const issues: ProfitCalculationIssue[] = [];
+  if (isMissing(order?.taxRateSnapshot)) {
+    issues.push(
+      calculationIssue(
+        'TAX_RATE_SNAPSHOT_MISSING',
+        '订单税率快照缺失，税费无法计算。',
+        '请使用重新计算安全补齐缺失快照，或由财务核对历史税率。',
+      ),
+    );
+  }
+  const paymentDetails = readPaymentDetails(order);
+  if (paymentDetails.length === 0) {
+    issues.push(
+      calculationIssue(
+        'PAYMENT_DETAILS_MISSING',
+        '已财务标记的订单缺少收款明细，付款手续费无法计算。',
+        '请取消财务标记，补齐收款明细并重新标记。',
+      ),
+    );
+    return issues;
+  }
+  const paymentTotalCents = paymentDetails.reduce(
+    (sum, detail) => sum + Number(detail?.amountCents || 0),
+    0,
+  );
+  if (
+    !Number.isSafeInteger(paymentTotalCents) ||
+    paymentTotalCents !== nonNegativeNumber(order?.totalAmountCents)
+  ) {
+    issues.push(
+      calculationIssue(
+        'PAYMENT_TOTAL_MISMATCH',
+        '收款明细合计与订单总额不一致，付款手续费无法可靠计算。',
+        '请取消财务标记并核对每条收款明细金额。',
+      ),
+    );
+  }
+  for (const detail of paymentDetails) {
+    const paymentDetailId = optionalString(detail?.id);
+    if (!optionalString(detail?.paymentMethodId)) {
+      issues.push({
+        ...calculationIssue(
+          'PAYMENT_METHOD_MISSING',
+          '收款明细缺少付款方式，付款手续费无法计算。',
+          '请取消财务标记并为该收款明细选择付款方式。',
+        ),
+        paymentDetailId,
+      });
+    }
+    if (isMissing(detail?.serviceFeeRateSnapshot)) {
+      issues.push({
+        ...calculationIssue(
+          'PAYMENT_FEE_RATE_SNAPSHOT_MISSING',
+          '付款手续费率快照缺失。',
+          '请使用重新计算安全补齐；当前付款方式也无费率时需先配置费率。',
+        ),
+        paymentDetailId,
+      });
+    }
+    if (isMissing(detail?.serviceFeeBaseAmountSnapshotCents)) {
+      issues.push({
+        ...calculationIssue(
+          'PAYMENT_FEE_BASE_SNAPSHOT_MISSING',
+          '付款手续费计费基数快照缺失。',
+          '请使用重新计算按原收款明细金额安全补齐。',
+        ),
+        paymentDetailId,
+      });
+    }
+  }
+  return issues;
+}
+
+function calculationIssue(
+  code: string,
+  message: string,
+  actionHint: string,
+): ProfitCalculationIssue {
+  return { code, message, actionHint };
+}
 
 function buildPaymentMethodBreakdown(
   details: PaymentDetailServiceFeeResult[],
@@ -558,6 +707,10 @@ function toShanghaiDateKey(value: unknown): string | null {
 function nonNegativeCents(value: unknown): bigint {
   const cents = integerCents(value ?? 0);
   return maxBigInt(0n, cents);
+}
+
+function nonNegativeNumber(value: unknown): number {
+  return toSafeCentsNumber(nonNegativeCents(value));
 }
 
 function integerCents(value: unknown): bigint {

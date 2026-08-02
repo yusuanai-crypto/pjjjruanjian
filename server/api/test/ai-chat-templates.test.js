@@ -20,6 +20,7 @@ test('contract: AI chat templates enforce login and first-version AI roles', asy
       'admin',
       'stage9-template-boss',
       'stage9-template-finance',
+      'stage9-template-warehouse',
       'stage9-template-after-sales',
     ]) {
       const session =
@@ -35,7 +36,6 @@ test('contract: AI chat templates enforce login and first-version AI roles', asy
     }
 
     for (const username of [
-      'stage9-template-warehouse',
       'stage9-template-sales',
       'stage9-template-taster',
       'stage9-template-front-desk',
@@ -159,6 +159,55 @@ test('contract: AI chat templates return only after-sales templates', async () =
       'management_sales_amount',
       'finance_commission',
     ]);
+  }, {
+    prisma: buildTemplateUsersPrisma(),
+  });
+});
+
+test('contract: warehouse templates are executable read-only analytics questions', async () => {
+  await withPhase1Server(async (baseUrl) => {
+    const session = await login(
+      baseUrl,
+      'stage9-template-warehouse',
+      'Password123',
+    );
+    const result = await requestJson(baseUrl, TEMPLATE_PATH, {
+      token: session.token,
+    });
+
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(templateIds(result.body.data), [
+      'warehouse_analytics_overview',
+      'warehouse_analytics_trend',
+      'warehouse_taster_ranking',
+      'warehouse_no_order_rate',
+    ]);
+    assert.deepEqual(templateTitles(result.body.data), [
+      '经营概况',
+      '经营趋势',
+      '品鉴师排名',
+      '打蛋率',
+    ]);
+    assert.deepEqual(
+      result.body.data.map((template) => template.intent),
+      [
+        'analytics_overview',
+        'analytics_trend',
+        'taster_ranking',
+        'analytics_overview',
+      ],
+    );
+    assertRoleScopes(result.body.data, ['warehouse']);
+    assertNoTemplateIds(result.body.data, [
+      'management_refund_amount',
+      'management_suggestion',
+      'finance_commission',
+      'after_sales_customer_orders',
+    ]);
+    assert.equal(
+      result.body.data.some((template) => /退款|经营建议/.test(template.question)),
+      false,
+    );
   }, {
     prisma: buildTemplateUsersPrisma(),
   });

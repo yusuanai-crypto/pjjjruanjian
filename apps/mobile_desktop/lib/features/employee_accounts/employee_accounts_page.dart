@@ -27,6 +27,8 @@ class EmployeeAccountsPage extends StatefulWidget {
 
 class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
   final _keywordController = TextEditingController();
+  final _verticalScrollController = ScrollController();
+  final _horizontalScrollController = ScrollController();
   List<EmployeeAccountRecord> _users = const <EmployeeAccountRecord>[];
   UserRole? _roleFilter;
   String _statusFilter = 'all';
@@ -42,6 +44,8 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
   @override
   void dispose() {
     _keywordController.dispose();
+    _verticalScrollController.dispose();
+    _horizontalScrollController.dispose();
     super.dispose();
   }
 
@@ -143,6 +147,43 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
     if (changed == true) {
       await _loadUsers();
       _showMessage('修改密码成功：员工密码已修改，原登录已失效。');
+    }
+  }
+
+  Future<void> _editUser(EmployeeAccountRecord user) async {
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (context) => _EditEmployeeDialog(
+        apiClient: widget.apiClient,
+        token: widget.token,
+        actorRole: widget.role,
+        user: user,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (updated == true) {
+      await _loadUsers();
+      _showMessage('员工资料已修改。');
+    }
+  }
+
+  Future<void> _deleteUser(EmployeeAccountRecord user) async {
+    final deleted = await showDialog<bool>(
+      context: context,
+      builder: (context) => _DeleteEmployeeDialog(
+        apiClient: widget.apiClient,
+        token: widget.token,
+        user: user,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (deleted == true) {
+      await _loadUsers();
+      _showMessage('员工账号已删除');
     }
   }
 
@@ -344,102 +385,172 @@ class _EmployeeAccountsPageState extends State<EmployeeAccountsPage> {
             child: Card(
               child: _users.isEmpty && !_loading
                   ? const Center(child: Text('暂无员工账号'))
-                  : SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: DataTable(
-                        dataRowMinHeight: 48,
-                        dataRowMaxHeight: 72,
-                        columns: const [
-                          DataColumn(label: Text('姓名')),
-                          DataColumn(label: Text('手机号/用户名')),
-                          DataColumn(label: Text('角色')),
-                          DataColumn(label: Text('状态')),
-                          DataColumn(label: Text('首次改密')),
-                          DataColumn(label: Text('最近原因')),
-                          DataColumn(label: Text('操作')),
-                        ],
-                        rows: [
-                          for (final user in _users)
-                            DataRow(
-                              cells: [
-                                DataCell(Text(user.name)),
-                                DataCell(Text(user.phone ?? user.username)),
-                                DataCell(Text(user.role.label)),
-                                DataCell(
-                                  StatusTag(
-                                    label: user.isActive ? '启用' : '冻结',
-                                    tone: user.isActive
-                                        ? StatusTone.success
-                                        : StatusTone.warning,
-                                  ),
-                                ),
-                                DataCell(Text(
-                                    user.mustChangePassword ? '待修改' : '已完成')),
-                                DataCell(SizedBox(
-                                  width: 180,
-                                  child: Text(
-                                    user.statusReason ?? '-',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )),
-                                DataCell(
-                                  SizedBox(
-                                    width: 156,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          key: ValueKey(
-                                            'employee-action-toggle-${user.id}',
-                                          ),
-                                          tooltip: user.isActive ? '冻结' : '解冻',
-                                          onPressed: _canManage(user)
-                                              ? () => _setUserActive(
-                                                    user,
-                                                    !user.isActive,
-                                                  )
-                                              : null,
-                                          icon: Icon(user.isActive
-                                              ? Icons.lock_rounded
-                                              : Icons.lock_open_rounded),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        IconButton(
-                                          key: ValueKey(
-                                            'employee-action-change-password-${user.id}',
-                                          ),
-                                          tooltip: '修改密码',
-                                          onPressed: _canManage(user)
-                                              ? () => _changePassword(user)
-                                              : null,
-                                          icon: const Icon(
-                                            Icons.password_rounded,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        IconButton(
-                                          key: ValueKey(
-                                            'employee-action-reset-password-${user.id}',
-                                          ),
-                                          tooltip: '重置密码',
-                                          onPressed: _canManage(user)
-                                              ? () => _resetPasswordToDefault(
-                                                    user,
-                                                  )
-                                              : null,
-                                          icon: const Icon(
-                                            Icons.lock_reset_rounded,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        return Scrollbar(
+                          key: const ValueKey('employee-table-scrollbar'),
+                          controller: _verticalScrollController,
+                          thumbVisibility: true,
+                          interactive: true,
+                          child: SingleChildScrollView(
+                            key: const ValueKey(
+                              'employee-table-vertical-scroll',
                             ),
-                        ],
-                      ),
+                            controller: _verticalScrollController,
+                            primary: false,
+                            scrollDirection: Axis.vertical,
+                            child: SingleChildScrollView(
+                              key: const ValueKey(
+                                'employee-table-horizontal-scroll',
+                              ),
+                              controller: _horizontalScrollController,
+                              primary: false,
+                              scrollDirection: Axis.horizontal,
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minWidth: constraints.maxWidth,
+                                ),
+                                child: DataTable(
+                                  dataRowMinHeight: 48,
+                                  dataRowMaxHeight: 72,
+                                  columns: const [
+                                    DataColumn(label: Text('姓名')),
+                                    DataColumn(label: Text('手机号/用户名')),
+                                    DataColumn(label: Text('角色')),
+                                    DataColumn(label: Text('状态')),
+                                    DataColumn(label: Text('首次改密')),
+                                    DataColumn(label: Text('最近原因')),
+                                    DataColumn(label: Text('操作')),
+                                  ],
+                                  rows: [
+                                    for (final user in _users)
+                                      DataRow(
+                                        key: ValueKey(
+                                          'employee-row-${user.id}',
+                                        ),
+                                        cells: [
+                                          DataCell(Text(user.name)),
+                                          DataCell(Text(
+                                            user.phone ?? user.username,
+                                          )),
+                                          DataCell(Text(user.role.label)),
+                                          DataCell(
+                                            StatusTag(
+                                              label:
+                                                  user.isActive ? '启用' : '冻结',
+                                              tone: user.isActive
+                                                  ? StatusTone.success
+                                                  : StatusTone.warning,
+                                            ),
+                                          ),
+                                          DataCell(Text(
+                                            user.mustChangePassword
+                                                ? '待修改'
+                                                : '已完成',
+                                          )),
+                                          DataCell(SizedBox(
+                                            width: 180,
+                                            child: Text(
+                                              user.statusReason ?? '-',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          )),
+                                          DataCell(
+                                            SizedBox(
+                                              width: 264,
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  IconButton(
+                                                    key: ValueKey(
+                                                      'employee-action-edit-${user.id}',
+                                                    ),
+                                                    tooltip: '修改',
+                                                    onPressed: _canManage(user)
+                                                        ? () => _editUser(user)
+                                                        : null,
+                                                    icon: const Icon(
+                                                      Icons.edit_rounded,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  IconButton(
+                                                    key: ValueKey(
+                                                      'employee-action-delete-${user.id}',
+                                                    ),
+                                                    tooltip: '删除',
+                                                    onPressed: _canManage(user)
+                                                        ? () =>
+                                                            _deleteUser(user)
+                                                        : null,
+                                                    icon: const Icon(
+                                                      Icons.delete_rounded,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  IconButton(
+                                                    key: ValueKey(
+                                                      'employee-action-toggle-${user.id}',
+                                                    ),
+                                                    tooltip: user.isActive
+                                                        ? '冻结'
+                                                        : '解冻',
+                                                    onPressed: _canManage(user)
+                                                        ? () => _setUserActive(
+                                                              user,
+                                                              !user.isActive,
+                                                            )
+                                                        : null,
+                                                    icon: Icon(user.isActive
+                                                        ? Icons.lock_rounded
+                                                        : Icons
+                                                            .lock_open_rounded),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  IconButton(
+                                                    key: ValueKey(
+                                                      'employee-action-change-password-${user.id}',
+                                                    ),
+                                                    tooltip: '修改密码',
+                                                    onPressed: _canManage(user)
+                                                        ? () => _changePassword(
+                                                              user,
+                                                            )
+                                                        : null,
+                                                    icon: const Icon(
+                                                      Icons.password_rounded,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  IconButton(
+                                                    key: ValueKey(
+                                                      'employee-action-reset-password-${user.id}',
+                                                    ),
+                                                    tooltip: '重置密码',
+                                                    onPressed: _canManage(user)
+                                                        ? () =>
+                                                            _resetPasswordToDefault(
+                                                              user,
+                                                            )
+                                                        : null,
+                                                    icon: const Icon(
+                                                      Icons.lock_reset_rounded,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
             ),
           ),
@@ -647,6 +758,291 @@ class _CreateEmployeeDialogState extends State<_CreateEmployeeDialog> {
                 )
               : const Icon(Icons.check_rounded),
           label: const Text('创建'),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditEmployeeDialog extends StatefulWidget {
+  const _EditEmployeeDialog({
+    required this.apiClient,
+    required this.token,
+    required this.actorRole,
+    required this.user,
+  });
+
+  final ApiClient apiClient;
+  final String token;
+  final UserRole actorRole;
+  final EmployeeAccountRecord user;
+
+  @override
+  State<_EditEmployeeDialog> createState() => _EditEmployeeDialogState();
+}
+
+class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _phoneController;
+  late UserRole _role;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.user.name);
+    _phoneController = TextEditingController(
+      text: widget.user.phone ?? widget.user.username,
+    );
+    _role = widget.user.role;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_saving) {
+      return;
+    }
+    final name = _nameController.text.trim();
+    final phone = _phoneController.text.replaceAll(RegExp(r'\s+'), '');
+    if (name.isEmpty || phone.isEmpty) {
+      setState(() => _error = '请填写姓名和手机号。');
+      return;
+    }
+    if (!RegExp(r'^1[3-9]\d{9}$').hasMatch(phone)) {
+      setState(() => _error = '请输入正确的中国大陆手机号。');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.apiClient.patchJson(
+        '/api/users/${widget.user.id}',
+        token: widget.token,
+        body: {
+          'name': name,
+          'phone': phone,
+          'role': _role.value,
+        },
+      );
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final roles = _editableRolesFor(widget.actorRole);
+    return AlertDialog(
+      title: Text('修改 ${widget.user.name} 的资料'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              enabled: !_saving,
+              decoration: const InputDecoration(
+                labelText: '姓名',
+                prefixIcon: Icon(Icons.person_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phoneController,
+              enabled: !_saving,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: '手机号',
+                prefixIcon: Icon(Icons.phone_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<UserRole>(
+              initialValue: _role,
+              decoration: const InputDecoration(
+                labelText: '角色',
+                prefixIcon: Icon(Icons.badge_rounded),
+              ),
+              items: [
+                for (final role in roles)
+                  DropdownMenuItem(
+                    value: role,
+                    child: Text(role.label),
+                  ),
+              ],
+              onChanged:
+                  _saving ? null : (value) => setState(() => _role = value!),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _submit,
+          icon: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save_rounded),
+          label: Text(_saving ? '保存中' : '保存'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeleteEmployeeDialog extends StatefulWidget {
+  const _DeleteEmployeeDialog({
+    required this.apiClient,
+    required this.token,
+    required this.user,
+  });
+
+  final ApiClient apiClient;
+  final String token;
+  final EmployeeAccountRecord user;
+
+  @override
+  State<_DeleteEmployeeDialog> createState() => _DeleteEmployeeDialogState();
+}
+
+class _DeleteEmployeeDialogState extends State<_DeleteEmployeeDialog> {
+  final _reasonController = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_saving) {
+      return;
+    }
+    final reason = _reasonController.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = '请填写删除原因。');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.apiClient.deleteJson(
+        '/api/users/${widget.user.id}',
+        token: widget.token,
+        body: {'reason': reason},
+      );
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('删除员工账号'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('员工姓名：${widget.user.name}'),
+            const SizedBox(height: 8),
+            Text(
+              '手机号/登录账号：${widget.user.phone ?? widget.user.username}',
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '删除后该员工不能登录，并从员工列表隐藏，但历史业务记录会保留。',
+              style: TextStyle(
+                color: scheme.error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _reasonController,
+              enabled: !_saving,
+              autofocus: true,
+              maxLength: 255,
+              decoration: const InputDecoration(
+                labelText: '删除原因（必填）',
+                prefixIcon: Icon(Icons.edit_note_rounded),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: TextStyle(color: scheme.error)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+          ),
+          onPressed: _saving ? null : _submit,
+          icon: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.delete_forever_rounded),
+          label: Text(_saving ? '删除中' : '确认删除'),
         ),
       ],
     );
@@ -1017,6 +1413,13 @@ const _employeeRoles = <UserRole>[
   UserRole.boss,
   UserRole.warehouse,
 ];
+
+List<UserRole> _editableRolesFor(UserRole actorRole) {
+  if (actorRole == UserRole.superAdmin) {
+    return <UserRole>[UserRole.admin, ..._employeeRoles];
+  }
+  return _employeeRoles;
+}
 
 Map<String, dynamic> _data(Map<String, dynamic> payload) {
   final data = payload['data'];

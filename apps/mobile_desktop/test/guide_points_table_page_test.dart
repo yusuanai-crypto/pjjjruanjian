@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -90,6 +91,193 @@ void main() {
     });
   });
 
+  testWidgets(
+      'finance edits liquor cost in yuan and receives immediate order and summary updates',
+      (tester) async {
+    final client = _GuidePointsApiClient();
+    await _pumpGuidePage(tester, client, UserRole.finance);
+    await _openGuideALiquorCostDialog(tester);
+
+    expect(find.text('修改订单 SO-GUIDE-001 的扣酒成本'), findsOneWidget);
+    final field = tester.widget<TextFormField>(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+      ),
+    );
+    expect(field.controller!.text, '10.00');
+
+    await tester.enterText(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+      ),
+      '12.34',
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.liquorCostBodies.single, {
+      'liquorCostDeductionCents': 1234,
+    });
+    expect(find.text('订单 SO-GUIDE-001 的扣酒成本已更新。'), findsOneWidget);
+    expect(find.text('扣酒 ¥12.34'), findsOneWidget);
+    expect(find.text('上单 ¥77.66'), findsOneWidget);
+    expect(find.text('¥12.34'), findsOneWidget);
+    expect(find.text('¥77.66'), findsOneWidget);
+    expect(find.text('50% / ¥38.83'), findsOneWidget);
+  });
+
+  testWidgets('liquor cost accepts zero, integer yuan, and two decimals',
+      (tester) async {
+    final client = _GuidePointsApiClient();
+    await _pumpGuidePage(tester, client, UserRole.finance);
+    await _expandGuideA(tester);
+
+    for (final value in ['0', '12', '12.34']) {
+      await tester.tap(
+        find.byKey(
+          const ValueKey('guide-points-edit-liquor-cost-order-guide-a'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(
+          const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+        ),
+        value,
+      );
+      await tester.tap(
+        find.byKey(
+          const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    expect(client.liquorCostBodies, [
+      {'liquorCostDeductionCents': 0},
+      {'liquorCostDeductionCents': 1200},
+      {'liquorCostDeductionCents': 1234},
+    ]);
+  });
+
+  testWidgets(
+      'liquor cost rejects empty, negative, over-limit, and over-precision values',
+      (tester) async {
+    final client = _GuidePointsApiClient();
+    await _pumpGuidePage(tester, client, UserRole.finance);
+    await _openGuideALiquorCostDialog(tester);
+    final field = find.byKey(
+      const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+    );
+    final save = find.byKey(
+      const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+    );
+
+    for (final value in ['', '-1', '90.01', '1.234']) {
+      await tester.enterText(field, value);
+      await tester.tap(save);
+      await tester.pump();
+      expect(client.liquorCostBodies, isEmpty, reason: value);
+      expect(
+        find.byKey(
+          const ValueKey('guide-order-liquor-cost-error-order-guide-a'),
+        ),
+        findsOneWidget,
+        reason: value,
+      );
+    }
+  });
+
+  testWidgets('liquor cost API failure keeps original value and shows error',
+      (tester) async {
+    final client = _GuidePointsApiClient(
+      liquorCostError: const ApiException(
+        statusCode: 409,
+        code: 'GUIDE_POINTS_ALREADY_PAID',
+        message: '请先取消日返/月返已返状态。',
+      ),
+    );
+    await _pumpGuidePage(tester, client, UserRole.finance);
+    await _openGuideALiquorCostDialog(tester);
+    await tester.enterText(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+      ),
+      '12.34',
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('请先取消日返/月返已返状态。'), findsOneWidget);
+    expect(find.text('修改订单 SO-GUIDE-001 的扣酒成本'), findsOneWidget);
+    expect(find.text('¥10.00'), findsWidgets);
+    expect(client.liquorCostDeductionCents, 1000);
+  });
+
+  testWidgets('liquor cost save blocks duplicate requests while pending',
+      (tester) async {
+    final gate = Completer<void>();
+    final client = _GuidePointsApiClient(liquorCostGate: gate);
+    await _pumpGuidePage(tester, client, UserRole.finance);
+    await _openGuideALiquorCostDialog(tester);
+    await tester.enterText(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-yuan-order-guide-a'),
+      ),
+      '12.34',
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+      ),
+    );
+    await tester.pump();
+
+    expect(client.liquorCostBodies, hasLength(1));
+    expect(find.text('保存中'), findsOneWidget);
+    final save = tester.widget<FilledButton>(
+      find.byKey(
+        const ValueKey('guide-order-liquor-cost-save-order-guide-a'),
+      ),
+    );
+    expect(save.onPressed, isNull);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(client.liquorCostBodies, hasLength(1));
+  });
+
+  testWidgets('daily or monthly paid disables liquor cost editing',
+      (tester) async {
+    for (final client in [
+      _GuidePointsApiClient(dailyPaid: true),
+      _GuidePointsApiClient(monthlyPaid: true),
+    ]) {
+      await _pumpGuidePage(tester, client, UserRole.finance);
+      await _expandGuideA(tester);
+      final button = tester.widget<IconButton>(
+        find.byKey(
+          const ValueKey('guide-points-edit-liquor-cost-order-guide-a'),
+        ),
+      );
+      expect(button.onPressed, isNull);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is Tooltip && widget.message == '请先取消日返/月返已返状态',
+        ),
+        findsOneWidget,
+      );
+    }
+  });
+
   testWidgets('boss sees guide table and order details as read-only',
       (tester) async {
     final client = _GuidePointsApiClient();
@@ -105,6 +293,12 @@ void main() {
     expect(
       find.byKey(
         const ValueKey('guide-points-edit-rates-order-guide-a'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('guide-points-edit-liquor-cost-order-guide-a'),
       ),
       findsNothing,
     );
@@ -212,6 +406,31 @@ void main() {
   });
 }
 
+Future<void> _expandGuideA(WidgetTester tester) async {
+  if (find
+      .byKey(const ValueKey('guide-points-orders-summary-a'))
+      .evaluate()
+      .isNotEmpty) {
+    return;
+  }
+  await tester.tap(
+    find.byKey(
+      const ValueKey('guide-points-summary-group-1-guide-a'),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openGuideALiquorCostDialog(WidgetTester tester) async {
+  await _expandGuideA(tester);
+  final button = find.byKey(
+    const ValueKey('guide-points-edit-liquor-cost-order-guide-a'),
+  );
+  await tester.ensureVisible(button);
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+}
+
 Future<void> _pumpGuidePage(
   WidgetTester tester,
   ApiClient client,
@@ -242,12 +461,20 @@ Future<void> _pumpGuidePage(
 class _GuidePointsApiClient extends ApiClient {
   _GuidePointsApiClient({
     this.dailyPaid = false,
+    this.monthlyPaid = false,
     this.summaryCount = 2,
+    this.liquorCostError,
+    this.liquorCostGate,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool dailyPaid;
+  final bool monthlyPaid;
   final int summaryCount;
+  final ApiException? liquorCostError;
+  final Completer<void>? liquorCostGate;
   final List<Map<String, dynamic>> rateBodies = [];
+  final List<Map<String, dynamic>> liquorCostBodies = [];
+  int liquorCostDeductionCents = 1000;
 
   @override
   Future<Map<String, dynamic>> getJson(
@@ -264,6 +491,8 @@ class _GuidePointsApiClient extends ApiClient {
                     guideId: 'guide-a',
                     guideName: '收款导游甲',
                     dailyPaid: dailyPaid,
+                    monthlyPaid: monthlyPaid,
+                    liquorCostDeductionCents: liquorCostDeductionCents,
                     includeOrders: false,
                   ),
                   _summaryJson(
@@ -288,6 +517,8 @@ class _GuidePointsApiClient extends ApiClient {
             guideId: 'guide-a',
             guideName: '收款导游甲',
             dailyPaid: dailyPaid,
+            monthlyPaid: monthlyPaid,
+            liquorCostDeductionCents: liquorCostDeductionCents,
             includeOrders: true,
           ),
         },
@@ -323,8 +554,35 @@ class _GuidePointsApiClient extends ApiClient {
             guideId: 'guide-a',
             guideName: '收款导游甲',
             dailyPaid: dailyPaid,
+            monthlyPaid: monthlyPaid,
+            liquorCostDeductionCents: liquorCostDeductionCents,
             includeOrders: true,
             monthlyRate: '0.1000',
+          ),
+        },
+      };
+    }
+    if (path ==
+        '/api/guide-points-summaries/orders/order-guide-a/'
+            'liquor-cost-deduction') {
+      liquorCostBodies.add(Map<String, dynamic>.from(body ?? {}));
+      if (liquorCostError != null) {
+        throw liquorCostError!;
+      }
+      if (liquorCostGate != null) {
+        await liquorCostGate!.future;
+      }
+      liquorCostDeductionCents = body?['liquorCostDeductionCents'] as int;
+      return {
+        'data': {
+          'guidePointsSummary': _summaryJson(
+            id: 'summary-a',
+            guideId: 'guide-a',
+            guideName: '收款导游甲',
+            dailyPaid: dailyPaid,
+            monthlyPaid: monthlyPaid,
+            liquorCostDeductionCents: liquorCostDeductionCents,
+            includeOrders: true,
           ),
         },
       };
@@ -355,10 +613,21 @@ Map<String, dynamic> _summaryJson({
   required String guideId,
   required String guideName,
   bool dailyPaid = false,
+  bool monthlyPaid = false,
   bool includeOrders = false,
   String monthlyRate = '0.0000',
+  int liquorCostDeductionCents = 1000,
 }) {
   final isA = guideId == 'guide-a';
+  final effectiveAmountCents = isA ? 9000 : 20000;
+  final deductionCents = isA ? liquorCostDeductionCents : 0;
+  final netAmountCents = effectiveAmountCents - deductionCents;
+  final dailyPointsCents = netAmountCents ~/ 2;
+  final monthlyPointsCents =
+      isA && monthlyRate == '0.1000' ? (netAmountCents + 5) ~/ 10 : 0;
+  final paidPointsCents = (dailyPaid && isA ? dailyPointsCents : 0) +
+      (monthlyPaid && isA ? monthlyPointsCents : 0);
+  final totalPointsCents = dailyPointsCents + monthlyPointsCents;
   return {
     'id': id,
     'travelGroupId': 'group-1',
@@ -384,27 +653,19 @@ Map<String, dynamic> _summaryJson({
     'totalCashOnDeliveryCents': 0,
     'totalPaidDepositCents': isA ? 10000 : 20000,
     'confirmedRefundAmountCents': isA ? 1000 : 0,
-    'effectiveSalesAmountCents': isA ? 9000 : 20000,
-    'totalLiquorCostDeductionCents': isA ? 1000 : 0,
-    'totalNetAmountCents': isA ? 8000 : 20000,
-    'totalDailyPointsCents': isA ? 4000 : 10000,
-    'totalMonthlyPointsCents': 0,
-    'paidPointsCents': dailyPaid && isA ? 4000 : 0,
-    'unpaidPointsCents': dailyPaid && isA
-        ? 0
-        : isA
-            ? 4000
-            : 10000,
-    'paidDailyPointsCents': dailyPaid && isA ? 4000 : 0,
-    'unpaidDailyPointsCents': dailyPaid && isA
-        ? 0
-        : isA
-            ? 4000
-            : 10000,
-    'paidMonthlyPointsCents': 0,
-    'unpaidMonthlyPointsCents': 0,
+    'effectiveSalesAmountCents': effectiveAmountCents,
+    'totalLiquorCostDeductionCents': deductionCents,
+    'totalNetAmountCents': netAmountCents,
+    'totalDailyPointsCents': dailyPointsCents,
+    'totalMonthlyPointsCents': monthlyPointsCents,
+    'paidPointsCents': paidPointsCents,
+    'unpaidPointsCents': totalPointsCents - paidPointsCents,
+    'paidDailyPointsCents': dailyPaid && isA ? dailyPointsCents : 0,
+    'unpaidDailyPointsCents': dailyPaid && isA ? 0 : dailyPointsCents,
+    'paidMonthlyPointsCents': monthlyPaid && isA ? monthlyPointsCents : 0,
+    'unpaidMonthlyPointsCents': monthlyPaid && isA ? 0 : monthlyPointsCents,
     'dailyPointsPaid': dailyPaid && isA,
-    'monthlyPointsPaid': false,
+    'monthlyPointsPaid': monthlyPaid && isA,
     'afterSalesImpact': const {'status': 'refund_adjusted'},
     'calculationVersion': 'guide_points_v1',
     'updatedAt': '2026-07-27T10:00:00.000Z',
@@ -418,15 +679,20 @@ Map<String, dynamic> _summaryJson({
           'status': 'valid',
           'grossAmountCents': isA ? 10000 : 20000,
           'confirmedRefundAmountCents': isA ? 1000 : 0,
-          'effectiveAmountCents': isA ? 9000 : 20000,
-          'liquorCostDeductionCents': isA ? 1000 : 0,
-          'netAmountCents': isA ? 8000 : 20000,
+          'effectiveAmountCents': effectiveAmountCents,
+          'liquorCostDeductionCents': deductionCents,
+          'automaticLiquorCostDeductionCents': isA ? 1000 : 0,
+          'liquorCostDeductionOverrideCents':
+              isA && deductionCents != 1000 ? deductionCents : null,
+          'liquorCostDeductionSource':
+              isA && deductionCents != 1000 ? 'manual_override' : 'automatic',
+          'netAmountCents': netAmountCents,
           'guideId': guideId,
           'guideName': guideName,
           'dailyRebateRate': '0.5000',
-          'dailyPointsCents': isA ? 4000 : 10000,
+          'dailyPointsCents': dailyPointsCents,
           'monthlyRebateRate': monthlyRate,
-          'monthlyPointsCents': isA && monthlyRate == '0.1000' ? 800 : 0,
+          'monthlyPointsCents': monthlyPointsCents,
         },
       ],
   };

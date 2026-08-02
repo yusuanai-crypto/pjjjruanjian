@@ -1,4 +1,14 @@
-import { Controller, Get, Param, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 
 import { getRequestIp } from '../../common/request-ip';
 import { AuthNestService } from '../auth/auth.nest.service';
@@ -127,6 +137,20 @@ export class AnalyticsNestController {
     );
     response.setHeader('Content-Length', exportResult.buffer.length);
     response.send(exportResult.buffer);
+  }
+
+  @Post('travel-group-profits/:travelGroupId/recalculate')
+  @HttpCode(HttpStatus.OK)
+  async recalculateTravelGroupProfit(
+    @Param('travelGroupId') travelGroupId: string,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.analyticsService.recalculateTravelGroupProfit(
+      actor,
+      travelGroupId,
+      { ipAddress: getRequestIp(request) },
+    );
   }
 
   @Get('daily-loss-profits')

@@ -248,23 +248,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
       if (!mounted) {
         return;
       }
-      await _showOrderResultDialog(
-        title: result.recalculation?.warnings.isNotEmpty == true
-            ? '录入成功（提成待处理）'
-            : '录入成功',
-        message: [
-          '订单录入成功。系统单号：${order.orderNo}',
-          for (final warning in order.shippingRiskWarnings) warning.message,
-          if (result.recalculation != null)
-            '提成重算：生成 ${result.recalculation!.generatedCount} 条，'
-                '更新 ${result.recalculation!.updatedCount} 条，'
-                '跳过 ${result.recalculation!.skippedCount} 单，'
-                '失败 ${result.recalculation!.failureCount} 单。',
-          for (final warning in result.recalculation?.warnings ??
-              const <CommissionRecalculationWarning>[])
-            _commissionWarningText(warning),
-        ].join('\n'),
-      );
+      await _showOrderResultDialog(title: '录入成功', message: '录入成功');
     } catch (error) {
       if (!mounted) {
         return;
@@ -1505,21 +1489,6 @@ class _InlineNotice extends StatelessWidget {
 const _orderEntryOrderType = 'travel_group';
 const _defaultSalesOrderItemUnit = '瓶';
 const _salesOrderItemUnits = <String>['瓶', '盒'];
-
-String _commissionWarningText(CommissionRecalculationWarning warning) {
-  switch (warning.code) {
-    case 'missing_sales_user':
-      return '提成未计算：订单缺少销售人员。';
-    case 'missing_outreach_user':
-      return '外联提成未计算：订单缺少外联人员。';
-    case 'missing_leader':
-      return '组长提成未计算：销售人员未配置组长。';
-    case 'missing_commission_rule':
-      return '提成未计算：订单日期没有适用的提成规则。';
-    default:
-      return '提成计算告警：${warning.message}';
-  }
-}
 
 DateTime _shanghaiToday() {
   final shanghaiNow = DateTime.now().toUtc().add(const Duration(hours: 8));

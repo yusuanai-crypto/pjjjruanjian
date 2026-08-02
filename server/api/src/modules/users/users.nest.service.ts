@@ -36,6 +36,9 @@ export class UsersNestService {
   async listUsers(actor: any, filters: any = {}) {
     requireAdmin(actor);
     const users = await this.prisma.user.findMany({
+      where: {
+        deletedAt: null,
+      },
       orderBy: {
         createdAt: 'asc',
       },
@@ -47,6 +50,7 @@ export class UsersNestService {
     requireAdmin(actor);
     const where: any = {
       isActive: true,
+      deletedAt: null,
     };
     const normalizedRole = normalizeOptionalString(role);
     if (normalizedRole) {
@@ -81,6 +85,7 @@ export class UsersNestService {
       where: {
         role: toPrismaRole('taster'),
         isActive: true,
+        deletedAt: null,
       },
       orderBy: {
         username: 'asc',
@@ -151,6 +156,7 @@ export class UsersNestService {
     const result = await this.runSerializableAccountMutation(
       async (transaction: any) => {
         const current = await this.findUserOrThrow(id, transaction);
+        assertCannotUpdateOwnAccount(actor, current);
         assertCanManageTargetAccount(actor, current, 'update');
 
         const data: any = {
@@ -176,9 +182,17 @@ export class UsersNestService {
           }
         }
         if (patch.phone !== undefined) {
-          const phone = normalizeOptionalPhone(patch.phone);
-          if (phone && phone !== current.phone) {
+          const phone = validateRequiredPhone(patch.phone);
+          const usernameTracksPhone =
+            Boolean(current.phone) &&
+            normalizeUsername(current.username) ===
+              normalizeUsername(current.phone);
+          if (phone !== current.phone) {
             await assertPhoneAvailable(transaction, phone, id);
+            if (usernameTracksPhone) {
+              await assertUsernameAvailable(transaction, phone, id);
+              data.username = phone;
+            }
           }
           data.phone = phone;
         }
@@ -221,6 +235,59 @@ export class UsersNestService {
     });
 
     return toPublicUser(nextUser);
+  }
+
+  async deleteUser(actor: any, id: string, payload: any, metadata: any = {}) {
+    requirePermission(actor, 'users:delete');
+    const reason = validateDeleteReason(payload?.reason);
+    const deletedUser = await this.runSerializableAccountMutation(
+      async (transaction: any) => {
+        const current = await this.findUserOrThrow(id, transaction);
+        assertCanDeleteTargetAccount(actor, current);
+        const now = new Date();
+        const updated = await transaction.user.update({
+          where: {
+            id: current.id,
+          },
+          data: {
+            deletedAt: now,
+            deletedById: actor.id,
+            deleteReason: reason,
+            isActive: false,
+            tokenVersion: {
+              increment: 1,
+            },
+            updatedAt: now,
+          },
+        });
+        await revokeRefreshSessions(
+          transaction,
+          current.id,
+          now,
+          'account_deleted',
+        );
+        await this.operationLogsService.appendLog(
+          {
+            userId: actor.id,
+            action: 'users.delete',
+            entityType: 'user',
+            entityId: current.id,
+            beforeData: toPublicUser(current),
+            afterData: {
+              deletedAt: toIsoString(updated.deletedAt),
+              deletedById: actor.id,
+              deleteReason: reason,
+              isActive: false,
+            },
+            ipAddress: metadata.ipAddress || null,
+          },
+          transaction,
+        );
+        return updated;
+      },
+    );
+
+    return toPublicUser(deletedUser);
   }
 
   async setUserActive(actor: any, id: string, isActive: boolean, metadata: any = {}) {
@@ -500,7 +567,7 @@ export class UsersNestService {
         username: normalizeUsername(username),
       },
     });
-    return user ? toAppUser(user) : null;
+    return user && !user.deletedAt ? toAppUser(user) : null;
   }
 
   async updatePassword(userId: string, passwordHash: string, options: any = {}) {
@@ -799,7 +866,7 @@ export class UsersNestService {
         id,
       },
     });
-    if (!user) {
+    if (!user || user.deletedAt) {
       throw createHttpError(404, 'USER_NOT_FOUND', 'User does not exist.');
     }
     return user;
@@ -856,6 +923,19 @@ function toTasterOption(user: any) {
 function requireAdmin(actor: any) {
   if (!actor || !isAdminRole(actor.role)) {
     throw createHttpError(403, 'ADMIN_REQUIRED', 'Administrator permission is required.');
+  }
+}
+
+function requirePermission(actor: any, permission: string) {
+  if (
+    !actor ||
+    !getRolePermissions(toAppRole(actor.role)).includes(permission)
+  ) {
+    throw createHttpError(
+      403,
+      'PERMISSION_DENIED',
+      'You do not have permission to perform this action.',
+    );
   }
 }
 
@@ -953,6 +1033,25 @@ function validateReason(reason: unknown) {
   return normalized;
 }
 
+function validateDeleteReason(reason: unknown) {
+  const normalized = String(reason || '').trim();
+  if (!normalized) {
+    throw createHttpError(
+      400,
+      'DELETE_REASON_REQUIRED',
+      'reason is required when deleting an employee account.',
+    );
+  }
+  if (normalized.length > 255) {
+    throw createHttpError(
+      400,
+      'DELETE_REASON_TOO_LONG',
+      'reason must be 255 characters or fewer.',
+    );
+  }
+  return normalized;
+}
+
 function validatePasswordResetReason(reason: unknown) {
   const normalized = String(reason || '').trim();
   if (!normalized) {
@@ -986,6 +1085,14 @@ function normalizeOptionalPhone(value: unknown) {
   return normalized;
 }
 
+function validateRequiredPhone(value: unknown) {
+  const phone = normalizeOptionalPhone(value);
+  if (!phone) {
+    throw createHttpError(400, 'PHONE_REQUIRED', 'phone is required.');
+  }
+  return phone;
+}
+
 async function assertPhoneAvailable(prisma: any, phone: string, exceptUserId?: string) {
   const existing = await prisma.user.findMany({
     where: {
@@ -996,6 +1103,49 @@ async function assertPhoneAvailable(prisma: any, phone: string, exceptUserId?: s
   if (duplicate) {
     throw createHttpError(409, 'PHONE_EXISTS', 'Phone already exists.');
   }
+}
+
+async function assertUsernameAvailable(
+  prisma: any,
+  username: string,
+  exceptUserId?: string,
+) {
+  const existing = await prisma.user.findUnique({
+    where: {
+      username: normalizeUsername(username),
+    },
+  });
+  if (existing && existing.id !== exceptUserId) {
+    throw createHttpError(409, 'USERNAME_EXISTS', 'Username already exists.');
+  }
+}
+
+function assertCannotUpdateOwnAccount(actor: any, target: any) {
+  if (actor?.id === target?.id) {
+    throw createHttpError(
+      400,
+      'CANNOT_UPDATE_SELF',
+      'Administrators cannot update their own employee account.',
+    );
+  }
+}
+
+function assertCanDeleteTargetAccount(actor: any, target: any) {
+  if (actor?.id === target?.id) {
+    throw createHttpError(
+      400,
+      'CANNOT_DELETE_SELF',
+      'Administrators cannot delete their own account.',
+    );
+  }
+  if (isSuperAdminRole(target?.role)) {
+    throw createHttpError(
+      403,
+      'SUPER_ADMIN_ACCOUNT_PROTECTED',
+      'Super administrator accounts cannot be deleted.',
+    );
+  }
+  assertCanManageTargetAccount(actor, target, 'delete');
 }
 
 function assertCanManageTargetAccount(actor: any, target: any, action: string) {
@@ -1052,6 +1202,7 @@ async function assertActiveSuperAdminRemains(
     where: {
       role: toPrismaRole('super_admin'),
       isActive: true,
+      deletedAt: null,
     },
   });
   if (activeSuperAdminCount <= 1) {

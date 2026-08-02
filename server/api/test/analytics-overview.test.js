@@ -23,6 +23,7 @@ test('contract: analytics overview enforces role permissions', async () => {
       'admin',
       'stage8-overview-boss',
       'stage8-overview-finance',
+      'stage8-overview-warehouse',
       'stage8-overview-after-sales',
     ]) {
       const session =
@@ -43,7 +44,6 @@ test('contract: analytics overview enforces role permissions', async () => {
     for (const username of [
       'stage8-overview-sales',
       'stage8-overview-front-desk',
-      'stage8-overview-warehouse',
       'stage8-overview-taster',
     ]) {
       const session = await login(baseUrl, username, 'Password123');

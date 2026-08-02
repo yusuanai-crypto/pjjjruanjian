@@ -44,7 +44,7 @@ const ROLE_DEFINITIONS = {
   warehouse: {
     role: 'warehouse',
     title: '库管',
-    description: '围绕订单处理物流方式、打包状态和打包件数。',
+    description: '处理发货与库存，并只读查看数据分析、利润分析和使用 AI 助手。',
   },
   after_sales: {
     role: 'after_sales',
@@ -234,6 +234,9 @@ const ROLE_MENU_IDS = {
     'warehouse_directory',
     'serialized_inventory',
     'after_sales_orders',
+    'analytics',
+    'profit_analysis',
+    'ai_assistant',
   ],
   after_sales: [
     'dashboard',
@@ -276,6 +279,7 @@ const USER_ADMIN_PERMISSIONS = [
   'users:update',
   'users:disable',
   'users:enable',
+  'users:delete',
   'users:reset_password',
 ];
 const GLOBAL_MARK_READ_PERMISSION = ['settings:global_mark:read'];

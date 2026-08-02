@@ -3710,10 +3710,9 @@ String _commissionWarningLabel(String warning) {
       return '缺旅行社返点规则';
     case 'missing_outreach':
     case 'missing_outreach_user':
-      return '缺外联';
     case 'missing_leader':
     case 'missing_leader_user':
-      return '缺组长';
+      return '历史人员归属提示（不影响订单级提成）';
     case 'unconfirmed_refund':
     case 'pending_unconfirmed_refund':
     case 'has_unconfirmed_refund':

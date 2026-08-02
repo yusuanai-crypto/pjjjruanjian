@@ -103,14 +103,28 @@ void main() {
       final resetButtons = tester
           .widgetList<IconButton>(_iconButtonsWithTooltip('重置密码'))
           .toList();
+      final editButtons =
+          tester.widgetList<IconButton>(_iconButtonsWithTooltip('修改')).toList();
+      final deleteButtons =
+          tester.widgetList<IconButton>(_iconButtonsWithTooltip('删除')).toList();
       expect(changeButtons, hasLength(4));
       expect(resetButtons, hasLength(4));
+      expect(editButtons, hasLength(4));
+      expect(deleteButtons, hasLength(4));
       expect(
         changeButtons.where((button) => button.onPressed != null),
         hasLength(1),
       );
       expect(
         resetButtons.where((button) => button.onPressed != null),
+        hasLength(1),
+      );
+      expect(
+        editButtons.where((button) => button.onPressed != null),
+        hasLength(1),
+      );
+      expect(
+        deleteButtons.where((button) => button.onPressed != null),
         hasLength(1),
       );
 
@@ -132,6 +146,18 @@ void main() {
       expect(
         tester
             .widgetList<IconButton>(_iconButtonsWithTooltip('重置密码'))
+            .every((button) => button.onPressed == null),
+        isTrue,
+      );
+      expect(
+        tester
+            .widgetList<IconButton>(_iconButtonsWithTooltip('修改'))
+            .every((button) => button.onPressed == null),
+        isTrue,
+      );
+      expect(
+        tester
+            .widgetList<IconButton>(_iconButtonsWithTooltip('删除'))
             .every((button) => button.onPressed == null),
         isTrue,
       );
@@ -188,6 +214,114 @@ void main() {
         find.text('修改密码成功：员工密码已修改，原登录已失效。'),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'edit dialog pre-fills profile and PATCH success refreshes the list',
+    (tester) async {
+      final apiClient = _FakeEmployeeApiClient(users: [_ordinaryEmployee]);
+      await _pumpPage(tester, apiClient);
+
+      await tester.tap(_iconButtonWithTooltip('修改'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('修改 张三 的资料'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(_dialogTextFieldWithLabel('姓名'))
+            .controller
+            ?.text,
+        '张三',
+      );
+      expect(
+        tester
+            .widget<TextField>(_dialogTextFieldWithLabel('手机号'))
+            .controller
+            ?.text,
+        '13800000043',
+      );
+      final roleField = tester.widget<DropdownButtonFormField<UserRole>>(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DropdownButtonFormField<UserRole> &&
+                widget.decoration.labelText == '角色',
+          ),
+        ),
+      );
+      expect(roleField.initialValue, UserRole.sales);
+
+      await tester.enterText(_dialogTextFieldWithLabel('姓名'), '张三修改');
+      await tester.enterText(
+        _dialogTextFieldWithLabel('手机号'),
+        '13900000043',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+
+      final updateCall = apiClient.calls.singleWhere(
+        (call) => call.path == '/api/users/employee-1',
+      );
+      expect(updateCall.body, {
+        'name': '张三修改',
+        'phone': '13900000043',
+        'role': 'sales',
+      });
+      expect(apiClient.listRequests, 2);
+      expect(find.text('员工资料已修改。'), findsOneWidget);
+      expect(find.text('张三修改'), findsOneWidget);
+    },
+  );
+
+  testWidgets('delete cancellation sends no request', (tester) async {
+    final apiClient = _FakeEmployeeApiClient(users: [_ordinaryEmployee]);
+    await _pumpPage(tester, apiClient);
+
+    await tester.tap(_iconButtonWithTooltip('删除'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除员工账号'), findsOneWidget);
+    expect(find.text('员工姓名：张三'), findsOneWidget);
+    expect(find.text('手机号/登录账号：13800000043'), findsOneWidget);
+    expect(
+      find.text('删除后该员工不能登录，并从员工列表隐藏，但历史业务记录会保留。'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(apiClient.calls, isEmpty);
+    expect(apiClient.listRequests, 1);
+  });
+
+  testWidgets(
+    'delete requires a reason and DELETE success refreshes the list',
+    (tester) async {
+      final apiClient = _FakeEmployeeApiClient(users: [_ordinaryEmployee]);
+      await _pumpPage(tester, apiClient);
+
+      await tester.tap(_iconButtonWithTooltip('删除'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '确认删除'));
+      await tester.pump();
+      expect(find.text('请填写删除原因。'), findsOneWidget);
+      expect(apiClient.calls, isEmpty);
+
+      await tester.enterText(
+        _dialogTextFieldWithLabel('删除原因（必填）'),
+        '员工离职',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, '确认删除'));
+      await tester.pumpAndSettle();
+
+      final deleteCall = apiClient.calls.singleWhere(
+        (call) => call.path == '/api/users/employee-1',
+      );
+      expect(deleteCall.body, {'reason': '员工离职'});
+      expect(apiClient.listRequests, 2);
+      expect(find.text('员工账号已删除'), findsOneWidget);
+      expect(find.text('暂无员工账号'), findsOneWidget);
     },
   );
 
@@ -314,6 +448,64 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'small window with many employees scrolls vertically to the final row',
+    (tester) async {
+      final users = List<Map<String, dynamic>>.generate(
+        30,
+        (index) => <String, dynamic>{
+          ..._ordinaryEmployee,
+          'id': 'employee-${index + 1}',
+          'name': '员工${index + 1}',
+          'username': '1380000${1000 + index}',
+          'phone': '1380000${1000 + index}',
+        },
+      );
+      final apiClient = _FakeEmployeeApiClient(users: users);
+      await _pumpPage(
+        tester,
+        apiClient,
+        surfaceSize: const Size(800, 600),
+      );
+
+      final scrollbar = tester.widget<Scrollbar>(
+        find.byKey(const ValueKey('employee-table-scrollbar')),
+      );
+      expect(scrollbar.thumbVisibility, isTrue);
+      expect(scrollbar.interactive, isTrue);
+
+      final verticalScrollView = find.byKey(
+        const ValueKey('employee-table-vertical-scroll'),
+      );
+      final verticalScrollable = find.descendant(
+        of: verticalScrollView,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Scrollable &&
+              widget.axisDirection == AxisDirection.down,
+        ),
+      );
+      expect(verticalScrollable, findsOneWidget);
+      final scrollableState = tester.state<ScrollableState>(verticalScrollable);
+      expect(scrollableState.position.maxScrollExtent, greaterThan(0));
+
+      await tester.drag(verticalScrollView, const Offset(0, -3000));
+      await tester.pumpAndSettle();
+
+      expect(
+        scrollableState.position.pixels,
+        scrollableState.position.maxScrollExtent,
+      );
+      final finalRow = find.text('员工30');
+      expect(finalRow, findsOneWidget);
+      expect(
+        tester.getRect(finalRow).bottom,
+        lessThanOrEqualTo(tester.getRect(verticalScrollView).bottom),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _pumpPage(
@@ -354,6 +546,8 @@ void _expectActionButtonsInOneNonOverlappingRow(
   String userId,
 ) {
   final buttonFinders = [
+    find.byKey(ValueKey('employee-action-edit-$userId')),
+    find.byKey(ValueKey('employee-action-delete-$userId')),
     find.byKey(ValueKey('employee-action-toggle-$userId')),
     find.byKey(ValueKey('employee-action-change-password-$userId')),
     find.byKey(ValueKey('employee-action-reset-password-$userId')),
@@ -363,20 +557,29 @@ void _expectActionButtonsInOneNonOverlappingRow(
   }
 
   final rects = buttonFinders.map(tester.getRect).toList();
-  expect(rects[0].center.dy, rects[1].center.dy);
-  expect(rects[1].center.dy, rects[2].center.dy);
+  for (var index = 1; index < rects.length; index += 1) {
+    expect(rects[index - 1].center.dy, rects[index].center.dy);
+  }
   for (var first = 0; first < rects.length; first += 1) {
     for (var second = first + 1; second < rects.length; second += 1) {
       expect(rects[first].overlaps(rects[second]), isFalse);
     }
   }
-  expect(rects[0].right, lessThan(rects[1].left));
-  expect(rects[1].right, lessThan(rects[2].left));
+  for (var index = 1; index < rects.length; index += 1) {
+    expect(rects[index - 1].right, lessThan(rects[index].left));
+  }
 }
 
 Finder _textFieldWithLabel(String label) {
   return find.byWidgetPredicate(
     (widget) => widget is TextField && widget.decoration?.labelText == label,
+  );
+}
+
+Finder _dialogTextFieldWithLabel(String label) {
+  return find.descendant(
+    of: find.byType(AlertDialog),
+    matching: _textFieldWithLabel(label),
   );
 }
 
@@ -452,6 +655,52 @@ class _FakeEmployeeApiClient extends ApiClient {
       };
     }
     throw StateError('Unexpected GET $path');
+  }
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    calls.add(_ApiCall(path: path, body: body));
+    final id = path.split('/').last;
+    final index = users.indexWhere((user) => user['id'] == id);
+    if (index < 0 || body == null) {
+      throw StateError('Unexpected PATCH $path');
+    }
+    final current = users[index];
+    users[index] = <String, dynamic>{
+      ...current,
+      ...body,
+      if (current['username'] == current['phone'])
+        'username': body['phone'] ?? current['username'],
+    };
+    return <String, dynamic>{
+      'data': <String, dynamic>{
+        'user': users[index],
+      },
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    calls.add(_ApiCall(path: path, body: body));
+    final id = path.split('/').last;
+    final index = users.indexWhere((user) => user['id'] == id);
+    if (index < 0) {
+      throw StateError('Unexpected DELETE $path');
+    }
+    final deleted = users.removeAt(index);
+    return <String, dynamic>{
+      'data': <String, dynamic>{
+        'user': <String, dynamic>{...deleted, 'isActive': false},
+      },
+    };
   }
 
   @override

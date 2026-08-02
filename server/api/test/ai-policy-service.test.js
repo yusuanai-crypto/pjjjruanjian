@@ -6,6 +6,18 @@ const {
 } = require('../src/modules/ai/ai-policy.service');
 const { getRoleMenus } = require('../src/modules/auth/roles');
 
+const WAREHOUSE_READ_ONLY_ANALYTICS_INTENTS = [
+  'analytics_overview',
+  'analytics_trend',
+  'metric_explain',
+  'taster_ranking',
+  'taster_detail',
+  'ranking_explain',
+  'analytics_source_orders',
+  'analytics_source_travel_groups',
+  'analytics_source_after_sales',
+];
+
 test('unit: AI policy allows only first-version AI roles', () => {
   const service = new AiPolicyService();
 
@@ -14,13 +26,14 @@ test('unit: AI policy allows only first-version AI roles', () => {
     'admin',
     'boss',
     'finance',
+    'warehouse',
     'after_sales',
   ]) {
     assert.equal(service.canUseAi(role), true, `${role} should use AI`);
     assert.match(service.getScopeDescription(role), /可/);
   }
 
-  for (const role of ['warehouse', 'sales', 'taster', 'front_desk']) {
+  for (const role of ['sales', 'taster', 'front_desk']) {
     assert.equal(service.canUseAi(role), false, `${role} should not use AI`);
     assert.equal(
       service.evaluateRequest(role, {
@@ -59,6 +72,28 @@ test('unit: AI policy covers role and intent matrix', () => {
   assertDenied(service, 'finance', 'management_suggestion', 'AI_PERMISSION_DENIED');
   assertDenied(service, 'finance', 'customer_order_lookup', 'AI_PERMISSION_DENIED');
 
+  assert.deepEqual(
+    service.getAllowedIntents('warehouse'),
+    WAREHOUSE_READ_ONLY_ANALYTICS_INTENTS,
+  );
+  for (const intent of WAREHOUSE_READ_ONLY_ANALYTICS_INTENTS) {
+    assertAllowed(service, 'warehouse', intent);
+  }
+  for (const intent of [
+    'management_suggestion',
+    'finance_summary',
+    'commission_query',
+    'points_query',
+    'customer_lookup',
+    'customer_order_lookup',
+    'after_sales_lookup',
+    'logistics_lookup',
+  ]) {
+    assertDenied(service, 'warehouse', intent, 'AI_PERMISSION_DENIED');
+  }
+  assert.match(service.getScopeDescription('warehouse'), /只读/);
+  assert.match(service.getScopeDescription('warehouse'), /不包含经营建议/);
+
   for (const intent of [
     'customer_lookup',
     'customer_order_lookup',
@@ -91,6 +126,18 @@ test('unit: AI policy rejects unsafe write, SQL, and explicit denial intents', (
   assert.equal(sqlDecision.code, 'AI_SQL_REQUEST_DENIED');
   assert.equal(sqlDecision.rejectionIntent, 'out_of_scope');
   assert.match(sqlDecision.reason, /SQL/);
+
+  const warehouseWriteDecision = service.evaluateRequest('warehouse', {
+    intent: 'analytics_overview',
+    question: '帮我把订单状态改成已发货',
+  });
+  assert.equal(warehouseWriteDecision.code, 'AI_UNSAFE_WRITE_REQUEST');
+
+  const warehouseSqlDecision = service.evaluateRequest('warehouse', {
+    intent: 'analytics_overview',
+    question: '执行 SQL 查询内部配置',
+  });
+  assert.equal(warehouseSqlDecision.code, 'AI_SQL_REQUEST_DENIED');
 
   const explicitPermissionDenied = service.evaluateRequest('finance', {
     intent: 'permission_denied',
@@ -129,12 +176,13 @@ test('unit: AI assistant menu follows first-version backend policy', () => {
     'admin',
     'boss',
     'finance',
+    'warehouse',
     'after_sales',
   ]) {
     assert.equal(roleMenus(role).includes('ai_assistant'), true);
   }
 
-  for (const role of ['warehouse', 'sales', 'taster', 'front_desk']) {
+  for (const role of ['sales', 'taster', 'front_desk']) {
     assert.equal(roleMenus(role).includes('ai_assistant'), false);
   }
 });

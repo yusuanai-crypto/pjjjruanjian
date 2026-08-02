@@ -134,8 +134,8 @@ test('GET /api/commission-records/export exports filtered stage7 commission deta
     assert.equal(row['旅行团'], 'TG-STAGE7-EXPORT-MARKED');
     assert.equal(row['客户'], 'Stage7 Export Marked Customer');
     assert.equal(row['销售'], 'Stage7 Export Sales');
-    assert.equal(row['外联'], 'Stage7 Export Outreach');
-    assert.equal(row['组长'], 'Stage7 Export Leader');
+    assert.equal(row['外联'], '');
+    assert.equal(row['组长'], '');
     assert.equal(row['品鉴师'], 'Stage7 Export Taster');
     assert.equal(row['旅行社'], 'Stage7 Export Agency');
     assert.equal(row['targetType'], 'sales_commission');

@@ -39,13 +39,13 @@ test('unit: stage7 original-order calculation ignores independent after-sales ad
     amountCents: 18000,
   });
   assertLine(result.commissionLines, 'OUTREACH_COMMISSION', {
-    targetUserId: 'user-outreach',
+    targetUserId: null,
     commissionRuleId: 'rule-outreach',
     rateSnapshot: '0.0080',
     amountCents: 7200,
   });
   assertLine(result.commissionLines, 'LEADER_COMMISSION', {
-    targetUserId: 'user-leader',
+    targetUserId: null,
     commissionRuleId: 'rule-leader',
     rateSnapshot: '0.0024',
     amountCents: 2160,
@@ -168,6 +168,54 @@ test('unit: points split uses integer cents for zero, partial, and full personal
   );
 });
 
+test('unit: personal liquor override replaces only the guide split and keeps the ordinary split automatic', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        personalAmountCents: 300000,
+        pointsDestination: 'GUIDE_PERSONAL',
+        personalDailyRebateRate: '0.5000',
+        personalMonthlyRebateRate: '0.1000',
+        personalLiquorCostDeductionOverrideCents: 50000,
+        afterSalesOrders: [
+          {
+            id: 'after-sales-split',
+            refundAmountCents: 100000,
+            personalPointsRefundAmountCents: 40000,
+            financeConfirmed: true,
+          },
+        ],
+      },
+    }),
+  );
+
+  assert.equal(
+    result.pointsSplit.automaticPersonalAgencyDeductionAmountCents,
+    36000,
+  );
+  assert.equal(result.pointsSplit.personalAgencyDeductionAmountCents, 50000);
+  assert.equal(result.pointsSplit.normalAgencyDeductionAmountCents, 84000);
+  assert.equal(result.pointsSplit.personalAgencyBaseAmountCents, 210000);
+  assert.equal(result.pointsSplit.normalAgencyBaseAmountCents, 556000);
+  assert.equal(result.pointsSplit.personalDailyRebateCents, 105000);
+  assert.equal(result.pointsSplit.personalMonthlyRebateCents, 21000);
+  assert.equal(result.pointsSplit.normalDailyRebateCents, 16680);
+  assert.equal(result.pointsSplit.normalMonthlyRebateCents, 11120);
+  assert.equal(result.agencyDeduction.automaticTotalAmountCents, 120000);
+  assert.equal(result.agencyDeduction.totalAmountCents, 134000);
+  assert.equal(result.agencyDeduction.personalSource, 'manual_override');
+  assert.deepEqual(result.sourceSnapshot.personalLiquorCostDeduction, {
+    source: 'manual_override',
+    automaticAmountCents: 36000,
+    overrideAmountCents: 50000,
+    appliedAmountCents: 50000,
+  });
+  for (const line of result.agencyRebateLines) {
+    assert.equal(line.deductionAmountCents, 84000);
+    assert.equal(line.baseAmountCents, 556000);
+  }
+});
+
 test('unit: historical refunded sources stay positive while standalone cancelled orders are zero', () => {
   const refunded = calculateStage7CommissionAndPoints(
     buildCalculationInput({
@@ -233,7 +281,7 @@ test('unit: historical refunded sources stay positive while standalone cancelled
   );
 });
 
-test('unit: stage7 calculation returns warnings for missing rules and people', () => {
+test('unit: stage7 calculation does not require outreach or leader people', () => {
   const result = calculateStage7CommissionAndPoints(
     buildCalculationInput({
       salesOrder: {
@@ -265,8 +313,6 @@ test('unit: stage7 calculation returns warnings for missing rules and people', (
     'missing_sales_deduction_rule',
     'missing_agency_deduction_rule',
     'missing_agency_rebate_rule',
-    'missing_outreach_user',
-    'missing_leader',
   ]);
   assert.equal(result.amounts.salesDeductionAmountCents, 0);
   assert.equal(result.amounts.agencyDeductionAmountCents, 0);
@@ -274,12 +320,87 @@ test('unit: stage7 calculation returns warnings for missing rules and people', (
     result.commissionLines.some(
       (line) => line.targetType === 'OUTREACH_COMMISSION',
     ),
-    false,
+    true,
   );
   assert.equal(
     result.commissionLines.some(
       (line) => line.targetType === 'LEADER_COMMISSION',
     ),
+    true,
+  );
+  assert.equal(
+    result.commissionLines.find(
+      (line) => line.targetType === 'OUTREACH_COMMISSION',
+    ).targetUserId,
+    null,
+  );
+  assert.equal(
+    result.commissionLines.find(
+      (line) => line.targetType === 'LEADER_COMMISSION',
+    ).targetUserId,
+    null,
+  );
+});
+
+test('unit: explicit zero-percent employee rules are calculated successfully', () => {
+  const result = calculateStage7CommissionAndPoints(
+    buildCalculationInput({
+      salesOrder: {
+        outreachUserId: null,
+        outreachUser: null,
+        salesUser: {
+          id: 'user-sales',
+          name: 'stage7 zero-rate sales',
+          leaderId: null,
+          leader: null,
+        },
+      },
+      commissionRules: [
+        commissionRule({
+          id: 'zero-sales',
+          targetType: 'sales_commission',
+          rate: '0.0000',
+        }),
+        commissionRule({
+          id: 'zero-outreach',
+          targetType: 'outreach_commission',
+          rate: '0.0000',
+        }),
+        commissionRule({
+          id: 'zero-leader',
+          targetType: 'leader_commission',
+          rate: '0.0000',
+        }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    result.commissionLines.map((line) => ({
+      targetType: line.targetType,
+      targetUserId: line.targetUserId,
+      amountCents: line.amountCents,
+    })),
+    [
+      {
+        targetType: 'SALES_COMMISSION',
+        targetUserId: 'user-sales',
+        amountCents: 0,
+      },
+      {
+        targetType: 'OUTREACH_COMMISSION',
+        targetUserId: null,
+        amountCents: 0,
+      },
+      {
+        targetType: 'LEADER_COMMISSION',
+        targetUserId: null,
+        amountCents: 0,
+      },
+    ],
+  );
+  assert.equal(
+    result.warnings.some((warning) => warning.code === 'missing_commission_rule'),
     false,
   );
 });

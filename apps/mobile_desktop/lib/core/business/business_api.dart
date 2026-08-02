@@ -2719,6 +2719,23 @@ class BusinessApi {
     return value is Map ? GuidePointsSummaryRecord.fromJson(_map(value)) : null;
   }
 
+  Future<GuidePointsSummaryRecord> updateGuidePersonalOrderLiquorCostDeduction(
+    String orderId, {
+    required int liquorCostDeductionCents,
+  }) async {
+    final payload = await _apiClient.patchJson(
+      '/api/guide-points-summaries/orders/'
+      '${Uri.encodeComponent(orderId)}/liquor-cost-deduction',
+      body: {
+        'liquorCostDeductionCents': liquorCostDeductionCents,
+      },
+      token: _token,
+    );
+    return GuidePointsSummaryRecord.fromJson(
+      _map(_data(payload)['guidePointsSummary']),
+    );
+  }
+
   Future<GuidePointsSummaryRecord> setGuideDailyPointsPaid(
     String id,
     bool isPaid,
@@ -2927,6 +2944,18 @@ class BusinessApi {
       token: _token,
       defaultFileName: 'travel-group-profits.xlsx',
     );
+  }
+
+  Future<ProfitRecalculationResult> recalculateTravelGroupProfit(
+    String travelGroupId,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/analytics/travel-group-profits/'
+      '${Uri.encodeComponent(travelGroupId)}/recalculate',
+      body: const {},
+      token: _token,
+    );
+    return ProfitRecalculationResult.fromJson(_data(payload));
   }
 
   Future<DailyLossProfitResponse> getDailyLossProfits({
@@ -6669,6 +6698,9 @@ class GuidePointsOrderRecord {
     required this.confirmedRefundAmountCents,
     required this.effectiveAmountCents,
     required this.liquorCostDeductionCents,
+    required this.automaticLiquorCostDeductionCents,
+    required this.liquorCostDeductionOverrideCents,
+    required this.liquorCostDeductionSource,
     required this.netAmountCents,
     required this.guideId,
     required this.guideName,
@@ -6687,6 +6719,9 @@ class GuidePointsOrderRecord {
   final int confirmedRefundAmountCents;
   final int effectiveAmountCents;
   final int liquorCostDeductionCents;
+  final int automaticLiquorCostDeductionCents;
+  final int? liquorCostDeductionOverrideCents;
+  final String liquorCostDeductionSource;
   final int netAmountCents;
   final String? guideId;
   final String? guideName;
@@ -6706,6 +6741,15 @@ class GuidePointsOrderRecord {
       confirmedRefundAmountCents: _intValue(json['confirmedRefundAmountCents']),
       effectiveAmountCents: _intValue(json['effectiveAmountCents']),
       liquorCostDeductionCents: _intValue(json['liquorCostDeductionCents']),
+      automaticLiquorCostDeductionCents: _intValue(
+          json['automaticLiquorCostDeductionCents'] ??
+              json['liquorCostDeductionCents']),
+      liquorCostDeductionOverrideCents:
+          json['liquorCostDeductionOverrideCents'] == null
+              ? null
+              : _intValue(json['liquorCostDeductionOverrideCents']),
+      liquorCostDeductionSource:
+          _stringOrNull(json['liquorCostDeductionSource']) ?? 'automatic',
       netAmountCents: _intValue(json['netAmountCents']),
       guideId: _stringOrNull(json['guideId']),
       guideName: _stringOrNull(json['guideName']),
@@ -7139,6 +7183,8 @@ class ProfitAnalysisSummary {
     required this.noSalesGroupCount,
     required this.effectiveSalesAmountCents,
     required this.actualProductCostCents,
+    required this.guideDailyPointsCents,
+    required this.guideMonthlyPointsCents,
     required this.taxFeeCents,
     required this.paymentServiceFeeCents,
     required this.totalExpenseCents,
@@ -7154,6 +7200,8 @@ class ProfitAnalysisSummary {
   final int noSalesGroupCount;
   final int effectiveSalesAmountCents;
   final int actualProductCostCents;
+  final int guideDailyPointsCents;
+  final int guideMonthlyPointsCents;
   final int? taxFeeCents;
   final int? paymentServiceFeeCents;
   final int totalExpenseCents;
@@ -7173,6 +7221,8 @@ class ProfitAnalysisSummary {
       noSalesGroupCount: _intValue(json['noSalesGroupCount']),
       effectiveSalesAmountCents: _intValue(json['effectiveSalesAmountCents']),
       actualProductCostCents: _intValue(json['actualProductCostCents']),
+      guideDailyPointsCents: _intValue(json['guideDailyPointsCents']),
+      guideMonthlyPointsCents: _intValue(json['guideMonthlyPointsCents']),
       taxFeeCents: _nullableNewCentsField(json, 'taxFeeCents'),
       paymentServiceFeeCents:
           _nullableNewCentsField(json, 'paymentServiceFeeCents'),
@@ -7215,6 +7265,8 @@ class TravelGroupProfitRecord {
     required this.tasterCommissionCents,
     required this.dailyAgencyRebateCents,
     required this.monthlyAgencyRebateCents,
+    required this.guideDailyPointsCents,
+    required this.guideMonthlyPointsCents,
     required this.taxFeeCents,
     required this.paymentServiceFeeCents,
     required this.paymentMethodFeeBreakdown,
@@ -7222,6 +7274,7 @@ class TravelGroupProfitRecord {
     required this.estimatedProfitCents,
     required this.estimatedProfitRate,
     required this.calculationStatus,
+    required this.components,
     required this.warnings,
   });
 
@@ -7250,6 +7303,8 @@ class TravelGroupProfitRecord {
   final int tasterCommissionCents;
   final int dailyAgencyRebateCents;
   final int monthlyAgencyRebateCents;
+  final int guideDailyPointsCents;
+  final int guideMonthlyPointsCents;
   final int? taxFeeCents;
   final int? paymentServiceFeeCents;
   final List<PaymentMethodFeeBreakdownRecord> paymentMethodFeeBreakdown;
@@ -7257,6 +7312,7 @@ class TravelGroupProfitRecord {
   final int? estimatedProfitCents;
   final double? estimatedProfitRate;
   final String calculationStatus;
+  final Map<String, ProfitComponentDiagnostic> components;
   final List<AnalyticsWarning> warnings;
 
   bool hasWarning(String code) =>
@@ -7298,6 +7354,8 @@ class TravelGroupProfitRecord {
       tasterCommissionCents: _intValue(json['tasterCommissionCents']),
       dailyAgencyRebateCents: _intValue(json['dailyAgencyRebateCents']),
       monthlyAgencyRebateCents: _intValue(json['monthlyAgencyRebateCents']),
+      guideDailyPointsCents: _intValue(json['guideDailyPointsCents']),
+      guideMonthlyPointsCents: _intValue(json['guideMonthlyPointsCents']),
       taxFeeCents: _nullableNewCentsField(json, 'taxFeeCents'),
       paymentServiceFeeCents:
           _nullableNewCentsField(json, 'paymentServiceFeeCents'),
@@ -7313,9 +7371,103 @@ class TravelGroupProfitRecord {
           : _doubleValue(json['estimatedProfitRate']),
       calculationStatus:
           _stringOrNull(json['calculationStatus']) ?? 'incomplete',
+      components: _profitComponentDiagnostics(json['components']),
       warnings: _analyticsWarnings(json['warnings']),
     );
   }
+}
+
+class ProfitCalculationIssue {
+  const ProfitCalculationIssue({
+    required this.code,
+    required this.message,
+    required this.orderId,
+    required this.orderNo,
+    required this.actionHint,
+  });
+
+  final String code;
+  final String message;
+  final String? orderId;
+  final String? orderNo;
+  final String actionHint;
+
+  factory ProfitCalculationIssue.fromJson(Map<String, dynamic> json) {
+    return ProfitCalculationIssue(
+      code: _stringOrNull(json['code']) ?? '',
+      message: _stringOrNull(json['message']) ?? '',
+      orderId: _stringOrNull(json['orderId']),
+      orderNo: _stringOrNull(json['orderNo']),
+      actionHint: _stringOrNull(json['actionHint']) ?? '',
+    );
+  }
+}
+
+class ProfitComponentDiagnostic {
+  const ProfitComponentDiagnostic({
+    required this.status,
+    required this.amountCents,
+    required this.issues,
+  });
+
+  final String status;
+  final int? amountCents;
+  final List<ProfitCalculationIssue> issues;
+
+  factory ProfitComponentDiagnostic.fromJson(Map<String, dynamic> json) {
+    return ProfitComponentDiagnostic(
+      status: _stringOrNull(json['status']) ?? 'not_applicable',
+      amountCents: json['amountCents'] == null
+          ? null
+          : _intValue(json['amountCents']),
+      issues: _list(json['issues'])
+          .map(ProfitCalculationIssue.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class ProfitRecalculationResult {
+  const ProfitRecalculationResult({
+    required this.successCount,
+    required this.failureCount,
+    required this.changedCount,
+    required this.unchangedCount,
+    required this.issues,
+    required this.profit,
+  });
+
+  final int successCount;
+  final int failureCount;
+  final int changedCount;
+  final int unchangedCount;
+  final List<ProfitCalculationIssue> issues;
+  final TravelGroupProfitRecord profit;
+
+  factory ProfitRecalculationResult.fromJson(Map<String, dynamic> json) {
+    return ProfitRecalculationResult(
+      successCount: _intValue(json['successCount']),
+      failureCount: _intValue(json['failureCount']),
+      changedCount: _intValue(json['changedCount']),
+      unchangedCount: _intValue(json['unchangedCount']),
+      issues: _list(json['issues'])
+          .map(ProfitCalculationIssue.fromJson)
+          .toList(),
+      profit: TravelGroupProfitRecord.fromJson(_map(json['profit'])),
+    );
+  }
+}
+
+Map<String, ProfitComponentDiagnostic> _profitComponentDiagnostics(
+  dynamic value,
+) {
+  if (value is! Map) return const {};
+  return value.map(
+    (key, component) => MapEntry(
+      '$key',
+      ProfitComponentDiagnostic.fromJson(_map(component)),
+    ),
+  );
 }
 
 class PaymentMethodFeeBreakdownRecord {

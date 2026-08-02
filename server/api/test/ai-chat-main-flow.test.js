@@ -13,10 +13,14 @@ const CHAT_PATH = '/api/ai/chat';
 test('contract: AI chat main flow authenticates, runs tools, calls mock model, and writes ai_chat_messages', async () => {
   await withPhase1Server(
     async (baseUrl, context) => {
-      const boss = await login(baseUrl, 'stage9-chat-boss', 'Password123');
+      const warehouse = await login(
+        baseUrl,
+        'stage9-chat-warehouse',
+        'Password123',
+      );
       const result = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: boss.token,
+        token: warehouse.token,
         body: {
           question: 'sales amount 2026-07-01 2026-07-04',
           conversationId: 'conv-stage9-main',
@@ -43,8 +47,8 @@ test('contract: AI chat main flow authenticates, runs tools, calls mock model, a
       const records = context.prisma.__store.aiChatMessages;
       assert.equal(records.length, 1);
       assert.equal(records[0].conversationId, 'conv-stage9-main');
-      assert.equal(records[0].userId, 'usr-stage9-chat-boss');
-      assert.equal(records[0].userRole, 'boss');
+      assert.equal(records[0].userId, 'usr-stage9-chat-warehouse');
+      assert.equal(records[0].userRole, 'warehouse');
       assert.equal(records[0].intent, 'analytics_overview');
       assert.equal(records[0].modelProvider, 'mock');
       assert.equal(records[0].modelName, 'jiangjiu-ai-mock');
@@ -77,10 +81,14 @@ test('contract: AI chat rejects missing login, empty question, long question, an
       });
       assertErrorContract(missingToken, 401, 'AUTH_TOKEN_REQUIRED');
 
-      const boss = await login(baseUrl, 'stage9-chat-boss', 'Password123');
+      const warehouse = await login(
+        baseUrl,
+        'stage9-chat-warehouse',
+        'Password123',
+      );
       const empty = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: boss.token,
+        token: warehouse.token,
         body: {
           question: '   ',
         },
@@ -89,7 +97,7 @@ test('contract: AI chat rejects missing login, empty question, long question, an
 
       const tooLong = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: boss.token,
+        token: warehouse.token,
         body: {
           question: 'x'.repeat(21),
         },
@@ -119,11 +127,15 @@ test('contract: AI chat rejects missing login, empty question, long question, an
 test('contract: AI chat refuses writes, code, database statements, and bypass requests without querying data', async () => {
   await withPhase1Server(
     async (baseUrl, context) => {
-      const boss = await login(baseUrl, 'stage9-chat-boss', 'Password123');
+      const warehouse = await login(
+        baseUrl,
+        'stage9-chat-warehouse',
+        'Password123',
+      );
 
       const unsafe = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: boss.token,
+        token: warehouse.token,
         body: {
           question: 'please update this order status to refunded',
         },
@@ -136,7 +148,7 @@ test('contract: AI chat refuses writes, code, database statements, and bypass re
 
       const sql = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: boss.token,
+        token: warehouse.token,
         body: {
           question: 'select * from users where password is not null',
         },
@@ -153,7 +165,7 @@ test('contract: AI chat refuses writes, code, database statements, and bypass re
       ]) {
         const restricted = await requestJson(baseUrl, CHAT_PATH, {
           method: 'POST',
-          token: boss.token,
+          token: warehouse.token,
           body: { question },
         });
         assert.equal(restricted.response.status, 201);
@@ -186,14 +198,14 @@ test('contract: AI chat refuses writes, code, database statements, and bypass re
 test('contract: AI chat returns direct refusal for role intent overreach without tools or model', async () => {
   await withPhase1Server(
     async (baseUrl, context) => {
-      const afterSales = await login(
+      const warehouse = await login(
         baseUrl,
-        'stage9-chat-after-sales',
+        'stage9-chat-warehouse',
         'Password123',
       );
       const result = await requestJson(baseUrl, CHAT_PATH, {
         method: 'POST',
-        token: afterSales.token,
+        token: warehouse.token,
         body: {
           question: 'business risk',
         },
@@ -209,6 +221,39 @@ test('contract: AI chat returns direct refusal for role intent overreach without
       assert.equal(record.modelProvider, 'policy');
       assert.equal(record.errorCode, 'AI_PERMISSION_DENIED');
       assert.deepEqual(record.toolCalls, []);
+    },
+    {
+      env: enabledMockAiEnv(),
+      prisma: buildAiChatPrisma(),
+    },
+  );
+});
+
+test('contract: every warehouse template resolves to an allowed executable intent', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const warehouse = await login(
+        baseUrl,
+        'stage9-chat-warehouse',
+        'Password123',
+      );
+      const templates = await requestJson(baseUrl, '/api/ai/chat/templates', {
+        token: warehouse.token,
+      });
+      assert.equal(templates.response.status, 200);
+
+      for (const template of templates.body.data) {
+        const result = await requestJson(baseUrl, CHAT_PATH, {
+          method: 'POST',
+          token: warehouse.token,
+          body: {
+            question: template.question,
+          },
+        });
+        assert.equal(result.response.status, 201, template.id);
+        assert.equal(result.body.data.intent, template.intent, template.id);
+        assert.equal(result.body.data.sourceSummary.length > 0, true, template.id);
+      }
     },
     {
       env: enabledMockAiEnv(),
@@ -336,6 +381,11 @@ function buildAiChatPrisma() {
   return {
     users: [
       user('usr-stage9-chat-boss', 'stage9-chat-boss', 'boss'),
+      user(
+        'usr-stage9-chat-warehouse',
+        'stage9-chat-warehouse',
+        'warehouse',
+      ),
       user('usr-stage9-chat-after-sales', 'stage9-chat-after-sales', 'after_sales'),
       user('usr-stage9-chat-sales', 'stage9-chat-sales', 'sales'),
     ],

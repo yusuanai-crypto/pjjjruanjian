@@ -44,9 +44,25 @@ test('unit: taster role metadata describes the travel group permission matrix', 
   });
 });
 
+test('unit: warehouse role metadata exposes only the new read-only analysis menus', () => {
+  const warehouse = getRoleCatalog().find((role) => role.role === 'warehouse');
+  assert.ok(warehouse);
+  const menuIds = warehouse.menus.map((menu) => menu.id);
+  for (const menuId of ['analytics', 'profit_analysis', 'ai_assistant']) {
+    assert.equal(menuIds.includes(menuId), true, menuId);
+  }
+  assert.match(warehouse.description, /只读查看数据分析、利润分析/);
+  assert.equal(
+    warehouse.permissions.includes('inventory:purchase_costs:read'),
+    false,
+  );
+  assert.equal(warehouse.permissions.includes('finance:overview'), false);
+});
+
 const INVENTORY_READ_PERMISSIONS = [
   'inventory:configuration:read',
   'inventory:warehouses:read',
+  'inventory:warehouse_products:read',
   'inventory:stocks:read',
   'inventory:movements:read',
   'inventory:inbounds:read',
@@ -59,6 +75,8 @@ const INVENTORY_COST_READ_PERMISSIONS = [
 const INVENTORY_MANAGE_PERMISSIONS = [
   'inventory:configuration:manage',
   'inventory:warehouses:manage',
+  'inventory:warehouses:delete',
+  'inventory:warehouse_products:manage',
   'inventory:alert_configs:manage',
   'inventory:rebuild_check',
 ];
@@ -93,6 +111,10 @@ const SPECIAL_ORDER_REVIEW_PERMISSIONS = [
   'special_orders:unapprove',
   'special_orders:complete',
   'special_orders:payments',
+  'special_orders:update',
+  'special_orders:cancel',
+  'special_orders:refund',
+  'special_orders:commissions',
   'special_orders:export',
 ];
 
@@ -112,6 +134,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'users:update',
     'users:disable',
     'users:enable',
+    'users:delete',
     'users:reset_password',
     'settings:global_mark:read',
     'settings:global_mark:enable',
@@ -176,6 +199,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'users:update',
     'users:disable',
     'users:enable',
+    'users:delete',
     'users:reset_password',
     'settings:global_mark:read',
     'settings:global_mark:enable',
@@ -342,6 +366,7 @@ const EXPECTED_ROLE_PERMISSIONS = {
     'sales_orders:list',
     'sales_orders:read',
     'sales_orders:create',
+    ...SPECIAL_ORDER_REVIEW_PERMISSIONS,
     'sales_orders:finance_mark',
     'sales_orders:update_shipping_date',
     'guide_points_summaries:list',
@@ -540,12 +565,13 @@ test('contract: protected auth endpoints require bearer token and return current
       'super_admin',
       'admin',
       'boss',
+      'finance',
       'sales',
       'after_sales',
     ]) {
       assert.equal(roleMenus[role].includes('special_orders'), true);
     }
-    for (const role of ['front_desk', 'finance', 'warehouse', 'taster']) {
+    for (const role of ['front_desk', 'warehouse', 'taster']) {
       assert.equal(roleMenus[role].includes('special_orders'), false);
     }
     assert.equal(roleMenus.after_sales.includes('after_sales_orders'), true);
@@ -564,7 +590,10 @@ test('contract: protected auth endpoints require bearer token and return current
     assert.equal(roleMenus.warehouse.includes('warehouse_workspace'), true);
     assert.equal(roleMenus.warehouse.includes('travel_group_query'), true);
     assert.equal(roleMenus.warehouse.includes('after_sales_orders'), true);
-    assert.equal(roleMenus.boss.includes('after_sales_orders'), false);
+    assert.equal(roleMenus.warehouse.includes('analytics'), true);
+    assert.equal(roleMenus.warehouse.includes('profit_analysis'), true);
+    assert.equal(roleMenus.warehouse.includes('ai_assistant'), true);
+    assert.equal(roleMenus.boss.includes('after_sales_orders'), true);
     assert.equal(roleMenus.boss.includes('finance_workspace'), false);
     assert.equal(roleMenus.boss.includes('reconciliation_table'), false);
     assert.equal(roleMenus.boss.includes('warehouse_workspace'), false);
@@ -581,9 +610,14 @@ test('contract: protected auth endpoints require bearer token and return current
       assert.equal(roleMenus[role].includes('travel_agency_management'), false);
       assert.equal(roleMenus[role].includes('product_management'), false);
     }
-    for (const role of ['sales', 'warehouse', 'front_desk', 'taster']) {
+    for (const role of ['sales', 'front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('ai_assistant'), false);
     }
+
+    const warehouseRole = roles.body.data.roles.find(
+      (role) => role.role === 'warehouse',
+    );
+    assert.match(warehouseRole.description, /只读查看数据分析、利润分析/);
     for (const role of ['sales', 'front_desk', 'taster']) {
       assert.equal(roleMenus[role].includes('after_sales_orders'), false);
       assert.equal(roleMenus[role].includes('finance_workspace'), false);
@@ -1152,6 +1186,7 @@ test('contract: admin user management paths preserve request and response struct
     assertPublicUserContract(updated.body.data.user);
     assert.equal(updated.body.data.user.name, '测试财务');
     assert.equal(updated.body.data.user.role, 'finance');
+    assert.equal(updated.body.data.user.username, '13900000000');
 
     const disabled = await requestJson(baseUrl, `/api/users/${createdUser.id}/disable`, {
       method: 'POST',
@@ -1166,7 +1201,7 @@ test('contract: admin user management paths preserve request and response struct
     const disabledLogin = await requestJson(baseUrl, '/api/auth/login', {
       method: 'POST',
       body: {
-        username: '13800000000',
+        username: '13900000000',
         password: 'Password123',
       },
     });
@@ -1208,11 +1243,11 @@ test('contract: admin user management paths preserve request and response struct
       },
     );
     assert.equal(reset.response.status, 200);
-    assert.equal(reset.body.data.user.username, '13800000000');
+    assert.equal(reset.body.data.user.username, '13900000000');
 
     const resetLogin = await login(
       baseUrl,
-      '13800000000',
+      '13900000000',
       'ResetPassword123',
     );
     assert.equal(resetLogin.user.role, 'finance');
@@ -1223,6 +1258,358 @@ test('contract: admin user management paths preserve request and response struct
       SMS_VERIFICATION_DEBUG: 'true',
     },
   });
+});
+
+test('contract: profile updates preserve independent usernames and keep username uniqueness', async () => {
+  await withPhase1Server(
+    async (baseUrl, { prisma }) => {
+      const admin = await login(baseUrl);
+      const independentUpdate = await requestJson(
+        baseUrl,
+        '/api/users/usr_independent_username',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            name: 'Independent Login',
+            phone: '13900000021',
+            role: 'finance',
+          },
+        },
+      );
+      assert.equal(independentUpdate.response.status, 200);
+      assert.equal(
+        independentUpdate.body.data.user.username,
+        'independent-login',
+      );
+
+      const collision = await requestJson(
+        baseUrl,
+        '/api/users/usr_phone_login',
+        {
+          method: 'PATCH',
+          token: admin.token,
+          body: {
+            name: 'Phone Login',
+            phone: '13900000022',
+            role: 'sales',
+          },
+        },
+      );
+      assertErrorContract(collision, 409, 'USERNAME_EXISTS');
+      const stored = prisma.__store.users.find(
+        (user) => user.id === 'usr_phone_login',
+      );
+      assert.equal(stored.phone, '13800000022');
+      assert.equal(stored.username, '13800000022');
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: 'usr_independent_username',
+            username: 'independent-login',
+            phone: '13800000021',
+            role: 'sales',
+          },
+          {
+            id: 'usr_phone_login',
+            username: '13800000022',
+            phone: '13800000022',
+            role: 'sales',
+          },
+          {
+            id: 'usr_username_collision',
+            username: '13900000022',
+            phone: null,
+            role: 'sales',
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: deleting an employee is transactional soft deletion with audit and session revocation', async () => {
+  await withPhase1Server(
+    async (baseUrl, { prisma }) => {
+      const superAdmin = await login(baseUrl);
+      const employee = await login(
+        baseUrl,
+        '13800000031',
+        'EmployeePassword123',
+      );
+      prisma.__store.salesOrders.push({
+        id: 'historical-order',
+        salesUserId: employee.user.id,
+      });
+      prisma.__store.commissionRecords.push({
+        id: 'historical-commission',
+        targetUserId: employee.user.id,
+      });
+      prisma.__store.inventoryMovements.push({
+        id: 'historical-inventory-movement',
+        operatorId: employee.user.id,
+      });
+      prisma.__store.operationLogs.push({
+        id: 'historical-operation-log',
+        userId: employee.user.id,
+        action: 'sales_orders.create',
+      });
+
+      const deleted = await requestJson(
+        baseUrl,
+        `/api/users/${employee.user.id}`,
+        {
+          method: 'DELETE',
+          token: superAdmin.token,
+          body: {
+            reason: '员工已经离职',
+          },
+        },
+      );
+      assert.equal(deleted.response.status, 200);
+      assertPublicUserContract(deleted.body.data.user);
+      assert.equal(deleted.body.data.user.isActive, false);
+
+      const stored = prisma.__store.users.find(
+        (user) => user.id === employee.user.id,
+      );
+      assert.equal(stored.deletedAt instanceof Date, true);
+      assert.equal(stored.deletedById, superAdmin.user.id);
+      assert.equal(stored.deleteReason, '员工已经离职');
+      assert.equal(stored.isActive, false);
+      assert.equal(stored.tokenVersion, 1);
+      assert.equal(
+        prisma.__store.refreshSessions
+          .filter((session) => session.userId === employee.user.id)
+          .every(
+            (session) =>
+              session.revokedAt instanceof Date &&
+              session.revokeReason === 'account_deleted',
+          ),
+        true,
+      );
+
+      assert.equal(
+        prisma.__store.salesOrders.some(
+          (order) => order.id === 'historical-order',
+        ),
+        true,
+      );
+      assert.equal(
+        prisma.__store.commissionRecords.some(
+          (record) => record.id === 'historical-commission',
+        ),
+        true,
+      );
+      assert.equal(
+        prisma.__store.inventoryMovements.some(
+          (movement) => movement.id === 'historical-inventory-movement',
+        ),
+        true,
+      );
+      assert.equal(
+        prisma.__store.operationLogs.some(
+          (log) => log.id === 'historical-operation-log',
+        ),
+        true,
+      );
+
+      const deleteLog = prisma.__store.operationLogs.find(
+        (log) =>
+          log.action === 'users.delete' && log.entityId === employee.user.id,
+      );
+      assert.ok(deleteLog);
+      assert.equal(deleteLog.userId, superAdmin.user.id);
+      assert.equal(deleteLog.beforeData.name, employee.user.name);
+      assert.equal(deleteLog.afterData.deleteReason, '员工已经离职');
+      assert.equal(deleteLog.afterData.isActive, false);
+
+      const list = await requestJson(baseUrl, '/api/users', {
+        token: superAdmin.token,
+      });
+      assert.equal(
+        list.body.data.users.some((user) => user.id === employee.user.id),
+        false,
+      );
+      const detail = await requestJson(
+        baseUrl,
+        `/api/users/${employee.user.id}`,
+        { token: superAdmin.token },
+      );
+      assertErrorContract(detail, 404, 'USER_NOT_FOUND');
+      for (const [method, suffix, body] of [
+        ['PATCH', '', { name: 'Blocked update' }],
+        ['POST', '/enable', { reason: 'Blocked enable' }],
+        ['POST', '/reset-password-to-default', { reason: 'Blocked reset' }],
+      ]) {
+        const mutation = await requestJson(
+          baseUrl,
+          `/api/users/${employee.user.id}${suffix}`,
+          {
+            method,
+            token: superAdmin.token,
+            body,
+          },
+        );
+        assertErrorContract(mutation, 404, 'USER_NOT_FOUND');
+      }
+
+      const deletedLogin = await requestJson(baseUrl, '/api/auth/login', {
+        method: 'POST',
+        body: {
+          username: '13800000031',
+          password: 'EmployeePassword123',
+        },
+      });
+      assertErrorContract(deletedLogin, 401, 'INVALID_CREDENTIALS');
+      const oldToken = await requestJson(baseUrl, '/api/auth/me', {
+        token: employee.token,
+      });
+      assertErrorContract(oldToken, 401, 'SESSION_REVOKED');
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: 'usr_deleted_employee',
+            name: '待删除员工',
+            username: '13800000031',
+            phone: '13800000031',
+            password: 'EmployeePassword123',
+            role: 'sales',
+          },
+        ],
+      },
+    },
+  );
+});
+
+test('contract: delete permission enforces self, role hierarchy, and protected super administrators', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const superAdmin = await login(baseUrl);
+      const admin = await login(
+        baseUrl,
+        'delete-admin',
+        'DeleteAdminPassword123',
+      );
+      const employee = await login(
+        baseUrl,
+        'delete-sales',
+        'DeleteSalesPassword123',
+      );
+
+      const selfDelete = await requestJson(
+        baseUrl,
+        `/api/users/${admin.user.id}`,
+        {
+          method: 'DELETE',
+          token: admin.token,
+          body: { reason: 'Blocked self deletion' },
+        },
+      );
+      assertErrorContract(selfDelete, 400, 'CANNOT_DELETE_SELF');
+
+      const peerAdminDelete = await requestJson(
+        baseUrl,
+        '/api/users/usr_delete_peer_admin',
+        {
+          method: 'DELETE',
+          token: admin.token,
+          body: { reason: 'Blocked hierarchy deletion' },
+        },
+      );
+      assertErrorContract(peerAdminDelete, 403, 'SUPER_ADMIN_REQUIRED');
+
+      for (const [token, id] of [
+        [admin.token, 'usr_admin'],
+        [superAdmin.token, 'usr_delete_second_super_admin'],
+      ]) {
+        const protectedDelete = await requestJson(
+          baseUrl,
+          `/api/users/${id}`,
+          {
+            method: 'DELETE',
+            token,
+            body: { reason: 'Blocked protected deletion' },
+          },
+        );
+        assertErrorContract(
+          protectedDelete,
+          403,
+          'SUPER_ADMIN_ACCOUNT_PROTECTED',
+        );
+      }
+
+      const noPermission = await requestJson(
+        baseUrl,
+        '/api/users/usr_delete_ordinary',
+        {
+          method: 'DELETE',
+          token: employee.token,
+          body: { reason: 'Blocked permission deletion' },
+        },
+      );
+      assertErrorContract(noPermission, 403, 'PERMISSION_DENIED');
+
+      const ordinaryDelete = await requestJson(
+        baseUrl,
+        '/api/users/usr_delete_ordinary',
+        {
+          method: 'DELETE',
+          token: admin.token,
+          body: { reason: 'Admin deletes ordinary employee' },
+        },
+      );
+      assert.equal(ordinaryDelete.response.status, 200);
+
+      const adminDelete = await requestJson(
+        baseUrl,
+        '/api/users/usr_delete_peer_admin',
+        {
+          method: 'DELETE',
+          token: superAdmin.token,
+          body: { reason: 'Super administrator deletes administrator' },
+        },
+      );
+      assert.equal(adminDelete.response.status, 200);
+    },
+    {
+      prisma: {
+        users: [
+          {
+            id: 'usr_delete_admin',
+            username: 'delete-admin',
+            password: 'DeleteAdminPassword123',
+            role: 'admin',
+          },
+          {
+            id: 'usr_delete_peer_admin',
+            username: 'delete-peer-admin',
+            role: 'admin',
+          },
+          {
+            id: 'usr_delete_second_super_admin',
+            username: 'delete-second-super-admin',
+            role: 'super_admin',
+          },
+          {
+            id: 'usr_delete_sales_actor',
+            username: 'delete-sales',
+            password: 'DeleteSalesPassword123',
+            role: 'sales',
+          },
+          {
+            id: 'usr_delete_ordinary',
+            username: 'delete-ordinary',
+            role: 'finance',
+          },
+        ],
+      },
+    },
+  );
 });
 
 test('contract: non-admin users cannot manage users and taster data scopes expose the travel permission matrix', async () => {
@@ -1959,7 +2346,7 @@ test('contract: the last active super administrator cannot be frozen or downgrad
         role: 'admin',
       },
     });
-    assertErrorContract(downgraded, 409, 'LAST_ACTIVE_SUPER_ADMIN');
+    assertErrorContract(downgraded, 400, 'CANNOT_UPDATE_SELF');
 
     const current = prisma.__store.users.find(
       (user) => user.id === 'usr_admin',
@@ -1969,7 +2356,7 @@ test('contract: the last active super administrator cannot be frozen or downgrad
   });
 });
 
-test('service: concurrent super_admin downgrades cannot remove every active super administrator', async () => {
+test('service: concurrent super_admin downgrades preserve self-protection and one active super administrator', async () => {
   await withPhase1Server(
     async (_baseUrl, { prisma }) => {
       const service = new UsersNestService(
@@ -1998,7 +2385,7 @@ test('service: concurrent super_admin downgrades cannot remove every active supe
       const rejected = results.find(
         (result) => result.status === 'rejected',
       );
-      assert.equal(rejected.reason.code, 'LAST_ACTIVE_SUPER_ADMIN');
+      assert.equal(rejected.reason.code, 'CANNOT_UPDATE_SELF');
       assert.equal(
         prisma.__store.users.filter(
           (user) => user.role === 'SUPER_ADMIN' && user.isActive,

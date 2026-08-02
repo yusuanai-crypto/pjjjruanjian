@@ -27,6 +27,7 @@ test('contract: analytics taster rankings enforces role permissions', async () =
       'admin',
       'stage8-ranking-boss',
       'stage8-ranking-finance',
+      'stage8-ranking-warehouse',
       'stage8-ranking-after-sales',
     ]) {
       const session =
@@ -47,7 +48,6 @@ test('contract: analytics taster rankings enforces role permissions', async () =
     for (const username of [
       'stage8-ranking-sales',
       'stage8-ranking-front-desk',
-      'stage8-ranking-warehouse',
       'stage8-ranking-taster',
     ]) {
       const session = await login(baseUrl, username, 'Password123');
@@ -461,6 +461,7 @@ test('contract: analytics company API role matrix covers every endpoint', async 
       'admin',
       'stage8-ranking-boss',
       'stage8-ranking-finance',
+      'stage8-ranking-warehouse',
       'stage8-ranking-after-sales',
     ];
     for (const username of allowedUsers) {
@@ -485,7 +486,6 @@ test('contract: analytics company API role matrix covers every endpoint', async 
     const deniedUsers = [
       'stage8-ranking-taster',
       'stage8-ranking-sales',
-      'stage8-ranking-warehouse',
       'stage8-ranking-front-desk',
     ];
     for (const username of deniedUsers) {

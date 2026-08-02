@@ -41,7 +41,12 @@ test('unit: stage7 commission record service generates order-level records', asy
 
   assert.equal(result.generatedRecords.length, 5);
   assert.equal(result.updatedRecords.length, 0);
-  assertWarningCodes(result, ['unconfirmed_after_sales_refund']);
+  assert.equal(
+    result.warnings.some(
+      (warning) => warning.code === 'unconfirmed_after_sales_refund',
+    ),
+    false,
+  );
   assert.deepEqual(
     prisma.__store.commissionRecords.map((record) => record.targetType).sort(),
     [
@@ -56,22 +61,25 @@ test('unit: stage7 commission record service generates order-level records', asy
   assertRecord(prisma, 'SALES_COMMISSION', {
     targetUserId: 'user-sales',
     grossAmountCents: 1000000,
-    confirmedRefundAmountCents: 100000,
-    baseAmountCents: 800000,
+    confirmedRefundAmountCents: 0,
+    baseAmountCents: 900000,
     deductionAmountCents: 100000,
     rateSnapshot: '0.0200',
-    amountCents: 16000,
+    amountCents: 18000,
     pointsCents: 0,
     commissionRuleId: 'rule-sales',
   });
   assertRecord(prisma, 'OUTREACH_COMMISSION', {
-    targetUserId: 'user-outreach',
-    amountCents: 6400,
+    targetUserId: null,
+    automaticScopeKey:
+      'sales-order:order-stage7:OUTREACH_COMMISSION:automatic',
+    amountCents: 7200,
     commissionRuleId: 'rule-outreach',
   });
   assertRecord(prisma, 'LEADER_COMMISSION', {
-    targetUserId: 'user-leader',
-    amountCents: 1920,
+    targetUserId: null,
+    automaticScopeKey: 'sales-order:order-stage7:LEADER_COMMISSION:automatic',
+    amountCents: 2160,
     commissionRuleId: 'rule-leader',
   });
   assertRecord(prisma, 'AGENCY_DAILY_REBATE', {
@@ -98,8 +106,8 @@ test('unit: stage7 commission record service generates order-level records', asy
     'rule-sales',
   );
   assert.equal(salesRecord.ruleSnapshot.salesDeductionRules.length, 2);
-  assert.equal(salesRecord.sourceSnapshot.confirmedRefunds.length, 1);
-  assert.equal(salesRecord.sourceSnapshot.unconfirmedRefundSummary.count, 1);
+  assert.equal(salesRecord.sourceSnapshot.confirmedRefunds.length, 0);
+  assert.equal(salesRecord.sourceSnapshot.unconfirmedRefundSummary.count, 0);
   assert.equal(
     salesRecord.sourceSnapshot.travelAgencyMatch.matchedTravelAgencyId,
     'agency-1',
@@ -126,7 +134,7 @@ test('unit: stage7 commission record service generates order-level records', asy
   }
 });
 
-test('unit: stage7 commission record service skips outreach when attribution is missing', async () => {
+test('unit: stage7 commission record service generates order-level outreach without attribution', async () => {
   const prisma = createCommissionPrisma({
     salesOrder: {
       outreachUserId: null,
@@ -137,17 +145,21 @@ test('unit: stage7 commission record service skips outreach when attribution is 
 
   const result = await service.recalculateSalesOrderRecords('order-stage7');
 
-  assert.equal(result.generatedRecords.length, 4);
+  assert.equal(result.generatedRecords.length, 5);
   assert.equal(
     prisma.__store.commissionRecords.some(
       (record) => record.targetType === 'OUTREACH_COMMISSION',
     ),
+    true,
+  );
+  assert.equal(findRecord(prisma, 'OUTREACH_COMMISSION').targetUserId, null);
+  assert.equal(
+    result.warnings.some((warning) => warning.code === 'missing_outreach_user'),
     false,
   );
-  assertWarningCodes(result, ['missing_outreach_user']);
 });
 
-test('unit: stage7 commission record service skips leader when sales has no leaderId', async () => {
+test('unit: stage7 commission record service generates order-level leader without leader config', async () => {
   const prisma = createCommissionPrisma({
     salesOrder: {
       salesUser: {
@@ -162,14 +174,18 @@ test('unit: stage7 commission record service skips leader when sales has no lead
 
   const result = await service.recalculateSalesOrderRecords('order-stage7');
 
-  assert.equal(result.generatedRecords.length, 4);
+  assert.equal(result.generatedRecords.length, 5);
   assert.equal(
     prisma.__store.commissionRecords.some(
       (record) => record.targetType === 'LEADER_COMMISSION',
     ),
+    true,
+  );
+  assert.equal(findRecord(prisma, 'LEADER_COMMISSION').targetUserId, null);
+  assert.equal(
+    result.warnings.some((warning) => warning.code === 'missing_leader'),
     false,
   );
-  assertWarningCodes(result, ['missing_leader']);
 });
 
 test('unit: commission rule outside the order date does not generate the targeted employee commission', async () => {
@@ -202,7 +218,7 @@ test('unit: commission rule outside the order date does not generate the targete
   );
 });
 
-test('unit: disabling an employee rule zeroes its stale snapshot without touching manual taster commission', async () => {
+test('unit: disabling an employee rule deactivates its stale snapshot without rewriting history', async () => {
   const prisma = createCommissionPrisma();
   const service = createService(prisma);
 
@@ -231,9 +247,10 @@ test('unit: disabling an employee rule zeroes its stale snapshot without touchin
   assert.equal(result.generatedRecords.length, 0);
   assert.equal(result.updatedRecords.length, 1);
   assertRecord(prisma, 'OUTREACH_COMMISSION', {
-    amountCents: 0,
-    commissionRuleId: null,
+    amountCents: 7200,
+    commissionRuleId: 'rule-outreach',
     manualInput: false,
+    isActive: false,
   });
   const manualTaster = prisma.__store.commissionRecords.find(
     (record) => record.id === 'manual-taster-record',
@@ -302,7 +319,7 @@ test('unit: changing employee attribution recalculates idempotently without dupl
   assert.equal(findRecord(prisma, 'SALES_COMMISSION').targetUserId, 'user-sales-next');
   assert.equal(
     findRecord(prisma, 'OUTREACH_COMMISSION').targetUserId,
-    'user-outreach-next',
+    null,
   );
   assert.equal(repeated.generatedRecords.length, 0);
   assert.equal(repeated.updatedRecords.length, 0);
@@ -347,7 +364,7 @@ test('unit: commission record manual fallback creates rebates once with audited 
   assert.equal(prisma.__store.commissionRecords.length, 2);
 });
 
-test('unit: stage7 commission record recalculation updates amounts after confirmed refund changes', async () => {
+test('unit: stage7 recalculation keeps independent refund out of employee commission and refreshes agency rebate', async () => {
   const prisma = createCommissionPrisma();
   const service = createService(prisma);
   const actor = { id: 'user-finance' };
@@ -366,9 +383,9 @@ test('unit: stage7 commission record recalculation updates amounts after confirm
   assert.equal(result.updatedRecords.length, 5);
   assert.equal(prisma.__store.commissionRecords.length, 5);
   assertRecord(prisma, 'SALES_COMMISSION', {
-    confirmedRefundAmountCents: 200000,
-    baseAmountCents: 700000,
-    amountCents: 14000,
+    confirmedRefundAmountCents: 0,
+    baseAmountCents: 900000,
+    amountCents: 18000,
   });
   assertRecord(prisma, 'AGENCY_DAILY_REBATE', {
     baseAmountCents: 680000,
@@ -379,8 +396,8 @@ test('unit: stage7 commission record recalculation updates amounts after confirm
     (log) => log.action === 'commission_records.recalculate',
   );
   assert.equal(recalcLogs.length, 5);
-  assert.equal(recalcLogs[0].beforeData.confirmedRefundAmountCents, 100000);
-  assert.equal(recalcLogs[0].afterData.confirmedRefundAmountCents, 200000);
+  assert.equal(recalcLogs[0].beforeData.confirmedRefundAmountCents, 0);
+  assert.equal(recalcLogs[0].afterData.confirmedRefundAmountCents, 0);
   for (const log of recalcLogs) {
     assertStage7ServiceLog(log, {
       action: 'commission_records.recalculate',

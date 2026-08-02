@@ -72,6 +72,36 @@ test('smoke: partial personal migration backfills historical whole-personal orde
   );
 });
 
+test('smoke: order-level personal liquor cost override is nullable and non-negative', () => {
+  const schema = fs.readFileSync(
+    path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+    'utf8',
+  );
+  const migration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '..',
+      'prisma',
+      'migrations',
+      '20260802000100_add_personal_liquor_cost_override',
+      'migration.sql',
+    ),
+    'utf8',
+  );
+  assert.match(
+    schema,
+    /personalLiquorCostDeductionOverrideCents\s+Int\?\s+@map\("personal_liquor_cost_deduction_override_cents"\)/,
+  );
+  assert.match(
+    migration,
+    /ADD COLUMN `personal_liquor_cost_deduction_override_cents` INTEGER NULL/,
+  );
+  assert.match(
+    migration,
+    /personal_liquor_cost_deduction_override_cents` >= 0/,
+  );
+});
+
 test('unit: guide points menu and permissions match the four-role matrix', () => {
   for (const role of ['super_admin', 'admin', 'finance', 'boss']) {
     assert.ok(
@@ -598,6 +628,228 @@ test('contract: paid states protect only the affected guide rate and boss remain
   });
 });
 
+test('contract: admin and finance can update one order liquor cost and the manual value survives recalculation', async () => {
+  await withGuidePointsServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const finance = await login(
+      baseUrl,
+      'guide-points-finance',
+      'Password123',
+    );
+    const switched = await switchDestination(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      {
+        personalAmountCents: 10000,
+        guideId: GUIDE_A_ID,
+      },
+    );
+    assert.equal(switched.response.status, 200, bodyText(switched));
+
+    const adminUpdate = await updateLiquorCost(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      1000,
+    );
+    assert.equal(adminUpdate.response.status, 200, bodyText(adminUpdate));
+    let summary = adminUpdate.body.data.guidePointsSummary;
+    assert.equal(summary.totalLiquorCostDeductionCents, 1000);
+    assert.equal(summary.totalNetAmountCents, 9000);
+    assert.equal(summary.totalDailyPointsCents, 4500);
+    assert.equal(summary.totalMonthlyPointsCents, 0);
+    assert.deepEqual(
+      pick(summary.orders[0], [
+        'liquorCostDeductionCents',
+        'automaticLiquorCostDeductionCents',
+        'liquorCostDeductionOverrideCents',
+        'liquorCostDeductionSource',
+        'netAmountCents',
+        'dailyPointsCents',
+      ]),
+      {
+        liquorCostDeductionCents: 1000,
+        automaticLiquorCostDeductionCents: 0,
+        liquorCostDeductionOverrideCents: 1000,
+        liquorCostDeductionSource: 'manual_override',
+        netAmountCents: 9000,
+        dailyPointsCents: 4500,
+      },
+    );
+
+    const financeUpdate = await updateLiquorCost(
+      baseUrl,
+      finance.token,
+      ORDER_A_ID,
+      1234,
+    );
+    assert.equal(financeUpdate.response.status, 200, bodyText(financeUpdate));
+    summary = financeUpdate.body.data.guidePointsSummary;
+    assert.equal(summary.totalLiquorCostDeductionCents, 1234);
+    assert.equal(summary.totalNetAmountCents, 8766);
+    assert.equal(summary.totalDailyPointsCents, 4383);
+
+    const recalculated = await updateRates(
+      baseUrl,
+      finance.token,
+      ORDER_A_ID,
+      { monthlyRebateRate: '0.1000' },
+    );
+    assert.equal(recalculated.response.status, 200, bodyText(recalculated));
+    assert.equal(
+      recalculated.body.data.guidePointsSummary.orders[0]
+        .liquorCostDeductionCents,
+      1234,
+    );
+    assert.equal(
+      recalculated.body.data.guidePointsSummary.orders[0]
+        .liquorCostDeductionSource,
+      'manual_override',
+    );
+
+    const ordinary = await getOrdinarySummary(baseUrl, admin.token);
+    assert.equal(ordinary.totalSalesAmountCents, 20000);
+    assert.equal(ordinary.confirmedRefundAmountCents, 2000);
+    assert.equal(ordinary.effectiveSalesAmountCents, 18000);
+    assert.equal(ordinary.totalAgencyDeductionCents, 0);
+
+    const logs = await listLogs(baseUrl, admin.token);
+    const firstLog = logs.find(
+      (entry) =>
+        entry.action ===
+          'guide_points_orders.liquor_cost_deduction.update' &&
+        entry.entityId === ORDER_A_ID &&
+        entry.afterData?.liquorCostDeductionCents === 1000,
+    );
+    assert.ok(firstLog);
+    assert.equal(firstLog.beforeData.liquorCostDeductionSource, 'automatic');
+    assert.equal(firstLog.beforeData.automaticLiquorCostDeductionCents, 0);
+    assert.equal(firstLog.afterData.liquorCostDeductionSource, 'manual_override');
+    assert.equal(firstLog.afterData.liquorCostDeductionOverrideCents, 1000);
+    const log = logs.find(
+      (entry) =>
+        entry.action ===
+          'guide_points_orders.liquor_cost_deduction.update' &&
+        entry.entityId === ORDER_A_ID &&
+        entry.afterData?.liquorCostDeductionCents === 1234,
+    );
+    assert.ok(log);
+    assert.equal(log.entityType, 'sales_order');
+    assert.equal(log.beforeData.liquorCostDeductionCents, 1000);
+    assert.equal(log.beforeData.liquorCostDeductionSource, 'manual_override');
+    assert.equal(log.afterData.liquorCostDeductionCents, 1234);
+    assert.equal(log.afterData.liquorCostDeductionOverrideCents, 1234);
+    assert.equal(log.afterData.liquorCostDeductionSource, 'manual_override');
+    assert.equal('customerName' in log.beforeData, false);
+    assert.equal('customerPhone' in log.afterData, false);
+  });
+});
+
+test('contract: liquor cost update validates permissions, order eligibility, integer bounds, and paid states', async () => {
+  await withGuidePointsServer(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const boss = await login(
+      baseUrl,
+      'guide-points-boss',
+      'Password123',
+    );
+    const sales = await login(
+      baseUrl,
+      'guide-points-sales',
+      'Password123',
+    );
+
+    const nonPersonal = await updateLiquorCost(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      0,
+    );
+    assertErrorContract(nonPersonal, 400, 'GUIDE_PERSONAL_ORDER_REQUIRED');
+    const missing = await updateLiquorCost(
+      baseUrl,
+      admin.token,
+      'missing-order',
+      0,
+    );
+    assertErrorContract(missing, 404, 'SALES_ORDER_NOT_FOUND');
+    for (const actor of [boss, sales]) {
+      const denied = await updateLiquorCost(
+        baseUrl,
+        actor.token,
+        ORDER_A_ID,
+        0,
+      );
+      assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+    }
+
+    const switched = await switchDestination(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      {
+        personalAmountCents: 10000,
+        guideId: GUIDE_A_ID,
+      },
+    );
+    assert.equal(switched.response.status, 200, bodyText(switched));
+    for (const value of [-1, 1.5, '100']) {
+      const invalid = await updateLiquorCost(
+        baseUrl,
+        admin.token,
+        ORDER_A_ID,
+        value,
+      );
+      assertErrorContract(
+        invalid,
+        400,
+        value === -1
+          ? 'LIQUOR_COST_DEDUCTION_OUT_OF_RANGE'
+          : 'LIQUOR_COST_DEDUCTION_INVALID',
+      );
+    }
+    const tooLarge = await updateLiquorCost(
+      baseUrl,
+      admin.token,
+      ORDER_A_ID,
+      10001,
+    );
+    assertErrorContract(
+      tooLarge,
+      400,
+      'LIQUOR_COST_DEDUCTION_OUT_OF_RANGE',
+    );
+
+    const summaryId = (await listGuideSummaries(baseUrl, admin.token))[0].id;
+    for (const type of ['daily', 'monthly']) {
+      const paid = await setPaid(
+        baseUrl,
+        admin.token,
+        summaryId,
+        type,
+        true,
+      );
+      assert.equal(paid.response.status, 200, bodyText(paid));
+      const blocked = await updateLiquorCost(
+        baseUrl,
+        admin.token,
+        ORDER_A_ID,
+        500,
+      );
+      assertErrorContract(blocked, 409, 'GUIDE_POINTS_ALREADY_PAID');
+      const unpaid = await setPaid(
+        baseUrl,
+        admin.token,
+        summaryId,
+        type,
+        false,
+      );
+      assert.equal(unpaid.response.status, 200, bodyText(unpaid));
+    }
+  });
+});
+
 test('contract: ordinary paid summary blocks transfer and injected summary failure rolls the transaction back', async () => {
   await withGuidePointsServer(
     async (baseUrl) => {
@@ -794,6 +1046,18 @@ async function updateRates(baseUrl, token, orderId, body) {
     baseUrl,
     `/api/guide-points-summaries/orders/${orderId}/rates`,
     { method: 'PATCH', token, body },
+  );
+}
+
+async function updateLiquorCost(baseUrl, token, orderId, value) {
+  return requestJson(
+    baseUrl,
+    `/api/guide-points-summaries/orders/${orderId}/liquor-cost-deduction`,
+    {
+      method: 'PATCH',
+      token,
+      body: { liquorCostDeductionCents: value },
+    },
   );
 }
 

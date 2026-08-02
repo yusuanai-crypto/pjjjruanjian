@@ -1425,12 +1425,6 @@ class _OrderDetailPanel extends StatelessWidget {
               ),
             ],
             _InfoRow(label: '销售人员', value: _display(order.salesUserId)),
-            _InfoRow(
-              label: '外联人员',
-              value: order.outreachUserId == null
-                  ? '无外联，不计算外联提成'
-                  : order.outreachUserId!,
-            ),
             const Divider(height: 24),
             const _SectionTitle('客户快照'),
             _InfoRow(label: '客户姓名', value: _display(order.customerName)),
@@ -3015,9 +3009,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
   bool _loadingAssignmentOptions = false;
   String? _assignmentOptionsError;
   String? _selectedSalesUserId;
-  String? _selectedOutreachUserId;
-
-  static const _noOutreachValue = '__no_outreach__';
 
   @override
   void initState() {
@@ -3033,7 +3024,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     _salesFormNoController =
         TextEditingController(text: widget.order.salesFormNo ?? '');
     _selectedSalesUserId = widget.order.salesUserId;
-    _selectedOutreachUserId = widget.order.outreachUserId;
     _remarkController = TextEditingController(text: widget.order.remark ?? '');
     _travelGroupIdController =
         TextEditingController(text: widget.order.travelGroupId ?? '');
@@ -3101,9 +3091,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
         if (!ids.contains(_selectedSalesUserId)) {
           _selectedSalesUserId =
               options.canChangeSalesUser ? null : options.currentUserId;
-        }
-        if (!ids.contains(_selectedOutreachUserId)) {
-          _selectedOutreachUserId = null;
         }
       });
     } catch (error) {
@@ -3331,17 +3318,12 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
 
     if (_loadingAssignmentOptions || _assignmentOptionsError != null) {
       setState(() => _errorMessage = _assignmentOptionsError == null
-          ? '销售与外联人员正在加载，请稍后再保存。'
-          : '销售与外联人员加载失败：$_assignmentOptionsError');
+          ? '销售人员正在加载，请稍后再保存。'
+          : '销售人员加载失败：$_assignmentOptionsError');
       return;
     }
     if (_selectedSalesUserId == null) {
       setState(() => _errorMessage = '请选择销售人员。');
-      return;
-    }
-    if ((_assignmentOptions?.outreachCommissionRequired ?? false) &&
-        _selectedOutreachUserId == null) {
-      setState(() => _errorMessage = '当前存在启用的外联提成规则，请选择外联人员。');
       return;
     }
 
@@ -3397,7 +3379,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
     orderPayload.addAll({
       'orderType': _orderType,
       if (widget.role != UserRole.sales) 'salesUserId': _selectedSalesUserId,
-      'outreachUserId': _selectedOutreachUserId,
       'travelGroupId': _orderType == 'travel_group' ? travelGroupId : null,
       'remark': _remarkController.text.trim(),
       'customer': {
@@ -3476,14 +3457,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
       return null;
     }
     return payloads;
-  }
-
-  SalesOrderAssignmentUser? get _selectedSalesAssignment {
-    for (final user in _assignmentOptions?.salesUsers ??
-        const <SalesOrderAssignmentUser>[]) {
-      if (user.id == _selectedSalesUserId) return user;
-    }
-    return null;
   }
 
   @override
@@ -3571,44 +3544,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                                     )
                                 : null,
                       ),
-                    if (widget.role != UserRole.sales)
-                      DropdownButtonFormField<String>(
-                        key: ValueKey(
-                          'order-edit-outreach-user-${_selectedOutreachUserId ?? _noOutreachValue}',
-                        ),
-                        initialValue: _selectedOutreachUserId ??
-                            (_assignmentOptions?.outreachCommissionRequired ==
-                                    true
-                                ? null
-                                : _noOutreachValue),
-                        isExpanded: true,
-                        decoration: InputDecoration(
-                          labelText:
-                              _assignmentOptions?.outreachCommissionRequired ==
-                                      true
-                                  ? '外联人员 *'
-                                  : '外联人员',
-                        ),
-                        hint: const Text('请选择外联人员'),
-                        items: [
-                          if (_assignmentOptions?.outreachCommissionRequired !=
-                              true)
-                            const DropdownMenuItem(
-                              value: _noOutreachValue,
-                              child: Text('无外联，不计算外联提成'),
-                            ),
-                          for (final user in _assignmentOptions?.salesUsers ??
-                              const <SalesOrderAssignmentUser>[])
-                            DropdownMenuItem(
-                              value: user.id,
-                              child: Text('${user.name}（${user.username}）'),
-                            ),
-                        ],
-                        onChanged: (value) => setState(() {
-                          _selectedOutreachUserId =
-                              value == _noOutreachValue ? null : value;
-                        }),
-                      ),
                   ],
                 )
               else ...[
@@ -3636,18 +3571,6 @@ class _OrderEditDialogState extends State<_OrderEditDialog> {
                     label: const Text('重试加载'),
                   ),
                 ),
-              ],
-              if (widget.fullEdit && _selectedSalesAssignment != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  '销售组长：${_selectedSalesAssignment!.leaderName ?? '未配置'}',
-                ),
-                if (_assignmentOptions?.leaderCommissionEnabled == true &&
-                    _selectedSalesAssignment!.leaderId == null)
-                  const StatusTag(
-                    label: '当前组长提成规则已启用；该销售未配置组长，保存后仅组长提成不会生成。',
-                    tone: StatusTone.warning,
-                  ),
               ],
               const SizedBox(height: 12),
               if (widget.order.paymentDetailsLocked) ...[
@@ -4817,9 +4740,8 @@ String _orderCommissionWarningSummary(
       case 'missing_sales_user':
         return '销售提成未计算：缺少销售人员';
       case 'missing_outreach_user':
-        return '外联提成未计算：缺少外联人员';
       case 'missing_leader':
-        return '组长提成未计算：销售未配置组长';
+        return '历史人员归属提示（不影响订单级提成）';
       case 'missing_commission_rule':
         return '订单日期缺少适用提成规则';
       default:

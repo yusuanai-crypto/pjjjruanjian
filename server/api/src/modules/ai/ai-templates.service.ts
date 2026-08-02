@@ -52,6 +52,36 @@ const ROLE_TEMPLATE_GROUPS: Record<string, AiChatTemplate[]> = {
       roleScopes: ['finance'],
     },
   ],
+  warehouse: [
+    {
+      id: 'warehouse_analytics_overview',
+      title: '经营概况',
+      question: '今天销售额和打蛋率是多少？',
+      intent: 'analytics_overview',
+      roleScopes: ['warehouse'],
+    },
+    {
+      id: 'warehouse_analytics_trend',
+      title: '经营趋势',
+      question: '近 10 天净销售额趋势怎么样？',
+      intent: 'analytics_trend',
+      roleScopes: ['warehouse'],
+    },
+    {
+      id: 'warehouse_taster_ranking',
+      title: '品鉴师排名',
+      question: '本月品鉴师销售额排名怎么样？',
+      intent: 'taster_ranking',
+      roleScopes: ['warehouse'],
+    },
+    {
+      id: 'warehouse_no_order_rate',
+      title: '打蛋率',
+      question: '近 10 天打蛋率是多少？',
+      intent: 'analytics_overview',
+      roleScopes: ['warehouse'],
+    },
+  ],
   after_sales: [
     {
       id: 'after_sales_customer_orders',

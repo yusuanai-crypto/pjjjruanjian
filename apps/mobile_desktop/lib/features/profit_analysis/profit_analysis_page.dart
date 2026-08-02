@@ -79,12 +79,14 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
   ProfitAnalysisResponse? _response;
   bool _loading = false;
   bool _exporting = false;
+  String? _recalculatingGroupId;
   String? _errorMessage;
   int _requestSerial = 0;
   String _selectedModule = 'travel_group';
   bool _dailyLossModuleInitialized = false;
 
   bool get _isAllowed => canViewProfitAnalysis(widget.role);
+  bool get _canRecalculate => canRecalculateProfitAnalysis(widget.role);
 
   @override
   void initState() {
@@ -462,6 +464,16 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
           icon: Icons.account_balance_wallet_outlined,
         ),
         MetricData(
+          label: '导游日返积分',
+          value: formatMoneyCents(summary.guideDailyPointsCents),
+          icon: Icons.today_outlined,
+        ),
+        MetricData(
+          label: '导游月返积分',
+          value: formatMoneyCents(summary.guideMonthlyPointsCents),
+          icon: Icons.calendar_month_outlined,
+        ),
+        MetricData(
           label: '可核算团数',
           value: '${summary.calculableGroupCount}',
           icon: Icons.check_circle_outline_rounded,
@@ -800,6 +812,136 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
     }
   }
 
+  Future<void> _requestRecalculation(
+    TravelGroupProfitRecord item,
+  ) async {
+    if (!_canRecalculate || _recalculatingGroupId != null) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: ValueKey(
+          'profit-analysis-recalculate-confirm-${item.travelGroupId}',
+        ),
+        title: const Text('确认重新计算'),
+        content: Text(
+          '将由后端重新计算团号 ${_display(item.groupNo)} 的提成、'
+          '财务汇总、导游积分和可修复的空费用快照。\n\n'
+          '已存在的历史费率快照不会被覆盖，未财务标记或付款明细不完整的订单会保留为待处理问题。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('profit-analysis-recalculate-confirm-button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('开始重算'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    Navigator.of(context).pop();
+    setState(() {
+      _recalculatingGroupId = item.travelGroupId;
+      _errorMessage = null;
+    });
+    try {
+      final result = await BusinessApi(
+        apiClient: widget.apiClient,
+        token: widget.token,
+      ).recalculateTravelGroupProfit(item.travelGroupId);
+      if (!mounted) {
+        return;
+      }
+      await _load();
+      if (!mounted) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          key: ValueKey(
+            'profit-analysis-recalculate-result-${item.travelGroupId}',
+          ),
+          title: Text(
+            result.failureCount > 0
+                ? '重新计算已完成（有待处理项）'
+                : '重新计算已完成',
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '成功 ${result.successCount} 单 · '
+                    '失败 ${result.failureCount} 单',
+                  ),
+                  Text(
+                    '已变更 ${result.changedCount} 项 · '
+                    '无需变更 ${result.unchangedCount} 项',
+                  ),
+                  Text(
+                    '当前状态：'
+                    '${_statusPresentation(result.profit.calculationStatus).label}',
+                  ),
+                  if (result.issues.isNotEmpty) ...[
+                    const Divider(height: 24),
+                    Text(
+                      '待处理项',
+                      style: Theme.of(dialogContext)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final issue in result.issues)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(
+                          '${issue.orderNo ?? issue.orderId ?? _display(item.groupNo)}：'
+                          '${issue.message}'
+                          '${issue.actionHint.isEmpty ? '' : '\n处理建议：${issue.actionHint}'}',
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = _friendlyError(error);
+      setState(() => _errorMessage = message);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _recalculatingGroupId = null);
+      }
+    }
+  }
+
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 350), () {
@@ -915,6 +1057,14 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                   value: formatMoneyCents(item.monthlyAgencyRebateCents),
                 ),
                 _DetailLine(
+                  label: '导游日返积分',
+                  value: formatMoneyCents(item.guideDailyPointsCents),
+                ),
+                _DetailLine(
+                  label: '导游月返积分',
+                  value: formatMoneyCents(item.guideMonthlyPointsCents),
+                ),
+                _DetailLine(
                   label: '税费',
                   value: _formatNullableMoney(item.taxFeeCents),
                 ),
@@ -968,11 +1118,56 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
                       ),
                     ),
                 ],
+                if (item.components.values.any(
+                  (component) => component.issues.isNotEmpty,
+                )) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '逐订单诊断',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  for (final component in item.components.entries)
+                    for (final issue in component.value.issues)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 7),
+                        child: Text(
+                          '${issue.orderNo ?? issue.orderId ?? '当前旅行团'} · '
+                          '${_profitComponentLabel(component.key)}：'
+                          '${issue.message}'
+                          '${issue.actionHint.isEmpty ? '' : '\n建议：${issue.actionHint}'}',
+                        ),
+                      ),
+                ],
               ],
             ),
           ),
         ),
         actions: [
+          Tooltip(
+            message: _canRecalculate
+                ? '由后端统一重算提成、财务汇总、导游积分和费用快照'
+                : '当前账号没有财务修改权限，只能查看诊断',
+            child: FilledButton.icon(
+              key: ValueKey(
+                'profit-analysis-recalculate-${item.travelGroupId}',
+              ),
+              onPressed: !_canRecalculate ||
+                      _recalculatingGroupId == item.travelGroupId
+                  ? null
+                  : () => _requestRecalculation(item),
+              icon: _recalculatingGroupId == item.travelGroupId
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.calculate_rounded),
+              label: const Text('重新计算'),
+            ),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('关闭'),
@@ -1420,16 +1615,16 @@ Color? _profitColor(BuildContext context, int? cents) {
 
 String _warningText(AnalyticsWarning warning) {
   switch (warning.code) {
+    case 'SALES_USER_MISSING':
     case 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER':
       return '未计算：订单缺少销售人员。';
-    case 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER':
-      return '未计算：订单缺少外联人员。';
-    case 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER':
-      return '未计算：订单缺少组长配置。';
+    case 'SALES_COMMISSION_RULE_MISSING':
     case 'SALES_COMMISSION_NOT_CALCULATED_MISSING_RULE':
       return '销售提成未计算：订单日期缺少适用规则。';
+    case 'OUTREACH_COMMISSION_RULE_MISSING':
     case 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_RULE':
       return '外联提成未计算：订单日期缺少适用规则。';
+    case 'LEADER_COMMISSION_RULE_MISSING':
     case 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_RULE':
       return '组长提成未计算：订单日期缺少适用规则。';
     case 'REFUND_COST_REVERSAL_UNAVAILABLE':
@@ -1442,6 +1637,8 @@ String _warningText(AnalyticsWarning warning) {
     case 'ACTUAL_COST_COVERAGE_UNAVAILABLE':
       return '商品实际成本快照不完整，无法估算利润。';
     case 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING':
+    case 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING':
+    case 'PAYMENT_FEE_BASE_SNAPSHOT_MISSING':
       return '手续费快照缺失，请财务补齐费率并重新标记订单';
     default:
       return warning.message.isEmpty ? warning.code : warning.message;
@@ -1457,20 +1654,35 @@ String _employeeCommissionDisplay(
   if (calculated) {
     return formatMoneyCents(cents);
   }
-  final missingPersonCodes = <String, String>{
-    'sales': 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
-    'outreach': 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER',
-    'leader': 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER',
-  };
-  final labels = <String, String>{
-    'sales': '销售人员',
-    'outreach': '外联人员',
-    'leader': '组长配置',
-  };
-  if (item.hasWarning(missingPersonCodes[target] ?? '')) {
-    return '未计算：订单缺少${labels[target]}';
+  if (target == 'sales' &&
+      (item.hasWarning('SALES_USER_MISSING') ||
+          item.hasWarning(
+            'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
+          ))) {
+    return '未计算：订单缺少销售人员';
   }
   return '未计算：订单日期缺少适用提成规则';
+}
+
+String _profitComponentLabel(String key) {
+  switch (key) {
+    case 'salesCommission':
+      return '销售提成';
+    case 'outreachCommission':
+      return '外联提成';
+    case 'leaderCommission':
+      return '组长提成';
+    case 'tax':
+      return '税费';
+    case 'paymentServiceFee':
+      return '付款手续费';
+    case 'guideDailyPoints':
+      return '导游日返积分';
+    case 'guideMonthlyPoints':
+      return '导游月返积分';
+    default:
+      return key;
+  }
 }
 
 String _display(String value) => value.trim().isEmpty ? '—' : value.trim();

@@ -8,6 +8,7 @@ import { OperationLogsNestService } from '../operation-logs/operation-log.nest.s
 import { SettingsNestService } from '../settings/settings.nest.service';
 import {
   allocateCentsByPersonalRatio,
+  calculateSalesOrderPointsSplit,
   calculateStage7CommissionAndPoints,
   resolveSalesOrderPersonalAmountCents,
 } from './commission-calculation.helper';
@@ -464,6 +465,162 @@ export class GuidePointsSummaryNestService {
         recalculation,
         guideRefresh,
       };
+    });
+  }
+
+  async updateGuidePersonalOrderLiquorCostDeduction(
+    actor: any,
+    orderId: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(
+      actor,
+      WRITE_ROLES,
+      '当前角色无权修改订单扣酒成本。',
+    );
+    const id = normalizeRequiredString(orderId, 'orderId');
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.salesOrder.findUnique({
+        where: { id },
+        include: {
+          travelGroup: true,
+          personalPointsGuide: true,
+          afterSalesOrders: {
+            select: {
+              refundAmountCents: true,
+              personalPointsRefundAmountCents: true,
+              financeConfirmed: true,
+            },
+          },
+        },
+      });
+      if (!current) {
+        throw createHttpError(
+          404,
+          'SALES_ORDER_NOT_FOUND',
+          '销售订单不存在。',
+        );
+      }
+      if (
+        normalizePointsDestination(current.pointsDestination) !==
+          'GUIDE_PERSONAL' ||
+        toInteger(current.personalAmountCents) <= 0 ||
+        !current.travelGroupId ||
+        !current.travelGroup ||
+        !current.personalPointsGuideId ||
+        !current.personalPointsGuide
+      ) {
+        throw createHttpError(
+          400,
+          'GUIDE_PERSONAL_ORDER_REQUIRED',
+          '只有走个人且已绑定旅行团和收款导游的订单才能修改扣酒成本。',
+        );
+      }
+
+      const summary = await tx.guidePointsSummary.findUnique({
+        where: {
+          travelGroupId_guideId: {
+            travelGroupId: current.travelGroupId,
+            guideId: current.personalPointsGuideId,
+          },
+        },
+      });
+      assertLiquorCostDeductionCanChange(summary);
+
+      const personalEffectiveAmountCents =
+        calculateSalesOrderPointsSplit(current).personalEffectiveAmountCents;
+      const liquorCostDeductionCents =
+        normalizeLiquorCostDeductionCents(
+          payload,
+          personalEffectiveAmountCents,
+        );
+      const beforeSnapshot = findGuideOrderSnapshot(summary, current.id);
+      const beforeState = summarizeOrderLiquorCostDeduction({
+        order: current,
+        snapshot: beforeSnapshot,
+        fallbackEffectiveAmountCents: personalEffectiveAmountCents,
+      });
+      const now = new Date();
+      const updatedOrder = await tx.salesOrder.update({
+        where: { id: current.id },
+        data: {
+          personalLiquorCostDeductionOverrideCents:
+            liquorCostDeductionCents,
+          updatedById: actor.id,
+          updatedAt: now,
+        },
+      });
+
+      await this.commissionRecordsService.recalculateSalesOrderRecords(
+        current.id,
+        {
+          prisma: tx,
+          actor,
+          ipAddress: metadata.ipAddress || null,
+          trigger: 'guide_personal_order_liquor_cost_deduction_change',
+        },
+      );
+      await this.travelGroupFinanceSummaryService.refreshTravelGroupFinanceSummary(
+        current.travelGroupId,
+        {
+          prisma: tx,
+          actor,
+          ipAddress: metadata.ipAddress || null,
+          syncCompatibilityFields: false,
+        },
+      );
+      const guideRefresh =
+        await this.refreshGuidePointsSummariesForTravelGroup(
+          current.travelGroupId,
+          {
+            prisma: tx,
+            actor,
+            ipAddress: metadata.ipAddress || null,
+          },
+        );
+      const summaryId = guideRefresh.summaries.find(
+        (entry: any) =>
+          entry.guideId === current.personalPointsGuideId &&
+          toInteger(entry.orderCount) > 0,
+      )?.id;
+      const refreshedSummary = summaryId
+        ? await tx.guidePointsSummary.findUnique({
+            where: { id: summaryId },
+            include: guidePointsSummaryInclude(),
+          })
+        : null;
+      if (!refreshedSummary) {
+        throw createHttpError(
+          409,
+          'GUIDE_POINTS_SUMMARY_REFRESH_FAILED',
+          '扣酒成本已重算，但未能读取更新后的导游积分汇总。',
+        );
+      }
+      const guidePointsSummary = toGuidePointsSummaryDto(
+        refreshedSummary,
+        true,
+      );
+      const afterSnapshot = guidePointsSummary.orders.find(
+        (order: any) => order.id === current.id,
+      );
+      await this.operationLogsService.appendLog(
+        {
+          userId: actor.id,
+          action: 'guide_points_orders.liquor_cost_deduction.update',
+          entityType: 'sales_order',
+          entityId: current.id,
+          beforeData: beforeState,
+          afterData: summarizeOrderLiquorCostDeduction({
+            order: updatedOrder,
+            snapshot: afterSnapshot,
+            fallbackEffectiveAmountCents: personalEffectiveAmountCents,
+          }),
+          ipAddress: metadata.ipAddress || null,
+        },
+        tx,
+      );
+      return guidePointsSummary;
     });
   }
 
@@ -1022,6 +1179,13 @@ function buildGuideOrderSnapshot(salesOrder: any, calculation: any) {
     liquorCostDeductionCents: toInteger(
       amounts.personalAgencyDeductionAmountCents,
     ),
+    automaticLiquorCostDeductionCents: toInteger(
+      amounts.automaticPersonalAgencyDeductionAmountCents,
+    ),
+    liquorCostDeductionOverrideCents:
+      amounts.personalLiquorCostDeductionOverrideCents,
+    liquorCostDeductionSource:
+      amounts.personalLiquorCostDeductionSource,
     netAmountCents: toInteger(amounts.personalAgencyBaseAmountCents),
     guideId: salesOrder.personalPointsGuideId || null,
     guideName:
@@ -1199,6 +1363,16 @@ function guidePointsOrderCalculationInclude() {
     personalPointsGuide: true,
     afterSalesOrders: { orderBy: { createdAt: 'asc' } },
   };
+}
+
+function assertLiquorCostDeductionCanChange(summary: any) {
+  if (summary?.dailyPointsPaid || summary?.monthlyPointsPaid) {
+    throw createHttpError(
+      409,
+      'GUIDE_POINTS_ALREADY_PAID',
+      '该导游积分汇总的日返或月返已标记已返，请先取消日返/月返已返状态后再修改扣酒成本。',
+    );
+  }
 }
 
 function getSalesOrderCollectOnDeliveryAmountCents(order: any) {
@@ -1477,6 +1651,50 @@ function paymentAmounts(
   };
 }
 
+function findGuideOrderSnapshot(summary: any, orderId: string) {
+  const snapshot = isPlainObject(summary?.sourceSnapshot)
+    ? summary.sourceSnapshot
+    : {};
+  const orders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
+  return orders.find((order: any) => order?.id === orderId) || null;
+}
+
+function summarizeOrderLiquorCostDeduction(input: any) {
+  const overrideRaw =
+    input.order?.personalLiquorCostDeductionOverrideCents;
+  const overrideCents =
+    overrideRaw === null || overrideRaw === undefined
+      ? null
+      : toInteger(overrideRaw);
+  const fallbackEffectiveAmountCents = Math.max(
+    0,
+    toInteger(input.fallbackEffectiveAmountCents),
+  );
+  const snapshotAmount = input.snapshot?.liquorCostDeductionCents;
+  const liquorCostDeductionCents =
+    overrideCents !== null
+      ? Math.min(fallbackEffectiveAmountCents, overrideCents)
+      : snapshotAmount === null || snapshotAmount === undefined
+        ? 0
+        : toInteger(snapshotAmount);
+  const automaticRaw =
+    input.snapshot?.automaticLiquorCostDeductionCents;
+  return {
+    orderId: input.order?.id || null,
+    orderNo: input.order?.orderNo || null,
+    liquorCostDeductionCents,
+    automaticLiquorCostDeductionCents:
+      automaticRaw === null || automaticRaw === undefined
+        ? overrideCents === null
+          ? liquorCostDeductionCents
+          : null
+        : toInteger(automaticRaw),
+    liquorCostDeductionOverrideCents: overrideCents,
+    liquorCostDeductionSource:
+      overrideCents === null ? 'automatic' : 'manual_override',
+  };
+}
+
 function persistedPaymentAmounts(amounts: any) {
   return {
     paidPointsCents: toInteger(amounts?.paidPointsCents),
@@ -1599,6 +1817,43 @@ function normalizePersonalAmountCents(payload: any, current: any) {
   return normalizePointsDestination(legacyDestination) === 'GUIDE_PERSONAL'
     ? totalAmountCents
     : 0;
+}
+
+function normalizeLiquorCostDeductionCents(
+  payload: any,
+  maximumCents: number,
+) {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    !Object.prototype.hasOwnProperty.call(
+      payload,
+      'liquorCostDeductionCents',
+    )
+  ) {
+    throw createHttpError(
+      400,
+      'LIQUOR_COST_DEDUCTION_INVALID',
+      '必须提交扣酒成本 liquorCostDeductionCents。',
+    );
+  }
+  const value = payload.liquorCostDeductionCents;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    throw createHttpError(
+      400,
+      'LIQUOR_COST_DEDUCTION_INVALID',
+      '扣酒成本必须使用整数分。',
+    );
+  }
+  if (value < 0 || value > maximumCents) {
+    throw createHttpError(
+      400,
+      'LIQUOR_COST_DEDUCTION_OUT_OF_RANGE',
+      `扣酒成本必须在 0 到本单个人积分有效金额 ${maximumCents} 分之间。`,
+    );
+  }
+  return value;
 }
 
 function assertPointsDestinationMatchesAmount(
@@ -1851,7 +2106,11 @@ function publicUser(user: any) {
     : null;
 }
 
-function requireAnyRole(actor: any, roles: string[]) {
+function requireAnyRole(
+  actor: any,
+  roles: string[],
+  message = '当前角色无权修改订单走个人金额。',
+) {
   if (
     !actor ||
     (!roles.includes(actor.role) &&
@@ -1860,7 +2119,7 @@ function requireAnyRole(actor: any, roles: string[]) {
     throw createHttpError(
       403,
       'PERMISSION_DENIED',
-      '当前角色无权修改订单走个人金额。',
+      message,
     );
   }
 }

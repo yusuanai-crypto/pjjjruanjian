@@ -16,6 +16,7 @@ void main() {
       UserRole.superAdmin,
       UserRole.admin,
       UserRole.boss,
+      UserRole.warehouse,
     };
     for (final role in UserRole.values) {
       expect(
@@ -46,7 +47,6 @@ void main() {
       UserRole.finance,
       UserRole.sales,
       UserRole.frontDesk,
-      UserRole.warehouse,
       UserRole.afterSales,
       UserRole.taster,
     ]) {
@@ -116,6 +116,8 @@ void main() {
     expect(find.text('有效销售额'), findsWidgets);
     expect(find.text('税费合计'), findsOneWidget);
     expect(find.text('手续费合计'), findsOneWidget);
+    expect(find.text('导游日返积分'), findsOneWidget);
+    expect(find.text('导游月返积分'), findsOneWidget);
     expect(find.text('可核算团数'), findsOneWidget);
     expect(find.text('预估利润率'), findsWidgets);
     expect(find.text('成本不完整团数'), findsOneWidget);
@@ -205,6 +207,43 @@ void main() {
     );
   });
 
+  testWidgets('authorized user confirms recalculation and sees action hints',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeProfitApiClient();
+    await tester.pumpWidget(_page(client));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('TG-COMPLETE'));
+    await tester.pumpAndSettle();
+
+    final recalculate = find.byKey(
+      const ValueKey('profit-analysis-recalculate-complete'),
+    );
+    expect(recalculate, findsOneWidget);
+    expect(tester.widget<FilledButton>(recalculate).onPressed, isNotNull);
+    await tester.tap(recalculate);
+    await tester.pumpAndSettle();
+    expect(find.text('确认重新计算'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey('profit-analysis-recalculate-confirm-button'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.postPaths, [
+      '/api/analytics/travel-group-profits/complete/recalculate',
+    ]);
+    expect(find.text('重新计算已完成（有待处理项）'), findsOneWidget);
+    expect(find.textContaining('成功 0 单 · 失败 1 单'), findsOneWidget);
+    expect(find.textContaining('处理建议：请补齐收款明细'), findsOneWidget);
+  });
+
   testWidgets('sends preset, search, status, sort, direction, and page filters',
       (tester) async {
     final client = _FakeProfitApiClient();
@@ -212,6 +251,7 @@ void main() {
     await tester.pumpWidget(
       _page(
         client,
+        role: UserRole.warehouse,
         fileSaver: (file) async {
           savedFile = file;
           return 'D:/exports/travel-group-profits.xlsx';
@@ -460,6 +500,7 @@ class _FakeProfitApiClient extends ApiClient {
   int failuresRemaining;
   int downloadFailuresRemaining;
   final List<String> paths = [];
+  final List<String> postPaths = [];
   final List<String> downloadPaths = [];
 
   @override
@@ -482,6 +523,43 @@ class _FakeProfitApiClient extends ApiClient {
       );
     }
     return {'data': _responseJson()};
+  }
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    postPaths.add(path);
+    expect(token, 'test-token');
+    expect(body, isEmpty);
+    return {
+      'data': {
+        'successCount': 0,
+        'failureCount': 1,
+        'changedCount': 1,
+        'unchangedCount': 0,
+        'issues': [
+          {
+            'code': 'PAYMENT_DETAILS_MISSING',
+            'message': '收款明细缺失',
+            'orderId': 'order-complete',
+            'orderNo': 'SO-COMPLETE',
+            'actionHint': '请补齐收款明细',
+          },
+        ],
+        'profit': _item(
+          id: 'complete',
+          groupNo: 'TG-COMPLETE',
+          status: 'incomplete',
+          sales: 10000,
+          expenses: 6000,
+          profit: null,
+          rate: null,
+        ),
+      },
+    };
   }
 
   @override
@@ -535,6 +613,8 @@ Map<String, dynamic> _responseJson({
       'noSalesGroupCount': 1,
       'effectiveSalesAmountCents': 26000,
       'actualProductCostCents': 9000,
+      'guideDailyPointsCents': 70,
+      'guideMonthlyPointsCents': 30,
       'taxFeeCents': 260,
       'paymentServiceFeeCents': 180,
       'totalExpenseCents': 17000,
@@ -655,6 +735,8 @@ Map<String, dynamic> _item({
     'tasterCommissionCents': expenses ~/ 10,
     'dailyAgencyRebateCents': expenses ~/ 10,
     'monthlyAgencyRebateCents': expenses ~/ 10,
+    'guideDailyPointsCents': 0,
+    'guideMonthlyPointsCents': 0,
     'taxFeeCents': id == 'incomplete' ? null : sales ~/ 100,
     'paymentServiceFeeCents': id == 'incomplete' ? null : expenses ~/ 50,
     'paymentMethodFeeBreakdown': id == 'complete'

@@ -797,6 +797,7 @@ export class TravelGroupFinanceSummaryNestService {
         targetType: {
           in: [AGENCY_DAILY_REBATE, AGENCY_MONTHLY_REBATE],
         },
+        isActive: { not: false },
       },
       orderBy: {
         createdAt: 'asc',

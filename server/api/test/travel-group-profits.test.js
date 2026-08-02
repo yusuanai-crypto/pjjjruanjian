@@ -25,7 +25,8 @@ test('contract: travel group profits enforce endpoint and menu role matrices', a
       'profit-super-admin',
       PASSWORD,
     );
-    for (const session of [admin, boss, superAdmin]) {
+    const warehouse = await login(baseUrl, 'profit-warehouse', PASSWORD);
+    for (const session of [admin, boss, superAdmin, warehouse]) {
       const result = await requestJson(baseUrl, ENDPOINT, {
         token: session.token,
       });
@@ -40,7 +41,6 @@ test('contract: travel group profits enforce endpoint and menu role matrices', a
       'finance',
       'sales',
       'front-desk',
-      'warehouse',
       'after-sales',
       'taster',
     ]) {
@@ -62,6 +62,130 @@ test('contract: travel group profits enforce endpoint and menu role matrices', a
       { token: finance.token },
     );
     assert.equal(existingProfit.response.status, 200);
+  });
+});
+
+test('contract: travel group profit recalculation enforces finance permission and is idempotent', async () => {
+  await withTravelGroupProfitServer(async (baseUrl) => {
+    const finance = await login(baseUrl, 'profit-finance', PASSWORD);
+    const warehouse = await login(baseUrl, 'profit-warehouse', PASSWORD);
+    const admin = await login(baseUrl);
+    const endpoint =
+      '/api/analytics/travel-group-profits/group-complete/recalculate';
+
+    const denied = await requestJson(baseUrl, endpoint, {
+      method: 'POST',
+      token: warehouse.token,
+      body: {},
+    });
+    assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+
+    const first = await requestJson(baseUrl, endpoint, {
+      method: 'POST',
+      token: finance.token,
+      body: {},
+    });
+    assert.equal(first.response.status, 200, JSON.stringify(first.body));
+    assert.equal(
+      first.body.data.successCount,
+      1,
+      JSON.stringify(first.body.data),
+    );
+    assert.equal(first.body.data.failureCount, 0);
+    assert.equal(first.body.data.changedCount, 1);
+    assert.equal(first.body.data.profit.travelGroupId, 'group-complete');
+    assert.ok(first.body.data.profit.components.salesCommission);
+
+    const second = await requestJson(baseUrl, endpoint, {
+      method: 'POST',
+      token: finance.token,
+      body: {},
+    });
+    assert.equal(second.response.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.data.successCount, 1);
+    assert.equal(second.body.data.failureCount, 0);
+    assert.equal(second.body.data.changedCount, 0);
+    assert.equal(second.body.data.unchangedCount, 1);
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?action=analytics.travel_group_profit.recalculate',
+      { token: admin.token },
+    );
+    assert.equal(logs.response.status, 200);
+    assert.equal(logs.body.data.logs.length, 2);
+  });
+});
+
+test('contract: recalculation safely repairs only missing fee snapshots and stays idempotent', async () => {
+  await withTravelGroupProfitServer(async (baseUrl) => {
+    const finance = await login(baseUrl, 'profit-finance', PASSWORD);
+    const endpoint =
+      '/api/analytics/travel-group-profits/group-incomplete/recalculate';
+
+    const first = await requestJson(baseUrl, endpoint, {
+      method: 'POST',
+      token: finance.token,
+      body: {},
+    });
+    assert.equal(first.response.status, 200, JSON.stringify(first.body));
+    assert.equal(
+      first.body.data.successCount,
+      1,
+      JSON.stringify(first.body.data),
+    );
+    assert.equal(first.body.data.failureCount, 0);
+    assert.ok(first.body.data.changedCount > 0);
+    assert.equal(first.body.data.profit.taxFeeCents, 60);
+    assert.equal(first.body.data.profit.paymentServiceFeeCents, 36);
+
+    const second = await requestJson(baseUrl, endpoint, {
+      method: 'POST',
+      token: finance.token,
+      body: {},
+    });
+    assert.equal(second.response.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.data.successCount, 1);
+    assert.equal(second.body.data.failureCount, 0);
+    assert.equal(second.body.data.changedCount, 0);
+    assert.equal(second.body.data.unchangedCount, 1);
+  });
+});
+
+test('contract: recalculation preserves partial success and reports an all-failed group per order', async () => {
+  await withRecalculationOutcomeServer(async (baseUrl) => {
+    const finance = await login(baseUrl, 'profit-finance', PASSWORD);
+
+    const partial = await requestJson(
+      baseUrl,
+      '/api/analytics/travel-group-profits/group-mixed/recalculate',
+      { method: 'POST', token: finance.token, body: {} },
+    );
+    assert.equal(partial.response.status, 200, JSON.stringify(partial.body));
+    assert.equal(partial.body.data.successCount, 1);
+    assert.equal(partial.body.data.failureCount, 1);
+    assert.equal(partial.body.data.results.length, 2);
+    assert.ok(
+      partial.body.data.issues.some(
+        (issue) =>
+          issue.orderNo === 'SO-mixed-failure' &&
+          issue.code === 'ORDER_NOT_FINANCE_MARKED',
+      ),
+    );
+
+    const failed = await requestJson(
+      baseUrl,
+      '/api/analytics/travel-group-profits/group-failed/recalculate',
+      { method: 'POST', token: finance.token, body: {} },
+    );
+    assert.equal(failed.response.status, 200, JSON.stringify(failed.body));
+    assert.equal(failed.body.data.successCount, 0);
+    assert.equal(failed.body.data.failureCount, 1);
+    assert.equal(failed.body.data.results[0].success, false);
+    assert.deepEqual(
+      failed.body.data.results[0].issues.map((issue) => issue.code),
+      ['ORDER_NOT_FINANCE_MARKED'],
+    );
   });
 });
 
@@ -173,9 +297,9 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
           warning.code === 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
       ),
     );
-    assert.equal(result.body.data.summary.incompleteGroupCount, 1);
+    assert.equal(result.body.data.summary.incompleteGroupCount, 3);
     assert.equal(result.body.data.summary.estimatedProfitCents, null);
-    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 4052);
+    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 4952);
     assert.equal(result.body.data.summary.taxFeeCents, null);
     assert.equal(
       result.body.data.summary.paymentServiceFeeCents,
@@ -186,8 +310,13 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
       (item) => item.groupNo === 'TG-UNMARKED',
     );
     assert.equal(unmarked.effectiveSalesAmountCents, 2000);
-    assert.equal(unmarked.taxFeeCents, 0);
-    assert.equal(unmarked.paymentServiceFeeCents, 0);
+    assert.equal(unmarked.taxFeeCents, null);
+    assert.equal(unmarked.paymentServiceFeeCents, null);
+    assert.ok(
+      unmarked.warnings.some(
+        (warning) => warning.code === 'ORDER_NOT_FINANCE_MARKED',
+      ),
+    );
 
     const encoded = JSON.stringify(result.body.data);
     for (const forbiddenField of [
@@ -286,6 +415,7 @@ test('contract: travel group profit export reuses filters and sort without pagin
       'profit-finance',
       PASSWORD,
     );
+    const warehouse = await login(baseUrl, 'profit-warehouse', PASSWORD);
     const exportPath =
       '/api/analytics/travel-group-profits/export?' +
       'preset=custom&dateFrom=2026-07-01&dateTo=2026-07-31' +
@@ -302,7 +432,7 @@ test('contract: travel group profit export reuses filters and sort without pagin
 
     const response = await fetch(`${baseUrl}${exportPath}`, {
       headers: {
-        authorization: `Bearer ${admin.token}`,
+        authorization: `Bearer ${warehouse.token}`,
       },
     });
     assert.equal(response.status, 200);
@@ -330,7 +460,7 @@ test('contract: travel group profit export reuses filters and sort without pagin
       'TG-CROSS-DAY',
       'export must preserve page sorting while ignoring pageSize=1',
     );
-    assert.equal(orderSheet.actualRowCount, 8);
+    assert.equal(orderSheet.actualRowCount, 7);
     assert.equal(paymentSheet.actualRowCount, 6);
 
     const groupRows = readWorksheetRows(groupSheet);
@@ -369,10 +499,10 @@ test('contract: travel group profit export reuses filters and sort without pagin
     );
     assert.equal(logs.response.status, 200);
     assert.equal(logs.body.data.logs.length, 1);
-    assert.equal(logs.body.data.logs[0].afterData.rowCount, 19);
+    assert.equal(logs.body.data.logs[0].afterData.rowCount, 18);
     assert.deepEqual(logs.body.data.logs[0].afterData.rowCounts, {
       travelGroups: 7,
-      orders: 7,
+      orders: 6,
       paymentMethods: 5,
     });
     assert.equal(
@@ -394,6 +524,31 @@ function withTravelGroupProfitServer(run) {
         user('profit-warehouse', 'warehouse'),
         user('profit-after-sales', 'after_sales'),
         user('profit-taster', 'taster'),
+      ],
+      commissionRules: [
+        employeeRule('profit-sales-rule', 'SALES_COMMISSION', '0.010000'),
+        employeeRule(
+          'profit-outreach-rule',
+          'OUTREACH_COMMISSION',
+          '0.020000',
+        ),
+        employeeRule('profit-leader-rule', 'LEADER_COMMISSION', '0.030000'),
+      ],
+      paymentMethods: [
+        {
+          id: 'payment-method-wallet',
+          name: '收钱吧',
+          category: 'ONLINE_PAYMENT',
+          serviceFeeRate: '0.006000',
+          isActive: true,
+        },
+        {
+          id: 'payment-method-card',
+          name: '银行卡',
+          category: 'BANK_TRANSFER',
+          serviceFeeRate: '0.010000',
+          isActive: true,
+        },
       ],
       customers: [
         {
@@ -534,6 +689,9 @@ function withTravelGroupProfitServer(run) {
         commission('complete', 'OUTREACH_COMMISSION', 200),
         commission('complete', 'LEADER_COMMISSION', 300),
         commission('complete', 'TASTER_COMMISSION', 400),
+        commission('estimated', 'SALES_COMMISSION', 0),
+        commission('estimated', 'OUTREACH_COMMISSION', 0),
+        commission('estimated', 'LEADER_COMMISSION', 0),
         {
           ...commission('estimated', 'AGENCY_DAILY_REBATE', 0),
           pointsCents: 100,
@@ -543,6 +701,8 @@ function withTravelGroupProfitServer(run) {
           pointsCents: 200,
         },
         commission('loss', 'SALES_COMMISSION', 300),
+        commission('loss', 'OUTREACH_COMMISSION', 0),
+        commission('loss', 'LEADER_COMMISSION', 0),
       ],
       travelGroupFinanceSummaries: [
         financeSummary('complete', 500, 600),
@@ -555,6 +715,77 @@ function withTravelGroupProfitServer(run) {
   });
 }
 
+function withRecalculationOutcomeServer(run) {
+  const markedOrder = {
+    ...order('mixed-success', '2026-07-20', 3000, 0, [
+      line('mixed-success', 3000, 1000),
+    ]),
+    travelGroupId: 'group-mixed',
+    financeMark: true,
+    taxRateSnapshot: '0.010000',
+    paymentDetails: [
+      payment(
+        'payment-mixed-success',
+        'payment-method-wallet',
+        '收钱吧',
+        3000,
+        '0.006000',
+      ),
+    ],
+  };
+  const unmarkedOrder = (id, travelGroupId, amountCents) => ({
+    ...order(id, '2026-07-20', amountCents, 0, [
+      line(id, amountCents, 500),
+    ]),
+    travelGroupId,
+    financeMark: false,
+    taxRateSnapshot: null,
+    paymentDetails: [],
+  });
+  return withPhase1Server(run, {
+    prisma: {
+      users: [
+        user('profit-super-admin', 'super_admin'),
+        user('profit-finance', 'finance'),
+      ],
+      commissionRules: [
+        employeeRule('profit-sales-rule', 'SALES_COMMISSION', '0.010000'),
+        employeeRule(
+          'profit-outreach-rule',
+          'OUTREACH_COMMISSION',
+          '0.020000',
+        ),
+        employeeRule('profit-leader-rule', 'LEADER_COMMISSION', '0.030000'),
+      ],
+      paymentMethods: [
+        {
+          id: 'payment-method-wallet',
+          name: '收钱吧',
+          category: 'ONLINE_PAYMENT',
+          serviceFeeRate: '0.006000',
+          isActive: true,
+        },
+      ],
+      customers: [
+        {
+          id: 'profit-customer-marked',
+          name: 'Recalculation Customer',
+          financeMark: true,
+        },
+      ],
+      travelGroups: [
+        group('mixed', 'TG-MIXED', '2026-07-20', true, 'Agency Mixed'),
+        group('failed', 'TG-FAILED', '2026-07-20', true, 'Agency Failed'),
+      ],
+      salesOrders: [
+        markedOrder,
+        unmarkedOrder('mixed-failure', 'group-mixed', 2000),
+        unmarkedOrder('failed', 'group-failed', 1000),
+      ],
+    },
+  });
+}
+
 function user(username, role) {
   return {
     id: `usr-${username}`,
@@ -562,6 +793,18 @@ function user(username, role) {
     name: username,
     role,
     password: PASSWORD,
+  };
+}
+
+function employeeRule(id, targetType, rate) {
+  return {
+    id,
+    ruleName: id,
+    targetType,
+    rate,
+    effectiveFrom: '2026-01-01T00:00:00.000Z',
+    effectiveTo: null,
+    isActive: true,
   };
 }
 
@@ -644,6 +887,7 @@ function order(id, orderDate, totalAmountCents, logisticsFeeCents, items) {
     customerId: 'profit-customer-marked',
     customerName: 'Sensitive Customer',
     customerPhone: '13900000000',
+    salesUserId: 'usr-profit-super-admin',
     status: id === 'estimated' ? 'PARTIAL_REFUND' : 'VALID',
     totalAmountCents,
     logisticsFeeCents,
@@ -684,6 +928,9 @@ function commission(id, targetType, amountCents) {
     travelGroupId: `group-${id}`,
     targetType,
     targetUserId: 'sensitive-user-id',
+    commissionRuleId: targetType.endsWith('_COMMISSION')
+      ? `rule-${id}-${targetType}`
+      : null,
     amountCents,
     pointsCents: 0,
     deductionAmountCents: 9999,

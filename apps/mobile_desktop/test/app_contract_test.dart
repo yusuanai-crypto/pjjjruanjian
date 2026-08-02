@@ -218,6 +218,9 @@ void main() {
         'order_query',
         'warehouse_workspace',
         'after_sales_orders',
+        'analytics',
+        'profit_analysis',
+        'ai_assistant',
       ],
       UserRole.warehouse,
     );
@@ -228,6 +231,9 @@ void main() {
         'order_query',
         'warehouse_packing',
         'after_sales_form',
+        'analytics',
+        'profit_analysis',
+        'ai_assistant',
       ]),
     );
 
@@ -332,6 +338,9 @@ void main() {
     expect(_roleIds(UserRole.warehouse), contains('warehouse_packing'));
     expect(_roleIds(UserRole.warehouse), contains('travel_group_query'));
     expect(_roleIds(UserRole.warehouse), contains('after_sales_form'));
+    expect(_roleIds(UserRole.warehouse), contains('analytics'));
+    expect(_roleIds(UserRole.warehouse), contains('profit_analysis'));
+    expect(_roleIds(UserRole.warehouse), contains('ai_assistant'));
     expect(_roleIds(UserRole.sales), isNot(contains('after_sales_form')));
 
     for (final role in [UserRole.frontDesk, UserRole.taster]) {
@@ -356,7 +365,6 @@ void main() {
     }
     for (final role in [
       UserRole.sales,
-      UserRole.warehouse,
       UserRole.frontDesk,
     ]) {
       expect(_roleIds(role), isNot(contains('finance_query')));
@@ -395,12 +403,13 @@ void main() {
   });
 
   testWidgets(
-      'analytics menu is visible only to admin boss finance and after sales',
+      'analytics menu is visible to warehouse and existing analytics roles',
       (_) async {
     for (final role in [
       UserRole.admin,
       UserRole.boss,
       UserRole.finance,
+      UserRole.warehouse,
       UserRole.afterSales,
     ]) {
       expect(_roleIds(role), contains('analytics'));
@@ -409,7 +418,6 @@ void main() {
 
     for (final role in [
       UserRole.sales,
-      UserRole.warehouse,
       UserRole.frontDesk,
       UserRole.taster,
     ]) {
@@ -421,12 +429,13 @@ void main() {
     }
   });
 
-  test('profit analysis menu is visible only to admin super admin and boss',
+  test('profit analysis menu is visible to warehouse and management roles',
       () {
     for (final role in [
       UserRole.superAdmin,
       UserRole.admin,
       UserRole.boss,
+      UserRole.warehouse,
     ]) {
       expect(_roleIds(role), contains('profit_analysis'));
       expect(
@@ -438,7 +447,6 @@ void main() {
       UserRole.finance,
       UserRole.sales,
       UserRole.frontDesk,
-      UserRole.warehouse,
       UserRole.afterSales,
       UserRole.taster,
     ]) {
@@ -456,6 +464,7 @@ void main() {
       UserRole.admin,
       UserRole.boss,
       UserRole.finance,
+      UserRole.warehouse,
       UserRole.afterSales,
     ]) {
       expect(_roleIds(role), contains('ai_assistant'));
@@ -467,7 +476,6 @@ void main() {
 
     for (final role in [
       UserRole.sales,
-      UserRole.warehouse,
       UserRole.frontDesk,
       UserRole.taster,
     ]) {

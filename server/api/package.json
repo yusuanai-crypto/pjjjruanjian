@@ -26,6 +26,7 @@
     "backfill:todo-reminders": "ts-node scripts/backfill-todo-reminders.ts",
     "backfill:after-sales-independent-orders": "ts-node scripts/backfill-after-sales-independent-orders.ts",
     "backfill:profit-fee-snapshots": "ts-node scripts/backfill-profit-fee-snapshots.ts",
+    "backfill:order-level-commissions": "ts-node scripts/backfill-order-level-commissions.ts",
     "backfill:agency-rebate-rule-agency-ids": "ts-node scripts/backfill-agency-rebate-rule-agency-ids.ts",
     "backfill:warehouse-products": "ts-node scripts/backfill-warehouse-product-configurations.ts",
     "preflight:special-orders": "ts-node scripts/preflight-special-orders.ts",

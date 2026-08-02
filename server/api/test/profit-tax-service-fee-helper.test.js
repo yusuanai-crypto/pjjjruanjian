@@ -8,7 +8,7 @@ const {
   roundHalfUpDivision,
 } = require('../src/modules/analytics/profit-tax-service-fee.helper');
 
-test('unit: an unmarked order contributes no tax or payment service fee', () => {
+test('unit: an unmarked order blocks tax and payment service fee calculation', () => {
   const result = calculateOrderProfitFees(
     order({
       financeMark: false,
@@ -20,10 +20,14 @@ test('unit: an unmarked order contributes no tax or payment service fee', () => 
   );
 
   assert.equal(result.effectiveAmountCents, 0);
-  assert.equal(result.taxCents, 0);
-  assert.equal(result.paymentServiceFeeCents, 0);
-  assert.equal(result.totalTaxAndServiceFeeCents, 0);
+  assert.equal(result.taxCents, null);
+  assert.equal(result.paymentServiceFeeCents, null);
+  assert.equal(result.totalTaxAndServiceFeeCents, null);
   assert.equal(result.missingSnapshots.hasMissingSnapshots, false);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.code),
+    ['ORDER_NOT_FINANCE_MARKED'],
+  );
 });
 
 test('unit: a marked order calculates 1% tax from its effective amount', () => {
@@ -79,6 +83,42 @@ test('unit: an explicit 0% fee snapshot is complete and calculates zero', () => 
 
   assert.equal(result.paymentServiceFeeCents, 0);
   assert.equal(result.missingSnapshots.hasMissingSnapshots, false);
+});
+
+test('unit: a marked order with no payment details stays blocked with a stable issue code', () => {
+  const result = calculateOrderProfitFees(
+    order({
+      paymentDetails: [],
+    }),
+  );
+
+  assert.equal(result.taxCents, 100);
+  assert.equal(result.paymentServiceFeeCents, null);
+  assert.equal(result.totalTaxAndServiceFeeCents, null);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.code),
+    ['PAYMENT_DETAILS_MISSING'],
+  );
+  assert.equal(result.components.paymentServiceFee.status, 'blocked');
+});
+
+test('unit: a marked order with mismatched payment totals never treats the fee as zero', () => {
+  const result = calculateOrderProfitFees(
+    order({
+      paymentDetails: [
+        payment('short-payment', 'cash', 9000, '0'),
+      ],
+    }),
+  );
+
+  assert.equal(result.taxCents, 100);
+  assert.equal(result.paymentServiceFeeCents, null);
+  assert.equal(result.totalTaxAndServiceFeeCents, null);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.code),
+    ['PAYMENT_TOTAL_MISMATCH'],
+  );
+  assert.equal(result.components.paymentServiceFee.status, 'blocked');
 });
 
 test('unit: exact half rounds up and rounding occurs per payment detail', () => {
@@ -280,7 +320,7 @@ test('unit: a missing rate snapshot stays unknown instead of becoming 0%', () =>
   assert.equal(result.missingSnapshots.hasMissingSnapshots, true);
   assert.deepEqual(result.missingSnapshots.issues, [
     {
-      code: 'PAYMENT_SERVICE_FEE_RATE_SNAPSHOT_MISSING',
+      code: 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING',
       paymentDetailId: 'missing-rate',
     },
   ]);

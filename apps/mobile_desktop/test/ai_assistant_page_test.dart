@@ -14,6 +14,7 @@ void main() {
       UserRole.admin: 'admin template',
       UserRole.boss: 'boss template',
       UserRole.finance: 'finance template',
+      UserRole.warehouse: 'warehouse template',
       UserRole.afterSales: 'after_sales template',
     };
 
@@ -39,6 +40,12 @@ void main() {
       expect(find.textContaining('mock'), findsNothing);
       expect(find.textContaining('模型模式'), findsNothing);
       expect(find.text(entry.value), findsOneWidget);
+      if (role == UserRole.warehouse) {
+        expect(
+          find.text('经营概况、趋势、品鉴师排名和数据来源明细'),
+          findsOneWidget,
+        );
+      }
       for (final otherTemplate in roleTemplates.values.where(
         (template) => template != entry.value,
       )) {

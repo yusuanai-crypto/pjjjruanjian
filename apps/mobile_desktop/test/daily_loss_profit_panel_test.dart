@@ -18,7 +18,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     final client = _FakeDailyLossApiClient();
-    await tester.pumpWidget(_page(client));
+    await tester.pumpWidget(_page(client, role: UserRole.warehouse));
     await tester.pumpAndSettle();
 
     expect(
@@ -149,6 +149,7 @@ void main() {
     await tester.pumpWidget(
       _page(
         client,
+        role: UserRole.warehouse,
         saver: (downloadedFile) async {
           savedFile = downloadedFile;
           return r'D:\exports\daily-loss-profit-test.xlsx';

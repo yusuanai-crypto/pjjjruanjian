@@ -23,7 +23,14 @@ export interface AiPolicyInput {
   question?: string | null;
 }
 
-const AI_ALLOWED_ROLES = ['super_admin', 'admin', 'boss', 'finance', 'after_sales'];
+const AI_ALLOWED_ROLES = [
+  'super_admin',
+  'admin',
+  'boss',
+  'finance',
+  'warehouse',
+  'after_sales',
+];
 const READ_ONLY_ANALYTICS_INTENTS = [
   'analytics_overview',
   'analytics_trend',
@@ -64,6 +71,7 @@ const ROLE_INTENTS: Record<string, string[]> = {
   admin: ADMIN_BOSS_INTENTS,
   boss: ADMIN_BOSS_INTENTS,
   finance: [...READ_ONLY_ANALYTICS_INTENTS, ...FINANCE_INTENTS],
+  warehouse: READ_ONLY_ANALYTICS_INTENTS,
   after_sales: AFTER_SALES_INTENTS,
 };
 const DENY_INTENTS: Record<string, AiPolicyDecisionCode> = {
@@ -235,7 +243,8 @@ function getScopeDescription(role: string): string {
       '财务可读取退款、物流费用、提成、积分、财务核对和只读统计数据；不包含经营建议。',
     after_sales:
       '售后可读取客户订单、售后历史和物流单号等售后相关数据。',
-    warehouse: '库管第一版不可使用 AI 助手。',
+    warehouse:
+      '库管可通过 AI 只读查看经营概况、趋势、品鉴师排名和数据来源明细；不包含经营建议、财务、提成、积分、客户隐私、售后专属或写入能力。',
     sales: '销售第一版不可使用 AI 助手。',
     taster: '品鉴师第一版不可使用 AI 助手。',
     front_desk: '前台第一版不可使用 AI 助手。',

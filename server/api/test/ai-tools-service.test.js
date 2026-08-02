@@ -573,6 +573,13 @@ test('unit: AI taster tools enforce company-level ranking permissions', async ()
   await service.executeTool('analytics.tasterRankings', {
     actor: { userId: 'u-finance', role: 'finance' },
   });
+  await service.executeTool('analytics.tasterRankings', {
+    actor: { userId: 'u-warehouse', role: 'warehouse' },
+  });
+  await service.executeTool('analytics.tasterDetail', {
+    actor: { userId: 'u-warehouse', role: 'warehouse' },
+    filters: { tasterId: 't1' },
+  });
   await assertToolExecutionError(
     service,
     'analytics.tasterRankings',
@@ -580,7 +587,7 @@ test('unit: AI taster tools enforce company-level ranking permissions', async ()
     'AI_PERMISSION_DENIED',
     403,
   );
-  for (const role of ['warehouse', 'sales', 'taster', 'front_desk']) {
+  for (const role of ['sales', 'taster', 'front_desk']) {
     await assertToolExecutionError(
       service,
       'analytics.tasterDetail',
@@ -611,6 +618,12 @@ test('unit: AI analytics tools reject roles outside the policy matrix', async ()
   });
   await service.executeTool('analytics.trends', {
     actor: { userId: 'u-finance', role: 'finance' },
+  });
+  await service.executeTool('analytics.overview', {
+    actor: { userId: 'u-warehouse', role: 'warehouse' },
+  });
+  await service.executeTool('analytics.trends', {
+    actor: { userId: 'u-warehouse', role: 'warehouse' },
   });
   await assertToolExecutionError(
     service,

@@ -27,6 +27,7 @@ export interface CalculateTravelGroupProfitInput {
   salesOrders?: any[];
   commissionRecords?: any[];
   financeSummary?: any | null;
+  guidePointsSummaries?: any[];
 }
 
 export function calculateTravelGroupProfit(
@@ -44,6 +45,9 @@ export function calculateTravelGroupProfit(
   );
   const effectiveOrders = salesOrders.filter((order: any) =>
     effectiveOrderIds.has(optionalString(order?.id) || ''),
+  );
+  const feeEligibleOrders = salesOrders.filter((order: any) =>
+    EFFECTIVE_ORDER_STATUSES.has(normalizeEnum(order?.status)),
   );
   const relevantRefundOrders = salesOrders.filter(
     (order: any) =>
@@ -112,6 +116,13 @@ export function calculateTravelGroupProfit(
         AGENCY_MONTHLY_REBATE,
       )
     : sumCommissionPoints(commissionRecords, AGENCY_MONTHLY_REBATE);
+  const guidePointsDiagnostics = diagnoseGuidePoints(
+    effectiveOrders,
+    input.guidePointsSummaries,
+  );
+  const guideDailyPointsCents = guidePointsDiagnostics.daily.amountCents || 0;
+  const guideMonthlyPointsCents =
+    guidePointsDiagnostics.monthly.amountCents || 0;
   const effectiveSalesAmountCents = nonNegativeInteger(
     productProfit.effectiveSalesAmountCents,
   );
@@ -128,7 +139,7 @@ export function calculateTravelGroupProfit(
     travelGroup?.cigaretteFeeCents === null
       ? null
       : nonNegativeInteger(travelGroup.cigaretteFeeCents);
-  const orderTaxAndServiceFees = salesOrders.map((order: any) => {
+  const orderTaxAndServiceFees = feeEligibleOrders.map((order: any) => {
     const calculated = calculateOrderProfitFees(order);
     return {
       orderId: optionalString(order?.id) || '',
@@ -143,17 +154,24 @@ export function calculateTravelGroupProfit(
       missingSnapshotCodes: calculated.missingSnapshots.issues.map(
         (issue) => issue.code,
       ),
+      issues: calculated.issues.map((issue) => ({
+        ...issue,
+        orderId: optionalString(order?.id) || '',
+        orderNo: optionalString(order?.orderNo) || '',
+      })),
+      components: calculated.components,
       paymentDetails: calculated.paymentDetails,
     };
   });
   const financeMarkedOrderFees = orderTaxAndServiceFees.filter(
     (order: any) => order.financeMarked,
   );
-  const taxFeeSnapshotMissing = financeMarkedOrderFees.some(
-    (order: any) => order.taxFeeCents === null,
+  const taxFeeSnapshotMissing = orderTaxAndServiceFees.some(
+    (order: any) => order.components?.tax?.status === 'blocked',
   );
-  const paymentServiceFeeSnapshotMissing = financeMarkedOrderFees.some(
-    (order: any) => order.paymentServiceFeeCents === null,
+  const paymentServiceFeeSnapshotMissing = orderTaxAndServiceFees.some(
+    (order: any) =>
+      order.components?.paymentServiceFee?.status === 'blocked',
   );
   const profitFeeSnapshotMissing =
     taxFeeSnapshotMissing || paymentServiceFeeSnapshotMissing;
@@ -186,15 +204,44 @@ export function calculateTravelGroupProfit(
     manualOrderCommissionCents +
     dailyAgencyRebateCents +
     monthlyAgencyRebateCents +
+    guideDailyPointsCents +
+    guideMonthlyPointsCents +
     knownTaxFeeCents +
     knownPaymentServiceFeeCents;
   const warnings = normalizeWarnings(productProfit.warnings);
-  const employeeCommissionDiagnostics = diagnoseEmployeeCommissions(
+  const employeeCommissionDiagnostics = diagnoseOrderCommissionComponents(
     effectiveOrders,
     commissionRecords,
   );
   for (const warning of employeeCommissionDiagnostics.warnings) {
     addWarning(warnings, warning);
+  }
+  for (const orderFee of orderTaxAndServiceFees) {
+    for (const issue of orderFee.issues || []) {
+      addWarning(warnings, {
+        code: issue.code,
+        message: issue.message,
+        context: {
+          orderId: issue.orderId,
+          orderNo: issue.orderNo,
+          actionHint: issue.actionHint,
+        },
+      });
+    }
+  }
+  for (const issue of [
+    ...guidePointsDiagnostics.daily.issues,
+    ...guidePointsDiagnostics.monthly.issues,
+  ]) {
+    addWarning(warnings, {
+      code: issue.code,
+      message: issue.message,
+      context: {
+        orderId: issue.orderId,
+        orderNo: issue.orderNo,
+        actionHint: issue.actionHint,
+      },
+    });
   }
 
   if (cigaretteFeeCents === null) {
@@ -236,7 +283,8 @@ export function calculateTravelGroupProfit(
     employeeCommissionIncomplete:
       !employeeCommissionDiagnostics.salesCommissionCalculated ||
       !employeeCommissionDiagnostics.outreachCommissionCalculated ||
-      !employeeCommissionDiagnostics.leaderCommissionCalculated,
+      !employeeCommissionDiagnostics.leaderCommissionCalculated ||
+      guidePointsDiagnostics.incomplete,
   });
   const estimatedProfitCents =
     calculationStatus === 'incomplete'
@@ -279,6 +327,8 @@ export function calculateTravelGroupProfit(
     manualOrderCommissionCents,
     dailyAgencyRebateCents,
     monthlyAgencyRebateCents,
+    guideDailyPointsCents,
+    guideMonthlyPointsCents,
     taxFeeCents,
     paymentServiceFeeCents,
     paymentMethodFeeBreakdown,
@@ -286,6 +336,19 @@ export function calculateTravelGroupProfit(
     estimatedProfitCents,
     estimatedProfitRate,
     calculationStatus,
+    components: {
+      salesCommission: employeeCommissionDiagnostics.components.sales,
+      outreachCommission:
+        employeeCommissionDiagnostics.components.outreach,
+      leaderCommission: employeeCommissionDiagnostics.components.leader,
+      tax: aggregateOrderComponents(orderTaxAndServiceFees, 'tax'),
+      paymentServiceFee: aggregateOrderComponents(
+        orderTaxAndServiceFees,
+        'paymentServiceFee',
+      ),
+      guideDailyPoints: guidePointsDiagnostics.daily,
+      guideMonthlyPoints: guidePointsDiagnostics.monthly,
+    },
     warnings,
     orderTaxAndServiceFees,
   };
@@ -326,88 +389,190 @@ function resolveCalculationStatus(input: {
   return 'complete';
 }
 
-function diagnoseEmployeeCommissions(
+function diagnoseOrderCommissionComponents(
   effectiveOrders: any[],
   commissionRecords: any[],
 ) {
   const diagnostics = [
     {
+      key: 'sales',
       targetType: 'SALES_COMMISSION',
       calculatedKey: 'salesCommissionCalculated',
-      missingPersonCode: 'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
-      missingPersonMessage: '销售提成未计算：订单缺少销售人员。',
-      missingRuleCode: 'SALES_COMMISSION_NOT_CALCULATED_MISSING_RULE',
-      missingRuleMessage: '销售提成未计算：订单日期缺少适用的销售提成规则。',
-      hasPerson: (order: any) => Boolean(optionalString(order?.salesUserId)),
+      missingRuleCode: 'SALES_COMMISSION_RULE_MISSING',
+      missingRuleMessage: '订单日期没有适用的销售提成规则。',
+      requiresSalesUser: true,
     },
     {
+      key: 'outreach',
       targetType: 'OUTREACH_COMMISSION',
       calculatedKey: 'outreachCommissionCalculated',
-      missingPersonCode:
-        'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_OUTREACH_USER',
-      missingPersonMessage: '外联提成未计算：订单缺少外联人员。',
-      missingRuleCode: 'OUTREACH_COMMISSION_NOT_CALCULATED_MISSING_RULE',
-      missingRuleMessage: '外联提成未计算：订单日期缺少适用的外联提成规则。',
-      hasPerson: (order: any) =>
-        Boolean(optionalString(order?.outreachUserId)),
+      missingRuleCode: 'OUTREACH_COMMISSION_RULE_MISSING',
+      missingRuleMessage: '订单日期没有适用的外联提成规则。',
+      requiresSalesUser: false,
     },
     {
+      key: 'leader',
       targetType: 'LEADER_COMMISSION',
       calculatedKey: 'leaderCommissionCalculated',
-      missingPersonCode: 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_LEADER',
-      missingPersonMessage: '组长提成未计算：销售人员未配置组长。',
-      missingRuleCode: 'LEADER_COMMISSION_NOT_CALCULATED_MISSING_RULE',
-      missingRuleMessage: '组长提成未计算：订单日期缺少适用的组长提成规则。',
-      hasPerson: (order: any) =>
-        Boolean(optionalString(order?.salesUser?.leaderId)),
+      missingRuleCode: 'LEADER_COMMISSION_RULE_MISSING',
+      missingRuleMessage: '订单日期没有适用的组长提成规则。',
+      requiresSalesUser: false,
     },
   ];
-  const result: any = { warnings: [] as TravelGroupProfitWarning[] };
+  const result: any = {
+    warnings: [] as TravelGroupProfitWarning[],
+    components: {},
+  };
   for (const diagnostic of diagnostics) {
-    const missingPersonOrderIds: string[] = [];
-    const missingRuleOrderIds: string[] = [];
+    const issues: any[] = [];
+    let amountCents = 0;
     for (const order of effectiveOrders) {
       const orderId = optionalString(order?.id);
       if (!orderId) continue;
-      const hasCalculatedRecord = commissionRecords.some(
+      const records = commissionRecords.filter(
         (record: any) =>
           optionalString(record?.salesOrderId) === orderId &&
           !optionalString(record?.afterSalesOrderId) &&
+          record?.isActive !== false &&
           normalizeEnum(record?.targetType) === diagnostic.targetType &&
           (Boolean(record?.manualInput) ||
             Boolean(optionalString(record?.commissionRuleId))),
       );
-      if (hasCalculatedRecord) continue;
-      if (!diagnostic.hasPerson(order)) {
-        missingPersonOrderIds.push(orderId);
-      } else {
-        missingRuleOrderIds.push(orderId);
+      if (records.length > 0) {
+        amountCents += sumBy(records, (record: any) =>
+          nonNegativeInteger(record?.amountCents),
+        );
+        continue;
       }
-    }
-    result[diagnostic.calculatedKey] =
-      missingPersonOrderIds.length === 0 && missingRuleOrderIds.length === 0;
-    if (missingPersonOrderIds.length > 0) {
+      const salesUserMissing =
+        diagnostic.requiresSalesUser &&
+        !optionalString(order?.salesUserId);
+      const componentIssue = {
+        code: salesUserMissing
+          ? 'SALES_USER_MISSING'
+          : diagnostic.missingRuleCode,
+        message: salesUserMissing
+          ? '订单缺少销售人员，销售提成无法计算。'
+          : diagnostic.missingRuleMessage,
+        orderId,
+        orderNo: optionalString(order?.orderNo) || '',
+        actionHint: salesUserMissing
+          ? '请为订单选择有效的销售人员后重新计算。'
+          : '请配置覆盖订单日期的有效提成规则后重新计算。',
+      };
+      issues.push(componentIssue);
       result.warnings.push({
-        code: diagnostic.missingPersonCode,
-        message: diagnostic.missingPersonMessage,
-        context: {
-          orderCount: missingPersonOrderIds.length,
-          sampleOrderId: missingPersonOrderIds[0],
-        },
+        code: componentIssue.code,
+        message: componentIssue.message,
+        context: componentIssue,
       });
     }
-    if (missingRuleOrderIds.length > 0) {
-      result.warnings.push({
-        code: diagnostic.missingRuleCode,
-        message: diagnostic.missingRuleMessage,
-        context: {
-          orderCount: missingRuleOrderIds.length,
-          sampleOrderId: missingRuleOrderIds[0],
-        },
+    const status =
+      effectiveOrders.length === 0
+        ? 'not_applicable'
+        : issues.length === 0
+          ? 'calculated'
+          : 'blocked';
+    result[diagnostic.calculatedKey] = status !== 'blocked';
+    result.components[diagnostic.key] = {
+      status,
+      amountCents,
+      issues,
+    };
+  }
+  return result;
+}
+
+function diagnoseGuidePoints(
+  effectiveOrders: any[],
+  summaries: any[] | undefined,
+) {
+  const personalOrders = effectiveOrders.filter(
+    (order: any) => nonNegativeInteger(order?.personalAmountCents) > 0,
+  );
+  const guideSummaries = Array.isArray(summaries) ? summaries : [];
+  const issues: any[] = [];
+  const summaryGuideIds = new Set(
+    guideSummaries
+      .map((summary: any) => optionalString(summary?.guideId))
+      .filter(Boolean) as string[],
+  );
+  for (const order of personalOrders) {
+    const orderId = optionalString(order?.id) || '';
+    const orderNo = optionalString(order?.orderNo) || '';
+    const guideId = optionalString(order?.personalPointsGuideId);
+    if (!guideId) {
+      issues.push({
+        code: 'GUIDE_PERSONAL_ASSIGNMENT_MISSING',
+        message: '订单存在走个人的积分金额，但未指定导游。',
+        orderId,
+        orderNo,
+        actionHint: '请为订单选择承接个人积分的导游后重新计算。',
+      });
+    } else if (!summaryGuideIds.has(guideId)) {
+      issues.push({
+        code: 'GUIDE_POINTS_SUMMARY_MISSING',
+        message: '订单存在走个人的积分金额，但找不到对应导游积分汇总。',
+        orderId,
+        orderNo,
+        actionHint: '请刷新导游积分汇总后重新计算利润。',
       });
     }
   }
-  return result;
+  const status =
+    issues.length > 0
+      ? 'blocked'
+      : personalOrders.length > 0 || guideSummaries.length > 0
+        ? 'calculated'
+        : 'not_applicable';
+  const dailyAmountCents = sumBy(guideSummaries, (summary: any) =>
+    nonNegativeInteger(summary?.totalDailyPointsCents),
+  );
+  const monthlyAmountCents = sumBy(guideSummaries, (summary: any) =>
+    nonNegativeInteger(summary?.totalMonthlyPointsCents),
+  );
+  return {
+    daily: { status, amountCents: dailyAmountCents, issues },
+    monthly: { status, amountCents: monthlyAmountCents, issues },
+    incomplete: status === 'blocked',
+  };
+}
+
+function aggregateOrderComponents(
+  orderFees: any[],
+  key: 'tax' | 'paymentServiceFee',
+) {
+  if (orderFees.length === 0) {
+    return { status: 'not_applicable', amountCents: 0, issues: [] };
+  }
+  const components = orderFees.map((orderFee: any) => ({
+    ...(orderFee.components?.[key] || {}),
+    orderId: orderFee.orderId,
+    orderNo: orderFee.orderNo,
+  }));
+  const issues = orderFees.flatMap((orderFee: any) =>
+    (orderFee.components?.[key]?.issues || []).map((issue: any) => ({
+      ...issue,
+      orderId: orderFee.orderId,
+      orderNo: orderFee.orderNo,
+    })),
+  );
+  const failed = components.some(
+    (component: any) => component.status === 'failed',
+  );
+  const blocked = components.some(
+    (component: any) => component.status === 'blocked',
+  );
+  return {
+    status: failed ? 'failed' : blocked ? 'blocked' : 'calculated',
+    amountCents:
+      failed || blocked
+        ? null
+        : sumBy(components, (component: any) =>
+            nonNegativeInteger(component.amountCents),
+          ),
+    issues,
+  };
 }
 
 function buildTravelGroupPaymentMethodFeeBreakdown(
@@ -493,6 +658,9 @@ function filterRelevantCommissionRecords(
   travelGroupId: string | null,
 ) {
   return (Array.isArray(records) ? records : []).filter((record: any) => {
+    if (record?.isActive === false) {
+      return false;
+    }
     if (optionalString(record?.afterSalesOrderId)) {
       return (
         Boolean(record?.isConfirmed) &&

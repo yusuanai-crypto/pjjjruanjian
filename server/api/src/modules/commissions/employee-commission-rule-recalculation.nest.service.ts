@@ -214,27 +214,6 @@ function translateCalculationWarnings(
   };
   for (const warning of warnings || []) {
     switch (warning?.code) {
-      case 'missing_outreach_user':
-        if (targetTypes.includes('OUTREACH_COMMISSION')) {
-          result.push({
-            code: warning.code,
-            message: '订单未配置外联人员，外联提成未计算；系统不会自动猜测外联人员。',
-            context,
-          });
-        }
-        break;
-      case 'missing_leader':
-        if (targetTypes.includes('LEADER_COMMISSION')) {
-          result.push({
-            code: warning.code,
-            message: '订单销售人员未配置组长，组长提成未计算；系统不会自动猜测组长人员。',
-            context: {
-              ...context,
-              salesUserId: normalizeOptionalString(warning?.context?.salesUserId),
-            },
-          });
-        }
-        break;
       case 'missing_sales_user':
         if (targetTypes.includes('SALES_COMMISSION')) {
           result.push({
@@ -284,8 +263,6 @@ function employeeTargetLabel(targetType: string) {
 function hasSkippedEmployeeTarget(warnings: any[]) {
   return warnings.some((warning) =>
     [
-      'missing_outreach_user',
-      'missing_leader',
       'missing_sales_user',
       'missing_commission_rule',
     ].includes(warning.code),

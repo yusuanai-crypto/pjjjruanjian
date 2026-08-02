@@ -46,7 +46,7 @@ void main() {
 
   testWidgets('defaults to travel group order and saves travelGroupId',
       (tester) async {
-    final apiClient = _FakeApiClient();
+    final apiClient = _FakeApiClient()..includeRecalculationWarning = true;
     await _pumpOrderForm(tester, apiClient);
 
     await _selectExistingCustomer(tester);
@@ -97,8 +97,27 @@ void main() {
         'amountCents': 259800,
       },
     ]);
-    expect(find.text('录入成功'), findsOneWidget);
-    expect(find.textContaining('SO20260630001'), findsWidgets);
+    final dialog = find.byType(AlertDialog);
+    expect(dialog, findsOneWidget);
+    expect(
+      find.descendant(of: dialog, matching: find.text('录入成功')),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.textContaining('SO20260630001'),
+      ),
+      findsNothing,
+    );
+    expect(find.textContaining('提成待处理'), findsNothing);
+    expect(find.textContaining('提成重算'), findsNothing);
+    expect(find.textContaining('提成未计算'), findsNothing);
+    expect(
+      find.descendant(
+          of: dialog, matching: find.widgetWithText(TextButton, '确定')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('admin saves without loading or selecting commission assignees',
@@ -742,6 +761,7 @@ class _FakeApiClient extends ApiClient {
   bool failSalesOrder = false;
   bool failIncompleteTravelGroup = false;
   bool failPaymentMethods = false;
+  bool includeRecalculationWarning = false;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -876,6 +896,15 @@ class _FakeApiClient extends ApiClient {
       return {
         'data': {
           'salesOrder': _salesOrderJson(body ?? const <String, dynamic>{}),
+          if (includeRecalculationWarning)
+            'recalculation': {
+              'warnings': [
+                {
+                  'code': 'missing_commission_rule',
+                  'message': 'Missing commission rule.',
+                },
+              ],
+            },
         },
       };
     }

@@ -70,7 +70,7 @@ test('contract: stage7 recalculation runs after sales order creation', async () 
   });
 });
 
-test('contract: admin order creation keeps missing assignees null and returns warnings', async () => {
+test('contract: admin order creation only requires sales attribution for person-bound commission', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const result = await requestJson(baseUrl, '/api/sales-orders', {
@@ -99,10 +99,11 @@ test('contract: admin order creation keeps missing assignees null and returns wa
         (warning) => warning.code === 'missing_sales_user',
       ),
     );
-    assert.ok(
+    assert.equal(
       result.body.data.recalculation.warnings.some(
         (warning) => warning.code === 'missing_outreach_user',
       ),
+      false,
     );
   }, {
     prisma: buildStage7RecalculationPrisma(),
@@ -144,7 +145,7 @@ test('contract: sales creation auto-assigns the actor while finance creation doe
   });
 });
 
-test('contract: explicitly submitted invalid sales or outreach assignees are still rejected', async () => {
+test('contract: invalid sales assignee is rejected while legacy outreach input is ignored', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const result = await requestJson(baseUrl, '/api/sales-orders', {
@@ -191,10 +192,10 @@ test('contract: explicitly submitted invalid sales or outreach assignees are sti
     });
     assert.equal(
       invalidOutreach.response.status,
-      400,
+      201,
       JSON.stringify(invalidOutreach.body),
     );
-    assert.equal(invalidOutreach.body.error.code, 'INVALID_ASSIGNEE');
+    assert.equal(invalidOutreach.body.data.salesOrder.outreachUserId, null);
   }, {
     prisma: buildStage7RecalculationPrisma(),
   });
@@ -252,6 +253,7 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
     );
     assert.ok(generatedOutreach);
     assert.equal(generatedOutreach.salesOrderId, createdOrder.id);
+    assert.equal(generatedOutreach.targetUserId, null);
     assert.equal(generatedOutreach.amountCents, 1440);
 
     const updatedRule = await requestJson(
@@ -265,7 +267,11 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
         },
       },
     );
-    assert.equal(updatedRule.response.status, 200);
+    assert.equal(
+      updatedRule.response.status,
+      200,
+      JSON.stringify(updatedRule.body),
+    );
     const updateRecalculation = updatedRule.body.data.recalculation;
     assert.equal(updateRecalculation.generatedCount, 0);
     assert.equal(updateRecalculation.updatedCount, 1);
@@ -323,7 +329,13 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       disableRecalculation.updatedRecords.find(
         (record) => record.targetType === 'outreach_commission',
       ).amountCents,
-      0,
+      1800,
+    );
+    assert.equal(
+      disableRecalculation.updatedRecords.find(
+        (record) => record.targetType === 'outreach_commission',
+      ).isActive,
+      false,
     );
     assert.equal(
       disableRecalculation.warnings.some(
@@ -341,12 +353,6 @@ test('contract: creating, updating, and disabling an outreach rule recalculates 
       records.filter(
         (record) => record.targetType === 'outreach_commission',
       ).length,
-      1,
-    );
-    assert.equal(
-      records.find(
-        (record) => record.targetType === 'outreach_commission',
-      ).amountCents,
       0,
     );
 
@@ -419,7 +425,7 @@ test('contract: creating a leader rule after the order generates the existing or
     );
     assert.ok(generatedLeader);
     assert.equal(generatedLeader.salesOrderId, createdOrder.id);
-    assert.equal(generatedLeader.targetUserId, 'usr-stage7-recalc-leader');
+    assert.equal(generatedLeader.targetUserId, null);
     assert.equal(generatedLeader.amountCents, 432);
   }, {
     prisma,
@@ -523,7 +529,11 @@ test('contract: updating and disabling an agency rebate rule recalculates unconf
       },
     );
 
-    assert.equal(updatedRule.response.status, 200);
+    assert.equal(
+      updatedRule.response.status,
+      200,
+      JSON.stringify(updatedRule.body),
+    );
     const updatedRecalculation = updatedRule.body.data.recalculation;
     assert.equal(updatedRecalculation.orderCount, 1);
     assert.equal(updatedRecalculation.successCount, 1);
@@ -719,7 +729,52 @@ test('contract: stage7 recalculation runs after sales order amount and item chan
   });
 });
 
-test('contract: attribution and travel group changes zero stale automatic records', async () => {
+test('contract: changing sales order date reapplies the sales commission rule for the new date', async () => {
+  const prisma = buildStage7RecalculationPrisma();
+  const currentSalesRule = prisma.commissionRules.find(
+    (rule) => rule.targetType === 'SALES_COMMISSION',
+  );
+  currentSalesRule.effectiveTo = '2026-07-01T00:00:00.000Z';
+  prisma.commissionRules.push({
+    ...commissionRule(
+      'rule-stage7-sales-from-july-2',
+      'SALES_COMMISSION',
+      '0.0300',
+    ),
+    effectiveFrom: '2026-07-02T00:00:00.000Z',
+  });
+
+  await withPhase1Server(async (baseUrl) => {
+    const admin = await login(baseUrl);
+    const createdOrder = await createStage7Order(baseUrl, admin.token);
+    const updated = await requestJson(
+      baseUrl,
+      `/api/sales-orders/${createdOrder.id}`,
+      {
+        method: 'PATCH',
+        token: admin.token,
+        body: { orderDate: '2026-07-02' },
+      },
+    );
+
+    assert.equal(updated.response.status, 200, JSON.stringify(updated.body));
+    assert.equal(updated.body.data.salesOrder.orderDate, '2026-07-02');
+    const records = await listOrderCommissionRecords(
+      baseUrl,
+      admin.token,
+      createdOrder.id,
+    );
+    const salesCommission = records.find(
+      (record) => record.targetType === 'sales_commission',
+    );
+    assert.ok(salesCommission);
+    assert.equal(salesCommission.amountCents, 5400);
+  }, {
+    prisma,
+  });
+});
+
+test('contract: travel group changes rebind order-level automatic records without requiring outreach', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const createdOrder = await createStage7Order(baseUrl, admin.token);
@@ -742,20 +797,32 @@ test('contract: attribution and travel group changes zero stale automatic record
       updated.body.data.salesOrder.travelGroupId,
       'tg-stage7-recalc-next',
     );
+    assert.ok(
+      updated.body.data.recalculation,
+      JSON.stringify(updated.body.data),
+    );
 
     const recalcLogs = await operationLogs(
       baseUrl,
       admin.token,
       'commission_records.recalculate',
     );
-    const zeroedOutreach = recalcLogs.find(
+    const movedOutreach = recalcLogs.find(
       (log) =>
         log.afterData.salesOrderId === createdOrder.id &&
         log.afterData.targetType === 'OUTREACH_COMMISSION' &&
-        log.afterData.amountCents === 0,
+        log.afterData.travelGroupId === 'tg-stage7-recalc-next',
     );
-    assert.ok(zeroedOutreach);
-    assert.equal(zeroedOutreach.beforeData.targetUserId, OUTREACH_USER_ID);
+    assert.ok(
+      movedOutreach,
+      JSON.stringify({
+        recalcLogs,
+        recalculation: updated.body.data.recalculation,
+      }),
+    );
+    assert.equal(movedOutreach.beforeData.targetUserId, null);
+    assert.equal(movedOutreach.afterData.targetUserId, null);
+    assert.equal(movedOutreach.afterData.amountCents, 1440);
 
     const triggerLogs = await operationLogs(
       baseUrl,
@@ -765,10 +832,13 @@ test('contract: attribution and travel group changes zero stale automatic record
     const updateTrigger = triggerLogs.find(
       (log) =>
         log.entityId === createdOrder.id &&
-        log.afterData.trigger === 'sales_order_update' &&
-        log.afterData.warningCodes.includes('missing_outreach_user'),
+        log.afterData.trigger === 'sales_order_update',
     );
     assert.ok(updateTrigger);
+    assert.equal(
+      updateTrigger.afterData.warningCodes.includes('missing_outreach_user'),
+      false,
+    );
     assert.deepEqual(updateTrigger.afterData.travelGroupIds.sort(), [
       TRAVEL_GROUP_ID,
       'tg-stage7-recalc-next',

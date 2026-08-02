@@ -367,7 +367,11 @@ void main() {
     });
 
     await tester.pumpWidget(
-      _page(apiClient, documentsDirectory: documentsDirectory),
+      _page(
+        apiClient,
+        role: UserRole.warehouse,
+        documentsDirectory: documentsDirectory,
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -732,12 +736,13 @@ void main() {
   });
 
   testWidgets(
-      'allows admin boss finance and after sales to use analytics and export',
+      'allows warehouse and existing analytics roles to load and export',
       (tester) async {
     for (final role in [
       UserRole.admin,
       UserRole.boss,
       UserRole.finance,
+      UserRole.warehouse,
       UserRole.afterSales,
     ]) {
       final apiClient = _FakeAnalyticsApiClient();
@@ -821,7 +826,6 @@ void main() {
     for (final role in [
       UserRole.taster,
       UserRole.sales,
-      UserRole.warehouse,
       UserRole.frontDesk,
     ]) {
       final apiClient = _FakeAnalyticsApiClient();

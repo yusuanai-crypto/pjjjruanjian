@@ -73,7 +73,7 @@ test('unit: employee commission rule update recalculates the union of old and ne
   assert.equal(log.afterData.generatedCount, 2);
 });
 
-test('unit: employee recalculation translates only affected missing-person and missing-rule warnings', async () => {
+test('unit: employee recalculation ignores legacy missing-person warnings and keeps affected missing-rule warnings', async () => {
   const fixture = createFixture({
     orders: [order('order-july', '2026-07-15')],
     calculationWarnings: [
@@ -110,13 +110,7 @@ test('unit: employee recalculation translates only affected missing-person and m
   assert.equal(result.skippedCount, 1);
   assert.deepEqual(
     result.warnings.map((warning) => warning.code),
-    ['missing_outreach_user', 'missing_commission_rule'],
-  );
-  assert.equal(
-    result.warnings.find(
-      (warning) => warning.code === 'missing_outreach_user',
-    ).message.includes('不会自动猜测外联人员'),
-    true,
+    ['missing_commission_rule'],
   );
   assert.equal(
     result.warnings.find(

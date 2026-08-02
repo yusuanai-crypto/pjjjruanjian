@@ -10,6 +10,17 @@ const {
 
 const HISTORY_PATH = '/api/ai/chat/history';
 const CAPABILITIES_PATH = '/api/ai/capabilities';
+const WAREHOUSE_READ_ONLY_ANALYTICS_INTENTS = [
+  'analytics_overview',
+  'analytics_trend',
+  'metric_explain',
+  'taster_ranking',
+  'taster_detail',
+  'ranking_explain',
+  'analytics_source_orders',
+  'analytics_source_travel_groups',
+  'analytics_source_after_sales',
+];
 
 test('contract: AI chat history returns only the current user records and sanitizes tool calls', async () => {
   await withPhase1Server(
@@ -180,6 +191,55 @@ test('contract: AI chat history paginates current user records', async () => {
   );
 });
 
+test('contract: warehouse can read only its own AI history', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const warehouse = await login(
+        baseUrl,
+        'stage9-history-warehouse',
+        'Password123',
+      );
+      const result = await requestJson(baseUrl, HISTORY_PATH, {
+        token: warehouse.token,
+      });
+
+      assert.equal(result.response.status, 200);
+      assertHistoryResponseContract(result.body.data);
+      assert.equal(result.body.data.total, 1);
+      assert.equal(result.body.data.items[0].question, 'warehouse own analytics');
+      assert.equal(result.body.data.items[0].intent, 'analytics_overview');
+      assert.equal(
+        JSON.stringify(result.body.data).includes('boss private analytics'),
+        false,
+      );
+    },
+    {
+      env: enabledMockAiEnv(),
+      prisma: {
+        users: historyUsers(),
+        aiChatMessages: [
+          chatMessage({
+            id: 'msg-stage9-warehouse-own',
+            conversationId: 'conv-stage9-warehouse-own',
+            userId: 'usr-stage9-history-warehouse',
+            userRole: 'warehouse',
+            question: 'warehouse own analytics',
+            intent: 'analytics_overview',
+          }),
+          chatMessage({
+            id: 'msg-stage9-warehouse-other',
+            conversationId: 'conv-stage9-warehouse-other',
+            userId: 'usr-stage9-history-boss',
+            userRole: 'boss',
+            question: 'boss private analytics',
+            intent: 'analytics_overview',
+          }),
+        ],
+      },
+    },
+  );
+});
+
 test('contract: AI capabilities expose role-scoped abilities without sensitive config', async () => {
   await withPhase1Server(
     async (baseUrl) => {
@@ -229,6 +289,24 @@ test('contract: AI capabilities expose role-scoped abilities without sensitive c
         finance.tools.some((tool) => tool.intent === 'management_suggestion'),
         false,
       );
+
+      const warehouse = await capabilityFor(baseUrl, 'stage9-cap-warehouse');
+      assertCapabilitiesContract(warehouse);
+      assert.equal(warehouse.role, 'warehouse');
+      assert.equal(warehouse.roleAllowed, true);
+      assert.equal(warehouse.canUseAi, true);
+      assert.deepEqual(
+        warehouse.allowedIntents,
+        WAREHOUSE_READ_ONLY_ANALYTICS_INTENTS,
+      );
+      assert.deepEqual(toolNames(warehouse), [
+        'analytics.overview',
+        'analytics.tasterRankings',
+        'analytics.tasterDetail',
+        'analytics.trends',
+      ]);
+      assert.match(warehouse.scopeDescription, /只读/);
+      assert.match(warehouse.scopeDescription, /不包含经营建议/);
 
       const afterSales = await capabilityFor(baseUrl, 'stage9-cap-after-sales');
       assertCapabilitiesContract(afterSales);
@@ -406,6 +484,11 @@ function historyUsers() {
   return [
     user('usr-stage9-history-boss', 'stage9-history-boss', 'boss'),
     user('usr-stage9-history-other', 'stage9-history-other', 'boss'),
+    user(
+      'usr-stage9-history-warehouse',
+      'stage9-history-warehouse',
+      'warehouse',
+    ),
   ];
 }
 
@@ -418,6 +501,7 @@ function capabilityUsers() {
     ),
     user('usr-stage9-cap-boss', 'stage9-cap-boss', 'boss'),
     user('usr-stage9-cap-finance', 'stage9-cap-finance', 'finance'),
+    user('usr-stage9-cap-warehouse', 'stage9-cap-warehouse', 'warehouse'),
     user('usr-stage9-cap-after-sales', 'stage9-cap-after-sales', 'after_sales'),
     user('usr-stage9-cap-sales', 'stage9-cap-sales', 'sales'),
   ];

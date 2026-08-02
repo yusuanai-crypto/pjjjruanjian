@@ -43,6 +43,10 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
       totalDailyRebateCents: 500,
       totalMonthlyRebateCents: 600,
     },
+    guidePointsSummaries: [
+      { totalDailyPointsCents: 100, totalMonthlyPointsCents: 200 },
+      { totalDailyPointsCents: 50, totalMonthlyPointsCents: 25 },
+    ],
   });
 
   assert.equal(result.calculationStatus, 'complete');
@@ -58,9 +62,11 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
   assert.equal(result.tasterCommissionCents, 400);
   assert.equal(result.dailyAgencyRebateCents, 500);
   assert.equal(result.monthlyAgencyRebateCents, 600);
-  assert.equal(result.totalExpenseCents, 6300);
-  assert.equal(result.estimatedProfitCents, 3700);
-  assert.equal(result.estimatedProfitRate, 0.37);
+  assert.equal(result.guideDailyPointsCents, 150);
+  assert.equal(result.guideMonthlyPointsCents, 225);
+  assert.equal(result.totalExpenseCents, 6675);
+  assert.equal(result.estimatedProfitCents, 3325);
+  assert.equal(result.estimatedProfitRate, 0.3325);
   assert.equal(
     result.employeeCommissionCents,
     result.salesCommissionCents +
@@ -76,11 +82,25 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
       result.employeeCommissionCents +
       result.tasterCommissionCents +
       result.dailyAgencyRebateCents +
-      result.monthlyAgencyRebateCents,
+      result.monthlyAgencyRebateCents +
+      result.guideDailyPointsCents +
+      result.guideMonthlyPointsCents,
   );
   assert.equal(
     result.estimatedProfitCents,
-    10000 - 3000 - 500 - 500 - 200 - 100 - 200 - 300 - 400 - 500 - 600,
+    10000 -
+      3000 -
+      500 -
+      500 -
+      200 -
+      100 -
+      200 -
+      300 -
+      400 -
+      500 -
+      600 -
+      150 -
+      225,
   );
 });
 
@@ -140,7 +160,7 @@ test('unit: profit diagnostics distinguish calculated zero from missing employee
 
   const missing = calculateTravelGroupProfit({
     travelGroup: group('group-missing-commission'),
-    salesOrders: [order('order-missing-commission')],
+    salesOrders: [order('order-missing-commission', { salesUserId: null })],
     commissionRecords: [],
     financeSummary: {
       totalDailyRebateCents: 0,
@@ -156,9 +176,38 @@ test('unit: profit diagnostics distinguish calculated zero from missing employee
     missing.warnings.some(
       (warning) =>
         warning.code ===
-        'SALES_COMMISSION_NOT_CALCULATED_MISSING_SALES_USER',
+        'SALES_USER_MISSING',
     ),
     true,
+  );
+});
+
+test('unit: missing guide points summary blocks both daily and monthly profit components', () => {
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-guide-summary-missing'),
+    salesOrders: [
+      order('order-guide-summary-missing', {
+        personalAmountCents: 1000,
+        personalPointsGuideId: 'guide-missing',
+      }),
+    ],
+    commissionRecords: employeeZeroCommissions(
+      'order-guide-summary-missing',
+    ),
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+    guidePointsSummaries: [],
+  });
+
+  assert.equal(result.calculationStatus, 'incomplete');
+  assert.equal(result.estimatedProfitCents, null);
+  assert.equal(result.components.guideDailyPoints.status, 'blocked');
+  assert.equal(result.components.guideMonthlyPoints.status, 'blocked');
+  assert.deepEqual(
+    result.components.guideDailyPoints.issues.map((issue) => issue.code),
+    ['GUIDE_POINTS_SUMMARY_MISSING'],
   );
 });
 
@@ -554,17 +603,29 @@ function group(id, overrides = {}) {
 
 function order(id, overrides = {}) {
   const items = overrides.items || [item(`${id}-line`, 10000, 3000)];
+  const totalAmountCents =
+    overrides.totalAmountCents ??
+    items.reduce((total, line) => total + line.subtotalCents, 0);
   return {
     id,
     orderNo: `SO-${id}`,
     orderDate: '2026-06-01',
     travelGroupId: id.replace('order', 'group'),
     status: 'VALID',
-    totalAmountCents: items.reduce(
-      (total, line) => total + line.subtotalCents,
-      0,
-    ),
+    salesUserId: 'sales-default',
+    totalAmountCents,
     logisticsFeeCents: 0,
+    financeMark: true,
+    taxRateSnapshot: '0.000000',
+    paymentDetails: [
+      paymentDetail(
+        `${id}-payment`,
+        'zero-fee',
+        '零费率',
+        totalAmountCents,
+        '0.000000',
+      ),
+    ],
     afterSalesOrders: [],
     commissionRecords: [],
     ...overrides,

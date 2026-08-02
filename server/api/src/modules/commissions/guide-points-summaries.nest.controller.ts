@@ -86,6 +86,24 @@ export class GuidePointsSummariesNestController {
     };
   }
 
+  @Patch('orders/:orderId/liquor-cost-deduction')
+  async updateOrderLiquorCostDeduction(
+    @Param('orderId') orderId: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      guidePointsSummary:
+        await this.guidePointsService.updateGuidePersonalOrderLiquorCostDeduction(
+          actor,
+          orderId,
+          body,
+          { ipAddress: getRequestIp(request) },
+        ),
+    };
+  }
+
   @Get(':id')
   async detail(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

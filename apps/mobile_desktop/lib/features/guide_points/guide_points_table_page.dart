@@ -294,6 +294,51 @@ class _GuidePointsTablePageState extends State<GuidePointsTablePage> {
     }
   }
 
+  Future<void> _editOrderLiquorCostDeduction(
+    GuidePointsSummaryRecord summary,
+    GuidePointsOrderRecord order,
+  ) async {
+    if (!_canMaintain || summary.dailyPointsPaid || summary.monthlyPointsPaid) {
+      return;
+    }
+    final busyKey = '${order.id}:liquor-cost';
+    final updated = await showDialog<GuidePointsSummaryRecord>(
+      context: context,
+      builder: (context) => _GuideLiquorCostEditDialog(
+        order: order,
+        onSave: (liquorCostDeductionCents) async {
+          if (_busyKeys.contains(busyKey)) {
+            throw StateError('正在保存，请勿重复提交。');
+          }
+          setState(() {
+            _busyKeys.add(busyKey);
+            _errorMessage = null;
+          });
+          try {
+            return await _businessApi
+                .updateGuidePersonalOrderLiquorCostDeduction(
+              order.id,
+              liquorCostDeductionCents: liquorCostDeductionCents,
+            );
+          } finally {
+            if (mounted) {
+              setState(() => _busyKeys.remove(busyKey));
+            }
+          }
+        },
+      ),
+    );
+    if (!mounted || updated == null) {
+      return;
+    }
+    setState(() {
+      _replaceSummary(updated);
+      _details[updated.id] = updated;
+      _successMessage = '订单 ${order.orderNo} 的扣酒成本已更新。';
+      _errorMessage = null;
+    });
+  }
+
   void _replaceSummary(GuidePointsSummaryRecord updated) {
     final index = _summaries.indexWhere((summary) => summary.id == updated.id);
     if (index < 0) {
@@ -652,6 +697,11 @@ class _GuidePointsTablePageState extends State<GuidePointsTablePage> {
                                 _details[summary.id] ?? summary,
                                 order,
                               ),
+                              onEditLiquorCostDeduction: (order) =>
+                                  _editOrderLiquorCostDeduction(
+                                _details[summary.id] ?? summary,
+                                order,
+                              ),
                             ),
                         ],
                       ),
@@ -676,6 +726,7 @@ class _GuideSummaryCard extends StatelessWidget {
     required this.onSetDailyPaid,
     required this.onSetMonthlyPaid,
     required this.onEditRates,
+    required this.onEditLiquorCostDeduction,
   });
 
   final GuidePointsSummaryRecord summary;
@@ -686,6 +737,7 @@ class _GuideSummaryCard extends StatelessWidget {
   final ValueChanged<bool> onSetDailyPaid;
   final ValueChanged<bool> onSetMonthlyPaid;
   final ValueChanged<GuidePointsOrderRecord> onEditRates;
+  final ValueChanged<GuidePointsOrderRecord> onEditLiquorCostDeduction;
 
   @override
   Widget build(BuildContext context) {
@@ -776,6 +828,7 @@ class _GuideSummaryCard extends StatelessWidget {
               canMaintain: canMaintain,
               busyKeys: busyKeys,
               onEditRates: onEditRates,
+              onEditLiquorCostDeduction: onEditLiquorCostDeduction,
             ),
         ],
       ),
@@ -789,12 +842,14 @@ class _GuideOrderTable extends StatelessWidget {
     required this.canMaintain,
     required this.busyKeys,
     required this.onEditRates,
+    required this.onEditLiquorCostDeduction,
   });
 
   final GuidePointsSummaryRecord summary;
   final bool canMaintain;
   final Set<String> busyKeys;
   final ValueChanged<GuidePointsOrderRecord> onEditRates;
+  final ValueChanged<GuidePointsOrderRecord> onEditLiquorCostDeduction;
 
   @override
   Widget build(BuildContext context) {
@@ -830,7 +885,47 @@ class _GuideOrderTable extends StatelessWidget {
                   ),
                   DataCell(Text(formatMoneyCents(order.effectiveAmountCents))),
                   DataCell(
-                    Text(formatMoneyCents(order.liquorCostDeductionCents)),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          formatMoneyCents(
+                            order.liquorCostDeductionCents,
+                          ),
+                        ),
+                        if (canMaintain) ...[
+                          const SizedBox(width: 4),
+                          Tooltip(
+                            message: summary.dailyPointsPaid ||
+                                    summary.monthlyPointsPaid
+                                ? '请先取消日返/月返已返状态'
+                                : '修改本单扣酒成本',
+                            child: IconButton(
+                              key: ValueKey(
+                                'guide-points-edit-liquor-cost-${order.id}',
+                              ),
+                              onPressed: busyKeys.contains(
+                                        '${order.id}:liquor-cost',
+                                      ) ||
+                                      summary.dailyPointsPaid ||
+                                      summary.monthlyPointsPaid
+                                  ? null
+                                  : () => onEditLiquorCostDeduction(order),
+                              icon: busyKeys.contains(
+                                '${order.id}:liquor-cost',
+                              )
+                                  ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.edit_note_rounded),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                   DataCell(Text(formatMoneyCents(order.netAmountCents))),
                   DataCell(Text(order.guideName ?? summary.guideNameSnapshot)),
@@ -899,6 +994,166 @@ class _PaidButton extends StatelessWidget {
     return OutlinedButton(
       onPressed: !enabled || busy ? null : () => onChanged(!paid),
       child: Text('$label${paid ? '已返' : '未返'}'),
+    );
+  }
+}
+
+class _GuideLiquorCostEditDialog extends StatefulWidget {
+  const _GuideLiquorCostEditDialog({
+    required this.order,
+    required this.onSave,
+  });
+
+  final GuidePointsOrderRecord order;
+  final Future<GuidePointsSummaryRecord> Function(int cents) onSave;
+
+  @override
+  State<_GuideLiquorCostEditDialog> createState() =>
+      _GuideLiquorCostEditDialogState();
+}
+
+class _GuideLiquorCostEditDialogState
+    extends State<_GuideLiquorCostEditDialog> {
+  late final TextEditingController _controller;
+  bool _saving = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: _centsToYuanInput(
+        widget.order.liquorCostDeductionCents,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  int? _validatedCents() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) {
+      setState(() => _errorMessage = '扣酒成本不能为空。');
+      return null;
+    }
+    if (text.startsWith('-')) {
+      setState(() => _errorMessage = '扣酒成本不能小于 0。');
+      return null;
+    }
+    final match = RegExp(r'^(\d+)(?:\.(\d{1,2}))?$').firstMatch(text);
+    if (match == null) {
+      setState(() => _errorMessage = '请输入不小于 0 的金额，最多两位小数。');
+      return null;
+    }
+    final whole = BigInt.parse(match.group(1)!);
+    final fraction = (match.group(2) ?? '').padRight(2, '0');
+    final cents = whole * BigInt.from(100) + BigInt.parse(fraction);
+    if (cents > BigInt.from(widget.order.effectiveAmountCents)) {
+      setState(
+        () => _errorMessage = '扣酒成本不能大于本单有效金额 '
+            '${formatMoneyCents(widget.order.effectiveAmountCents)}。',
+      );
+      return null;
+    }
+    return cents.toInt();
+  }
+
+  Future<void> _submit() async {
+    if (_saving) {
+      return;
+    }
+    final cents = _validatedCents();
+    if (cents == null) {
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+    try {
+      final updated = await widget.onSave(cents);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(updated);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForGuidePointsError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final orderId = widget.order.id;
+    return AlertDialog(
+      title: Text('修改订单 ${widget.order.orderNo} 的扣酒成本'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextFormField(
+              key: ValueKey('guide-order-liquor-cost-yuan-$orderId'),
+              controller: _controller,
+              enabled: !_saving,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: '扣酒成本',
+                suffixText: '元',
+                helperText: '最多两位小数；不得超过本单有效金额 '
+                    '${formatMoneyCents(widget.order.effectiveAmountCents)}',
+              ),
+              onFieldSubmitted: (_) => _submit(),
+            ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _errorMessage!,
+                key: ValueKey('guide-order-liquor-cost-error-$orderId'),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: ValueKey('guide-order-liquor-cost-cancel-$orderId'),
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: ValueKey('guide-order-liquor-cost-save-$orderId'),
+          onPressed: _saving ? null : _submit,
+          child: _saving
+              ? const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 8),
+                    Text('保存中'),
+                  ],
+                )
+              : const Text('保存'),
+        ),
+      ],
     );
   }
 }
@@ -1075,6 +1330,13 @@ String _rateToPercentText(String rate) {
 }
 
 String _rateToPercent(String rate) => '${_rateToPercentText(rate)}%';
+
+String _centsToYuanInput(int cents) {
+  final normalized = cents < 0 ? 0 : cents;
+  final whole = normalized ~/ 100;
+  final fraction = (normalized % 100).toString().padLeft(2, '0');
+  return '$whole.$fraction';
+}
 
 String _dateText(DateTime date) => '${date.year.toString().padLeft(4, '0')}-'
     '${date.month.toString().padLeft(2, '0')}-'

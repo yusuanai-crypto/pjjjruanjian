@@ -4,6 +4,9 @@ import * as ExcelJS from 'exceljs';
 import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
+import { CommissionRecordsNestService } from '../commissions/commission-records.nest.service';
+import { GuidePointsSummaryNestService } from '../commissions/guide-points-summary.nest.service';
+import { TravelGroupFinanceSummaryNestService } from '../commissions/travel-group-finance-summary.nest.service';
 import { calculateProductProfitSummary } from '../products/product-profit.helper';
 import { SettingsNestService } from '../settings/settings.nest.service';
 import {
@@ -24,8 +27,16 @@ import {
 } from './analytics-sales-performance.helper';
 import { buildDailyLossProfitResult } from './daily-loss-profit.helper';
 import { calculateTravelGroupProfit } from './travel-group-profit.helper';
+import { repairOrderProfitFeeSnapshots } from './profit-fee-snapshot-repair.helper';
 
-const ANALYTICS_READ_ROLES = ['admin', 'boss', 'finance', 'after_sales'];
+const ANALYTICS_READ_ROLES = [
+  'admin',
+  'boss',
+  'finance',
+  'warehouse',
+  'after_sales',
+];
+const PROFIT_ANALYSIS_READ_ROLES = ['admin', 'boss', 'warehouse'];
 const UNASSIGNED_TASTER_KEY = '__unassigned_taster__';
 const UNASSIGNED_TASTER_NAME = '\u672a\u5206\u914d\u54c1\u9274\u5e08';
 const GROSS_SALES_STATUS_VALUES = ['VALID', 'PARTIAL_REFUND', 'REFUNDED'];
@@ -59,6 +70,9 @@ export class AnalyticsNestService {
     private readonly prisma: PrismaService,
     private readonly operationLogsService: OperationLogsNestService,
     private readonly settingsService: SettingsNestService,
+    private readonly commissionRecordsService: CommissionRecordsNestService,
+    private readonly travelGroupFinanceSummaryService: TravelGroupFinanceSummaryNestService,
+    private readonly guidePointsSummaryService: GuidePointsSummaryNestService,
   ) {}
 
   async getOverview(actor: any, query: any = {}) {
@@ -274,7 +288,7 @@ export class AnalyticsNestService {
   }
 
   async listTravelGroupProfits(actor: any, query: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss']);
+    requireAnyRole(actor, PROFIT_ANALYSIS_READ_ROLES);
     const result = await this.buildTravelGroupProfitReadResult(query);
     const page = normalizePositivePage(query?.page);
     const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
@@ -297,12 +311,187 @@ export class AnalyticsNestService {
     };
   }
 
+  async recalculateTravelGroupProfit(
+    actor: any,
+    travelGroupId: string,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, ['admin', 'finance']);
+    const groupId = normalizeOptionalString(travelGroupId);
+    if (!groupId) {
+      throw createHttpError(
+        400,
+        'VALIDATION_FAILED',
+        'travelGroupId is required.',
+      );
+    }
+    const travelGroup = await this.prisma.travelGroup.findUnique({
+      where: { id: groupId },
+    });
+    if (!travelGroup) {
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
+    }
+    const orders = await this.prisma.salesOrder.findMany({
+      where: {
+        travelGroupId: groupId,
+        orderType: { notIn: ['AFTER_SALES', 'BUYBACK'] },
+        status: { in: ['VALID', 'PARTIAL_REFUND'] },
+        OR: [
+          { workflowStatus: null },
+          { workflowStatus: { in: ['APPROVED', 'COMPLETED'] } },
+        ],
+      },
+      select: { id: true, orderNo: true },
+      orderBy: [{ orderDate: 'asc' }, { orderNo: 'asc' }],
+    });
+    const results: any[] = [];
+    for (const order of orders) {
+      try {
+        const result = await this.prisma.$transaction(async (tx: any) => {
+          let recalculation: any;
+          try {
+            recalculation =
+              await this.commissionRecordsService.recalculateSalesOrderRecords(
+              order.id,
+              {
+                prisma: tx,
+                actor,
+                ipAddress: metadata.ipAddress || null,
+                targetTypes: [
+                  'SALES_COMMISSION',
+                  'OUTREACH_COMMISSION',
+                  'LEADER_COMMISSION',
+                ],
+              },
+            );
+          } catch (error: any) {
+            throw markProfitRecalculationStep(error, 'commissions');
+          }
+          let snapshotRepair: any;
+          try {
+            snapshotRepair = await repairOrderProfitFeeSnapshots(
+              tx,
+              order.id,
+              { actorId: actor.id },
+            );
+          } catch (error: any) {
+            throw markProfitRecalculationStep(error, 'fee_snapshots');
+          }
+          const issues = [
+            ...commissionWarningsToProfitIssues(
+              recalculation.warnings,
+              order,
+            ),
+            ...snapshotRepair.issues,
+          ];
+          const changed =
+            recalculation.generatedRecords.length > 0 ||
+            recalculation.updatedRecords.length > 0 ||
+            snapshotRepair.changedCount > 0;
+          return {
+            orderId: order.id,
+            orderNo: order.orderNo,
+            success: issues.length === 0,
+            changed,
+            issues,
+          };
+        });
+        results.push(result);
+      } catch (error: any) {
+        results.push({
+          orderId: order.id,
+          orderNo: order.orderNo,
+          success: false,
+          changed: false,
+          issues: buildOrderRecalculationFailureIssues(error, order),
+        });
+      }
+    }
+
+    const orchestrationIssues: any[] = [];
+    try {
+      await this.travelGroupFinanceSummaryService.refreshTravelGroupFinanceSummary(
+        groupId,
+        { actor, ipAddress: metadata.ipAddress || null },
+      );
+    } catch (error: any) {
+      orchestrationIssues.push({
+        code: 'TRAVEL_GROUP_FINANCE_SUMMARY_RECALCULATION_FAILED',
+        message: error?.message || '旅行团财务汇总刷新失败。',
+        orderId: null,
+        orderNo: null,
+        actionHint: '请检查旅行团财务数据后重试。',
+      });
+    }
+    try {
+      await this.guidePointsSummaryService.refreshGuidePointsSummariesForTravelGroup(
+        groupId,
+        { actor, ipAddress: metadata.ipAddress || null },
+      );
+    } catch (error: any) {
+      orchestrationIssues.push({
+        code: 'GUIDE_POINTS_RECALCULATION_FAILED',
+        message: error?.message || '导游积分汇总刷新失败。',
+        orderId: null,
+        orderNo: null,
+        actionHint: '请检查个人积分归属和导游资料后重试。',
+      });
+    }
+    const profit = await this.buildTravelGroupProfitRow(groupId);
+    const issues = [
+      ...results.flatMap((result) => result.issues || []),
+      ...orchestrationIssues,
+    ];
+    await this.operationLogsService.appendLog({
+      userId: actor.id,
+      action: 'analytics.travel_group_profit.recalculate',
+      entityType: 'travel_group',
+      entityId: groupId,
+      beforeData: null,
+      afterData: {
+        successCount: results.filter((result) => result.success).length,
+        failureCount:
+          results.filter((result) => !result.success).length +
+          orchestrationIssues.length,
+        changedCount: results.filter((result) => result.changed).length,
+        issueCodes: issues.map((issue) => issue.code),
+        orderResults: results.map((result) => ({
+          orderId: result.orderId,
+          orderNo: result.orderNo,
+          success: result.success,
+          changed: result.changed,
+          issueCodes: (result.issues || []).map(
+            (issue: any) => issue.code,
+          ),
+        })),
+      },
+      ipAddress: metadata.ipAddress || null,
+    });
+    return {
+      successCount: results.filter((result) => result.success).length,
+      failureCount:
+        results.filter((result) => !result.success).length +
+        orchestrationIssues.length,
+      changedCount: results.filter((result) => result.changed).length,
+      unchangedCount: results.filter(
+        (result) => result.success && !result.changed,
+      ).length,
+      issues,
+      results,
+      profit: toTravelGroupProfitDto(profit),
+    };
+  }
+
   async exportTravelGroupProfitsXlsx(
     actor: any,
     query: any = {},
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'boss']);
+    requireAnyRole(actor, PROFIT_ANALYSIS_READ_ROLES);
     const result = await this.buildTravelGroupProfitReadResult(query);
     const groupRowCount = result.rows.length;
     const orderRowCount = result.rows.reduce(
@@ -363,6 +552,53 @@ export class AnalyticsNestService {
     };
   }
 
+  private async buildTravelGroupProfitRow(travelGroupId: string) {
+    const travelGroup = await this.prisma.travelGroup.findUnique({
+      where: { id: travelGroupId },
+    });
+    if (!travelGroup) {
+      throw createHttpError(
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+        'Travel group does not exist.',
+      );
+    }
+    const salesOrders = await this.prisma.salesOrder.findMany({
+      where: { travelGroupId },
+      include: getSalesOrderProfitAnalyticsInclude(),
+      orderBy: { orderDate: 'asc' },
+    });
+    const salesOrderIds = salesOrders
+      .map((order: any) => normalizeOptionalString(order?.id))
+      .filter(Boolean);
+    const [commissionRecords, financeSummary, guidePointsSummaries] =
+      await Promise.all([
+        this.prisma.commissionRecord.findMany({
+          where: {
+            OR: [
+              { travelGroupId },
+              ...(salesOrderIds.length
+                ? [{ salesOrderId: { in: salesOrderIds } }]
+                : []),
+            ],
+          },
+        }),
+        this.prisma.travelGroupFinanceSummary.findUnique({
+          where: { travelGroupId },
+        }),
+        this.prisma.guidePointsSummary.findMany({
+          where: { travelGroupId },
+        }),
+      ]);
+    return calculateTravelGroupProfit({
+      travelGroup,
+      salesOrders,
+      commissionRecords,
+      financeSummary,
+      guidePointsSummaries,
+    });
+  }
+
   private async buildTravelGroupProfitReadResult(query: any = {}) {
     const range = normalizeAnalyticsDateRange({
       preset: query?.preset,
@@ -406,7 +642,8 @@ export class AnalyticsNestService {
     const salesOrderIds = salesOrders
       .map((order: any) => normalizeOptionalString(order?.id))
       .filter(Boolean);
-    const [commissionRecords, financeSummaries] = travelGroupIds.length
+    const [commissionRecords, financeSummaries, guidePointsSummaries] =
+      travelGroupIds.length
       ? await Promise.all([
           this.prisma.commissionRecord.findMany({
             where: {
@@ -435,8 +672,15 @@ export class AnalyticsNestService {
               },
             },
           }),
+          this.prisma.guidePointsSummary.findMany({
+            where: {
+              travelGroupId: {
+                in: travelGroupIds,
+              },
+            },
+          }),
         ])
-      : [[], []];
+      : [[], [], []];
     const ordersByTravelGroupId = groupRowsBy(
       salesOrders,
       (order: any) => normalizeOptionalString(order?.travelGroupId),
@@ -455,6 +699,11 @@ export class AnalyticsNestService {
         [string, any]
       >,
     );
+    const guidePointsSummariesByTravelGroupId = groupRowsBy(
+      guidePointsSummaries,
+      (summary: any) =>
+        normalizeOptionalString(summary?.travelGroupId),
+    );
     const status = normalizeTravelGroupProfitStatus(query?.status);
     const rows = travelGroups
       .map((travelGroup: any) => {
@@ -466,6 +715,8 @@ export class AnalyticsNestService {
             commissionRecordsByTravelGroupId.get(travelGroupId) || [],
           financeSummary:
             financeSummaryByTravelGroupId.get(travelGroupId) || null,
+          guidePointsSummaries:
+            guidePointsSummariesByTravelGroupId.get(travelGroupId) || [],
         });
       })
       .filter((row: any) => !status || row.calculationStatus === status);
@@ -486,7 +737,7 @@ export class AnalyticsNestService {
   }
 
   async listDailyLossProfits(actor: any, query: any = {}) {
-    requireAnyRole(actor, ['admin', 'boss']);
+    requireAnyRole(actor, PROFIT_ANALYSIS_READ_ROLES);
     const result = await this.buildDailyLossProfitReadResult(query);
     const page = normalizePositivePage(query?.page);
     const pageSize = normalizeTravelGroupProfitPageSize(query?.pageSize);
@@ -511,7 +762,7 @@ export class AnalyticsNestService {
     query: any = {},
     metadata: any = {},
   ) {
-    requireAnyRole(actor, ['admin', 'boss']);
+    requireAnyRole(actor, PROFIT_ANALYSIS_READ_ROLES);
     const result = await this.buildDailyLossProfitReadResult(query);
     const rowCount = result.items.length;
     assertExportRowLimit(rowCount);
@@ -1563,6 +1814,14 @@ function buildTravelGroupProfitSummary(rows: any[]) {
       rows,
       (row) => Number(row.actualProductCostCents || 0),
     ),
+    guideDailyPointsCents: sumBy(
+      rows,
+      (row) => Number(row.guideDailyPointsCents || 0),
+    ),
+    guideMonthlyPointsCents: sumBy(
+      rows,
+      (row) => Number(row.guideMonthlyPointsCents || 0),
+    ),
     taxFeeCents,
     paymentServiceFeeCents,
     totalExpenseCents: sumBy(
@@ -1617,6 +1876,8 @@ function toTravelGroupProfitDto(row: any) {
     tasterCommissionCents: Number(row.tasterCommissionCents || 0),
     dailyAgencyRebateCents: Number(row.dailyAgencyRebateCents || 0),
     monthlyAgencyRebateCents: Number(row.monthlyAgencyRebateCents || 0),
+    guideDailyPointsCents: Number(row.guideDailyPointsCents || 0),
+    guideMonthlyPointsCents: Number(row.guideMonthlyPointsCents || 0),
     taxFeeCents:
       row.taxFeeCents === null || row.taxFeeCents === undefined
         ? null
@@ -1641,13 +1902,49 @@ function toTravelGroupProfitDto(row: any) {
         ? null
         : Number(row.estimatedProfitRate),
     calculationStatus: String(row.calculationStatus || ''),
+    components: toProfitComponentDiagnosticsDto(row.components),
     warnings: (Array.isArray(row.warnings) ? row.warnings : []).map(
       (warning: any) => ({
         code: String(warning?.code || ''),
         message: String(warning?.message || warning?.code || ''),
+        context: warning?.context || null,
       }),
     ),
   };
+}
+
+function toProfitComponentDiagnosticsDto(value: any) {
+  const result: any = {};
+  for (const key of [
+    'salesCommission',
+    'outreachCommission',
+    'leaderCommission',
+    'tax',
+    'paymentServiceFee',
+    'guideDailyPoints',
+    'guideMonthlyPoints',
+  ]) {
+    const component = value?.[key] || {};
+    result[key] = {
+      status: String(component.status || 'not_applicable'),
+      amountCents:
+        component.amountCents === null ||
+        component.amountCents === undefined
+          ? null
+          : Number(component.amountCents),
+      issues: (Array.isArray(component.issues)
+        ? component.issues
+        : []
+      ).map((issue: any) => ({
+        code: String(issue?.code || ''),
+        message: String(issue?.message || issue?.code || ''),
+        orderId: normalizeOptionalString(issue?.orderId),
+        orderNo: normalizeOptionalString(issue?.orderNo),
+        actionHint: String(issue?.actionHint || ''),
+      })),
+    };
+  }
+  return result;
 }
 
 function toTravelGroupPaymentMethodFeeBreakdownDto(row: any) {
@@ -2314,6 +2611,8 @@ function buildTravelGroupProfitExportWorkbook(result: any) {
       { header: '品鉴提成（元）', key: 'tasterCommissionYuan', width: 16 },
       { header: '旅行社日返（元）', key: 'dailyAgencyRebateYuan', width: 18 },
       { header: '旅行社月返（元）', key: 'monthlyAgencyRebateYuan', width: 18 },
+      { header: '导游日返积分（元）', key: 'guideDailyPointsYuan', width: 18 },
+      { header: '导游月返积分（元）', key: 'guideMonthlyPointsYuan', width: 18 },
       { header: '税费（元）', key: 'taxFeeYuan', width: 14 },
       { header: '付款手续费（元）', key: 'paymentServiceFeeYuan', width: 18 },
       { header: '总费用（元）', key: 'totalExpenseYuan', width: 16 },
@@ -2357,6 +2656,12 @@ function buildTravelGroupProfitExportWorkbook(result: any) {
       monthlyAgencyRebateYuan: centsToExportYuan(
         row.monthlyAgencyRebateCents,
       ),
+      guideDailyPointsYuan: centsToExportYuan(
+        row.guideDailyPointsCents,
+      ),
+      guideMonthlyPointsYuan: centsToExportYuan(
+        row.guideMonthlyPointsCents,
+      ),
       taxFeeYuan: centsToExportYuan(row.taxFeeCents),
       paymentServiceFeeYuan: centsToExportYuan(
         row.paymentServiceFeeCents,
@@ -2371,12 +2676,10 @@ function buildTravelGroupProfitExportWorkbook(result: any) {
       warnings: formatWarningCodes(row.warnings),
     })),
   );
-  for (let column = 8; column <= 22; column += 1) {
-    if (column !== 23) {
-      groupSheet.getColumn(column).numFmt = '¥#,##0.00';
-    }
+  for (let column = 8; column <= 24; column += 1) {
+    groupSheet.getColumn(column).numFmt = '¥#,##0.00';
   }
-  groupSheet.getColumn(23).numFmt = '0.00%';
+  groupSheet.getColumn(25).numFmt = '0.00%';
 
   const orderRows = result.rows.flatMap((row: any) =>
     (Array.isArray(row.orderTaxAndServiceFees)
@@ -3298,6 +3601,82 @@ function normalizeOptionalString(value: unknown) {
   }
   const text = String(value).trim();
   return text || null;
+}
+
+function commissionWarningsToProfitIssues(warnings: any, order: any) {
+  const result: any[] = [];
+  for (const warning of Array.isArray(warnings) ? warnings : []) {
+    const warningCode = String(warning?.code || '');
+    let code: string | null = null;
+    let message = String(warning?.message || '提成未计算。');
+    if (warningCode === 'missing_sales_user') {
+      code = 'SALES_USER_MISSING';
+      message = '订单缺少销售人员，销售提成无法计算。';
+    } else if (warningCode === 'missing_commission_rule') {
+      const targetType = String(warning?.context?.targetType || '');
+      code =
+        targetType === 'OUTREACH_COMMISSION'
+          ? 'OUTREACH_COMMISSION_RULE_MISSING'
+          : targetType === 'LEADER_COMMISSION'
+            ? 'LEADER_COMMISSION_RULE_MISSING'
+            : 'SALES_COMMISSION_RULE_MISSING';
+      message = '订单日期没有适用的提成规则。';
+    }
+    if (!code) continue;
+    result.push({
+      code,
+      message,
+      orderId: String(order?.id || ''),
+      orderNo: String(order?.orderNo || ''),
+      actionHint:
+        code === 'SALES_USER_MISSING'
+          ? '请为订单选择有效的销售人员后重新计算。'
+          : '请配置覆盖订单日期的有效提成规则后重新计算。',
+    });
+  }
+  return result;
+}
+
+function markProfitRecalculationStep(error: any, step: string) {
+  const annotated =
+    error instanceof Error ? error : new Error(String(error || ''));
+  (annotated as any).profitRecalculationStep = step;
+  return annotated;
+}
+
+function buildOrderRecalculationFailureIssues(error: any, order: any) {
+  const context = {
+    orderId: String(order?.id || ''),
+    orderNo: String(order?.orderNo || ''),
+  };
+  const detail = String(error?.message || '').trim();
+  if (error?.profitRecalculationStep === 'fee_snapshots') {
+    return [
+      {
+        ...context,
+        code: 'FEE_SNAPSHOT_REPAIR_FAILED',
+        message: detail || '税费和付款手续费快照修复失败。',
+        actionHint: '请核对财务标记、收款明细及付款方式费率后重试。',
+      },
+    ];
+  }
+  return [
+    {
+      code: 'SALES_COMMISSION_RECALCULATION_FAILED',
+      message: detail || '销售提成重新计算失败。',
+      actionHint: '请检查销售归属和销售提成规则后重试。',
+    },
+    {
+      code: 'OUTREACH_COMMISSION_RECALCULATION_FAILED',
+      message: detail || '外联提成重新计算失败。',
+      actionHint: '请检查外联提成规则后重试。',
+    },
+    {
+      code: 'LEADER_COMMISSION_RECALCULATION_FAILED',
+      message: detail || '组长提成重新计算失败。',
+      actionHint: '请检查组长提成规则后重试。',
+    },
+  ].map((issue) => ({ ...context, ...issue }));
 }
 
 function requireAnyRole(actor: any, roles: string[]) {

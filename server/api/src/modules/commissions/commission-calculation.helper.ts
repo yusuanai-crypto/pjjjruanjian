@@ -38,6 +38,11 @@ export interface CalculateStage7CommissionInput {
   allowLatestAgencyRebateRuleFallback?: boolean;
 }
 
+export interface CalculateSalesOrderEntryAmountInput {
+  salesOrder: any;
+  salesDeductionRules?: any[];
+}
+
 export interface CentsAllocation {
   normalAmountCents: number;
   personalAmountCents: number;
@@ -54,8 +59,35 @@ export interface SalesOrderPointsSplit {
   normalEffectiveAmountCents: number;
   personalAgencyDeductionAmountCents: number;
   normalAgencyDeductionAmountCents: number;
+  automaticPersonalAgencyDeductionAmountCents: number;
+  personalLiquorCostDeductionOverrideCents: number | null;
+  personalLiquorCostDeductionSource: 'automatic' | 'manual_override';
   personalAgencyBaseAmountCents: number;
   normalAgencyBaseAmountCents: number;
+}
+
+export function calculateSalesOrderEntryAmount(
+  input: CalculateSalesOrderEntryAmountInput,
+) {
+  const salesOrder = input?.salesOrder || {};
+  const warnings: Stage7CalculationWarning[] = [];
+  const effectiveAmount = calculateOrderEffectiveAmount(salesOrder);
+  const salesDeduction = calculateSalesDeduction(
+    normalizeOrderItems(salesOrder.items),
+    input?.salesDeductionRules || [],
+    normalizeCalculationDate(salesOrder),
+    warnings,
+  );
+  return {
+    ...effectiveAmount,
+    salesDeductionAmountCents: salesDeduction.totalAmountCents,
+    entryAmountCents: Math.max(
+      0,
+      effectiveAmount.effectiveAmountCents - salesDeduction.totalAmountCents,
+    ),
+    salesDeduction,
+    warnings,
+  };
 }
 
 export function calculateStage7CommissionAndPoints(
@@ -67,7 +99,17 @@ export function calculateStage7CommissionAndPoints(
   const calculationDate = normalizeCalculationDate(salesOrder);
   const items = normalizeOrderItems(salesOrder.items);
   const orderStatus = normalizeOrderStatus(salesOrder.status);
-  const grossAmountCents = toCents(salesOrder.totalAmountCents);
+  const entryAmountCalculation = calculateSalesOrderEntryAmount({
+    salesOrder,
+    salesDeductionRules: input?.salesDeductionRules || [],
+  });
+  warnings.push(...entryAmountCalculation.warnings);
+  const {
+    grossAmountCents,
+    confirmedRefundAmountCents,
+    effectiveAmountCents,
+    salesDeduction,
+  } = entryAmountCalculation;
   const afterSalesOrders = normalizeAfterSalesOrders(
     salesOrder.afterSalesOrders,
   );
@@ -75,22 +117,11 @@ export function calculateStage7CommissionAndPoints(
   // must never be folded back into or overwrite the original order.
   const confirmedRefunds: any[] = [];
   const unconfirmedRefunds: any[] = [];
-  const confirmedRefundAmountCents = 0;
   const unconfirmedRefundAmountCents = 0;
-  const effectiveAmountCents =
-    CLOSED_ORDER_STATUSES.has(orderStatus) && afterSalesOrders.length === 0
-      ? 0
-      : grossAmountCents;
 
   const agencyMatch = resolveTravelAgencyMatch(
     salesOrder,
     input?.travelAgencies || [],
-    warnings,
-  );
-  const salesDeduction = calculateSalesDeduction(
-    items,
-    input?.salesDeductionRules || [],
-    calculationDate,
     warnings,
   );
   const agencyDeduction = calculateAgencyDeduction(
@@ -106,13 +137,13 @@ export function calculateStage7CommissionAndPoints(
     salesOrder,
     agencyDeduction.totalAmountCents,
   );
-  const employeeBaseAmountCents = Math.max(
-    0,
-    effectiveAmountCents - salesDeduction.totalAmountCents,
-  );
+  const employeeBaseAmountCents = entryAmountCalculation.entryAmountCents;
+  const appliedAgencyDeductionAmountCents =
+    pointsSplit.personalAgencyDeductionAmountCents +
+    pointsSplit.normalAgencyDeductionAmountCents;
   const agencyBaseAmountCents = Math.max(
     0,
-    effectiveAmountCents - agencyDeduction.totalAmountCents,
+    effectiveAmountCents - appliedAgencyDeductionAmountCents,
   );
 
   const commissionRuleMatches = resolveCommissionRules(
@@ -230,6 +261,15 @@ export function calculateStage7CommissionAndPoints(
     personalMonthlyRebateRate: guidePersonal
       ? personalMonthlyRebateRate
       : null,
+    personalLiquorCostDeduction: {
+      source: pointsSplit.personalLiquorCostDeductionSource,
+      automaticAmountCents:
+        pointsSplit.automaticPersonalAgencyDeductionAmountCents,
+      overrideAmountCents:
+        pointsSplit.personalLiquorCostDeductionOverrideCents,
+      appliedAmountCents:
+        pointsSplit.personalAgencyDeductionAmountCents,
+    },
     pointsSplit: {
       ...pointsSplit,
       normalDailyRebateRate: dailyRebateRate,
@@ -267,7 +307,17 @@ export function calculateStage7CommissionAndPoints(
     effectiveAmountCents,
     salesDeductionAmountCents: salesDeduction.totalAmountCents,
     employeeBaseAmountCents,
-    agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
+    agencyDeductionAmountCents: appliedAgencyDeductionAmountCents,
+    automaticAgencyDeductionAmountCents:
+      agencyDeduction.totalAmountCents,
+    personalLiquorCostDeductionSource:
+      pointsSplit.personalLiquorCostDeductionSource,
+    personalLiquorCostDeductionOverrideCents:
+      pointsSplit.personalLiquorCostDeductionOverrideCents,
+    automaticPersonalLiquorCostDeductionCents:
+      pointsSplit.automaticPersonalAgencyDeductionAmountCents,
+    personalLiquorCostDeductionCents:
+      pointsSplit.personalAgencyDeductionAmountCents,
     agencyDeductionCalculationMode: agencyDeduction.calculationMode,
     agencyBaseAmountCents,
     dailyRebateCents,
@@ -292,7 +342,7 @@ export function calculateStage7CommissionAndPoints(
       effectiveAmountCents,
       salesDeductionAmountCents: salesDeduction.totalAmountCents,
       employeeBaseAmountCents,
-      agencyDeductionAmountCents: agencyDeduction.totalAmountCents,
+      agencyDeductionAmountCents: appliedAgencyDeductionAmountCents,
       agencyBaseAmountCents,
       dailyRebateCents,
       monthlyRebateCents,
@@ -309,7 +359,19 @@ export function calculateStage7CommissionAndPoints(
       personalMonthlyRebateCents,
     },
     salesDeduction,
-    agencyDeduction,
+    agencyDeduction: {
+      ...agencyDeduction,
+      automaticTotalAmountCents: agencyDeduction.totalAmountCents,
+      totalAmountCents: appliedAgencyDeductionAmountCents,
+      personalAmountCents:
+        pointsSplit.personalAgencyDeductionAmountCents,
+      normalAmountCents:
+        pointsSplit.normalAgencyDeductionAmountCents,
+      personalSource:
+        pointsSplit.personalLiquorCostDeductionSource,
+      personalOverrideAmountCents:
+        pointsSplit.personalLiquorCostDeductionOverrideCents,
+    },
     commissionLines,
     agencyRebateLines,
     ruleSnapshot,
@@ -410,6 +472,15 @@ export function calculateSalesOrderPointsSplit(
     totalAmountCents,
     personalAmountCents,
   );
+  const personalLiquorCostDeductionOverrideCents =
+    readPersonalLiquorCostDeductionOverrideCents(salesOrder);
+  const personalAgencyDeductionAmountCents =
+    personalLiquorCostDeductionOverrideCents === null
+      ? deductionAllocation.personalAmountCents
+      : Math.min(
+          personalEffectiveAmountCents,
+          personalLiquorCostDeductionOverrideCents,
+        );
   return {
     totalAmountCents,
     personalAmountCents,
@@ -419,20 +490,37 @@ export function calculateSalesOrderPointsSplit(
     normalRefundAmountCents,
     personalEffectiveAmountCents,
     normalEffectiveAmountCents,
-    personalAgencyDeductionAmountCents:
-      deductionAllocation.personalAmountCents,
+    personalAgencyDeductionAmountCents,
     normalAgencyDeductionAmountCents:
       deductionAllocation.normalAmountCents,
+    automaticPersonalAgencyDeductionAmountCents:
+      deductionAllocation.personalAmountCents,
+    personalLiquorCostDeductionOverrideCents,
+    personalLiquorCostDeductionSource:
+      personalLiquorCostDeductionOverrideCents === null
+        ? 'automatic'
+        : 'manual_override',
     personalAgencyBaseAmountCents: Math.max(
       0,
       personalEffectiveAmountCents -
-        deductionAllocation.personalAmountCents,
+        personalAgencyDeductionAmountCents,
     ),
     normalAgencyBaseAmountCents: Math.max(
       0,
       normalEffectiveAmountCents - deductionAllocation.normalAmountCents,
     ),
   };
+}
+
+function readPersonalLiquorCostDeductionOverrideCents(
+  salesOrder: any,
+) {
+  const raw = salesOrder?.personalLiquorCostDeductionOverrideCents;
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 export function calculateOrderEffectiveAmount(salesOrder: any) {
@@ -644,38 +732,23 @@ function buildCommissionLines(options: any) {
     );
   }
 
-  const outreachUserId =
-    normalizeOptionalString(options.salesOrder.outreachUserId) ||
-    normalizeOptionalString(options.salesOrder.outreachUser?.id);
-  if (options.rules[OUTREACH_COMMISSION] && !outreachUserId) {
-    addWarning(
-      options.warnings,
-      'missing_outreach_user',
-      'Missing outreach user.',
-      {
-        salesOrderId: normalizeOptionalString(options.salesOrder.id),
-      },
-    );
-  } else if (options.rules[OUTREACH_COMMISSION]) {
-    lines.push(
-      buildCommissionLine(options, OUTREACH_COMMISSION, outreachUserId),
-    );
+  // Outreach and leader commissions are order-level accrued costs. Historical
+  // assignment fields remain available for audit, but new calculations must
+  // never depend on, or be attributed to, a concrete person.
+  if (options.rules[OUTREACH_COMMISSION]) {
+    lines.push(buildCommissionLine(options, OUTREACH_COMMISSION, null));
   }
-
-  const leaderUserId =
-    normalizeOptionalString(options.salesOrder.salesUser?.leaderId) ||
-    normalizeOptionalString(options.salesOrder.salesUser?.leader?.id);
-  if (options.rules[LEADER_COMMISSION] && !leaderUserId) {
-    addWarning(options.warnings, 'missing_leader', 'Missing sales leader.', {
-      salesUserId,
-    });
-  } else if (options.rules[LEADER_COMMISSION]) {
-    lines.push(buildCommissionLine(options, LEADER_COMMISSION, leaderUserId));
+  if (options.rules[LEADER_COMMISSION]) {
+    lines.push(buildCommissionLine(options, LEADER_COMMISSION, null));
   }
   return lines.filter(Boolean);
 }
 
-function buildCommissionLine(options: any, targetType: string, targetUserId: string) {
+function buildCommissionLine(
+  options: any,
+  targetType: string,
+  targetUserId: string | null,
+) {
   const rule = options.rules[targetType];
   if (!rule) {
     return null;

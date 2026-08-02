@@ -145,8 +145,7 @@ export class CommissionRecordsNestService {
 
   async preflightEmployeeCommissionAssignments(actor: any, filters: any = {}) {
     requireAnyRole(actor, ['admin']);
-    const [orders, rules] = await Promise.all([
-      this.prisma.salesOrder.findMany({
+    const orders = await this.prisma.salesOrder.findMany({
         where: {
           orderType: { not: 'BUYBACK' },
           status: { in: ['VALID', 'PARTIAL_REFUND'] },
@@ -160,38 +159,18 @@ export class CommissionRecordsNestService {
           orderNo: true,
           orderDate: true,
           salesUserId: true,
-          outreachUserId: true,
-          salesUser: { select: { leaderId: true } },
         },
         orderBy: [{ orderDate: 'asc' }, { orderNo: 'asc' }],
-      }),
-      this.prisma.commissionRule.findMany({
-        where: { isActive: true },
-        select: {
-          targetType: true,
-          effectiveFrom: true,
-          effectiveTo: true,
-        },
-      }),
-    ]);
+      });
     const problems = orders
       .map((order: any) => {
-        const activeTargets = activeEmployeeRuleTargetsForDate(
-          rules,
-          order.orderDate,
-        );
         return {
           salesOrderId: order.id,
           orderNo: order.orderNo,
           orderDate: toDateOnly(order.orderDate),
           missingSalesUser: !order.salesUserId,
-          missingOutreachUser:
-            activeTargets.has('OUTREACH_COMMISSION') &&
-            !order.outreachUserId,
-          missingLeader:
-            activeTargets.has('LEADER_COMMISSION') &&
-            Boolean(order.salesUserId) &&
-            !order.salesUser?.leaderId,
+          missingOutreachUser: false,
+          missingLeader: false,
         };
       })
       .filter(
@@ -254,7 +233,6 @@ export class CommissionRecordsNestService {
               orderType: true,
               workflowStatus: true,
               salesUserId: true,
-              outreachUserId: true,
             },
           });
           if (!current) {
@@ -275,55 +253,15 @@ export class CommissionRecordsNestService {
             assignment?.salesUserId,
             'salesUserId',
           );
-          if (!Object.prototype.hasOwnProperty.call(assignment, 'outreachUserId')) {
-            throw createHttpError(
-              400,
-              'VALIDATION_FAILED',
-              'outreachUserId must be supplied explicitly; use null only when no outreach rule applies.',
-            );
-          }
-          const outreachUserId = normalizeOptionalString(
-            assignment?.outreachUserId,
-          );
-          const salesUser = await findActiveSalesAssignee(
+          await findActiveSalesAssignee(
             tx,
             salesUserId,
             'salesUserId',
           );
-          if (outreachUserId) {
-            await findActiveSalesAssignee(
-              tx,
-              outreachUserId,
-              'outreachUserId',
-            );
-          }
-          const rules = await tx.commissionRule.findMany({
-            where: { isActive: true },
-            select: {
-              targetType: true,
-              effectiveFrom: true,
-              effectiveTo: true,
-            },
-          });
-          const activeTargets = activeEmployeeRuleTargetsForDate(
-            rules,
-            current.orderDate,
-          );
-          if (
-            activeTargets.has('OUTREACH_COMMISSION') &&
-            !outreachUserId
-          ) {
-            throw createHttpError(
-              400,
-              'MISSING_OUTREACH_USER',
-              'An outreach user is required for the order date.',
-            );
-          }
           const updated = await tx.salesOrder.update({
             where: { id: salesOrderId },
             data: {
               salesUserId,
-              outreachUserId,
               updatedById: actor.id,
               updatedAt: new Date(),
             },
@@ -349,11 +287,9 @@ export class CommissionRecordsNestService {
               entityId: salesOrderId,
               beforeData: {
                 salesUserId: current.salesUserId,
-                outreachUserId: current.outreachUserId,
               },
               afterData: {
                 salesUserId: updated.salesUserId,
-                outreachUserId: updated.outreachUserId,
                 orderDate: toDateOnly(current.orderDate),
               },
               ipAddress: metadata.ipAddress || null,
@@ -364,8 +300,7 @@ export class CommissionRecordsNestService {
             salesOrderId,
             orderNo: current.orderNo,
             success: true,
-            leaderMissing:
-              activeTargets.has('LEADER_COMMISSION') && !salesUser.leaderId,
+            leaderMissing: false,
             recalculation,
           };
         });
@@ -463,12 +398,26 @@ export class CommissionRecordsNestService {
     const unchangedRecords: any[] = [];
 
     for (const line of lines) {
-      const businessKey = buildCommissionRecordBusinessKey(line);
-      const current = await findExistingCommissionRecord(
-        prisma,
-        businessKey,
-        line,
-      );
+      const { current, duplicates } =
+        await findExistingAutomaticCommissionRecords(prisma, line);
+      for (const duplicate of duplicates) {
+        const deactivated = await prisma.commissionRecord.update({
+          where: { id: duplicate.id },
+          data: buildDuplicateCommissionRecordDeactivationData(
+            duplicate,
+            actor,
+          ),
+        });
+        updatedRecords.push(toCommissionRecordDto(deactivated));
+        await this.appendRecordLog(
+          prisma,
+          actor,
+          'commission_records.duplicate.deactivate',
+          duplicate,
+          deactivated,
+          options,
+        );
+      }
       const data = buildCommissionRecordData(
         line,
         calculation,
@@ -516,22 +465,21 @@ export class CommissionRecordsNestService {
       });
       updatedRecords.push(toCommissionRecordDto(updated));
 
-      if (hasCommissionRecordAmountChanged(current, updated)) {
-        await this.appendRecordLog(
-          prisma,
-          actor,
-          'commission_records.recalculate',
-          current,
-          updated,
-          options,
-        );
-      }
+      await this.appendRecordLog(
+        prisma,
+        actor,
+        'commission_records.recalculate',
+        current,
+        updated,
+        options,
+      );
     }
 
     const staleRecords = await prisma.commissionRecord.findMany({
       where: {
         salesOrderId: orderId,
         manualInput: false,
+        isActive: true,
         targetType: {
           in: activeTargetTypes,
         },
@@ -561,11 +509,14 @@ export class CommissionRecordsNestService {
         },
       });
       updatedRecords.push(toCommissionRecordDto(updated));
-      if (hasCommissionRecordAmountChanged(current, updated)) {
+      if (
+        hasCommissionRecordAmountChanged(current, updated) ||
+        Boolean(current.isActive) !== Boolean(updated.isActive)
+      ) {
         await this.appendRecordLog(
           prisma,
           actor,
-          'commission_records.recalculate',
+          'commission_records.deactivate',
           current,
           updated,
           options,
@@ -1150,6 +1101,10 @@ function normalizeRecalculationTargetTypes(
 }
 
 function buildCommissionRecordBusinessKey(line: any) {
+  const automaticScopeKey = buildAutomaticCommissionScopeKey(line);
+  if (automaticScopeKey) {
+    return { automaticScopeKey };
+  }
   const where: any = {
     salesOrderId: line.salesOrderId,
     targetType: line.targetType,
@@ -1168,27 +1123,48 @@ function buildCommissionRecordBusinessKey(line: any) {
   return where;
 }
 
-async function findExistingCommissionRecord(
+function buildAutomaticCommissionScopeKey(line: any) {
+  const salesOrderId = normalizeOptionalString(line?.salesOrderId);
+  const targetType = normalizeOptionalString(line?.targetType)?.toUpperCase();
+  return salesOrderId && targetType && AUTO_TARGET_TYPES.includes(targetType)
+    ? `sales-order:${salesOrderId}:${targetType}:automatic`
+    : null;
+}
+
+async function findExistingAutomaticCommissionRecords(
   prisma: any,
-  businessKey: any,
   line: any,
 ) {
-  const current = await prisma.commissionRecord.findFirst({
-    where: businessKey,
-  });
-  if (current) {
-    return current;
-  }
-  if (!AUTO_TARGET_TYPES.includes(line.targetType)) {
-    return null;
-  }
-  return prisma.commissionRecord.findFirst({
+  const records = await prisma.commissionRecord.findMany({
     where: {
       salesOrderId: line.salesOrderId,
       targetType: line.targetType,
       manualInput: false,
     },
   });
+  const automaticScopeKey = buildAutomaticCommissionScopeKey(line);
+  const sorted = [...records].sort(
+    (left: any, right: any) =>
+      String(left?.createdAt || '').localeCompare(
+        String(right?.createdAt || ''),
+      ) || String(left?.id || '').localeCompare(String(right?.id || '')),
+  );
+  const current =
+    sorted.find(
+      (record: any) =>
+        Boolean(automaticScopeKey) &&
+        record?.automaticScopeKey === automaticScopeKey,
+    ) ||
+    sorted.find((record: any) => record?.isActive !== false) ||
+    sorted[0] ||
+    null;
+  return {
+    current,
+    duplicates: sorted.filter(
+      (record: any) =>
+        record?.id !== current?.id && record?.isActive !== false,
+    ),
+  };
 }
 
 function buildCommissionRecordData(
@@ -1216,6 +1192,7 @@ function buildCommissionRecordData(
     agencyRebateRuleId: line.agencyRebateRuleId || null,
     targetType: line.targetType,
     targetUserId: line.targetUserId || null,
+    automaticScopeKey: buildAutomaticCommissionScopeKey(line),
     agencyId: line.agencyId || null,
     agencyName: line.agencyName || null,
     grossAmountCents: toInteger(line.grossAmountCents),
@@ -1228,6 +1205,8 @@ function buildCommissionRecordData(
     amountCents: toInteger(line.amountCents),
     pointsCents: toInteger(line.pointsCents),
     manualInput: false,
+    isActive: true,
+    deactivatedAt: null,
     isConfirmed: Boolean(current?.isConfirmed),
     confirmedById: current?.confirmedById || null,
     confirmedAt: current?.confirmedAt || null,
@@ -1244,10 +1223,6 @@ function buildStaleCommissionRecordData(
   calculation: any,
   actor: any,
 ) {
-  const isAgencyRecord = [
-    'AGENCY_DAILY_REBATE',
-    'AGENCY_MONTHLY_REBATE',
-  ].includes(current.targetType);
   const sourceSnapshot = {
     ...(isPlainObject(calculation.sourceSnapshot)
       ? calculation.sourceSnapshot
@@ -1259,12 +1234,12 @@ function buildStaleCommissionRecordData(
       targetUserId: current.targetUserId || null,
       agencyId: current.agencyId || null,
       agencyName: current.agencyName || null,
-      zeroedBecause: 'current_calculation_has_no_matching_auto_line',
+      deactivatedBecause: 'current_calculation_has_no_matching_auto_line',
     },
   };
   const ruleSnapshot = {
     targetType: current.targetType,
-    zeroedBecause: 'current_calculation_has_no_matching_auto_line',
+    deactivatedBecause: 'current_calculation_has_no_matching_auto_line',
     ...calculation.ruleSnapshot,
   };
   return {
@@ -1274,29 +1249,30 @@ function buildStaleCommissionRecordData(
       current.travelGroupId ||
       null,
     afterSalesOrderId: null,
-    commissionRuleId: null,
-    agencyRebateRuleId: null,
+    commissionRuleId: current.commissionRuleId || null,
+    agencyRebateRuleId: current.agencyRebateRuleId || null,
     targetType: current.targetType,
     targetUserId: current.targetUserId || null,
+    automaticScopeKey: current.automaticScopeKey || null,
     agencyId: current.agencyId || null,
     agencyName: current.agencyName || null,
-    grossAmountCents: toInteger(calculation.amounts.grossAmountCents),
+    grossAmountCents: toInteger(current.grossAmountCents),
     confirmedRefundAmountCents: toInteger(
-      calculation.amounts.confirmedRefundAmountCents,
+      current.confirmedRefundAmountCents,
     ),
-    baseAmountCents: 0,
-    deductionAmountCents: isAgencyRecord
-      ? toInteger(calculation.amounts.agencyDeductionAmountCents)
-      : toInteger(calculation.amounts.salesDeductionAmountCents),
+    baseAmountCents: toInteger(current.baseAmountCents),
+    deductionAmountCents: toInteger(current.deductionAmountCents),
     rateSnapshot: current.rateSnapshot || null,
-    amountCents: 0,
-    pointsCents: 0,
+    amountCents: toInteger(current.amountCents),
+    pointsCents: toInteger(current.pointsCents),
     manualInput: false,
+    isActive: false,
+    deactivatedAt: current.deactivatedAt || new Date(),
     isConfirmed: Boolean(current?.isConfirmed),
     confirmedById: current?.confirmedById || null,
     confirmedAt: current?.confirmedAt || null,
     calculationVersion: calculation.calculationVersion,
-    calculationNote: `${calculation.calculationNote}; stale auto record zeroed`,
+    calculationNote: `${calculation.calculationNote}; stale auto record deactivated and historical amount preserved`,
     ruleSnapshot,
     sourceSnapshot,
     updatedById: actor?.id || null,
@@ -1551,6 +1527,7 @@ const RECORD_COMPARE_FIELDS = [
   'agencyRebateRuleId',
   'targetType',
   'targetUserId',
+  'automaticScopeKey',
   'agencyId',
   'agencyName',
   'grossAmountCents',
@@ -1561,6 +1538,8 @@ const RECORD_COMPARE_FIELDS = [
   'amountCents',
   'pointsCents',
   'manualInput',
+  'isActive',
+  'deactivatedAt',
   'isConfirmed',
   'calculationVersion',
   'calculationNote',
@@ -1634,6 +1613,30 @@ function getCommissionRecordListInclude(): any {
     adjustments: {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     },
+  };
+}
+
+function buildDuplicateCommissionRecordDeactivationData(
+  current: any,
+  actor: any,
+) {
+  const now = new Date();
+  return {
+    automaticScopeKey: null,
+    isActive: false,
+    deactivatedAt: current.deactivatedAt || now,
+    sourceSnapshot: {
+      ...(isPlainObject(current?.sourceSnapshot)
+        ? current.sourceSnapshot
+        : {}),
+      duplicateDeactivation: {
+        deactivatedAt: now.toISOString(),
+        canonicalBusinessScope: buildAutomaticCommissionScopeKey(current),
+        reason: 'duplicate_active_automatic_commission_record',
+      },
+    },
+    updatedById: actor?.id || null,
+    updatedAt: now,
   };
 }
 
@@ -1749,6 +1752,7 @@ function toCommissionRecordExportRow(record: any) {
   const salesOrder = record.salesOrder || null;
   const travelGroup = record.travelGroup || salesOrder?.travelGroup || null;
   const targetType = targetTypeToApi(record.targetType);
+  const orderLevelAccrual = isOrderLevelCommissionTarget(record.targetType);
 
   return {
     date: toDateOnly(
@@ -1758,15 +1762,16 @@ function toCommissionRecordExportRow(record: any) {
     travelGroup: travelGroup?.groupNo || '',
     customer: salesOrder?.customer?.name || salesOrder?.customerName || '',
     sales: salesOrder?.salesUser?.name || '',
-    outreach: salesOrder?.outreachUser?.name || '',
-    leader: salesOrder?.salesUser?.leader?.name || '',
+    outreach: orderLevelAccrual ? '按规则计提' : '',
+    leader: orderLevelAccrual ? '按规则计提' : '',
     taster: getCommissionRecordTasterName(record, travelGroup, targetType),
     agency: record.agencyName || record.agency?.name || travelGroup?.travelAgency || '',
     targetType: targetType || '',
     orderType: String(salesOrder?.orderType || '').toLowerCase(),
     recipientType: String(record.recipientType || '').toLowerCase(),
-    recipientName:
-      record.recipientNameSnapshot || record.targetUser?.name || '',
+    recipientName: orderLevelAccrual
+      ? '按规则计提'
+      : record.recipientNameSnapshot || record.targetUser?.name || '',
     sourceType: String(record.sourceType || '').toLowerCase(),
     grossAmountYuan: centsToYuanNumber(record.grossAmountCents),
     confirmedRefundYuan: centsToYuanNumber(
@@ -1945,18 +1950,20 @@ function toCommissionRecordListDto(record: any) {
     record.travelGroup || record.salesOrder?.travelGroup,
     sourceSnapshot,
   );
+  const orderLevelAccrual = isOrderLevelCommissionTarget(record.targetType);
 
   return {
     id: record.id,
     salesOrderId: record.salesOrderId || null,
     travelGroupId: record.travelGroupId || null,
     targetType: targetTypeToApi(record.targetType),
-    targetUserId: record.targetUserId || null,
+    targetUserId: orderLevelAccrual ? null : record.targetUserId || null,
     recipientType: record.recipientType
       ? String(record.recipientType).toLowerCase()
       : null,
-    recipientName:
-      record.recipientNameSnapshot || record.targetUser?.name || null,
+    recipientName: orderLevelAccrual
+      ? '按规则计提'
+      : record.recipientNameSnapshot || record.targetUser?.name || null,
     sourceType: record.sourceType
       ? String(record.sourceType).toLowerCase()
       : null,
@@ -1966,7 +1973,9 @@ function toCommissionRecordListDto(record: any) {
     salesOrder,
     travelGroup,
     customer: summarizeCustomerForCommission(record.salesOrder),
-    targetUser: summarizePublicUser(record.targetUser),
+    targetUser: orderLevelAccrual
+      ? null
+      : summarizePublicUser(record.targetUser),
     agency: summarizeAgencyForCommission(record),
     grossAmountCents: toInteger(record.grossAmountCents),
     confirmedRefundAmountCents: toInteger(
@@ -1996,6 +2005,7 @@ function toCommissionRecordListDto(record: any) {
 }
 
 function toCommissionRecordDetailDto(record: any) {
+  const orderLevelAccrual = isOrderLevelCommissionTarget(record.targetType);
   return {
     ...toCommissionRecordDto(record),
     salesOrder: summarizeSalesOrderForCommission(
@@ -2007,7 +2017,9 @@ function toCommissionRecordDetailDto(record: any) {
       record.sourceSnapshot,
     ),
     customer: summarizeCustomerForCommission(record.salesOrder),
-    targetUser: summarizePublicUser(record.targetUser),
+    targetUser: orderLevelAccrual
+      ? null
+      : summarizePublicUser(record.targetUser),
     agency: summarizeAgencyForCommission(record),
     confirmedBy: summarizePublicUser(record.confirmedBy),
     calculationNoteSummary: summarizeText(record.calculationNote, 160),
@@ -2126,6 +2138,7 @@ function summarizeText(value: unknown, maxLength: number) {
 }
 
 function toCommissionRecordDto(record: any) {
+  const orderLevelAccrual = isOrderLevelCommissionTarget(record.targetType);
   return {
     id: record.id,
     salesOrderId: record.salesOrderId || null,
@@ -2134,11 +2147,13 @@ function toCommissionRecordDto(record: any) {
     commissionRuleId: record.commissionRuleId || null,
     agencyRebateRuleId: record.agencyRebateRuleId || null,
     targetType: targetTypeToApi(record.targetType),
-    targetUserId: record.targetUserId || null,
+    targetUserId: orderLevelAccrual ? null : record.targetUserId || null,
     recipientType: record.recipientType
       ? String(record.recipientType).toLowerCase()
       : null,
-    recipientName: record.recipientNameSnapshot || null,
+    recipientName: orderLevelAccrual
+      ? '按规则计提'
+      : record.recipientNameSnapshot || null,
     sourceType: record.sourceType
       ? String(record.sourceType).toLowerCase()
       : null,
@@ -2510,6 +2525,12 @@ function normalizeRole(value: unknown) {
   return map[text] || text.toLowerCase();
 }
 
+function isOrderLevelCommissionTarget(value: unknown) {
+  return ['OUTREACH_COMMISSION', 'LEADER_COMMISSION'].includes(
+    normalizeTargetType(value),
+  );
+}
+
 function isCommissionEligibleSalesOrder(order: any) {
   if (String(order?.orderType || '').toUpperCase() === 'BUYBACK') {
     return false;
@@ -2543,22 +2564,6 @@ async function findActiveSalesAssignee(
     );
   }
   return user;
-}
-
-function activeEmployeeRuleTargetsForDate(rules: any[], value: unknown) {
-  const date = value instanceof Date ? value : new Date(String(value));
-  const time = date.getTime();
-  return new Set(
-    (Array.isArray(rules) ? rules : [])
-      .filter((rule: any) => {
-        const from = new Date(rule.effectiveFrom).getTime();
-        const to = rule.effectiveTo
-          ? new Date(rule.effectiveTo).getTime()
-          : Number.POSITIVE_INFINITY;
-        return Boolean(rule.isActive ?? true) && from <= time && time <= to;
-      })
-      .map((rule: any) => String(rule.targetType).toUpperCase()),
-  );
 }
 
 function normalizeNullableRate(value: unknown) {

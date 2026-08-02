@@ -281,8 +281,7 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
     case UserRole.warehouse:
       ids
         ..remove('order_form')
-        ..remove('travel_agency_management')
-        ..remove('analytics');
+        ..remove('travel_agency_management');
       _removeStage7Destinations(ids);
       break;
     case UserRole.superAdmin:
@@ -340,6 +339,7 @@ bool _canUseAiAssistant(UserRole role) {
       role == UserRole.superAdmin ||
       role == UserRole.boss ||
       role == UserRole.finance ||
+      role == UserRole.warehouse ||
       role == UserRole.afterSales;
 }
 
