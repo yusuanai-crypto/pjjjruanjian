@@ -1618,6 +1618,7 @@ function createInMemoryPrisma(options = {}) {
     ),
     afterSalesReceiptLine: createAfterSalesReceiptLineDelegate(
       afterSalesReceiptLines,
+      afterSalesOrderItems,
     ),
     afterSalesReceiptSerializedUnit: createAfterSalesReceiptSerializedUnitDelegate(
       afterSalesReceiptSerializedUnits,
@@ -2519,8 +2520,39 @@ function createAfterSalesReceiptDelegate(rows, relations = {}) {
   };
 }
 
-function createAfterSalesReceiptLineDelegate(rows) {
+function createAfterSalesReceiptLineDelegate(
+  rows,
+  afterSalesOrderItems = [],
+) {
   return {
+    count: async ({ where } = {}) => {
+      if (
+        Object.prototype.hasOwnProperty.call(where || {}, 'productId')
+      ) {
+        const error = new Error("Unknown argument `productId`.");
+        error.name = 'PrismaClientValidationError';
+        throw error;
+      }
+      const {
+        afterSalesOrderItem: relationWhere,
+        ...lineWhere
+      } = where || {};
+      return rows.filter((row) => {
+        if (!matchesWhere(row, lineWhere)) return false;
+        if (relationWhere === undefined) return true;
+        const item = afterSalesOrderItems.find(
+          (candidate) => candidate.id === row.afterSalesOrderItemId,
+        );
+        if (!item) return false;
+        const itemWhere =
+          relationWhere &&
+          typeof relationWhere === 'object' &&
+          relationWhere.is !== undefined
+            ? relationWhere.is
+            : relationWhere;
+        return matchesWhere(item, itemWhere);
+      }).length;
+    },
     create: async ({ data } = {}) => {
       if (
         rows.some(

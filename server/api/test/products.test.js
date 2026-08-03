@@ -482,6 +482,47 @@ test('contract: dedicated quantity-inventory activation is authorized, atomic, i
       'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
     );
 
+    const productWithReceipt = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Product With After-sales Receipt Fact',
+    );
+    await prisma.afterSalesOrderItem.create({
+      data: {
+        id: 'mode-fact-after-sales-item-1',
+        afterSalesOrderId: 'mode-fact-after-sales-order-1',
+        productId: productWithReceipt.id,
+        productName: productWithReceipt.name,
+        quantity: 1,
+        originalUnitPriceCents: 0,
+        subtotalCents: 0,
+      },
+    });
+    await prisma.afterSalesReceiptLine.create({
+      data: {
+        id: 'mode-fact-receipt-line-1',
+        receiptId: 'mode-fact-receipt-1',
+        afterSalesOrderItemId: 'mode-fact-after-sales-item-1',
+        lineNo: 1,
+        receivedQty: 1,
+        condition: 'SALEABLE',
+      },
+    });
+    const receiptFactConflict = await requestJson(
+      baseUrl,
+      `/api/products/${productWithReceipt.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: activationBody(productWithReceipt.id, 'receipt-facts'),
+      },
+    );
+    assertErrorContract(
+      receiptFactConflict,
+      409,
+      'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
+    );
+
     const body = activationBody(product.id, 'success');
     const activated = await requestJson(
       baseUrl,

@@ -907,13 +907,17 @@ async function hasIncompatibleInventoryFacts(tx: any, productId: string) {
     async (delegateName) => {
       const delegate = tx[delegateName];
       if (!delegate) return false;
+      const where = buildProductInventoryFactWhere(
+        delegateName,
+        productId,
+      );
       if (typeof delegate.count === 'function') {
-        return (await delegate.count({ where: { productId } })) > 0;
+        return (await delegate.count({ where })) > 0;
       }
       if (typeof delegate.findFirst === 'function') {
         return Boolean(
           await delegate.findFirst({
-            where: { productId },
+            where,
             select: { id: true },
           }),
         );
@@ -922,7 +926,7 @@ async function hasIncompatibleInventoryFacts(tx: any, productId: string) {
         return (
           (
             await delegate.findMany({
-              where: { productId },
+              where,
               select: { id: true },
               take: 1,
             })
@@ -933,6 +937,18 @@ async function hasIncompatibleInventoryFacts(tx: any, productId: string) {
     },
   );
   return (await Promise.all(checks)).some(Boolean);
+}
+
+function buildProductInventoryFactWhere(
+  delegateName: (typeof PRODUCT_INVENTORY_FACT_DELEGATES)[number],
+  productId: string,
+) {
+  if (delegateName === 'afterSalesReceiptLine') {
+    return {
+      afterSalesOrderItem: { productId },
+    };
+  }
+  return { productId };
 }
 
 function toInventoryTrackingMode(value: unknown) {
