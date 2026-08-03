@@ -828,7 +828,7 @@ class _ProfitAnalysisPageState extends State<ProfitAnalysisPage> {
         content: Text(
           '将由后端重新计算团号 ${_display(item.groupNo)} 的提成、'
           '财务汇总、导游积分和可修复的空费用快照。\n\n'
-          '已存在的历史费率快照不会被覆盖，未财务标记或付款明细不完整的订单会保留为待处理问题。',
+          '已存在的历史费率快照不会被覆盖；未财务标记订单无需补税率快照，付款明细、付款方式或手续费率不完整时会保留为待处理问题。',
         ),
         actions: [
           TextButton(
@@ -1317,7 +1317,7 @@ class _PaymentMethodFeeBreakdown extends StatelessWidget {
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsets.only(bottom: 8),
       title: const Text('付款方式手续费明细'),
-      subtitle: Text('${rows.length} 组历史费率'),
+      subtitle: Text('${rows.length} 组适用费率'),
       children: [
         for (var index = 0; index < rows.length; index += 1)
           Card(
@@ -1639,7 +1639,11 @@ String _warningText(AnalyticsWarning warning) {
     case 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING':
     case 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING':
     case 'PAYMENT_FEE_BASE_SNAPSHOT_MISSING':
-      return '手续费快照缺失，请财务补齐费率并重新标记订单';
+    case 'PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED':
+    case 'PAYMENT_FEE_BASE_AMOUNT_MISSING':
+    case 'PAYMENT_METHOD_MISSING':
+    case 'PAYMENT_DETAILS_MISSING':
+      return '请补齐付款明细或配置付款方式手续费率';
     default:
       return warning.message.isEmpty ? warning.code : warning.message;
   }

@@ -6,6 +6,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 
 const PRODUCT_MANAGEMENT_ROLES = ['admin', 'finance'];
+const PRODUCT_INVENTORY_MODE_ACTIVATION_ROLES = ['admin'];
 const PRODUCT_OPTION_ROLES = [
   'admin',
   'boss',
@@ -16,6 +17,19 @@ const PRODUCT_OPTION_ROLES = [
   'after_sales',
 ];
 const MAX_EFFECTIVE_DATE = new Date('9999-12-31T00:00:00.000Z');
+const PRODUCT_INVENTORY_MODE_ACTIVATION_COMMAND =
+  'PRODUCT_INVENTORY_TRACKING_ACTIVATE';
+const PRODUCT_INVENTORY_FACT_DELEGATES = [
+  'warehouseProductStock',
+  'inventoryBatch',
+  'inventoryDocumentLine',
+  'inventoryMovement',
+  'inventoryReservation',
+  'inventoryTransferLine',
+  'stocktake',
+  'serializedInventoryUnit',
+  'afterSalesReceiptLine',
+] as const;
 
 @Injectable()
 export class ProductsNestService {
@@ -127,6 +141,199 @@ export class ProductsNestService {
     const dto = toProductDto(created);
     await this.appendLog(actor, 'products.create', 'product', created.id, null, dto, metadata);
     return dto;
+  }
+
+  async activateQuantityInventoryTracking(
+    actor: any,
+    productId: string,
+    payload: any,
+    metadata: any = {},
+  ) {
+    requireAnyRole(actor, PRODUCT_INVENTORY_MODE_ACTIVATION_ROLES);
+    const command = normalizeInventoryModeActivationCommand(
+      productId,
+      payload,
+    );
+
+    const replay = await this.findInventoryModeChangeByIdempotencyKey(
+      command.idempotencyKey,
+    );
+    if (replay) {
+      return this.resolveInventoryModeActivationReplay(command, replay);
+    }
+    assertInventoryModeActivationRequestHash(command);
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx: any) => {
+          const transactionReplay =
+            await tx.productInventoryModeChange.findUnique({
+              where: { idempotencyKey: command.idempotencyKey },
+            });
+          if (transactionReplay) {
+            return this.resolveInventoryModeActivationReplay(
+              command,
+              transactionReplay,
+              tx,
+            );
+          }
+
+          const current = await tx.product.findUnique({
+            where: { id: command.productId },
+          });
+          if (!current) {
+            throw createHttpError(
+              404,
+              'PRODUCT_NOT_FOUND',
+              '商品不存在。',
+            );
+          }
+          if (!current.isActive) {
+            throw createHttpError(
+              409,
+              'PRODUCT_INACTIVE',
+              '已停用商品不能启用库存跟踪，请先启用商品。',
+            );
+          }
+          const actualMode = String(
+            current.inventoryTrackingMode || 'NONE',
+          ).toUpperCase();
+          if (actualMode !== command.expectedCurrentMode) {
+            throw createHttpError(
+              409,
+              'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+              `商品当前库存模式为 ${actualMode}，与请求预期的 ${command.expectedCurrentMode} 不一致，请刷新后重试。`,
+            );
+          }
+          if (
+            await hasIncompatibleInventoryFacts(tx, command.productId)
+          ) {
+            throw createHttpError(
+              409,
+              'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
+              '该商品已存在库存事实或逐瓶记录，不能在线启用普通数量库存，请联系超级管理员核查。',
+            );
+          }
+
+          const now = new Date();
+          const change = await tx.productInventoryModeChange.create({
+            data: {
+              id: crypto.randomUUID(),
+              productId: command.productId,
+              expectedCurrentMode: command.expectedCurrentMode,
+              targetMode: command.targetMode,
+              effectiveAt: command.effectiveAt,
+              sourceKey: command.sourceKey,
+              idempotencyKey: command.idempotencyKey,
+              requestHash: command.requestHash,
+              status: 'PENDING',
+              requestedById: actor.id,
+              requestedByNameSnapshot: actor.name || actor.username || null,
+              requestedByRoleSnapshot: actor.role || null,
+              requestedAt: now,
+              appliedById: null,
+              appliedByNameSnapshot: null,
+              appliedByRoleSnapshot: null,
+              appliedAt: null,
+              reason: '在线启用普通数量库存',
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+
+          const conditionalUpdate = await tx.product.updateMany({
+            where: {
+              id: command.productId,
+              isActive: true,
+              inventoryTrackingMode: command.expectedCurrentMode,
+            },
+            data: {
+              inventoryTrackingMode: command.targetMode,
+              updatedById: actor.id,
+              updatedAt: now,
+            },
+          });
+          if (conditionalUpdate.count !== 1) {
+            throw createHttpError(
+              409,
+              'PRODUCT_INVENTORY_MODE_CONCURRENT_CONFLICT',
+              '商品库存模式已被其他请求修改，请刷新商品后重试。',
+            );
+          }
+
+          const [updated, appliedChange] = await Promise.all([
+            tx.product.findUnique({ where: { id: command.productId } }),
+            tx.productInventoryModeChange.update({
+              where: { id: change.id },
+              data: {
+                status: 'APPLIED',
+                appliedById: actor.id,
+                appliedByNameSnapshot:
+                  actor.name || actor.username || null,
+                appliedByRoleSnapshot: actor.role || null,
+                appliedAt: now,
+                updatedAt: now,
+              },
+            }),
+          ]);
+          const product = toProductDto(updated);
+          const inventoryModeChange =
+            toProductInventoryModeChangeDto(appliedChange);
+          await this.operationLogsService.appendLog(
+            {
+              userId: actor.id,
+              action: 'products.inventory_tracking.activate',
+              module: 'products',
+              operationType: 'STATUS_CHANGE',
+              entityType: 'product_inventory_mode_change',
+              entityId: appliedChange.id,
+              beforeData: toProductDto(current),
+              afterData: {
+                product,
+                inventoryModeChange,
+              },
+              requestSummary: {
+                productId: command.productId,
+                expectedCurrentMode: command.expectedCurrentMode,
+                targetMode: command.targetMode,
+                effectiveAt: command.effectiveAt.toISOString(),
+                sourceKey: command.sourceKey,
+                idempotencyKey: command.idempotencyKey,
+                requestHash: command.requestHash,
+              },
+              ipAddress: metadata.ipAddress || null,
+            },
+            tx,
+          );
+          return { product, inventoryModeChange };
+        },
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error) {
+      if (error?.code === 'P2034') {
+        throw createHttpError(
+          409,
+          'PRODUCT_INVENTORY_MODE_CONCURRENT_CONFLICT',
+          '商品库存模式启用请求发生并发冲突，请刷新商品后重试。',
+        );
+      }
+      if (error?.code !== 'P2002') throw error;
+      const replayAfterConflict =
+        await this.findInventoryModeChangeByIdempotencyKey(
+          command.idempotencyKey,
+        );
+      if (replayAfterConflict) {
+        return this.resolveInventoryModeActivationReplay(
+          command,
+          replayAfterConflict,
+        );
+      }
+      throw createHttpError(
+        409,
+        'PRODUCT_INVENTORY_MODE_SOURCE_CONFLICT',
+        'sourceKey 已被其他库存模式切换命令使用，请重新发起操作。',
+      );
+    }
   }
 
   async updateProduct(actor: any, id: string, payload: any, metadata: any = {}) {
@@ -366,6 +573,46 @@ export class ProductsNestService {
     return product;
   }
 
+  private async findInventoryModeChangeByIdempotencyKey(
+    idempotencyKey: string,
+    prisma: any = this.prisma,
+  ) {
+    return prisma.productInventoryModeChange.findUnique({
+      where: { idempotencyKey },
+    });
+  }
+
+  private async resolveInventoryModeActivationReplay(
+    command: NormalizedInventoryModeActivationCommand,
+    change: any,
+    prisma: any = this.prisma,
+  ) {
+    if (!isSameInventoryModeActivationRequest(command, change)) {
+      throw createHttpError(
+        409,
+        'PRODUCT_INVENTORY_MODE_IDEMPOTENCY_CONFLICT',
+        '该 idempotencyKey 已用于不同的库存模式切换请求，请勿复用。',
+      );
+    }
+    if (change.status !== 'APPLIED') {
+      throw createHttpError(
+        409,
+        'PRODUCT_INVENTORY_MODE_COMMAND_NOT_APPLIED',
+        '该幂等命令尚未成功应用，请联系管理员核查切换记录。',
+      );
+    }
+    const product = await prisma.product.findUnique({
+      where: { id: change.productId },
+    });
+    if (!product) {
+      throw createHttpError(404, 'PRODUCT_NOT_FOUND', '商品不存在。');
+    }
+    return {
+      product: toProductDto(product),
+      inventoryModeChange: toProductInventoryModeChangeDto(change),
+    };
+  }
+
   private async findActualCostOrThrow(id: string) {
     const cost = await this.prisma.productActualCost.findUnique({ where: { id } });
     if (!cost) {
@@ -469,6 +716,223 @@ function normalizeInventoryTrackingMode(value: unknown) {
     );
   }
   return normalized;
+}
+
+interface NormalizedInventoryModeActivationCommand {
+  productId: string;
+  expectedCurrentMode: 'NONE';
+  targetMode: 'QUANTITY';
+  effectiveAt: Date;
+  sourceKey: string;
+  idempotencyKey: string;
+  requestHash: string;
+  calculatedRequestHash: string;
+}
+
+function normalizeInventoryModeActivationCommand(
+  productIdInput: unknown,
+  payload: any,
+): NormalizedInventoryModeActivationCommand {
+  assertObjectPayload(payload);
+  assertAllowedFields(payload, [
+    'expectedCurrentMode',
+    'targetMode',
+    'effectiveAt',
+    'sourceKey',
+    'idempotencyKey',
+    'requestHash',
+  ]);
+  const productId = normalizeLimitedRequiredString(
+    productIdInput,
+    'productId',
+    191,
+  );
+  const expectedCurrentMode = normalizeInventoryTrackingMode(
+    payload.expectedCurrentMode,
+  );
+  const targetMode = normalizeInventoryTrackingMode(payload.targetMode);
+  if (expectedCurrentMode !== 'NONE' || targetMode !== 'QUANTITY') {
+    throw createHttpError(
+      400,
+      'PRODUCT_INVENTORY_MODE_TRANSITION_NOT_ALLOWED',
+      '当前仅允许通过此命令执行 NONE → QUANTITY，不能启用逐瓶模式或切回未启用库存。',
+    );
+  }
+  const effectiveAt = normalizeEffectiveAt(payload.effectiveAt);
+  const sourceKey = normalizeBusinessKey(payload.sourceKey, 'sourceKey');
+  const idempotencyKey = normalizeBusinessKey(
+    payload.idempotencyKey,
+    'idempotencyKey',
+  );
+  const requestHash = normalizeRequestHash(payload.requestHash);
+  const calculatedRequestHash = calculateInventoryModeActivationRequestHash({
+    productId,
+    expectedCurrentMode,
+    targetMode,
+    effectiveAt: effectiveAt.toISOString(),
+    sourceKey,
+    idempotencyKey,
+  });
+  return {
+    productId,
+    expectedCurrentMode: 'NONE',
+    targetMode: 'QUANTITY',
+    effectiveAt,
+    sourceKey,
+    idempotencyKey,
+    requestHash,
+    calculatedRequestHash,
+  };
+}
+
+function assertInventoryModeActivationRequestHash(
+  command: NormalizedInventoryModeActivationCommand,
+) {
+  if (command.requestHash !== command.calculatedRequestHash) {
+    throw createHttpError(
+      400,
+      'PRODUCT_INVENTORY_MODE_REQUEST_HASH_MISMATCH',
+      'requestHash 与规范化后的库存模式启用请求不一致。',
+    );
+  }
+}
+
+function normalizeEffectiveAt(value: unknown) {
+  if (
+    typeof value !== 'string' ||
+    !/(?:Z|[+-]\d{2}:\d{2})$/i.test(value.trim())
+  ) {
+    throw validationError('effectiveAt 必须是包含时区的 ISO-8601 时间。');
+  }
+  const parsed = new Date(value.trim());
+  if (Number.isNaN(parsed.getTime())) {
+    throw validationError('effectiveAt 必须是有效时间。');
+  }
+  parsed.setUTCMilliseconds(0);
+  return parsed;
+}
+
+function normalizeBusinessKey(value: unknown, fieldName: string) {
+  const normalized = normalizeOptionalString(value)?.toLocaleLowerCase(
+    'en-US',
+  );
+  if (!normalized) {
+    throw validationError(`${fieldName} 不能为空。`);
+  }
+  if (normalized.length > 150) {
+    throw validationError(`${fieldName} 不能超过 150 个字符。`);
+  }
+  if (!/^[a-z0-9:./_-]+$/.test(normalized)) {
+    throw validationError(
+      `${fieldName} 只能包含小写字母、数字、冒号、点、斜杠、下划线和连字符。`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeRequestHash(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw validationError('requestHash 必须是 64 位小写 SHA-256。');
+  }
+  return normalized;
+}
+
+export function calculateInventoryModeActivationRequestHash(input: {
+  productId: string;
+  expectedCurrentMode: string;
+  targetMode: string;
+  effectiveAt: string;
+  sourceKey: string;
+  idempotencyKey: string;
+}) {
+  return crypto
+    .createHash('sha256')
+    .update(
+      canonicalJson({
+        commandType: PRODUCT_INVENTORY_MODE_ACTIVATION_COMMAND,
+        payload: {
+          effectiveAt: input.effectiveAt,
+          expectedCurrentMode: input.expectedCurrentMode,
+          idempotencyKey: input.idempotencyKey,
+          productId: input.productId,
+          sourceKey: input.sourceKey,
+          targetMode: input.targetMode,
+        },
+      }),
+      'utf8',
+    )
+    .digest('hex');
+}
+
+function canonicalJson(value: any): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(',')}}`;
+}
+
+function isSameInventoryModeActivationRequest(
+  command: NormalizedInventoryModeActivationCommand,
+  change: any,
+) {
+  return (
+    change.productId === command.productId &&
+    String(change.expectedCurrentMode).toUpperCase() ===
+      command.expectedCurrentMode &&
+    String(change.targetMode).toUpperCase() === command.targetMode &&
+    normalizeStoredSecond(change.effectiveAt) ===
+      command.effectiveAt.toISOString() &&
+    change.sourceKey === command.sourceKey &&
+    change.idempotencyKey === command.idempotencyKey &&
+    String(change.requestHash).toLowerCase() === command.requestHash
+  );
+}
+
+function normalizeStoredSecond(value: unknown) {
+  const date = value instanceof Date ? new Date(value) : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCMilliseconds(0);
+  return date.toISOString();
+}
+
+async function hasIncompatibleInventoryFacts(tx: any, productId: string) {
+  const checks = PRODUCT_INVENTORY_FACT_DELEGATES.map(
+    async (delegateName) => {
+      const delegate = tx[delegateName];
+      if (!delegate) return false;
+      if (typeof delegate.count === 'function') {
+        return (await delegate.count({ where: { productId } })) > 0;
+      }
+      if (typeof delegate.findFirst === 'function') {
+        return Boolean(
+          await delegate.findFirst({
+            where: { productId },
+            select: { id: true },
+          }),
+        );
+      }
+      if (typeof delegate.findMany === 'function') {
+        return (
+          (
+            await delegate.findMany({
+              where: { productId },
+              select: { id: true },
+              take: 1,
+            })
+          ).length > 0
+        );
+      }
+      return false;
+    },
+  );
+  return (await Promise.all(checks)).some(Boolean);
 }
 
 function toInventoryTrackingMode(value: unknown) {
@@ -597,6 +1061,33 @@ function toProductDto(product: any) {
     updatedById: product.updatedById || null,
     createdAt: toIsoString(product.createdAt),
     updatedAt: toIsoString(product.updatedAt),
+  };
+}
+
+function toProductInventoryModeChangeDto(change: any) {
+  return {
+    id: change.id,
+    productId: change.productId,
+    expectedCurrentMode: toInventoryTrackingMode(
+      change.expectedCurrentMode,
+    ),
+    targetMode: toInventoryTrackingMode(change.targetMode),
+    effectiveAt: toIsoString(change.effectiveAt),
+    sourceKey: change.sourceKey,
+    idempotencyKey: change.idempotencyKey,
+    requestHash: change.requestHash,
+    status: String(change.status || '').toLowerCase(),
+    requestedById: change.requestedById || null,
+    requestedByNameSnapshot: change.requestedByNameSnapshot || null,
+    requestedByRoleSnapshot: change.requestedByRoleSnapshot || null,
+    requestedAt: toIsoString(change.requestedAt),
+    appliedById: change.appliedById || null,
+    appliedByNameSnapshot: change.appliedByNameSnapshot || null,
+    appliedByRoleSnapshot: change.appliedByRoleSnapshot || null,
+    appliedAt: toIsoString(change.appliedAt),
+    reason: change.reason || null,
+    createdAt: toIsoString(change.createdAt),
+    updatedAt: toIsoString(change.updatedAt),
   };
 }
 

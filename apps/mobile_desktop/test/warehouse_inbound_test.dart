@@ -199,6 +199,124 @@ void main() {
   });
 
   group('inbound create workflow', () {
+    testWidgets('all NONE products show the precise quantity empty state',
+        (tester) async {
+      final client = _InboundFakeApiClient(
+        productOptions: const [
+          {
+            'id': 'product-1',
+            'name': '未启用库存商品',
+            'unit': '瓶',
+            'inventoryTrackingMode': 'none',
+          },
+        ],
+      );
+      await _pumpInbound(tester, client, role: UserRole.warehouse);
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('暂无已启用普通数量库存的商品，请先在商品管理中启用数量库存。'),
+        findsOneWidget,
+      );
+      expect(find.text('暂无启用商品，无法新增或更换商品。'), findsNothing);
+      expect(find.textContaining('系统存在启用商品'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-contact-admin')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('serialized-only products are distinguished from no products',
+        (tester) async {
+      final client = _InboundFakeApiClient(
+        productOptions: const [
+          {
+            'id': 'product-serialized',
+            'name': '逐瓶商品',
+            'unit': '瓶',
+            'inventoryTrackingMode': 'serialized',
+          },
+        ],
+      );
+      await _pumpInbound(tester, client, role: UserRole.warehouse);
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('暂无已启用普通数量库存的商品，请先在商品管理中启用数量库存。'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('全部为逐瓶库存商品'), findsOneWidget);
+    });
+
+    testWidgets('admin can leave the empty editor for product management',
+        (tester) async {
+      var openedProductManagement = false;
+      await _pumpInbound(
+        tester,
+        _InboundFakeApiClient(productOptions: const []),
+        role: UserRole.admin,
+        onOpenProductManagement: () => openedProductManagement = true,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+      );
+      await tester.pumpAndSettle();
+      final open = find.byKey(
+        const ValueKey('warehouse-inbound-open-product-management'),
+      );
+      expect(find.text('系统当前没有任何启用商品。'), findsOneWidget);
+      expect(open, findsOneWidget);
+      await tester.ensureVisible(open);
+      await tester.tap(open);
+      await tester.pumpAndSettle();
+      expect(openedProductManagement, isTrue);
+    });
+
+    testWidgets('a newly quantity-enabled product is selectable immediately',
+        (tester) async {
+      await _pumpInbound(
+        tester,
+        _InboundFakeApiClient(),
+        role: UserRole.warehouse,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('测试商品 · 瓶'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-quantity-empty-state')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('product-option request failure is not reported as empty data',
+        (tester) async {
+      await _pumpInbound(
+        tester,
+        _InboundFakeApiClient(failProductOptions: true),
+        role: UserRole.warehouse,
+      );
+
+      expect(find.text('加载失败'), findsWidgets);
+      await tester.tap(
+        find.byKey(const ValueKey('warehouse-inbound-create-button')),
+      );
+      await tester.pump();
+      expect(find.textContaining('商品选项加载失败'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('warehouse-inbound-quantity-empty-state')),
+        findsNothing,
+      );
+    });
+
     testWidgets('shows single-line backend limit and serialized redirect',
         (tester) async {
       var openedSerialized = false;
@@ -387,6 +505,7 @@ Future<void> _pumpInbound(
   Size size = const Size(1400, 900),
   VoidCallback? onOpenSerialized,
   VoidCallback? onFactsChanged,
+  VoidCallback? onOpenProductManagement,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -411,6 +530,7 @@ Future<void> _pumpInbound(
             businessApi: businessApi,
             role: role,
             onOpenSerialized: onOpenSerialized ?? () {},
+            onOpenProductManagement: onOpenProductManagement,
             onInventoryFactsChanged: onFactsChanged ?? () {},
             requestedSelection: const InventorySelectionContext(
               warehouseId: 'wh-1',
@@ -467,10 +587,16 @@ Future<void> _submitCreate(WidgetTester tester) async {
 }
 
 class _InboundFakeApiClient extends ApiClient {
-  _InboundFakeApiClient({this.failCreate = false})
-      : super(baseUrl: 'http://127.0.0.1:3000');
+  _InboundFakeApiClient({
+    this.failCreate = false,
+    this.failProductOptions = false,
+    List<Map<String, dynamic>>? productOptions,
+  })  : productOptions = productOptions ?? _defaultProductOptions,
+        super(baseUrl: 'http://127.0.0.1:3000');
 
   final bool failCreate;
+  final bool failProductOptions;
+  final List<Map<String, dynamic>> productOptions;
   final List<String> inboundListPaths = [];
   final List<Map<String, dynamic>> createBodies = [];
   final List<Map<String, dynamic>> reverseBodies = [];
@@ -480,22 +606,16 @@ class _InboundFakeApiClient extends ApiClient {
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
     if (path == '/api/products/options') {
+      if (failProductOptions) {
+        throw const ApiException(
+          statusCode: 503,
+          code: 'PRODUCT_OPTIONS_UNAVAILABLE',
+          message: '商品选项服务暂不可用',
+        );
+      }
       return {
         'data': {
-          'products': [
-            {
-              'id': 'product-1',
-              'name': '测试商品',
-              'unit': '瓶',
-              'inventoryTrackingMode': 'quantity',
-            },
-            {
-              'id': 'product-serialized',
-              'name': '逐瓶商品',
-              'unit': '瓶',
-              'inventoryTrackingMode': 'serialized',
-            },
-          ],
+          'products': productOptions,
         },
       };
     }
@@ -620,6 +740,21 @@ class _InboundFakeApiClient extends ApiClient {
     throw StateError('Unexpected PATCH $path');
   }
 }
+
+const _defaultProductOptions = <Map<String, dynamic>>[
+  {
+    'id': 'product-1',
+    'name': '测试商品',
+    'unit': '瓶',
+    'inventoryTrackingMode': 'quantity',
+  },
+  {
+    'id': 'product-serialized',
+    'name': '逐瓶商品',
+    'unit': '瓶',
+    'inventoryTrackingMode': 'serialized',
+  },
+];
 
 Map<String, dynamic> _pagination(int total) => {
       'page': 1,

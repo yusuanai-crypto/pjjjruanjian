@@ -747,6 +747,18 @@ class BusinessApi {
     return ProductRecord.fromJson(_map(_data(payload)['product']));
   }
 
+  Future<ProductInventoryModeActivationResult> activateProductQuantityInventory(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final payload = await _apiClient.postJson(
+      '/api/products/${Uri.encodeComponent(id)}/inventory-tracking/activate',
+      body: body,
+      token: _token,
+    );
+    return ProductInventoryModeActivationResult.fromJson(_data(payload));
+  }
+
   Future<List<ProductActualCostRecord>> listProductActualCosts(
     String productId,
   ) async {
@@ -5529,6 +5541,71 @@ class ProductRecord {
       updatedById: _stringOrNull(json['updatedById']),
       createdAt: _stringOrNull(json['createdAt']),
       updatedAt: _stringOrNull(json['updatedAt']),
+    );
+  }
+}
+
+class ProductInventoryModeActivationResult {
+  const ProductInventoryModeActivationResult({
+    required this.product,
+    required this.inventoryModeChange,
+  });
+
+  final ProductRecord product;
+  final ProductInventoryModeChangeRecord inventoryModeChange;
+
+  factory ProductInventoryModeActivationResult.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return ProductInventoryModeActivationResult(
+      product: ProductRecord.fromJson(_map(json['product'])),
+      inventoryModeChange: ProductInventoryModeChangeRecord.fromJson(
+        _map(json['inventoryModeChange']),
+      ),
+    );
+  }
+}
+
+class ProductInventoryModeChangeRecord {
+  const ProductInventoryModeChangeRecord({
+    required this.id,
+    required this.productId,
+    required this.expectedCurrentMode,
+    required this.targetMode,
+    required this.effectiveAt,
+    required this.sourceKey,
+    required this.idempotencyKey,
+    required this.requestHash,
+    required this.status,
+    required this.appliedAt,
+  });
+
+  final String id;
+  final String productId;
+  final String expectedCurrentMode;
+  final String targetMode;
+  final String effectiveAt;
+  final String sourceKey;
+  final String idempotencyKey;
+  final String requestHash;
+  final String status;
+  final String? appliedAt;
+
+  factory ProductInventoryModeChangeRecord.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return ProductInventoryModeChangeRecord(
+      id: '${json['id'] ?? ''}',
+      productId: '${json['productId'] ?? ''}',
+      expectedCurrentMode:
+          '${json['expectedCurrentMode'] ?? 'none'}'.toLowerCase(),
+      targetMode: '${json['targetMode'] ?? 'none'}'.toLowerCase(),
+      effectiveAt: '${json['effectiveAt'] ?? ''}',
+      sourceKey: '${json['sourceKey'] ?? ''}',
+      idempotencyKey: '${json['idempotencyKey'] ?? ''}',
+      requestHash: '${json['requestHash'] ?? ''}',
+      status: '${json['status'] ?? ''}'.toLowerCase(),
+      appliedAt: _stringOrNull(json['appliedAt']),
     );
   }
 }

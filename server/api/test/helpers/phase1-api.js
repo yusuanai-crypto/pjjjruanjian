@@ -228,6 +228,7 @@ function createInMemoryPrisma(options = {}) {
   const travelAgencies = [];
   const guides = [];
   const products = [];
+  const productInventoryModeChanges = [];
   const productActualCosts = [];
   const travelGroups = [];
   const travelGroupTastingItems = [];
@@ -376,6 +377,7 @@ function createInMemoryPrisma(options = {}) {
     travelAgencies,
     guides,
     products,
+    productInventoryModeChanges,
     productActualCosts,
     travelGroups,
     travelGroupTastingItems,
@@ -904,6 +906,9 @@ function createInMemoryPrisma(options = {}) {
     travelAgency: createTravelAgencyDelegate(travelAgencies),
     guide: createGuideDelegate(guides),
     product: createProductDelegate(products),
+    productInventoryModeChange: createProductInventoryModeChangeDelegate(
+      productInventoryModeChanges,
+    ),
     productActualCost: createProductActualCostDelegate(productActualCosts),
     commissionRule: createRuleDelegate(commissionRules),
     salesDeductionRule: createRuleDelegate(salesDeductionRules),
@@ -1271,6 +1276,29 @@ function createInMemoryPrisma(options = {}) {
             ),
           orderBy,
         ),
+      create: async ({ data } = {}) => {
+        if (
+          inventoryBatches.some(
+            (item) =>
+              item.sourceLineKey === data.sourceLineKey ||
+              (data.openingEntryKey &&
+                item.openingEntryKey === data.openingEntryKey),
+          )
+        ) {
+          throw createPrismaUniqueError('inventory_batch');
+        }
+        const row = {
+          ...data,
+          id: data.id || crypto.randomUUID(),
+          version: Number(data.version || 0),
+          productionDate: asDate(data.productionDate),
+          fifoAt: asDate(data.fifoAt) || new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        inventoryBatches.push(row);
+        return copyRow(row);
+      },
       updateMany: async ({ where, data } = {}) =>
         updateInventoryRows(inventoryBatches, where, data),
     },
@@ -1861,6 +1889,83 @@ function createProductDelegate(rows) {
       rows[index] = {
         ...rows[index],
         ...data,
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      return copyRow(rows[index]);
+    },
+    updateMany: async ({ where, data }) => {
+      let count = 0;
+      for (let index = 0; index < rows.length; index += 1) {
+        if (!matchesWhere(rows[index], where)) continue;
+        assertUniqueProduct(rows, data, rows[index].id);
+        rows[index] = {
+          ...rows[index],
+          ...applyPrismaUpdateData(rows[index], data),
+          updatedAt: asDate(data.updatedAt) || new Date(),
+        };
+        count += 1;
+      }
+      return { count };
+    },
+  };
+}
+
+function createProductInventoryModeChangeDelegate(rows) {
+  return {
+    findUnique: async ({ where }) => {
+      const row = rows.find((item) => matchesUnique(item, where));
+      return row ? copyRow(row) : null;
+    },
+    findFirst: async ({ where, orderBy } = {}) => {
+      const row = sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      )[0];
+      return row || null;
+    },
+    findMany: async ({ where, orderBy } = {}) =>
+      sortRows(
+        rows.filter((item) => matchesWhere(item, where)).map(copyRow),
+        orderBy,
+      ),
+    count: async ({ where } = {}) =>
+      rows.filter((item) => matchesWhere(item, where)).length,
+    create: async ({ data }) => {
+      if (
+        rows.some(
+          (item) =>
+            item.sourceKey === data.sourceKey ||
+            item.idempotencyKey === data.idempotencyKey,
+        )
+      ) {
+        throw createPrismaUniqueError('product_inventory_mode_change');
+      }
+      const row = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        effectiveAt: asDate(data.effectiveAt),
+        requestedAt: asDate(data.requestedAt) || new Date(),
+        appliedAt: asDate(data.appliedAt),
+        createdAt: asDate(data.createdAt) || new Date(),
+        updatedAt: asDate(data.updatedAt) || new Date(),
+      };
+      rows.push(row);
+      return copyRow(row);
+    },
+    update: async ({ where, data }) => {
+      const index = rows.findIndex((item) => matchesUnique(item, where));
+      if (index < 0) {
+        throw new Error(
+          'Product inventory mode change not found in test Prisma store.',
+        );
+      }
+      rows[index] = {
+        ...rows[index],
+        ...applyPrismaUpdateData(rows[index], data),
+        appliedAt:
+          data.appliedAt === undefined
+            ? rows[index].appliedAt
+            : asDate(data.appliedAt),
         updatedAt: asDate(data.updatedAt) || new Date(),
       };
       return copyRow(rows[index]);
@@ -2734,6 +2839,7 @@ function createTravelGroupDelegate(rows, options = {}) {
         childCount: data.childCount ?? 0,
         parkingFeeCents: data.parkingFeeCents ?? 500,
         cigaretteFeeCents: data.cigaretteFeeCents ?? null,
+        departureTime: data.departureTime ?? null,
         notEnteredConfirmedAt:
           asDate(data.notEnteredConfirmedAt) || null,
         notEnteredConfirmedById: data.notEnteredConfirmedById ?? null,
@@ -4163,15 +4269,22 @@ function withSalesOrderIncludes(
               ? copyRow(confirmedBy)
               : null;
           }
-          if (includeConfig.include?.paymentMethod) {
+          const paymentMethodSelection =
+            includeConfig.include?.paymentMethod ||
+            includeConfig.select?.paymentMethod;
+          if (paymentMethodSelection) {
             const paymentMethod = paymentMethods.find(
               (method) => method.id === detail.paymentMethodId,
             );
             expanded.paymentMethod = paymentMethod
-              ? copyRow(paymentMethod)
+              ? paymentMethodSelection.select
+                ? selectRow(paymentMethod, paymentMethodSelection.select)
+                : copyRow(paymentMethod)
               : null;
           }
-          return expanded;
+          return includeConfig.select
+            ? selectRow(expanded, includeConfig.select)
+            : expanded;
         }),
       includeConfig.orderBy,
     );

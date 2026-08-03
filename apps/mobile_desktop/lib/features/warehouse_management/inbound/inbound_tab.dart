@@ -12,6 +12,7 @@ class InboundTab extends StatefulWidget {
     required this.role,
     required this.onOpenSerialized,
     required this.onInventoryFactsChanged,
+    this.onOpenProductManagement,
     this.createRequestRevision = 0,
     this.requestedFilter,
     this.filterRequestRevision = 0,
@@ -23,6 +24,7 @@ class InboundTab extends StatefulWidget {
   final UserRole role;
   final VoidCallback onOpenSerialized;
   final VoidCallback onInventoryFactsChanged;
+  final VoidCallback? onOpenProductManagement;
   final int createRequestRevision;
   final String? requestedFilter;
   final int filterRequestRevision;
@@ -70,6 +72,8 @@ class _InboundTabState extends State<InboundTab> {
   bool get _canReadCost => canReadInventoryCost(widget.role);
   bool get _canMaintainCost => canCostWrite(widget.role);
   bool get _canSetCostOnInbound =>
+      widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
+  bool get _canManageProductInventoryMode =>
       widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
 
   bool get _hasActiveFilters =>
@@ -935,10 +939,12 @@ class _InboundTabState extends State<InboundTab> {
       productsError: _productsError,
       onRetryProducts: _loadProducts,
       canSetCost: _canSetCostOnInbound,
+      canManageProductInventoryMode: _canManageProductInventoryMode,
       initialWarehouseId:
           _warehouseId ?? widget.requestedSelection?.warehouseId,
       initialProductId: _productId ?? widget.requestedSelection?.productId,
       onOpenSerialized: widget.onOpenSerialized,
+      onOpenProductManagement: widget.onOpenProductManagement,
     );
     final mobile = MediaQuery.sizeOf(context).width < AppBreakpoints.tablet;
     final result = mobile
@@ -1361,7 +1367,9 @@ class _InboundCreateEditor extends StatefulWidget {
     required this.productsError,
     required this.onRetryProducts,
     required this.canSetCost,
+    required this.canManageProductInventoryMode,
     required this.onOpenSerialized,
+    required this.onOpenProductManagement,
     this.initialWarehouseId,
     this.initialProductId,
   });
@@ -1373,7 +1381,9 @@ class _InboundCreateEditor extends StatefulWidget {
   final String? productsError;
   final VoidCallback onRetryProducts;
   final bool canSetCost;
+  final bool canManageProductInventoryMode;
   final VoidCallback onOpenSerialized;
+  final VoidCallback? onOpenProductManagement;
   final String? initialWarehouseId;
   final String? initialProductId;
 
@@ -1406,6 +1416,27 @@ class _InboundCreateEditorState extends State<_InboundCreateEditor> {
   List<ProductOptionRecord> get _quantityProducts => widget.productOptions
       .where((product) => product.inventoryTrackingMode == 'quantity')
       .toList();
+
+  String get _quantityProductEmptyDetail {
+    if (widget.productOptions.isEmpty) {
+      return '系统当前没有任何启用商品。';
+    }
+    if (widget.productOptions.every(
+      (product) => product.inventoryTrackingMode == 'serialized',
+    )) {
+      return '当前启用商品全部为逐瓶库存商品，普通入库不会展示这些商品。';
+    }
+    return '系统存在启用商品，但它们尚未启用普通数量库存。';
+  }
+
+  void _openProductManagement() {
+    if (widget.onOpenProductManagement == null) return;
+    setState(() => _allowPop = true);
+    Navigator.of(context).pop();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.onOpenProductManagement?.call();
+    });
+  }
 
   @override
   void initState() {
@@ -1757,6 +1788,7 @@ class _InboundCreateEditorState extends State<_InboundCreateEditor> {
                               snapshotUnit: _productUnit,
                               enabled: !_saving,
                               label: '普通数量商品',
+                              emptyMessage: '暂无已启用普通数量库存的商品，请先在商品管理中启用数量库存。',
                               onChanged: (product) => setState(() {
                                 _productId = product.id;
                                 _productName = product.name;
@@ -1764,6 +1796,43 @@ class _InboundCreateEditorState extends State<_InboundCreateEditor> {
                                 _dirty = true;
                               }),
                             ),
+                            if (!widget.productsLoading &&
+                                widget.productsError == null &&
+                                _quantityProducts.isEmpty) ...[
+                              const SizedBox(height: 10),
+                              InventoryInlineNotice(
+                                key: const ValueKey(
+                                  'warehouse-inbound-quantity-empty-state',
+                                ),
+                                message: _quantityProductEmptyDetail,
+                                tone: StatusTone.warning,
+                              ),
+                              const SizedBox(height: 6),
+                              if (widget.canManageProductInventoryMode &&
+                                  widget.onOpenProductManagement != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    key: const ValueKey(
+                                      'warehouse-inbound-open-product-management',
+                                    ),
+                                    onPressed:
+                                        _saving ? null : _openProductManagement,
+                                    icon: const Icon(
+                                      Icons.inventory_2_outlined,
+                                    ),
+                                    label: const Text('前往商品管理启用数量库存'),
+                                  ),
+                                )
+                              else
+                                const InventoryInlineNotice(
+                                  key: ValueKey(
+                                    'warehouse-inbound-contact-admin',
+                                  ),
+                                  message: '请联系管理员在商品管理中启用普通数量库存。',
+                                  tone: StatusTone.info,
+                                ),
+                            ],
                             const SizedBox(height: 10),
                             InventoryInlineNotice(
                               message: widget.productOptions.any(

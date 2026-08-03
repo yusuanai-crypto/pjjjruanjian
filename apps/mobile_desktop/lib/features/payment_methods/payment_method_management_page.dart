@@ -228,7 +228,7 @@ class _PaymentMethodManagementPageState
           ),
           children: [
             const Text(
-              '维护名称、分类、手续费率、启停、顺序和默认方式。费率变更只影响之后重新标记的订单，历史订单快照不会改变。',
+              '维护名称、分类、手续费率、启停、顺序和默认方式。费率变更会用于未财务标记订单的实时估算；已标记历史订单仍优先使用原费率快照。',
             ),
             if (_loading) ...[
               const SizedBox(height: 12),

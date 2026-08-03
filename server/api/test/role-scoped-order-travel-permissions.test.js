@@ -185,7 +185,7 @@ test('contract: sales and taster retain their own data scopes under global mark 
   );
 });
 
-test('contract: taster travel group list, detail, orders, and writes share the Shanghai-day permission matrix', async () => {
+test('contract: taster travel group list, detail, orders, and writes share the supplement lifecycle permission matrix', async () => {
   const dates = shanghaiFixtureDates();
   const travelGroups = [
     group('matrix-past-reception', dates.yesterday, TASTER_RECEPTION_ID),
@@ -195,6 +195,16 @@ test('contract: taster travel group list, detail, orders, and writes share the S
       TASTER_OTHER_ID,
       TASTER_LIAISON_ID,
     ),
+    {
+      ...group(
+        'matrix-past-liaison-completed',
+        dates.yesterday,
+        TASTER_OTHER_ID,
+        TASTER_LIAISON_ID,
+      ),
+      departureTime: '16:00',
+      lossStatus: 'NO_LOSS',
+    },
     {
       ...group(
         'matrix-today-public-null',
@@ -283,17 +293,17 @@ test('contract: taster travel group list, detail, orders, and writes share the S
         ]),
       );
       for (const id of [
+        'matrix-past-reception',
         'matrix-today-reception',
         'matrix-today-liaison',
         'matrix-future-liaison',
+        'matrix-future-reception',
       ]) {
         assert.equal(listedById.get(id).canEditByCurrentUser, true, id);
       }
       for (const id of [
-        'matrix-past-reception',
         'matrix-today-public-null',
         'matrix-today-public-empty',
-        'matrix-future-reception',
         'matrix-future-public',
       ]) {
         assert.equal(listedById.get(id).canEditByCurrentUser, false, id);
@@ -318,8 +328,18 @@ test('contract: taster travel group list, detail, orders, and writes share the S
         '/api/travel-groups/matrix-past-liaison-only',
         { token: liaison.token },
       );
+      assert.equal(pastLiaisonOnly.response.status, 200);
+      assert.equal(
+        pastLiaisonOnly.body.data.travelGroup.canEditByCurrentUser,
+        true,
+      );
+      const completedPastLiaison = await requestJson(
+        baseUrl,
+        '/api/travel-groups/matrix-past-liaison-completed',
+        { token: liaison.token },
+      );
       assertErrorContract(
-        pastLiaisonOnly,
+        completedPastLiaison,
         404,
         'TRAVEL_GROUP_NOT_FOUND',
       );
@@ -335,9 +355,11 @@ test('contract: taster travel group list, detail, orders, and writes share the S
       );
 
       for (const id of [
+        'matrix-past-reception',
         'matrix-today-reception',
         'matrix-today-liaison',
         'matrix-future-liaison',
+        'matrix-future-reception',
       ]) {
         const edited = await requestJson(
           baseUrl,
@@ -376,23 +398,8 @@ test('contract: taster travel group list, detail, orders, and writes share the S
         'FIELD_PERMISSION_DENIED',
       );
 
-      const pastEdit = await requestJson(
-        baseUrl,
-        '/api/travel-groups/matrix-past-reception',
-        {
-          method: 'PATCH',
-          token: reception.token,
-          body: { remarks: 'past denied' },
-        },
-      );
-      assertErrorContract(
-        pastEdit,
-        403,
-        'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
-      );
       for (const id of [
         'matrix-today-public-null',
-        'matrix-future-reception',
         'matrix-future-public',
       ]) {
         const denied = await requestJson(
@@ -433,6 +440,232 @@ test('contract: taster travel group list, detail, orders, and writes share the S
             SALES_ONE_ID,
             SALES_ONE_ID,
             dates.todayCreatedAt,
+          ),
+        ],
+      },
+    },
+  );
+});
+
+test('contract: taster edit capability follows supplement state across dates and relationships', async () => {
+  const dates = shanghaiFixtureDates();
+  const dateCases = [
+    ['past', dates.yesterday],
+    ['today', dates.today],
+    ['future', dates.tomorrow],
+  ];
+  const supplementCases = [
+    ['empty-pending', null, 'PENDING', true],
+    ['departure-pending', '16:00', 'PENDING', true],
+    ['empty-recorded', null, 'RECORDED', true],
+    ['empty-no-loss', null, 'NO_LOSS', true],
+    ['departure-recorded', '16:00', 'RECORDED', false],
+    ['departure-no-loss', '16:00', 'NO_LOSS', false],
+  ];
+  const travelGroups = [];
+  for (const [dateKey, visitDate] of dateCases) {
+    for (const [stateKey, departureTime, lossStatus] of supplementCases) {
+      for (const relationship of ['reception', 'liaison', 'unrelated']) {
+        const id = `lifecycle-${dateKey}-${relationship}-${stateKey}`;
+        const assignment =
+          relationship === 'reception'
+            ? [TASTER_RECEPTION_ID, TASTER_OTHER_ID]
+            : relationship === 'liaison'
+              ? [TASTER_OTHER_ID, TASTER_RECEPTION_ID]
+              : [TASTER_OTHER_ID, TASTER_LIAISON_ID];
+        travelGroups.push({
+          ...group(id, visitDate, assignment[0], assignment[1]),
+          arrivalTime: relationship === 'unrelated' ? null : '09:00',
+          departureTime,
+          lossStatus,
+        });
+      }
+    }
+  }
+
+  await withPhase1Server(
+    async (baseUrl) => {
+      const taster = await login(
+        baseUrl,
+        'scope-taster-reception',
+        'Password123',
+      );
+      const list = await requestJson(
+        baseUrl,
+        '/api/travel-groups?limit=100',
+        { token: taster.token },
+      );
+      assert.equal(list.response.status, 200);
+      const listedById = new Map(
+        list.body.data.travelGroups.map((travelGroup) => [
+          travelGroup.id,
+          travelGroup,
+        ]),
+      );
+
+      for (const [dateKey] of dateCases) {
+        for (const [stateKey, , , incomplete] of supplementCases) {
+          for (const relationship of ['reception', 'liaison', 'unrelated']) {
+            const id = `lifecycle-${dateKey}-${relationship}-${stateKey}`;
+            const historicalLiaisonHidden =
+              dateKey === 'past' && relationship === 'liaison' && !incomplete;
+            const historicalUnrelatedHidden =
+              dateKey === 'past' && relationship === 'unrelated';
+            if (historicalLiaisonHidden || historicalUnrelatedHidden) {
+              assert.equal(listedById.has(id), false, id);
+              continue;
+            }
+            assert.equal(listedById.has(id), true, id);
+            assert.equal(
+              listedById.get(id).canEditByCurrentUser,
+              relationship !== 'unrelated' && incomplete,
+              id,
+            );
+            const detail = await requestJson(
+              baseUrl,
+              `/api/travel-groups/${id}`,
+              { token: taster.token },
+            );
+            assert.equal(detail.response.status, 200, id);
+            assert.equal(
+              detail.body.data.travelGroup.canEditByCurrentUser,
+              listedById.get(id).canEditByCurrentUser,
+              id,
+            );
+          }
+        }
+      }
+
+      for (const [dateKey] of dateCases) {
+        for (const [stateKey, , , incomplete] of supplementCases) {
+          const id = `lifecycle-${dateKey}-reception-${stateKey}`;
+          const patch = await requestJson(
+            baseUrl,
+            `/api/travel-groups/${id}`,
+            {
+              method: 'PATCH',
+              token: taster.token,
+              body: { remarks: `patched ${id}` },
+            },
+          );
+          if (incomplete) {
+            assert.equal(patch.response.status, 200, id);
+          } else {
+            assertErrorContract(
+              patch,
+              403,
+              'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+            );
+          }
+        }
+      }
+
+      const completedSummary = await requestJson(
+        baseUrl,
+        '/api/travel-groups/lifecycle-today-liaison-departure-recorded/taster-summary',
+        {
+          method: 'POST',
+          token: taster.token,
+          body: { tasterSummary: 'must be rejected after completion' },
+        },
+      );
+      assertErrorContract(
+        completedSummary,
+        403,
+        'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+      );
+
+      const unrelatedPatch = await requestJson(
+        baseUrl,
+        '/api/travel-groups/lifecycle-today-unrelated-empty-pending',
+        {
+          method: 'PATCH',
+          token: taster.token,
+          body: { remarks: 'unrelated write must fail' },
+        },
+      );
+      assertErrorContract(unrelatedPatch, 403, 'PERMISSION_DENIED');
+    },
+    {
+      prisma: {
+        users: fixtureUsers(),
+        travelGroups,
+      },
+    },
+  );
+});
+
+test('contract: transaction scope blocks a taster write when sales completes the supplement after the initial read', async () => {
+  const dates = shanghaiFixtureDates();
+  await withPhase1Server(
+    async (baseUrl, { prisma }) => {
+      const sales = await login(baseUrl, 'scope-sales-one', 'Password123');
+      const taster = await login(
+        baseUrl,
+        'scope-taster-reception',
+        'Password123',
+      );
+      const originalTransaction = prisma.$transaction.bind(prisma);
+      let salesCompletionInjected = false;
+      let salesCompletionResponse;
+      prisma.$transaction = async (operations) => {
+        if (!salesCompletionInjected && typeof operations === 'function') {
+          salesCompletionInjected = true;
+          salesCompletionResponse = await requestJson(
+            baseUrl,
+            '/api/travel-groups/group-supplement-race',
+            {
+              method: 'PATCH',
+              token: sales.token,
+              body: {
+                departureTime: '16:30',
+                lossStatus: 'NO_LOSS',
+              },
+            },
+          );
+        }
+        return originalTransaction(operations);
+      };
+
+      const tasterWrite = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-supplement-race',
+        {
+          method: 'PATCH',
+          token: taster.token,
+          body: { remarks: 'must not cross the sales completion boundary' },
+        },
+      );
+      assert.equal(salesCompletionInjected, true);
+      assert.equal(salesCompletionResponse.response.status, 200);
+      assertErrorContract(
+        tasterWrite,
+        403,
+        'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+      );
+
+      const detail = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-supplement-race',
+        { token: taster.token },
+      );
+      assert.equal(detail.response.status, 200);
+      assert.equal(detail.body.data.travelGroup.departureTime, '16:30');
+      assert.equal(detail.body.data.travelGroup.lossStatus, 'NO_LOSS');
+      assert.equal(detail.body.data.travelGroup.remarks, null);
+      assert.equal(
+        detail.body.data.travelGroup.canEditByCurrentUser,
+        false,
+      );
+    },
+    {
+      prisma: {
+        users: fixtureUsers(),
+        travelGroups: [
+          group(
+            'group-supplement-race',
+            dates.today,
+            TASTER_RECEPTION_ID,
           ),
         ],
       },
@@ -635,14 +868,10 @@ test('contract: sales keeps one edit while assigned tasters can edit without a l
         {
           method: 'PATCH',
           token: taster.token,
-          body: { remarks: 'future denied' },
+          body: { remarks: 'future reception allowed' },
         },
       );
-      assertErrorContract(
-        futureEdit,
-        403,
-        'PERMISSION_DENIED',
-      );
+      assert.equal(futureEdit.response.status, 200);
       const unrelatedEdit = await requestJson(
         baseUrl,
         '/api/travel-groups/group-taster-shared',

@@ -39,7 +39,7 @@ const roleDefinitions = <RoleDefinition>[
   RoleDefinition(role: UserRole.afterSales, description: '查询订单并创建售后处理记录'),
   RoleDefinition(
     role: UserRole.taster,
-    description: '全量查看旅行团，按接团或对接关系编辑，并查看本人接待和提成',
+    description: '销售完成损耗与离店补录前，接待或对接品鉴师可按字段白名单修改旅行团；完成后只读',
   ),
 ];
 

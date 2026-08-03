@@ -2,6 +2,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  calculateInventoryModeActivationRequestHash,
+} = require('../src/modules/products/products.nest.service');
+const {
+  calculateInventoryRequestHash,
+} = require('../src/modules/inventory/inventory-command.policy');
+
+const {
   assertErrorContract,
   createUser,
   login,
@@ -373,6 +380,321 @@ test('contract: actual-cost history uses integer cents and rejects overlapping a
   });
 });
 
+test('contract: product inventory activation hash stays aligned with Flutter', () => {
+  assert.equal(
+    calculateInventoryModeActivationRequestHash({
+      productId: 'product-1',
+      expectedCurrentMode: 'NONE',
+      targetMode: 'QUANTITY',
+      effectiveAt: '2026-08-03T01:02:03.000Z',
+      sourceKey: 'source:key',
+      idempotencyKey: 'idem:source:key',
+    }),
+    '0ce33e1cfd539334db90bc0d13d969071378569a83a5d6f47bb534d9edaa54a8',
+  );
+});
+
+test('contract: dedicated quantity-inventory activation is authorized, atomic, idempotent, and usable by inbound', async () => {
+  await withPhase1Server(async (baseUrl, { prisma }) => {
+    const superAdmin = await login(baseUrl);
+    const sessions = await createRoleSessions(baseUrl, superAdmin.token, [
+      'admin',
+      'finance',
+      'warehouse',
+    ]);
+
+    const product = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Activatable Quantity Product',
+    );
+    assert.equal(product.inventoryTrackingMode, 'none');
+
+    const deniedBody = activationBody(product.id, 'denied');
+    for (const token of [sessions.finance.token, sessions.warehouse.token]) {
+      const denied = await requestJson(
+        baseUrl,
+        `/api/products/${product.id}/inventory-tracking/activate`,
+        { method: 'POST', token, body: deniedBody },
+      );
+      assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+    }
+
+    const invalidTargetBody = activationBody(product.id, 'serialized', {
+      targetMode: 'SERIALIZED',
+    });
+    const invalidTarget = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: invalidTargetBody,
+      },
+    );
+    assertErrorContract(
+      invalidTarget,
+      400,
+      'PRODUCT_INVENTORY_MODE_TRANSITION_NOT_ALLOWED',
+    );
+
+    const inactive = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Inactive Inventory Product',
+      false,
+    );
+    const inactiveResult = await requestJson(
+      baseUrl,
+      `/api/products/${inactive.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: activationBody(inactive.id, 'inactive'),
+      },
+    );
+    assertErrorContract(inactiveResult, 409, 'PRODUCT_INACTIVE');
+
+    const productWithBottle = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Product With Bottle Fact',
+    );
+    await prisma.serializedInventoryUnit.create({
+      data: {
+        id: 'mode-fact-unit-1',
+        productId: productWithBottle.id,
+        normalizedLogisticsCode: 'mode-fact-unit-1',
+      },
+    });
+    const factConflict = await requestJson(
+      baseUrl,
+      `/api/products/${productWithBottle.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: activationBody(productWithBottle.id, 'facts'),
+      },
+    );
+    assertErrorContract(
+      factConflict,
+      409,
+      'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
+    );
+
+    const body = activationBody(product.id, 'success');
+    const activated = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        headers: { 'x-forwarded-for': '203.0.113.28' },
+        body,
+      },
+    );
+    assert.equal(activated.response.status, 201);
+    assert.equal(
+      activated.body.data.product.inventoryTrackingMode,
+      'quantity',
+    );
+    assert.equal(
+      activated.body.data.inventoryModeChange.targetMode,
+      'quantity',
+    );
+    assert.equal(activated.body.data.inventoryModeChange.status, 'applied');
+    assert.equal(
+      activated.body.data.inventoryModeChange.idempotencyKey,
+      body.idempotencyKey,
+    );
+
+    const options = await requestJson(baseUrl, '/api/products/options', {
+      token: sessions.warehouse.token,
+    });
+    assert.equal(options.response.status, 200);
+    assert.equal(
+      options.body.data.products.find((item) => item.id === product.id)
+        .inventoryTrackingMode,
+      'quantity',
+    );
+
+    const replay = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      { method: 'POST', token: sessions.admin.token, body },
+    );
+    assert.equal(replay.response.status, 201);
+    assert.equal(
+      replay.body.data.inventoryModeChange.id,
+      activated.body.data.inventoryModeChange.id,
+    );
+    assert.equal(await prisma.productInventoryModeChange.count(), 1);
+
+    const idempotencyConflictBody = activationBody(
+      product.id,
+      'different-request',
+      { idempotencyKey: body.idempotencyKey },
+    );
+    const idempotencyConflict = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: idempotencyConflictBody,
+      },
+    );
+    assertErrorContract(
+      idempotencyConflict,
+      409,
+      'PRODUCT_INVENTORY_MODE_IDEMPOTENCY_CONFLICT',
+    );
+
+    const staleExpectation = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: activationBody(product.id, 'stale'),
+      },
+    );
+    assertErrorContract(
+      staleExpectation,
+      409,
+      'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+    );
+
+    const protectedPatch = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}`,
+      {
+        method: 'PATCH',
+        token: sessions.admin.token,
+        body: { inventoryTrackingMode: 'none' },
+      },
+    );
+    assertErrorContract(
+      protectedPatch,
+      409,
+      'PRODUCT_INVENTORY_MODE_CHANGE_REQUIRES_COMMAND',
+    );
+
+    const warehouse = await requestJson(baseUrl, '/api/inventory/warehouses', {
+      method: 'POST',
+      token: sessions.admin.token,
+      body: { code: 'MODE-WH', name: 'Mode Activation Warehouse' },
+    });
+    assert.equal(warehouse.response.status, 201);
+    const inboundPayload = {
+      sourceKey: 'mode-activation:inbound:1',
+      idempotencyKey: 'idem:mode-activation:inbound:1',
+      kind: 'PURCHASE_RECEIPT',
+      warehouseId: warehouse.body.data.warehouse.id,
+      productId: product.id,
+      quantity: 2,
+      batch: {
+        sourceLineKey: 'mode-activation:inbound:line:1',
+      },
+    };
+    const inbound = await requestJson(baseUrl, '/api/inventory/inbounds', {
+      method: 'POST',
+      token: sessions.admin.token,
+      body: {
+        ...inboundPayload,
+        requestHash: calculateInventoryRequestHash('INBOUND', inboundPayload),
+      },
+    });
+    assert.equal(inbound.response.status, 201);
+    assert.equal(inbound.body.data.stockChanges[0].after.onHandQty, 2);
+
+    const noneProduct = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Inbound Rejected None Product',
+    );
+    const nonePayload = {
+      sourceKey: 'mode-none:inbound:1',
+      idempotencyKey: 'idem:mode-none:inbound:1',
+      kind: 'PURCHASE_RECEIPT',
+      warehouseId: warehouse.body.data.warehouse.id,
+      productId: noneProduct.id,
+      quantity: 1,
+      batch: { sourceLineKey: 'mode-none:inbound:line:1' },
+    };
+    const rejectedInbound = await requestJson(
+      baseUrl,
+      '/api/inventory/inbounds',
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: {
+          ...nonePayload,
+          requestHash: calculateInventoryRequestHash('INBOUND', nonePayload),
+        },
+      },
+    );
+    assertErrorContract(
+      rejectedInbound,
+      409,
+      'INVENTORY_TRACKING_DISABLED',
+    );
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?entityType=product_inventory_mode_change',
+      { token: superAdmin.token },
+    );
+    const activationLogs = logs.body.data.logs.filter(
+      (log) =>
+        log.action === 'products.inventory_tracking.activate' &&
+        log.afterData.product.id === product.id,
+    );
+    assert.equal(activationLogs.length, 1);
+    assert.equal(activationLogs[0].ipAddress, '203.0.113.28');
+  });
+});
+
+test('contract: concurrent quantity-inventory activation applies at most one command', async () => {
+  await withPhase1Server(async (baseUrl, { prisma }) => {
+    const superAdmin = await login(baseUrl);
+    const product = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Concurrent Activation Product',
+    );
+    const results = await Promise.all([
+      requestJson(
+        baseUrl,
+        `/api/products/${product.id}/inventory-tracking/activate`,
+        {
+          method: 'POST',
+          token: superAdmin.token,
+          body: activationBody(product.id, 'race-a'),
+        },
+      ),
+      requestJson(
+        baseUrl,
+        `/api/products/${product.id}/inventory-tracking/activate`,
+        {
+          method: 'POST',
+          token: superAdmin.token,
+          body: activationBody(product.id, 'race-b'),
+        },
+      ),
+    ]);
+    assert.equal(
+      results.filter((result) => result.response.status === 201).length,
+      1,
+    );
+    assert.equal(
+      results.filter((result) => result.response.status === 409).length,
+      1,
+    );
+    assert.equal(await prisma.productInventoryModeChange.count(), 1);
+  });
+});
+
 test('contract: product options are active-only and cannot leak costs or audit fields', async () => {
   await withPhase1Server(async (baseUrl) => {
     const anonymous = await requestJson(baseUrl, '/api/products/options');
@@ -471,6 +793,26 @@ async function createProduct(baseUrl, token, name, isActive = true) {
   });
   assert.equal(result.response.status, 201);
   return result.body.data.product;
+}
+
+function activationBody(productId, suffix, overrides = {}) {
+  const body = {
+    expectedCurrentMode: 'NONE',
+    targetMode: 'QUANTITY',
+    effectiveAt: '2026-08-03T01:02:03.000Z',
+    sourceKey: `products-test:inventory-mode:${suffix}`,
+    idempotencyKey: `idem:products-test:inventory-mode:${suffix}`,
+    ...overrides,
+  };
+  body.requestHash = calculateInventoryModeActivationRequestHash({
+    productId,
+    expectedCurrentMode: String(body.expectedCurrentMode).toUpperCase(),
+    targetMode: String(body.targetMode).toUpperCase(),
+    effectiveAt: new Date(body.effectiveAt).toISOString().replace('.000Z', '.000Z'),
+    sourceKey: String(body.sourceKey).trim().toLowerCase(),
+    idempotencyKey: String(body.idempotencyKey).trim().toLowerCase(),
+  });
+  return body;
 }
 
 function assertProductContract(product) {

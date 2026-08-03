@@ -56,7 +56,7 @@ void main() {
     expect(find.text('手续费率 0%'), findsOneWidget);
     expect(find.text('手续费率未设置'), findsOneWidget);
     expect(
-      find.textContaining('费率变更只影响之后重新标记的订单'),
+      find.textContaining('费率变更会用于未财务标记订单的实时估算'),
       findsOneWidget,
     );
     expect(find.text('删除'), findsNothing);

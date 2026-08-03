@@ -12523,6 +12523,16 @@ function getShanghaiTodayDate(now = new Date()) {
   return new Date(`${getShanghaiTodayBusinessDate(now)}T00:00:00.000Z`);
 }
 
+function buildTravelGroupSalesSupplementIncompleteScope() {
+  return {
+    OR: [
+      { departureTime: null },
+      { departureTime: '' },
+      { lossStatus: 'PENDING' },
+    ],
+  };
+}
+
 function buildTasterTravelGroupReadScope(actor: any, now = new Date()) {
   const today = getShanghaiTodayDate(now);
   return {
@@ -12531,6 +12541,13 @@ function buildTasterTravelGroupReadScope(actor: any, now = new Date()) {
       {
         liaisonTasterId: actor.id,
         visitDate: { gte: today },
+      },
+      {
+        AND: [
+          { liaisonTasterId: actor.id },
+          { visitDate: { lt: today } },
+          buildTravelGroupSalesSupplementIncompleteScope(),
+        ],
       },
       {
         visitDate: today,
@@ -12544,21 +12561,16 @@ function buildTasterTravelGroupReadScope(actor: any, now = new Date()) {
   };
 }
 
-function buildTasterTravelGroupEditScope(actor: any, now = new Date()) {
-  const today = getShanghaiTodayDate(now);
+function buildTasterTravelGroupEditScope(actor: any) {
   return {
-    OR: [
+    AND: [
       {
-        visitDate: today,
         OR: [
           { tasterId: actor.id },
           { liaisonTasterId: actor.id },
         ],
       },
-      {
-        visitDate: { gt: today },
-        liaisonTasterId: actor.id,
-      },
+      buildTravelGroupSalesSupplementIncompleteScope(),
     ],
   };
 }
@@ -12594,27 +12606,26 @@ function canTasterReadTravelGroup(
   return (
     group?.tasterId === actor?.id ||
     (group?.liaisonTasterId === actor?.id &&
-      (relation === 'today' || relation === 'future')) ||
+      (relation === 'today' ||
+        relation === 'future' ||
+        !isSalesSupplementCompleted(group))) ||
     relation === 'future' ||
     (relation === 'today' && hasTravelGroupNotArrived(group))
   );
 }
 
-function canTasterEditTravelGroup(
-  group: any,
-  actor: any,
-  now = new Date(),
-) {
-  const relation = getTravelGroupShanghaiDateRelation(group, now);
-  if (relation === 'today') {
-    return (
-      group?.tasterId === actor?.id ||
-      group?.liaisonTasterId === actor?.id
-    );
-  }
+function isSalesSupplementCompleted(group: any) {
   return (
-    relation === 'future' &&
-    group?.liaisonTasterId === actor?.id
+    hasText(group?.departureTime) &&
+    normalizeStoredTravelGroupLossStatus(group?.lossStatus) !== 'PENDING'
+  );
+}
+
+function canTasterEditTravelGroup(group: any, actor: any) {
+  return (
+    (group?.tasterId === actor?.id ||
+      group?.liaisonTasterId === actor?.id) &&
+    !isSalesSupplementCompleted(group)
   );
 }
 
@@ -12702,7 +12713,7 @@ async function recordTravelGroupTasterEditActivity(
   const result = await tx.travelGroup.updateMany({
     where: andWhere(
       { id },
-      buildTasterTravelGroupEditScope(actor, now),
+      buildTasterTravelGroupEditScope(actor),
     ),
     data: {
       tasterLastEditedAt: now,
@@ -12735,11 +12746,11 @@ function assertTasterCanEditTravelGroup(actor: any, current: any) {
   if (canTasterEditTravelGroup(current, actor)) {
     return;
   }
-  if (getTravelGroupShanghaiDateRelation(current) === 'past') {
+  if (isSalesSupplementCompleted(current)) {
     throw createHttpError(
       403,
-      'TRAVEL_GROUP_EDIT_DATE_NOT_ALLOWED',
-      'Historical travel groups are read-only for tasters.',
+      'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+      'Sales has completed the loss and departure supplement. This travel group is read-only for tasters.',
     );
   }
   throw createHttpError(

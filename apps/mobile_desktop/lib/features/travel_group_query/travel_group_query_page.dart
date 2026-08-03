@@ -831,22 +831,11 @@ class _TravelGroupQueryPageState extends State<TravelGroupQueryPage> {
     if (widget.role != UserRole.taster || group.canEditByCurrentUser) {
       return null;
     }
-    final today = formatDate(_shanghaiToday());
-    final visitDate = group.visitDate;
-    if (visitDate.compareTo(today) < 0) {
-      return '历史旅行团仅可查看。';
+    final hasDepartureTime = group.departureTime?.trim().isNotEmpty == true;
+    if (hasDepartureTime && group.lossStatus.toUpperCase() != 'PENDING') {
+      return '销售已完成损耗与离店补录，品鉴师仅可查看。';
     }
-    if (visitDate.compareTo(today) > 0 &&
-        group.liaisonTasterId != widget.currentUserId) {
-      return '未来旅行团仅对接品鉴师可以修改，其他品鉴师仅可查看。';
-    }
-    if (visitDate == today &&
-        (group.arrivalTime == null || group.arrivalTime!.isEmpty) &&
-        group.tasterId != widget.currentUserId &&
-        group.liaisonTasterId != widget.currentUserId) {
-      return '该旅行团尚未进店，所有品鉴师均可查看；只有关联品鉴师可以修改。';
-    }
-    return '当前旅行团为只读。';
+    return '只有该团的接待品鉴师或对接品鉴师可以修改。';
   }
 
   Future<void> _previewAttachment(

@@ -199,6 +199,8 @@ class _WarehouseManagementPageState extends State<WarehouseManagementPage> {
               role: role,
               onOpenSerialized: () =>
                   widget.onOpenDestination('moutai_inventory'),
+              onOpenProductManagement: () =>
+                  widget.onOpenDestination('product_management'),
               onInventoryFactsChanged: _invalidateInventoryFacts,
               createRequestRevision: _createRequestRevisions['inbound'] ?? 0,
               requestedFilter: _moduleFilterRequests['inbound'],

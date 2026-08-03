@@ -4,6 +4,7 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/business/business_api.dart';
+import '../../core/business/product_inventory_mode_command.dart';
 import '../../shared/widgets/form_section.dart';
 import '../../shared/widgets/money_text.dart';
 import '../../shared/widgets/responsive.dart';
@@ -46,6 +47,9 @@ class _ProductManagementPageState extends State<ProductManagementPage> {
       widget.role == UserRole.superAdmin ||
       widget.role == UserRole.admin ||
       widget.role == UserRole.finance;
+
+  bool get _canActivateQuantityInventory =>
+      widget.role == UserRole.superAdmin || widget.role == UserRole.admin;
 
   @override
   void initState() {
@@ -214,6 +218,20 @@ class _ProductManagementPageState extends State<ProductManagementPage> {
     } catch (error) {
       if (mounted) _showMessage(_messageForError(error), isError: true);
     }
+  }
+
+  Future<void> _activateQuantityInventory(ProductRecord product) async {
+    final result = await showDialog<ProductInventoryModeActivationResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _InventoryTrackingActivationDialog(
+        businessApi: _businessApi,
+        product: product,
+      ),
+    );
+    if (result == null || !mounted) return;
+    _showMessage('已为“${product.name}”启用普通数量库存。');
+    await _loadProducts(preferredProductId: result.product.id);
   }
 
   Future<void> _openCostEditor({ProductActualCostRecord? cost}) async {
@@ -396,6 +414,12 @@ class _ProductManagementPageState extends State<ProductManagementPage> {
             _InfoLine(label: '商品名称', value: product.name),
             _InfoLine(label: '单位', value: product.unit),
             _InfoLine(
+              label: '库存模式',
+              value: _inventoryTrackingModeLabel(
+                product.inventoryTrackingMode,
+              ),
+            ),
+            _InfoLine(
               label: '当前实际成本',
               value: current == null
                   ? '暂无有效成本'
@@ -411,6 +435,17 @@ class _ProductManagementPageState extends State<ProductManagementPage> {
           runSpacing: 10,
           alignment: WrapAlignment.end,
           children: [
+            if (_canActivateQuantityInventory &&
+                product.isActive &&
+                product.inventoryTrackingMode == 'none')
+              FilledButton.icon(
+                key: const ValueKey(
+                  'product-activate-quantity-inventory-button',
+                ),
+                onPressed: () => _activateQuantityInventory(product),
+                icon: const Icon(Icons.inventory_2_outlined),
+                label: const Text('启用数量库存'),
+              ),
             OutlinedButton.icon(
               key: const ValueKey('product-edit-button'),
               onPressed: () => _openProductEditor(product: product),
@@ -677,6 +712,120 @@ class _ProductEditorDialogState extends State<_ProductEditorDialog> {
   }
 }
 
+class _InventoryTrackingActivationDialog extends StatefulWidget {
+  const _InventoryTrackingActivationDialog({
+    required this.businessApi,
+    required this.product,
+  });
+
+  final BusinessApi businessApi;
+  final ProductRecord product;
+
+  @override
+  State<_InventoryTrackingActivationDialog> createState() =>
+      _InventoryTrackingActivationDialogState();
+}
+
+class _InventoryTrackingActivationDialogState
+    extends State<_InventoryTrackingActivationDialog> {
+  late final Map<String, dynamic> _requestBody;
+  bool _saving = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    final stamp = DateTime.now().toUtc().microsecondsSinceEpoch;
+    final sourceKey =
+        'flutter-product-inventory-mode:${widget.product.id}:$stamp';
+    _requestBody = buildProductInventoryTrackingActivationRequest(
+      productId: widget.product.id,
+      effectiveAt: DateTime.now().toUtc(),
+      sourceKey: sourceKey,
+      idempotencyKey: 'idem:$sourceKey',
+    );
+  }
+
+  Future<void> _activate() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+    try {
+      final result = await widget.businessApi.activateProductQuantityInventory(
+        widget.product.id,
+        _requestBody,
+      );
+      // 商品选项接口不缓存成本或审计字段；这里立即重新读取，既验证新模式
+      // 已进入通用选项，也让失败后的同幂等请求可安全重试刷新。
+      await widget.businessApi.listProductOptions();
+      if (mounted) Navigator.pop(context, result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _errorMessage = _messageForError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('启用普通数量库存'),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('商品：${widget.product.name} · ${widget.product.unit}'),
+            const SizedBox(height: 14),
+            const _InlineNotice(
+              message: '启用后，该商品可用于普通入库、调拨、盘点和库存占用。',
+              tone: StatusTone.info,
+            ),
+            const SizedBox(height: 10),
+            const _InlineNotice(
+              message: '当前不支持在线切回“未启用库存”或改为逐瓶库存，请确认商品类型无误。',
+              tone: StatusTone.warning,
+            ),
+            const SizedBox(height: 10),
+            const _InlineNotice(
+              message: '本次操作会保存库存模式切换事实并记录审计信息。',
+              tone: StatusTone.neutral,
+            ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              _InlineNotice(
+                key: const ValueKey(
+                  'product-activate-quantity-inventory-error',
+                ),
+                message: _errorMessage!,
+                tone: StatusTone.danger,
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey(
+            'product-activate-quantity-inventory-confirm',
+          ),
+          onPressed: _saving ? null : _activate,
+          child: Text(_saving ? '启用中...' : '确认启用'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ActualCostEditorDialog extends StatefulWidget {
   const _ActualCostEditorDialog({
     required this.businessApi,
@@ -907,6 +1056,9 @@ class _ProductCard extends StatelessWidget {
               const SizedBox(height: 8),
               Text('单位：${product.unit}'),
               Text(
+                '库存模式：${_inventoryTrackingModeLabel(product.inventoryTrackingMode)}',
+              ),
+              Text(
                   '当前实际成本：${currentCost == null ? '暂无' : formatMoneyCents(currentCost!.costCents)}'),
               Text('最近修改：${_dateTimeLabel(product.updatedAt)}'),
             ],
@@ -936,7 +1088,11 @@ class _InfoLine extends StatelessWidget {
 }
 
 class _InlineNotice extends StatelessWidget {
-  const _InlineNotice({required this.message, required this.tone});
+  const _InlineNotice({
+    super.key,
+    required this.message,
+    required this.tone,
+  });
   final String message;
   final StatusTone tone;
 
@@ -1009,6 +1165,14 @@ String _dateTimeLabel(String? value) {
 String _display(String? value) =>
     value == null || value.trim().isEmpty ? '-' : value.trim();
 
+String _inventoryTrackingModeLabel(String mode) {
+  return switch (mode.toLowerCase()) {
+    'quantity' => '普通数量库存',
+    'serialized' => '逐瓶库存',
+    _ => '未启用库存',
+  };
+}
+
 String? _requiredValidator(String? value) {
   if (value == null || value.trim().isEmpty) return '此项必填';
   return null;
@@ -1059,8 +1223,20 @@ String _messageForError(Object error) {
         return '商品名称已存在，请使用唯一名称。';
       case 'PRODUCT_INACTIVE':
         return '该商品已停用，不能用于新业务。';
+      case 'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH':
+      case 'PRODUCT_INVENTORY_MODE_CONCURRENT_CONFLICT':
+        return '商品库存模式已发生变化，请关闭窗口并刷新商品后重试。';
+      case 'PRODUCT_INVENTORY_MODE_FACTS_EXIST':
+        return '该商品已有库存事实或逐瓶记录，不能在线启用普通数量库存，请联系超级管理员核查。';
+      case 'PRODUCT_INVENTORY_MODE_IDEMPOTENCY_CONFLICT':
+      case 'PRODUCT_INVENTORY_MODE_SOURCE_CONFLICT':
+        return '本次操作标识发生冲突，请关闭确认窗口后重新发起。';
+      case 'PRODUCT_INVENTORY_MODE_REQUEST_HASH_MISMATCH':
+        return '库存模式启用请求校验失败，请关闭确认窗口后重试。';
+      case 'PRODUCT_INVENTORY_MODE_TRANSITION_NOT_ALLOWED':
+        return '当前仅支持从“未启用库存”切换为“普通数量库存”。';
       case 'PERMISSION_DENIED':
-        return '仅管理员和财务可访问商品与成本管理。';
+        return '当前账号没有执行此操作的权限。';
       default:
         return error.message;
     }

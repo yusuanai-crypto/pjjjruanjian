@@ -2,9 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
 import 'package:jiangjiu_mobile_desktop/features/product_management/product_management_page.dart';
+import 'package:jiangjiu_mobile_desktop/core/business/product_inventory_mode_command.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
+  test('product inventory activation hash matches the backend contract', () {
+    expect(
+      calculateProductInventoryTrackingActivationHash(
+        productId: 'product-1',
+        body: const {
+          'expectedCurrentMode': 'NONE',
+          'targetMode': 'QUANTITY',
+          'effectiveAt': '2026-08-03T01:02:03.000Z',
+          'sourceKey': 'source:key',
+          'idempotencyKey': 'idem:source:key',
+        },
+      ),
+      '0ce33e1cfd539334db90bc0d13d969071378569a83a5d6f47bb534d9edaa54a8',
+    );
+  });
+
   testWidgets('admin sees product costs and all three management sections',
       (tester) async {
     tester.view.physicalSize = const Size(1400, 1000);
@@ -178,6 +195,108 @@ void main() {
     expect(client.getUris, isEmpty);
     expect(find.text('实际成本历史'), findsNothing);
   });
+
+  testWidgets(
+      'admin confirms dedicated quantity activation once and refreshes mode and options',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeProductApiClient();
+    await tester.pumpWidget(_page(client, UserRole.admin));
+    await tester.pumpAndSettle();
+
+    expect(find.text('库存模式：未启用库存'), findsOneWidget);
+    final activate = find.byKey(
+      const ValueKey('product-activate-quantity-inventory-button'),
+    );
+    expect(activate, findsOneWidget);
+    await tester.tap(activate);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('普通入库、调拨、盘点和库存占用'), findsOneWidget);
+    expect(find.textContaining('不支持在线切回'), findsOneWidget);
+    expect(find.textContaining('记录审计信息'), findsOneWidget);
+
+    final confirm = find.byKey(
+      const ValueKey('product-activate-quantity-inventory-confirm'),
+    );
+    await tester.tap(confirm);
+    await tester.tap(confirm, warnIfMissed: false);
+    await tester.pumpAndSettle();
+
+    expect(client.activationBodies, hasLength(1));
+    final body = client.activationBodies.single;
+    expect(body['expectedCurrentMode'], 'NONE');
+    expect(body['targetMode'], 'QUANTITY');
+    expect(body['sourceKey'], isNotEmpty);
+    expect(body['idempotencyKey'], startsWith('idem:'));
+    expect(
+      body['requestHash'],
+      calculateProductInventoryTrackingActivationHash(
+        productId: 'product-1',
+        body: body,
+      ),
+    );
+    expect(
+      client.getUris.where((uri) => uri.path == '/api/products/options'),
+      isNotEmpty,
+    );
+    expect(find.text('库存模式：普通数量库存'), findsOneWidget);
+    expect(activate, findsNothing);
+  });
+
+  testWidgets('activation failure stays visible and retries the same command',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeProductApiClient()..failActivation = true;
+    await tester.pumpWidget(_page(client, UserRole.admin));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      const ValueKey('product-activate-quantity-inventory-button'),
+    ));
+    await tester.pumpAndSettle();
+    final confirm = find.byKey(
+      const ValueKey('product-activate-quantity-inventory-confirm'),
+    );
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey('product-activate-quantity-inventory-error'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(AlertDialog), findsOneWidget);
+    final firstBody = Map<String, dynamic>.from(client.activationBodies.single);
+
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    expect(client.activationBodies, hasLength(2));
+    expect(client.activationBodies.last, firstBody);
+  });
+
+  testWidgets('finance can manage products but cannot activate inventory mode',
+      (tester) async {
+    final client = _FakeProductApiClient();
+    await tester.pumpWidget(_page(client, UserRole.finance));
+    await tester.pumpAndSettle();
+
+    expect(find.text('商品列表'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('product-activate-quantity-inventory-button'),
+      ),
+      findsNothing,
+    );
+  });
 }
 
 Widget _page(ApiClient client, UserRole role) {
@@ -206,9 +325,11 @@ class _FakeProductApiClient extends ApiClient {
   final patchPaths = <String>[];
   final Map<String, dynamic> _currentProduct;
   bool failCostPostWithOverlap = false;
+  bool failActivation = false;
   String? lastPostPath;
   Map<String, dynamic>? lastPostBody;
   Map<String, dynamic>? lastPatchBody;
+  final List<Map<String, dynamic>> activationBodies = [];
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
@@ -224,6 +345,21 @@ class _FakeProductApiClient extends ApiClient {
             'total': 1,
             'totalPages': 1,
           },
+        },
+      };
+    }
+    if (uri.path == '/api/products/options') {
+      return {
+        'data': {
+          'products': [
+            {
+              'id': _currentProduct['id'],
+              'name': _currentProduct['name'],
+              'unit': _currentProduct['unit'],
+              'inventoryTrackingMode':
+                  _currentProduct['inventoryTrackingMode'] ?? 'none',
+            },
+          ],
         },
       };
     }
@@ -259,6 +395,34 @@ class _FakeProductApiClient extends ApiClient {
   }) async {
     lastPostPath = Uri.parse(path).path;
     lastPostBody = Map<String, dynamic>.from(body ?? const {});
+    if (lastPostPath == '/api/products/product-1/inventory-tracking/activate') {
+      activationBodies.add(Map<String, dynamic>.from(lastPostBody!));
+      if (failActivation) {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+          message: 'stale mode',
+        );
+      }
+      _currentProduct['inventoryTrackingMode'] = 'quantity';
+      return {
+        'data': {
+          'product': _currentProduct,
+          'inventoryModeChange': {
+            'id': 'mode-change-1',
+            'productId': 'product-1',
+            'expectedCurrentMode': 'none',
+            'targetMode': 'quantity',
+            'effectiveAt': body?['effectiveAt'],
+            'sourceKey': body?['sourceKey'],
+            'idempotencyKey': body?['idempotencyKey'],
+            'requestHash': body?['requestHash'],
+            'status': 'applied',
+            'appliedAt': body?['effectiveAt'],
+          },
+        },
+      };
+    }
     if (failCostPostWithOverlap) {
       throw const ApiException(
         statusCode: 409,
@@ -306,6 +470,7 @@ const _product = {
   'id': 'product-1',
   'name': '测试酱酒',
   'unit': '瓶',
+  'inventoryTrackingMode': 'none',
   'isActive': true,
   'notes': '测试备注',
   'createdAt': '2026-07-01T08:00:00.000Z',

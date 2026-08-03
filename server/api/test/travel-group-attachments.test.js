@@ -845,6 +845,126 @@ test('future liaison can manage attachments while public reads and global mark f
   });
 });
 
+test('completed sales supplement blocks assigned taster attachment upload and deletion', async () => {
+  await withTemporaryAttachmentStorage(async (storageRoot) => {
+    await withPhase1Server(
+      async (baseUrl) => {
+        const admin = await login(baseUrl);
+        const tasterUser = await createUser(baseUrl, admin.token, {
+          name: 'Closed Attachment Taster',
+          username: 'closed-attachment-taster',
+          password: 'Password123',
+          role: 'taster',
+        });
+        const salesUser = await createUser(baseUrl, admin.token, {
+          name: 'Closed Attachment Sales',
+          username: 'closed-attachment-sales',
+          password: 'Password123',
+          role: 'sales',
+        });
+        const taster = await login(
+          baseUrl,
+          tasterUser.username,
+          'Password123',
+        );
+        const sales = await login(
+          baseUrl,
+          salesUser.username,
+          'Password123',
+        );
+        const group = await createTravelGroup(baseUrl, admin.token, {
+          tasterId: tasterUser.id,
+          visitDate: SHANGHAI_TODAY,
+        });
+
+        const initialUpload = await uploadFiles(
+          baseUrl,
+          taster.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('kept after supplement closes'),
+              name: 'kept.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assert.equal(initialUpload.response.status, 201);
+        const attachment = initialUpload.body.data.attachments[0];
+
+        const salesCompletion = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}`,
+          {
+            method: 'PATCH',
+            token: sales.token,
+            body: {
+              departureTime: '16:30',
+              lossStatus: 'NO_LOSS',
+            },
+          },
+        );
+        assert.equal(salesCompletion.response.status, 200);
+
+        const detail = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}`,
+          { token: taster.token },
+        );
+        assert.equal(detail.response.status, 200);
+        assert.equal(
+          detail.body.data.travelGroup.canEditByCurrentUser,
+          false,
+        );
+
+        const blockedUpload = await uploadFiles(
+          baseUrl,
+          taster.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('must not be stored'),
+              name: 'blocked.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assertErrorContract(
+          blockedUpload,
+          403,
+          'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+        );
+
+        const blockedDelete = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}/attachments/${attachment.id}`,
+          { method: 'DELETE', token: taster.token },
+        );
+        assertErrorContract(
+          blockedDelete,
+          403,
+          'TRAVEL_GROUP_TASTER_EDIT_CLOSED',
+        );
+
+        const retainedDownload = await downloadFile(
+          baseUrl,
+          taster.token,
+          group.id,
+          attachment.id,
+        );
+        assert.equal(retainedDownload.response.status, 200);
+        assert.deepEqual(
+          retainedDownload.buffer,
+          Buffer.from('kept after supplement closes'),
+        );
+      },
+      { env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot } },
+    );
+  });
+});
+
 test('travel group attachment upload removes the physical file when metadata persistence fails', async () => {
   await withTemporaryAttachmentStorage(async (storageRoot) => {
     await withPhase1Server(

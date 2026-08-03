@@ -4461,6 +4461,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
       tasterTwoUser.username,
       'Password123',
     );
+    assert.equal(tasterTwo.user.id, tasterTwoUser.id);
     const warehouse = await login(
       baseUrl,
       warehouseUser.username,
@@ -4674,6 +4675,10 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
     assert.equal(frontDeskPatch.body.data.travelGroup.adultCount, 20);
     assert.equal(frontDeskPatch.body.data.travelGroup.childCount, 2);
     assert.equal(frontDeskPatch.body.data.travelGroup.guestCount, 22);
+    assert.equal(
+      frontDeskPatch.body.data.travelGroup.tasterId,
+      tasterTwoUser.id,
+    );
     assert.deepEqual(
       frontDeskPatch.body.data.travelGroup.tastingItems.map(
         (item) => item.productName,
@@ -4952,7 +4957,7 @@ test('contract: travel group patch enforces role fields, snapshots, tasting item
   });
 });
 
-test('contract: associated tasters can edit today groups while all tasters can read future groups', async () => {
+test('contract: associated tasters can edit before sales supplement completion while all tasters can read future groups', async () => {
   await withPhase1Server(async (baseUrl) => {
     const admin = await login(baseUrl);
     const primaryUser = await createUser(baseUrl, admin.token, {

@@ -8,25 +8,33 @@ const {
   roundHalfUpDivision,
 } = require('../src/modules/analytics/profit-tax-service-fee.helper');
 
-test('unit: an unmarked order blocks tax and payment service fee calculation', () => {
+test('unit: an unmarked order keeps effective sales, charges no tax, and falls back to the current payment fee rate', () => {
   const result = calculateOrderProfitFees(
     order({
       financeMark: false,
       taxRateSnapshot: null,
       paymentDetails: [
-        payment('payment-1', 'cash', 10000, null),
+        {
+          ...payment('payment-1', 'cash', 10000, null),
+          serviceFeeBaseAmountSnapshotCents: null,
+          paymentMethod: { name: 'cash', serviceFeeRate: '0.006' },
+        },
       ],
     }),
   );
 
-  assert.equal(result.effectiveAmountCents, 0);
-  assert.equal(result.taxCents, null);
-  assert.equal(result.paymentServiceFeeCents, null);
-  assert.equal(result.totalTaxAndServiceFeeCents, null);
+  assert.equal(result.effectiveAmountCents, 10000);
+  assert.equal(result.taxCents, 0);
+  assert.equal(result.paymentServiceFeeCents, 60);
+  assert.equal(result.totalTaxAndServiceFeeCents, 60);
   assert.equal(result.missingSnapshots.hasMissingSnapshots, false);
-  assert.deepEqual(
-    result.issues.map((issue) => issue.code),
-    ['ORDER_NOT_FINANCE_MARKED'],
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.components.tax.status, 'calculated');
+  assert.equal(result.components.paymentServiceFee.status, 'calculated');
+  assert.equal(result.paymentDetails[0].serviceFeeRateSnapshot, '0.006');
+  assert.equal(
+    result.paymentDetails[0].serviceFeeBaseAmountSnapshotCents,
+    10000,
   );
 });
 
@@ -43,6 +51,21 @@ test('unit: a marked order calculates 1% tax from its effective amount', () => {
   assert.equal(result.effectiveAmountCents, 10000);
   assert.equal(result.taxRateSnapshot, '0.01');
   assert.equal(result.taxCents, 100);
+});
+
+test('unit: a marked legacy order without a tax snapshot still uses the fixed 1% rate', () => {
+  const result = calculateOrderProfitFees(
+    order({
+      taxRateSnapshot: null,
+      paymentDetails: [payment('payment-1', 'cash', 10000, '0')],
+    }),
+  );
+
+  assert.equal(result.effectiveAmountCents, 10000);
+  assert.equal(result.taxRateSnapshot, null);
+  assert.equal(result.taxCents, 100);
+  assert.equal(result.components.tax.status, 'calculated');
+  assert.deepEqual(result.components.tax.issues, []);
 });
 
 test('unit: mixed payments calculate and group each detail independently', () => {
@@ -323,6 +346,9 @@ test('unit: a missing rate snapshot stays unknown instead of becoming 0%', () =>
       code: 'PAYMENT_FEE_RATE_SNAPSHOT_MISSING',
       paymentDetailId: 'missing-rate',
     },
+  ]);
+  assert.deepEqual(result.issues.map((issue) => issue.code), [
+    'PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED',
   ]);
 });
 

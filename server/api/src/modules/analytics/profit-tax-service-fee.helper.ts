@@ -116,12 +116,9 @@ export const roundHalfUp = roundHalfUpDivision;
 
 /**
  * Calculates the amount still effective after every financially confirmed
- * refund. Unmarked and non-effective orders contribute no effective amount.
+ * refund. Finance marking does not affect whether sales remain effective.
  */
 export function calculateEffectiveOrderAmountCents(order: any): number {
-  if (order?.financeMark !== true) {
-    return 0;
-  }
   const status = normalizeEnum(order?.status);
   if (status && !EFFECTIVE_ORDER_STATUSES.has(status)) {
     return 0;
@@ -141,8 +138,8 @@ export const calculateEffectiveAmountCents =
   calculateEffectiveOrderAmountCents;
 
 /**
- * Tax is calculated once per order from its effective amount and its captured
- * tax-rate snapshot. A missing rate remains null and is never treated as 0%.
+ * Tax is calculated once per order. Unmarked orders always return zero; the
+ * order-level calculator supplies the system's fixed 1% rate for marked orders.
  */
 export function calculateOrderTaxCents(
   input:
@@ -156,7 +153,7 @@ export function calculateOrderTaxCents(
   taxRateSnapshot?: DecimalRateInput,
 ): number | null {
   if (typeof input === 'object' && input !== null) {
-    if (input.financeMark === false) {
+    if (input.financeMark !== true) {
       return 0;
     }
     return calculateCentsAtRate(
@@ -176,7 +173,6 @@ export const calculateTaxCents = calculateOrderTaxCents;
 export function calculatePaymentDetailServiceFeeCents(
   input:
     | {
-        financeMark?: boolean;
         serviceFeeRateSnapshot: DecimalRateInput;
         serviceFeeBaseAmountSnapshotCents:
           | number
@@ -192,9 +188,6 @@ export function calculatePaymentDetailServiceFeeCents(
   sameDayRefundAmountCents: number | bigint | string = 0,
 ): number | null {
   if (typeof input === 'object' && input !== null) {
-    if (input.financeMark === false) {
-      return 0;
-    }
     if (
       input.serviceFeeBaseAmountSnapshotCents === null ||
       input.serviceFeeBaseAmountSnapshotCents === undefined
@@ -339,43 +332,13 @@ export function calculateOrderProfitFees(
 ): OrderProfitFeeCalculation {
   const financeMarked = order?.financeMark === true;
   const missingSnapshots = findMissingProfitFeeSnapshots(order);
-  if (!financeMarked) {
-    const issues = [
-      calculationIssue(
-        'ORDER_NOT_FINANCE_MARKED',
-        '订单尚未完成财务标记，税费和付款手续费无法计算。',
-        '请由财务核对收款明细后完成订单财务标记。',
-      ),
-    ];
-    return {
-      financeMarked: false,
-      effectiveAmountCents: 0,
-      taxRateSnapshot: null,
-      taxCents: null,
-      paymentServiceFeeCents: null,
-      totalTaxAndServiceFeeCents: null,
-      paymentDetails: [],
-      paymentMethods: [],
-      missingSnapshots,
-      issues,
-      components: {
-        tax: { status: 'blocked', amountCents: null, issues },
-        paymentServiceFee: {
-          status: 'blocked',
-          amountCents: null,
-          issues,
-        },
-      },
-    };
-  }
-
   const effectiveAmountCents = calculateEffectiveOrderAmountCents(order);
-  const calculationIssues = inspectMarkedOrderProfitFeeInputs(order);
+  const calculationIssues = inspectOrderPaymentServiceFeeInputs(order);
   const normalizedTaxRate = normalizeDecimalRate(order?.taxRateSnapshot);
   const calculatedTaxCents = calculateOrderTaxCents({
-    financeMark: true,
+    financeMark: financeMarked,
     effectiveAmountCents,
-    taxRateSnapshot: order?.taxRateSnapshot,
+    taxRateSnapshot: financeMarked ? PROFIT_TAX_RATE : null,
   });
   const sameDayRefunds = aggregateSameDayRefundsByPaymentDetail(
     order?.orderDate,
@@ -384,14 +347,17 @@ export function calculateOrderProfitFees(
   const paymentDetails = readPaymentDetails(order).map(
     (detail): PaymentDetailServiceFeeResult => {
       const paymentDetailId = optionalString(detail?.id);
-      const baseMissing = isMissing(
-        detail?.serviceFeeBaseAmountSnapshotCents,
-      );
+      const effectiveRate =
+        normalizeDecimalRate(detail?.serviceFeeRateSnapshot) ??
+        normalizeDecimalRate(detail?.paymentMethod?.serviceFeeRate);
+      const effectiveBaseAmountCents =
+        detail?.serviceFeeBaseAmountSnapshotCents ?? detail?.amountCents;
+      const baseMissing = isMissing(effectiveBaseAmountCents);
       const baseCents = baseMissing
         ? null
         : toSafeCentsNumber(
             nonNegativeCents(
-              detail.serviceFeeBaseAmountSnapshotCents,
+              effectiveBaseAmountCents,
             ),
           );
       const refundCents = paymentDetailId
@@ -410,19 +376,20 @@ export function calculateOrderProfitFees(
         paymentDetailId,
         paymentMethodId: optionalString(detail?.paymentMethodId),
         paymentMethodName:
-          optionalString(detail?.paymentMethodNameSnapshot) || '',
-        serviceFeeRateSnapshot: normalizeDecimalRate(
-          detail?.serviceFeeRateSnapshot,
-        ),
+          optionalString(detail?.paymentMethodNameSnapshot) ||
+          optionalString(detail?.paymentMethod?.name) ||
+          '',
+        // Keep the existing DTO field and expose the rate actually used. For
+        // unmarked orders this can be the current payment-method rate.
+        serviceFeeRateSnapshot: effectiveRate,
         serviceFeeBaseAmountSnapshotCents: baseCents,
         sameDayRefundAmountCents: refundCents,
         serviceFeeChargeableBaseAmountCents: chargeableBaseCents,
         serviceFeeCents:
           calculatePaymentDetailServiceFeeCents({
-            financeMark: true,
-            serviceFeeRateSnapshot: detail?.serviceFeeRateSnapshot,
+            serviceFeeRateSnapshot: effectiveRate,
             serviceFeeBaseAmountSnapshotCents:
-              detail?.serviceFeeBaseAmountSnapshotCents,
+              effectiveBaseAmountCents,
             sameDayRefundAmountCents: refundCents,
           }),
       };
@@ -432,13 +399,9 @@ export function calculateOrderProfitFees(
   const calculatedPaymentServiceFeeCents = sumNullableCents(
     paymentDetails.map((detail) => detail.serviceFeeCents),
   );
-  const taxIssues = calculationIssues.filter((issue) =>
-    issue.code === 'TAX_RATE_SNAPSHOT_MISSING',
-  );
-  const paymentIssues = calculationIssues.filter(
-    (issue) => issue.code !== 'TAX_RATE_SNAPSHOT_MISSING',
-  );
-  const taxCents = taxIssues.length === 0 ? calculatedTaxCents : null;
+  const taxIssues: ProfitCalculationIssue[] = [];
+  const paymentIssues = calculationIssues;
+  const taxCents = calculatedTaxCents ?? 0;
   const paymentServiceFeeCents =
     paymentIssues.length === 0
       ? calculatedPaymentServiceFeeCents
@@ -477,26 +440,17 @@ export function calculateOrderProfitFees(
 export const calculateOrderTaxAndServiceFees =
   calculateOrderProfitFees;
 
-function inspectMarkedOrderProfitFeeInputs(
+function inspectOrderPaymentServiceFeeInputs(
   order: any,
 ): ProfitCalculationIssue[] {
   const issues: ProfitCalculationIssue[] = [];
-  if (isMissing(order?.taxRateSnapshot)) {
-    issues.push(
-      calculationIssue(
-        'TAX_RATE_SNAPSHOT_MISSING',
-        '订单税率快照缺失，税费无法计算。',
-        '请使用重新计算安全补齐缺失快照，或由财务核对历史税率。',
-      ),
-    );
-  }
   const paymentDetails = readPaymentDetails(order);
   if (paymentDetails.length === 0) {
     issues.push(
       calculationIssue(
         'PAYMENT_DETAILS_MISSING',
-        '已财务标记的订单缺少收款明细，付款手续费无法计算。',
-        '请取消财务标记，补齐收款明细并重新标记。',
+        '订单缺少付款明细，付款手续费无法计算。',
+        '请补齐付款明细或配置付款方式手续费率。',
       ),
     );
     return issues;
@@ -513,7 +467,7 @@ function inspectMarkedOrderProfitFeeInputs(
       calculationIssue(
         'PAYMENT_TOTAL_MISMATCH',
         '收款明细合计与订单总额不一致，付款手续费无法可靠计算。',
-        '请取消财务标记并核对每条收款明细金额。',
+        '请补齐付款明细并核对每条付款金额。',
       ),
     );
   }
@@ -524,27 +478,33 @@ function inspectMarkedOrderProfitFeeInputs(
         ...calculationIssue(
           'PAYMENT_METHOD_MISSING',
           '收款明细缺少付款方式，付款手续费无法计算。',
-          '请取消财务标记并为该收款明细选择付款方式。',
+          '请补齐付款明细或配置付款方式手续费率。',
         ),
         paymentDetailId,
       });
     }
-    if (isMissing(detail?.serviceFeeRateSnapshot)) {
+    if (
+      isMissing(detail?.serviceFeeRateSnapshot) &&
+      isMissing(detail?.paymentMethod?.serviceFeeRate)
+    ) {
       issues.push({
         ...calculationIssue(
-          'PAYMENT_FEE_RATE_SNAPSHOT_MISSING',
-          '付款手续费率快照缺失。',
-          '请使用重新计算安全补齐；当前付款方式也无费率时需先配置费率。',
+          'PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED',
+          '付款明细的手续费率快照和付款方式当前手续费率均缺失。',
+          '请补齐付款明细或配置付款方式手续费率。',
         ),
         paymentDetailId,
       });
     }
-    if (isMissing(detail?.serviceFeeBaseAmountSnapshotCents)) {
+    if (
+      isMissing(detail?.serviceFeeBaseAmountSnapshotCents) &&
+      isMissing(detail?.amountCents)
+    ) {
       issues.push({
         ...calculationIssue(
-          'PAYMENT_FEE_BASE_SNAPSHOT_MISSING',
-          '付款手续费计费基数快照缺失。',
-          '请使用重新计算按原收款明细金额安全补齐。',
+          'PAYMENT_FEE_BASE_AMOUNT_MISSING',
+          '付款明细金额缺失，付款手续费计费基数无法确定。',
+          '请补齐付款明细或配置付款方式手续费率。',
         ),
         paymentDetailId,
       });

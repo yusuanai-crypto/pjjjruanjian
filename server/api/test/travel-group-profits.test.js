@@ -107,13 +107,28 @@ test('contract: travel group profit recalculation enforces finance permission an
     assert.equal(second.body.data.changedCount, 0);
     assert.equal(second.body.data.unchangedCount, 1);
 
+    const unmarked = await requestJson(
+      baseUrl,
+      '/api/analytics/travel-group-profits/group-unmarked/recalculate',
+      { method: 'POST', token: finance.token, body: {} },
+    );
+    assert.equal(unmarked.response.status, 200, JSON.stringify(unmarked.body));
+    assert.equal(
+      unmarked.body.data.issues.some(
+        (issue) => issue.code === 'ORDER_NOT_FINANCE_MARKED',
+      ),
+      false,
+    );
+    assert.equal(unmarked.body.data.profit.taxFeeCents, 0);
+    assert.equal(unmarked.body.data.profit.paymentServiceFeeCents, 12);
+
     const logs = await requestJson(
       baseUrl,
       '/api/operation-logs?action=analytics.travel_group_profit.recalculate',
       { token: admin.token },
     );
     assert.equal(logs.response.status, 200);
-    assert.equal(logs.body.data.logs.length, 2);
+    assert.equal(logs.body.data.logs.length, 3);
   });
 });
 
@@ -169,7 +184,7 @@ test('contract: recalculation preserves partial success and reports an all-faile
       partial.body.data.issues.some(
         (issue) =>
           issue.orderNo === 'SO-mixed-failure' &&
-          issue.code === 'ORDER_NOT_FINANCE_MARKED',
+          issue.code === 'PAYMENT_DETAILS_MISSING',
       ),
     );
 
@@ -184,7 +199,7 @@ test('contract: recalculation preserves partial success and reports an all-faile
     assert.equal(failed.body.data.results[0].success, false);
     assert.deepEqual(
       failed.body.data.results[0].issues.map((issue) => issue.code),
-      ['ORDER_NOT_FINANCE_MARKED'],
+      ['PAYMENT_DETAILS_MISSING'],
     );
   });
 });
@@ -289,34 +304,41 @@ test('contract: travel group profits aggregate, filter, sort, paginate, and retu
         (warning) => warning.code === 'CIGARETTE_FEE_MISSING',
       ),
     );
-    assert.equal(incomplete.taxFeeCents, null);
-    assert.equal(incomplete.paymentServiceFeeCents, null);
-    assert.ok(
+    assert.equal(incomplete.taxFeeCents, 60);
+    assert.equal(incomplete.paymentServiceFeeCents, 36);
+    assert.equal(
       incomplete.warnings.some(
         (warning) =>
           warning.code === 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
       ),
+      false,
     );
-    assert.equal(result.body.data.summary.incompleteGroupCount, 3);
+    assert.equal(result.body.data.summary.incompleteGroupCount, 1);
     assert.equal(result.body.data.summary.estimatedProfitCents, null);
-    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 4952);
-    assert.equal(result.body.data.summary.taxFeeCents, null);
+    assert.equal(result.body.data.summary.knownEstimatedProfitCents, 4034);
+    assert.equal(result.body.data.summary.taxFeeCents, 230);
     assert.equal(
       result.body.data.summary.paymentServiceFeeCents,
-      null,
+      232,
     );
 
     const unmarked = result.body.data.items.find(
       (item) => item.groupNo === 'TG-UNMARKED',
     );
     assert.equal(unmarked.effectiveSalesAmountCents, 2000);
-    assert.equal(unmarked.taxFeeCents, null);
-    assert.equal(unmarked.paymentServiceFeeCents, null);
-    assert.ok(
+    assert.equal(unmarked.taxFeeCents, 0);
+    assert.equal(unmarked.paymentServiceFeeCents, 12);
+    assert.equal(unmarked.totalExpenseCents, 1212);
+    assert.equal(unmarked.estimatedProfitCents, 788);
+    assert.equal(unmarked.estimatedProfitRate, 0.394);
+    assert.equal(unmarked.calculationStatus, 'complete');
+    assert.equal(
       unmarked.warnings.some(
         (warning) => warning.code === 'ORDER_NOT_FINANCE_MARKED',
       ),
+      false,
     );
+    assert.equal(unmarked.paymentMethodFeeBreakdown[0].serviceFeeCents, 12);
 
     const encoded = JSON.stringify(result.body.data);
     for (const forbiddenField of [
@@ -461,12 +483,24 @@ test('contract: travel group profit export reuses filters and sort without pagin
       'export must preserve page sorting while ignoring pageSize=1',
     );
     assert.equal(orderSheet.actualRowCount, 7);
-    assert.equal(paymentSheet.actualRowCount, 6);
+    assert.equal(paymentSheet.actualRowCount, 8);
 
     const groupRows = readWorksheetRows(groupSheet);
     const complete = groupRows.find((row) => row['团号'] === 'TG-COMPLETE');
     assert.equal(complete['税费（元）'], 1);
     assert.equal(complete['付款手续费（元）'], 0.76);
+    const unmarked = groupRows.find((row) => row['团号'] === 'TG-UNMARKED');
+    assert.equal(unmarked['税费（元）'], 0);
+    assert.equal(unmarked['付款手续费（元）'], 0.12);
+    assert.equal(unmarked['总费用（元）'], 12.12);
+    assert.equal(unmarked['预估利润（元）'], 7.88);
+    const orderRows = readWorksheetRows(orderSheet);
+    const unmarkedOrder = orderRows.find(
+      (row) => row['订单号'] === 'SO-unmarked',
+    );
+    assert.equal(unmarkedOrder['有效金额（元）'], 20);
+    assert.equal(unmarkedOrder['税费（元）'], 0);
+    assert.equal(unmarkedOrder['付款手续费（元）'], 0.12);
     const paymentRows = readWorksheetRows(paymentSheet);
     const estimatedWallet = paymentRows.find(
       (row) =>
@@ -475,6 +509,12 @@ test('contract: travel group profit export reuses filters and sort without pagin
     );
     assert.equal(estimatedWallet['当天退款（元）'], 10);
     assert.equal(estimatedWallet['手续费基数（元）'], 70);
+    const unmarkedWallet = paymentRows.find(
+      (row) => row['团号'] === 'TG-UNMARKED',
+    );
+    assert.equal(unmarkedWallet['手续费率（快照/当前）'], '0.006000');
+    assert.equal(unmarkedWallet['手续费基数（元）'], 20);
+    assert.equal(unmarkedWallet['手续费（元）'], 0.12);
 
     const workbookText = JSON.stringify(
       workbook.worksheets.flatMap((sheet) =>
@@ -499,11 +539,11 @@ test('contract: travel group profit export reuses filters and sort without pagin
     );
     assert.equal(logs.response.status, 200);
     assert.equal(logs.body.data.logs.length, 1);
-    assert.equal(logs.body.data.logs[0].afterData.rowCount, 18);
+    assert.equal(logs.body.data.logs[0].afterData.rowCount, 20);
     assert.deepEqual(logs.body.data.logs[0].afterData.rowCounts, {
       travelGroups: 7,
       orders: 6,
-      paymentMethods: 5,
+      paymentMethods: 7,
     });
     assert.equal(
       'page' in logs.body.data.logs[0].afterData.filters,
@@ -703,6 +743,9 @@ function withTravelGroupProfitServer(run) {
         commission('loss', 'SALES_COMMISSION', 300),
         commission('loss', 'OUTREACH_COMMISSION', 0),
         commission('loss', 'LEADER_COMMISSION', 0),
+        commission('unmarked', 'SALES_COMMISSION', 0),
+        commission('unmarked', 'OUTREACH_COMMISSION', 0),
+        commission('unmarked', 'LEADER_COMMISSION', 0),
       ],
       travelGroupFinanceSummaries: [
         financeSummary('complete', 500, 600),
@@ -878,7 +921,20 @@ function order(id, orderDate, totalAmountCents, logisticsFeeCents, items) {
                   '0.006000',
                 ),
               ]
-            : [];
+            : ['loss', 'unmarked', 'outside'].includes(id)
+              ? [
+                  {
+                    ...payment(
+                      `payment-${id}-wallet`,
+                      'payment-method-wallet',
+                      '收钱吧',
+                      totalAmountCents,
+                      null,
+                    ),
+                    serviceFeeBaseAmountSnapshotCents: null,
+                  },
+                ]
+              : [];
   return {
     id: `order-${id}`,
     orderNo: `SO-${id}`,

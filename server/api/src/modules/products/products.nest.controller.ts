@@ -44,6 +44,23 @@ export class ProductsNestController {
     };
   }
 
+  @Post(':id/inventory-tracking/activate')
+  async activateInventoryTracking(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return this.productsService.activateQuantityInventoryTracking(
+      actor,
+      id,
+      body,
+      {
+        ipAddress: getRequestIp(request),
+      },
+    );
+  }
+
   @Get(':id')
   async get(@Param('id') id: string, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

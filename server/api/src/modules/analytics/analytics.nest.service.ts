@@ -1603,6 +1603,13 @@ function getSalesOrderProfitAnalyticsInclude() {
         amountCents: true,
         serviceFeeRateSnapshot: true,
         serviceFeeBaseAmountSnapshotCents: true,
+        paymentMethod: {
+          select: {
+            id: true,
+            name: true,
+            serviceFeeRate: true,
+          },
+        },
       },
     },
     afterSalesOrders: {
@@ -2767,7 +2774,7 @@ function buildTravelGroupProfitExportWorkbook(result: any) {
         width: 22,
       },
       {
-        header: '手续费率快照',
+        header: '手续费率（快照/当前）',
         key: 'serviceFeeRateSnapshot',
         width: 18,
       },
@@ -3655,8 +3662,8 @@ function buildOrderRecalculationFailureIssues(error: any, order: any) {
       {
         ...context,
         code: 'FEE_SNAPSHOT_REPAIR_FAILED',
-        message: detail || '税费和付款手续费快照修复失败。',
-        actionHint: '请核对财务标记、收款明细及付款方式费率后重试。',
+        message: detail || '税费或付款手续费数据检查失败。',
+        actionHint: '请补齐付款明细或配置付款方式手续费率后重试。',
       },
     ];
   }

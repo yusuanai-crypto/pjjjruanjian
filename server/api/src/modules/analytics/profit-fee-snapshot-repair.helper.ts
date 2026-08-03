@@ -38,21 +38,7 @@ export async function repairOrderProfitFeeSnapshots(
     orderId: String(order.id),
     orderNo: String(order.orderNo || order.id),
   };
-  if (order.financeMark !== true) {
-    return {
-      ...context,
-      changedCount: 0,
-      issues: [
-        issue(
-          context,
-          'ORDER_NOT_FINANCE_MARKED',
-          '订单尚未完成财务标记，税费和付款手续费无法计算。',
-          '请由财务核对收款明细后完成订单财务标记。',
-        ),
-      ],
-    };
-  }
-
+  const financeMarked = order.financeMark === true;
   const paymentDetails = Array.isArray(order.paymentDetails)
     ? order.paymentDetails
     : [];
@@ -62,8 +48,8 @@ export async function repairOrderProfitFeeSnapshots(
       issue(
         context,
         'PAYMENT_DETAILS_MISSING',
-        '已财务标记的订单缺少收款明细。',
-        '请取消财务标记，补齐收款明细并重新标记。',
+        '订单缺少付款明细，付款手续费无法计算。',
+        '请补齐付款明细或配置付款方式手续费率。',
       ),
     );
   }
@@ -80,7 +66,7 @@ export async function repairOrderProfitFeeSnapshots(
         context,
         'PAYMENT_TOTAL_MISMATCH',
         '收款明细合计与订单总额不一致。',
-        '请取消财务标记并核对每条收款明细金额。',
+        '请补齐付款明细并核对每条付款金额。',
       ),
     );
   }
@@ -94,7 +80,7 @@ export async function repairOrderProfitFeeSnapshots(
           context,
           'PAYMENT_METHOD_MISSING',
           '收款明细关联的付款方式不存在。',
-          '请取消财务标记并重新选择有效付款方式。',
+          '请补齐付款明细或配置付款方式手续费率。',
           detail?.id,
         ),
       );
@@ -108,8 +94,8 @@ export async function repairOrderProfitFeeSnapshots(
         issue(
           context,
           'PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED',
-          '付款方式未配置手续费率，无法补齐历史快照。',
-          '请先配置该付款方式手续费率，再重新计算。',
+          '付款明细的手续费率快照和付款方式当前手续费率均缺失。',
+          '请补齐付款明细或配置付款方式手续费率。',
           detail.id,
         ),
       );
@@ -117,6 +103,9 @@ export async function repairOrderProfitFeeSnapshots(
   }
   if (issues.length > 0) {
     return { ...context, changedCount: 0, issues };
+  }
+  if (!financeMarked) {
+    return { ...context, changedCount: 0, issues: [] };
   }
 
   let changedCount = 0;

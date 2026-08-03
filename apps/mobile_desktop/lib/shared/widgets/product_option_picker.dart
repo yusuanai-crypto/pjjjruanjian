@@ -16,6 +16,7 @@ class ProductOptionPickerField extends StatelessWidget {
     this.enabled = true,
     this.label = '商品',
     this.allowSnapshotWithoutProductId = false,
+    this.emptyMessage,
   });
 
   final List<ProductOptionRecord> options;
@@ -29,6 +30,7 @@ class ProductOptionPickerField extends StatelessWidget {
   final bool enabled;
   final String label;
   final bool allowSnapshotWithoutProductId;
+  final String? emptyMessage;
 
   ProductOptionRecord? get _activeSelection {
     for (final option in options) {
@@ -66,7 +68,7 @@ class ProductOptionPickerField extends StatelessWidget {
       helperText = '商品选项加载失败：$loadError';
       helperColor = Theme.of(context).colorScheme.error;
     } else if (options.isEmpty) {
-      helperText = '暂无启用商品，无法新增或更换商品。';
+      helperText = emptyMessage ?? '暂无启用商品，无法新增或更换商品。';
       helperColor = Theme.of(context).colorScheme.error;
     } else if (missingAssociation && allowSnapshotWithoutProductId) {
       helperText = '内置损耗项，无需关联商品档案。';
@@ -90,7 +92,7 @@ class ProductOptionPickerField extends StatelessWidget {
           return '请选择商品';
         }
         if (options.isEmpty && !_hasSnapshot) {
-          return '暂无可选的启用商品';
+          return emptyMessage ?? '暂无可选的启用商品';
         }
         return null;
       },

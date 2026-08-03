@@ -54,7 +54,7 @@ const ROLE_DEFINITIONS = {
   taster: {
     role: 'taster',
     title: '品鉴师',
-    description: '查看本人全部接待团、今天及未来对接团、今天未进店团和全部未来团；今天关联品鉴师可修改，未来仅对接品鉴师可修改，历史团只读。',
+    description: '查看本人全部接待团、今天及未来对接团、销售补录未完成的历史对接团、今天未进店团和全部未来团；销售完成损耗与离店补录前，接待品鉴师或对接品鉴师可以在字段白名单范围内修改旅行团；销售完成补录后，品鉴师只读。',
   },
 };
 
@@ -594,9 +594,9 @@ const ROLE_DATA_SCOPES = {
   after_sales: { orders: 'after_sales_related' },
   taster: {
     travelGroups:
-      'own_receptions_all_dates_or_own_liaisons_today_future_or_public_today_unarrived_and_future',
+      'own_receptions_all_dates_or_own_liaisons_today_future_or_incomplete_history_or_public_today_unarrived_and_future',
     travelGroupUpdates:
-      'today_reception_or_liaison_future_liaison_only_history_read_only',
+      'associated_taster_before_sales_loss_and_departure_supplement_completed',
     orders: 'today_and_future_reception_taster_only',
     receptions: 'own_user_id',
     commissions: 'own_user_id',

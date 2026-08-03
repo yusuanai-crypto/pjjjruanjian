@@ -223,6 +223,7 @@ function withProfitServer(run) {
           [itemSeed('coverage-fees-line', 10000, 3000)],
           {
             travelGroupId: 'coverage-fees-group',
+            salesUserId: 'coverage-sales-user',
             financeMark: true,
             taxRateSnapshot: '0.010000',
             paymentDetails: [
@@ -289,6 +290,17 @@ function withProfitServer(run) {
           targetType: 'AGENCY_DAILY_REBATE',
           deductionAmountCents: 222,
         },
+        ...['SALES_COMMISSION', 'OUTREACH_COMMISSION', 'LEADER_COMMISSION'].map(
+          (targetType) => ({
+            id: `coverage-fees-${targetType.toLowerCase()}`,
+            salesOrderId: 'coverage-fees',
+            travelGroupId: 'coverage-fees-group',
+            targetType,
+            commissionRuleId: `coverage-fees-${targetType.toLowerCase()}-rule`,
+            amountCents: 0,
+            pointsCents: 0,
+          }),
+        ),
       ],
       travelGroupFinanceSummaries: [
         {

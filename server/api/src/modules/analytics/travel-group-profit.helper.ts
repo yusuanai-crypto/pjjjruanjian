@@ -163,36 +163,32 @@ export function calculateTravelGroupProfit(
       paymentDetails: calculated.paymentDetails,
     };
   });
-  const financeMarkedOrderFees = orderTaxAndServiceFees.filter(
-    (order: any) => order.financeMarked,
-  );
-  const taxFeeSnapshotMissing = orderTaxAndServiceFees.some(
+  const taxFeeBlocked = orderTaxAndServiceFees.some(
     (order: any) => order.components?.tax?.status === 'blocked',
   );
-  const paymentServiceFeeSnapshotMissing = orderTaxAndServiceFees.some(
+  const paymentServiceFeeBlocked = orderTaxAndServiceFees.some(
     (order: any) =>
       order.components?.paymentServiceFee?.status === 'blocked',
   );
-  const profitFeeSnapshotMissing =
-    taxFeeSnapshotMissing || paymentServiceFeeSnapshotMissing;
+  const profitFeeBlocked = taxFeeBlocked || paymentServiceFeeBlocked;
   const knownTaxFeeCents = sumBy(
-    financeMarkedOrderFees,
+    orderTaxAndServiceFees,
     (order: any) =>
       order.taxFeeCents === null ? 0 : Number(order.taxFeeCents),
   );
   const knownPaymentServiceFeeCents = sumBy(
-    financeMarkedOrderFees,
+    orderTaxAndServiceFees,
     (order: any) =>
       order.paymentServiceFeeCents === null
         ? 0
         : Number(order.paymentServiceFeeCents),
   );
-  const taxFeeCents = taxFeeSnapshotMissing ? null : knownTaxFeeCents;
-  const paymentServiceFeeCents = paymentServiceFeeSnapshotMissing
+  const taxFeeCents = taxFeeBlocked ? null : knownTaxFeeCents;
+  const paymentServiceFeeCents = paymentServiceFeeBlocked
     ? null
     : knownPaymentServiceFeeCents;
   const paymentMethodFeeBreakdown = buildTravelGroupPaymentMethodFeeBreakdown(
-    financeMarkedOrderFees,
+    orderTaxAndServiceFees,
   );
   const totalExpenseCents =
     actualProductCostCents +
@@ -263,13 +259,12 @@ export function calculateTravelGroupProfit(
       message: '旅行团财务汇总缺失，日返和月返使用提成记录积分兼容回退。',
     });
   }
-  if (profitFeeSnapshotMissing) {
+  if (paymentServiceFeeBlocked) {
     addWarning(warnings, {
       code: 'PAYMENT_SERVICE_FEE_SNAPSHOT_MISSING',
-      message: '存在已财务标记订单缺少税率或付款手续费快照，不能按 0 估算利润。',
+      message: '存在订单缺少付款明细、付款方式或手续费率，付款手续费无法计算。',
       context: {
-        taxSnapshotMissing: taxFeeSnapshotMissing,
-        paymentServiceFeeSnapshotMissing,
+        paymentServiceFeeBlocked,
       },
     });
   }
@@ -279,7 +274,7 @@ export function calculateTravelGroupProfit(
     costCoverageStatus: productProfit.costCoverageStatus,
     warnings,
     cigaretteFeeMissing: cigaretteFeeCents === null,
-    profitFeeSnapshotMissing,
+    profitFeeBlocked,
     employeeCommissionIncomplete:
       !employeeCommissionDiagnostics.salesCommissionCalculated ||
       !employeeCommissionDiagnostics.outreachCommissionCalculated ||
@@ -359,12 +354,12 @@ function resolveCalculationStatus(input: {
   costCoverageStatus: string;
   warnings: TravelGroupProfitWarning[];
   cigaretteFeeMissing: boolean;
-  profitFeeSnapshotMissing: boolean;
+  profitFeeBlocked: boolean;
   employeeCommissionIncomplete: boolean;
 }): TravelGroupProfitCalculationStatus {
   if (
     input.cigaretteFeeMissing ||
-    input.profitFeeSnapshotMissing ||
+    input.profitFeeBlocked ||
     input.employeeCommissionIncomplete
   ) {
     return 'incomplete';

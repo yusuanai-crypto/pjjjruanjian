@@ -202,9 +202,90 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('手续费快照缺失，请财务补齐费率并重新标记订单'),
+      find.textContaining('请补齐付款明细或配置付款方式手续费率'),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+      'unmarked-order backend result shows zero tax, actual fee, and complete profit without finance-mark diagnostics',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final Map<String, dynamic> item = {
+      ..._item(
+        id: 'unmarked-fee',
+        groupNo: 'TG-UNMARKED-FEE',
+        status: 'complete',
+        sales: 10000,
+        expenses: 3060,
+        profit: 6940,
+        rate: 0.694,
+      ),
+      'taxFeeCents': 0,
+      'paymentServiceFeeCents': 60,
+      'paymentMethodFeeBreakdown': [
+        {
+          'paymentMethodId': 'wallet',
+          'paymentMethodNameSnapshot': '收钱吧',
+          'serviceFeeRateSnapshot': '0.006',
+          'originalPaymentAmountCents': 10000,
+          'sameDayRefundAmountCents': 0,
+          'serviceFeeBaseAmountCents': 10000,
+          'serviceFeeCents': 60,
+          'orderCount': 1,
+        },
+      ],
+      'warnings': <Map<String, dynamic>>[],
+    };
+    final response = _responseJson(items: [item]);
+    response['summary'] = {
+      'groupCount': 1,
+      'completeGroupCount': 1,
+      'estimatedGroupCount': 0,
+      'incompleteGroupCount': 0,
+      'noSalesGroupCount': 0,
+      'effectiveSalesAmountCents': 10000,
+      'actualProductCostCents': 3000,
+      'guideDailyPointsCents': 0,
+      'guideMonthlyPointsCents': 0,
+      'taxFeeCents': 0,
+      'paymentServiceFeeCents': 60,
+      'totalExpenseCents': 3060,
+      'estimatedProfitCents': 6940,
+      'knownEstimatedProfitCents': 6940,
+      'estimatedProfitRate': 0.694,
+    };
+    final client = _FakeProfitApiClient(responseData: response);
+    await tester.pumpWidget(_page(client));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('TG-UNMARKED-FEE'));
+    await tester.pumpAndSettle();
+    final detail = find.byKey(
+      const ValueKey('profit-analysis-detail-unmarked-fee'),
+    );
+    expect(detail, findsOneWidget);
+    expect(
+      find.descendant(of: detail, matching: find.text(formatMoneyCents(0))),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(of: detail, matching: find.text(formatMoneyCents(60))),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(
+        of: detail,
+        matching: find.text('盈利 ${formatMoneyCents(6940)}'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('订单尚未财务标记'), findsNothing);
+    expect(find.textContaining('税费和付款手续费无法计算'), findsNothing);
   });
 
   testWidgets('authorized user confirms recalculation and sees action hints',
@@ -491,12 +572,14 @@ class _FakeProfitApiClient extends ApiClient {
   _FakeProfitApiClient({
     this.pending,
     this.downloadPending,
+    this.responseData,
     this.failuresRemaining = 0,
     this.downloadFailuresRemaining = 0,
   }) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final Completer<Map<String, dynamic>>? pending;
   final Completer<ApiDownloadedFile>? downloadPending;
+  final Map<String, dynamic>? responseData;
   int failuresRemaining;
   int downloadFailuresRemaining;
   final List<String> paths = [];
@@ -522,7 +605,7 @@ class _FakeProfitApiClient extends ApiClient {
         message: '测试利润接口失败',
       );
     }
-    return {'data': _responseJson()};
+    return {'data': responseData ?? _responseJson()};
   }
 
   @override

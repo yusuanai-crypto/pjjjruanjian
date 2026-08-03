@@ -64,9 +64,11 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
   assert.equal(result.monthlyAgencyRebateCents, 600);
   assert.equal(result.guideDailyPointsCents, 150);
   assert.equal(result.guideMonthlyPointsCents, 225);
-  assert.equal(result.totalExpenseCents, 6675);
-  assert.equal(result.estimatedProfitCents, 3325);
-  assert.equal(result.estimatedProfitRate, 0.3325);
+  assert.equal(result.taxFeeCents, 100);
+  assert.equal(result.paymentServiceFeeCents, 0);
+  assert.equal(result.totalExpenseCents, 6775);
+  assert.equal(result.estimatedProfitCents, 3225);
+  assert.equal(result.estimatedProfitRate, 0.3225);
   assert.equal(
     result.employeeCommissionCents,
     result.salesCommissionCents +
@@ -84,7 +86,9 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
       result.dailyAgencyRebateCents +
       result.monthlyAgencyRebateCents +
       result.guideDailyPointsCents +
-      result.guideMonthlyPointsCents,
+      result.guideMonthlyPointsCents +
+      result.taxFeeCents +
+      result.paymentServiceFeeCents,
   );
   assert.equal(
     result.estimatedProfitCents,
@@ -100,7 +104,8 @@ test('unit: travel group profit subtracts snapshot cost and each expense exactly
       500 -
       600 -
       150 -
-      225,
+      225 -
+      100,
   );
 });
 
@@ -129,7 +134,7 @@ test('unit: a stale zeroed employee commission snapshot no longer enters profit 
   assert.equal(result.outreachCommissionCents, 0);
   assert.equal(result.outreachCommissionCalculated, false);
   assert.equal(result.employeeCommissionCents, 0);
-  assert.equal(result.totalExpenseCents, 3700);
+  assert.equal(result.totalExpenseCents, 3800);
   assert.equal(result.estimatedProfitCents, null);
 });
 
@@ -334,7 +339,7 @@ test('unit: confirmed and pending refunds produce estimates and agency fallback 
   assert.equal(result.pendingRefundAmountCents, 500);
   assert.equal(result.dailyAgencyRebateCents, 100);
   assert.equal(result.monthlyAgencyRebateCents, 200);
-  assert.equal(result.estimatedProfitCents, 5000);
+  assert.equal(result.estimatedProfitCents, 4910);
   assert.deepEqual(
     result.warnings.map((warning) => warning.code).sort(),
     [
@@ -367,9 +372,9 @@ test('unit: travel group estimated profit preserves negative values', () => {
   });
 
   assert.equal(result.calculationStatus, 'complete');
-  assert.equal(result.totalExpenseCents, 2700);
-  assert.equal(result.estimatedProfitCents, -1700);
-  assert.equal(result.estimatedProfitRate, -1.7);
+  assert.equal(result.totalExpenseCents, 2710);
+  assert.equal(result.estimatedProfitCents, -1710);
+  assert.equal(result.estimatedProfitRate, -1.71);
 });
 
 test('unit: marked mixed payments add per-order tax and same-day adjusted service fees', () => {
@@ -484,7 +489,7 @@ test('unit: a full cross-day refund keeps the captured payment service fee', () 
   );
 });
 
-test('unit: missing marked-order fee snapshots stay null and make profit incomplete', () => {
+test('unit: a missing marked tax snapshot uses 1% while a truly missing payment fee rate alone blocks profit', () => {
   const result = calculateTravelGroupProfit({
     travelGroup: group('group-missing-fee'),
     salesOrders: [
@@ -508,7 +513,7 @@ test('unit: missing marked-order fee snapshots stay null and make profit incompl
     },
   });
 
-  assert.equal(result.taxFeeCents, null);
+  assert.equal(result.taxFeeCents, 100);
   assert.equal(result.paymentServiceFeeCents, null);
   assert.equal(result.calculationStatus, 'incomplete');
   assert.equal(result.estimatedProfitCents, null);
@@ -521,6 +526,85 @@ test('unit: missing marked-order fee snapshots stay null and make profit incompl
   assert.equal(
     result.paymentMethodFeeBreakdown[0].serviceFeeCents,
     null,
+  );
+  assert.equal(result.components.tax.status, 'calculated');
+  assert.equal(result.components.paymentServiceFee.status, 'blocked');
+  assert.deepEqual(
+    result.components.paymentServiceFee.issues.map((issue) => issue.code),
+    ['PAYMENT_METHOD_SERVICE_FEE_RATE_REQUIRED'],
+  );
+});
+
+test('unit: marked and unmarked orders share service-fee aggregation while only the marked order pays tax', () => {
+  const unmarkedPayment = paymentDetail(
+    'unmarked-payment',
+    'wallet',
+    '收钱吧',
+    10000,
+    null,
+  );
+  unmarkedPayment.serviceFeeBaseAmountSnapshotCents = null;
+  unmarkedPayment.paymentMethod = {
+    id: 'wallet',
+    name: '收钱吧',
+    serviceFeeRate: '0.006',
+  };
+  const result = calculateTravelGroupProfit({
+    travelGroup: group('group-mixed-mark'),
+    salesOrders: [
+      order('marked-order', {
+        financeMark: true,
+        totalAmountCents: 10000,
+        items: [item('marked-line', 10000, 3000)],
+      }),
+      order('unmarked-order', {
+        financeMark: false,
+        taxRateSnapshot: '0.250000',
+        totalAmountCents: 10000,
+        items: [item('unmarked-line', 10000, 3000)],
+        paymentDetails: [unmarkedPayment],
+      }),
+    ],
+    commissionRecords: [
+      ...employeeZeroCommissions('marked-order'),
+      ...employeeZeroCommissions('unmarked-order'),
+    ],
+    financeSummary: {
+      totalDailyRebateCents: 0,
+      totalMonthlyRebateCents: 0,
+    },
+  });
+
+  assert.equal(result.effectiveSalesAmountCents, 20000);
+  assert.equal(result.taxFeeCents, 100);
+  assert.equal(result.paymentServiceFeeCents, 60);
+  assert.equal(result.totalExpenseCents, 6860);
+  assert.equal(result.estimatedProfitCents, 13140);
+  assert.equal(result.estimatedProfitRate, 0.657);
+  assert.equal(result.calculationStatus, 'complete');
+  assert.deepEqual(
+    result.orderTaxAndServiceFees.map((row) => ({
+      marked: row.financeMarked,
+      tax: row.taxFeeCents,
+      fee: row.paymentServiceFeeCents,
+    })),
+    [
+      { marked: true, tax: 100, fee: 0 },
+      { marked: false, tax: 0, fee: 60 },
+    ],
+  );
+  assert.equal(result.paymentMethodFeeBreakdown.length, 2);
+  assert.equal(
+    result.paymentMethodFeeBreakdown.find(
+      (row) => row.paymentMethodId === 'wallet',
+    ).serviceFeeCents,
+    60,
+  );
+  assert.equal(
+    result.warnings.some(
+      (warning) => warning.code === 'ORDER_NOT_FINANCE_MARKED',
+    ),
+    false,
   );
 });
 
