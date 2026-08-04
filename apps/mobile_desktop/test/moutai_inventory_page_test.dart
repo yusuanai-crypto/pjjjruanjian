@@ -86,6 +86,139 @@ void main() {
     expect(client.productOptionCalls, 1);
   });
 
+  testWidgets('inbound picker selects the active default warehouse',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient();
+
+    await _openInboundDialog(tester, client);
+
+    expect(
+      _dropdownValue(tester, const ValueKey('moutai-inbound-warehouse')),
+      'warehouse-default',
+    );
+    expect(find.text('默认仓 · WH-001'), findsOneWidget);
+    expect(find.text('备用仓 · WH-002'), findsNothing);
+    expect(client.lastWarehousePath, contains('isActive=true'));
+  });
+
+  testWidgets('inbound request includes the selected default warehouse id',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient();
+    await _openInboundDialog(tester, client);
+
+    await tester.enterText(
+      find.byKey(const Key('moutai-inbound-rows')),
+      'LOG-001,0001',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '确认入库'));
+    await tester.pumpAndSettle();
+
+    expect(client.serializedBatchPostCalls, 1);
+    expect(client.lastSerializedBatchBody?['warehouseId'], 'warehouse-default');
+    expect(client.lastSerializedBatchBody?['productId'], 'product-serialized');
+  });
+
+  testWidgets('inbound request uses the warehouse selected by the user',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient();
+    await _openInboundDialog(tester, client);
+
+    await tester.tap(
+      find.byKey(const ValueKey('moutai-inbound-warehouse')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('备用仓 · WH-002').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('moutai-inbound-rows')),
+      'LOG-002,0002',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '确认入库'));
+    await tester.pumpAndSettle();
+
+    expect(client.serializedBatchPostCalls, 1);
+    expect(client.lastSerializedBatchBody?['warehouseId'], 'warehouse-other');
+  });
+
+  testWidgets('warehouse must be explicitly selected when none is default',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient(
+      warehouses: [
+        _warehouse('warehouse-a', 'WH-A', '甲仓'),
+        _warehouse('warehouse-b', 'WH-B', '乙仓'),
+      ],
+    );
+    await _openInboundDialog(tester, client);
+
+    expect(
+      _dropdownValue(tester, const ValueKey('moutai-inbound-warehouse')),
+      isNull,
+    );
+    await tester.enterText(
+      find.byKey(const Key('moutai-inbound-rows')),
+      'LOG-003,0003',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '确认入库'));
+    await tester.pump();
+
+    expect(client.serializedBatchPostCalls, 0);
+    expect(find.text('请选择入库仓库'), findsOneWidget);
+  });
+
+  testWidgets('inbound is disabled when there are no active warehouses',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient(
+      warehouses: [
+        _warehouse(
+          'warehouse-inactive',
+          'WH-OFF',
+          '停用仓',
+          isActive: false,
+        ),
+      ],
+    );
+    await _openInboundDialog(tester, client);
+
+    expect(
+      find.text('没有可用的入库仓库，请先在仓库设置中启用仓库'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('停用仓'), findsNothing);
+    final submit = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '确认入库'),
+    );
+    expect(submit.onPressed, isNull);
+    expect(client.serializedBatchPostCalls, 0);
+  });
+
+  testWidgets('warehouse load failure is understandable and can be retried',
+      (tester) async {
+    _setDesktopView(tester);
+    final client = _FakeInventoryApiClient(warehouseFailures: 1);
+    await _openInboundDialog(tester, client);
+
+    expect(find.textContaining('入库仓库加载失败'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('moutai-inbound-warehouse-retry')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('moutai-inbound-warehouse-retry')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.warehouseCalls, 2);
+    expect(
+      _dropdownValue(tester, const ValueKey('moutai-inbound-warehouse')),
+      'warehouse-default',
+    );
+  });
+
   testWidgets('expanded serialized statuses use stable Chinese labels',
       (tester) async {
     tester.view.physicalSize = const Size(1500, 900);
@@ -292,20 +425,81 @@ Widget _page(
   );
 }
 
+void _setDesktopView(WidgetTester tester) {
+  tester.view.physicalSize = const Size(1500, 900);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+Future<void> _openInboundDialog(
+  WidgetTester tester,
+  _FakeInventoryApiClient client,
+) async {
+  await tester.pumpWidget(_page(client, UserRole.admin));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('moutai-inbound-button')));
+  await tester.pumpAndSettle();
+  expect(find.text('茅台逐瓶入库'), findsOneWidget);
+}
+
+String? _dropdownValue(WidgetTester tester, Key key) {
+  return tester.state<FormFieldState<String>>(find.byKey(key)).value;
+}
+
 class _FakeInventoryApiClient extends ApiClient {
-  _FakeInventoryApiClient({this.status = 'available'})
-      : super(baseUrl: 'http://127.0.0.1:3000');
+  _FakeInventoryApiClient({
+    this.status = 'available',
+    List<Map<String, dynamic>>? warehouses,
+    int warehouseFailures = 0,
+  })  : warehouses = warehouses ??
+            [
+              _warehouse(
+                'warehouse-default',
+                'WH-001',
+                '默认仓',
+                isDefault: true,
+              ),
+              _warehouse('warehouse-other', 'WH-002', '备用仓'),
+            ],
+        warehouseFailuresRemaining = warehouseFailures,
+        super(baseUrl: 'http://127.0.0.1:3000');
 
   final String status;
+  final List<Map<String, dynamic>> warehouses;
   int exportCalls = 0;
   int getCalls = 0;
   int productOptionCalls = 0;
+  int warehouseCalls = 0;
+  int warehouseFailuresRemaining;
+  int serializedBatchPostCalls = 0;
+  String? lastWarehousePath;
+  Map<String, dynamic>? lastSerializedBatchBody;
   List<String> exportedUnitIds = const [];
   Completer<ApiDownloadedFile>? pendingExport;
   ApiException? exportError;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path.startsWith('/api/inventory/warehouses?')) {
+      warehouseCalls += 1;
+      lastWarehousePath = path;
+      if (warehouseFailuresRemaining > 0) {
+        warehouseFailuresRemaining -= 1;
+        throw StateError('warehouse request failed');
+      }
+      return {
+        'data': {
+          'warehouses': warehouses,
+          'pagination': {
+            'page': 1,
+            'pageSize': 100,
+            'total': warehouses.length,
+            'totalPages': 1,
+          },
+        },
+      };
+    }
     if (path == '/api/products/options') {
       productOptionCalls += 1;
       return {
@@ -342,6 +536,22 @@ class _FakeInventoryApiClient extends ApiClient {
   }
 
   @override
+  Future<Map<String, dynamic>> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+  }) async {
+    if (path == '/api/serialized-inventory/batch') {
+      serializedBatchPostCalls += 1;
+      lastSerializedBatchBody = Map<String, dynamic>.from(body ?? const {});
+      return {
+        'data': {'units': <Map<String, dynamic>>[]},
+      };
+    }
+    throw StateError('Unexpected POST $path');
+  }
+
+  @override
   Future<ApiDownloadedFile> postBytes(
     String path, {
     required Map<String, dynamic> body,
@@ -360,6 +570,25 @@ class _FakeInventoryApiClient extends ApiClient {
       fileName: '茅台物流单_20260723_共1瓶.docx',
     );
   }
+}
+
+Map<String, dynamic> _warehouse(
+  String id,
+  String code,
+  String name, {
+  bool isActive = true,
+  bool isDefault = false,
+}) {
+  return {
+    'id': id,
+    'code': code,
+    'name': name,
+    'address': '',
+    'manager': null,
+    'isActive': isActive,
+    'isDefault': isDefault,
+    'parentWarehouse': null,
+  };
 }
 
 class _DelayedInventoryApiClient extends ApiClient {

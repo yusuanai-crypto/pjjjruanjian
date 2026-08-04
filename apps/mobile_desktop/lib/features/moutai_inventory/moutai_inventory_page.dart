@@ -7,6 +7,7 @@ import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 import '../../core/api/api_client.dart';
 import '../../core/auth/role_access.dart';
 import '../../core/business/business_api.dart';
+import '../../core/business/inventory_api.dart';
 import '../../shared/widgets/responsive.dart';
 import '../../shared/widgets/state_views.dart';
 import '../../shared/widgets/status_tag.dart';
@@ -25,6 +26,7 @@ class MoutaiInventoryPage extends StatefulWidget {
     required this.token,
     required this.role,
     this.businessApi,
+    this.inventoryApi,
     this.savePathPicker,
     this.fileWriter,
   });
@@ -33,6 +35,7 @@ class MoutaiInventoryPage extends StatefulWidget {
   final String token;
   final UserRole role;
   final BusinessApi? businessApi;
+  final InventoryApi? inventoryApi;
   final MoutaiSavePathPicker? savePathPicker;
   final MoutaiFileWriter? fileWriter;
 
@@ -42,6 +45,7 @@ class MoutaiInventoryPage extends StatefulWidget {
 
 class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
   late BusinessApi _api;
+  late InventoryApi _inventoryApi;
   final _nameFilter = TextEditingController();
   final _codeFilter = TextEditingController();
   final _dateFilter = TextEditingController();
@@ -73,6 +77,12 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
     super.initState();
     _api = widget.businessApi ??
         BusinessApi(apiClient: widget.apiClient, token: widget.token);
+    _inventoryApi = widget.inventoryApi ??
+        InventoryApi(
+          apiClient: widget.apiClient,
+          token: widget.token,
+          role: widget.role,
+        );
     if (_canAccess) _load();
   }
 
@@ -80,11 +90,19 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
   void didUpdateWidget(covariant MoutaiInventoryPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.businessApi != widget.businessApi ||
+        oldWidget.inventoryApi != widget.inventoryApi ||
         oldWidget.apiClient != widget.apiClient ||
         oldWidget.token != widget.token ||
         oldWidget.role != widget.role) {
+      _inventoryApi.clearCache();
       _api = widget.businessApi ??
           BusinessApi(apiClient: widget.apiClient, token: widget.token);
+      _inventoryApi = widget.inventoryApi ??
+          InventoryApi(
+            apiClient: widget.apiClient,
+            token: widget.token,
+            role: widget.role,
+          );
       _identityRevision++;
       _requestGeneration++;
       _units = const [];
@@ -212,6 +230,7 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
       barrierDismissible: false,
       builder: (context) => _MoutaiInboundDialog(
         api: _api,
+        inventoryApi: _inventoryApi,
         canEditCost: _canSeeCost,
       ),
     );
@@ -594,10 +613,12 @@ class _MoutaiInventoryPageState extends State<MoutaiInventoryPage> {
 class _MoutaiInboundDialog extends StatefulWidget {
   const _MoutaiInboundDialog({
     required this.api,
+    required this.inventoryApi,
     required this.canEditCost,
   });
 
   final BusinessApi api;
+  final InventoryApi inventoryApi;
   final bool canEditCost;
 
   @override
@@ -611,15 +632,20 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
   final _cost = TextEditingController();
   final _rows = TextEditingController();
   List<ProductOptionRecord> _products = const [];
+  List<WarehouseRecord> _warehouses = const [];
   String? _productId;
+  String? _warehouseId;
   bool _loadingProducts = true;
+  bool _loadingWarehouses = true;
   bool _saving = false;
+  String? _warehouseError;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _loadProducts();
+    _loadWarehouses();
   }
 
   @override
@@ -652,11 +678,49 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
     }
   }
 
+  Future<void> _loadWarehouses() async {
+    setState(() {
+      _loadingWarehouses = true;
+      _warehouseError = null;
+      _warehouses = const [];
+      _warehouseId = null;
+    });
+    try {
+      final warehouses = (await widget.inventoryApi.listWarehouses(
+        isActive: true,
+      ))
+          .where((warehouse) => warehouse.isActive)
+          .toList();
+      if (!mounted) return;
+      String? defaultWarehouseId;
+      for (final warehouse in warehouses) {
+        if (warehouse.isDefault) {
+          defaultWarehouseId = warehouse.id;
+          break;
+        }
+      }
+      setState(() {
+        _warehouses = warehouses;
+        _warehouseId = defaultWarehouseId;
+        _loadingWarehouses = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingWarehouses = false;
+        _warehouseError = '入库仓库加载失败：${_message(error)}';
+      });
+    }
+  }
+
   Future<void> _submit() async {
     if (_saving) return;
     final productId = _productId;
-    if (productId == null) {
-      setState(() => _error = '没有已启用逐瓶库存的茅台主商品。');
+    final warehouseId = _warehouseId;
+    if (productId == null || warehouseId == null) {
+      setState(() {
+        _error = productId == null ? '没有已启用逐瓶库存的茅台主商品。' : '请选择入库仓库';
+      });
       return;
     }
     try {
@@ -674,6 +738,7 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
         _error = null;
       });
       await widget.api.createSerializedInventoryUnits({
+        'warehouseId': warehouseId,
         'productId': productId,
         'defaults': defaults,
         'units': units,
@@ -702,19 +767,82 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (_loadingProducts) const LinearProgressIndicator(),
-                DropdownButtonFormField<String>(
-                  initialValue: _productId,
-                  decoration: const InputDecoration(labelText: '茅台主商品'),
-                  items: [
-                    for (final product in _products)
-                      DropdownMenuItem(
-                        value: product.id,
-                        child: Text(product.label),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => _productId = value),
-                ),
+                if (_loadingProducts) ...[
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 6),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('正在加载逐瓶商品…'),
+                  ),
+                ] else
+                  DropdownButtonFormField<String>(
+                    initialValue: _productId,
+                    decoration: const InputDecoration(labelText: '茅台主商品'),
+                    items: [
+                      for (final product in _products)
+                        DropdownMenuItem(
+                          value: product.id,
+                          child: Text(product.label),
+                        ),
+                    ],
+                    onChanged: _saving
+                        ? null
+                        : (value) => setState(() => _productId = value),
+                  ),
+                const SizedBox(height: 12),
+                if (_loadingWarehouses) ...[
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 6),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('正在加载入库仓库…'),
+                  ),
+                ] else if (_warehouseError != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _warehouseError!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                        const SizedBox(height: 6),
+                        OutlinedButton.icon(
+                          key: const ValueKey(
+                            'moutai-inbound-warehouse-retry',
+                          ),
+                          onPressed: _saving ? null : _loadWarehouses,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('重试'),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (_warehouses.isEmpty)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '没有可用的入库仓库，请先在仓库设置中启用仓库',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  )
+                else
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('moutai-inbound-warehouse'),
+                    initialValue: _warehouseId,
+                    decoration: const InputDecoration(labelText: '入库仓库'),
+                    items: [
+                      for (final warehouse in _warehouses)
+                        DropdownMenuItem(
+                          value: warehouse.id,
+                          child: Text('${warehouse.name} · ${warehouse.code}'),
+                        ),
+                    ],
+                    onChanged: _saving
+                        ? null
+                        : (value) => setState(() => _warehouseId = value),
+                  ),
                 TextField(
                   controller: _name,
                   decoration: const InputDecoration(labelText: '默认商品名称'),
@@ -766,7 +894,13 @@ class _MoutaiInboundDialogState extends State<_MoutaiInboundDialog> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: _saving ? null : _submit,
+              onPressed: _saving ||
+                      _loadingProducts ||
+                      _loadingWarehouses ||
+                      _warehouseError != null ||
+                      _warehouses.isEmpty
+                  ? null
+                  : _submit,
               child: Text(_saving ? '保存中…' : '确认入库'),
             ),
           ],
