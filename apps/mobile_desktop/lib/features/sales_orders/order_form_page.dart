@@ -35,6 +35,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
   late BusinessApi _businessApi;
   late DateTime _orderDate;
   late DateTime _shippingDate;
+  String _shippingDateMode = scheduledShippingDateMode;
   bool _shippingDateManuallySpecified = false;
   late final TextEditingController _customerNameController;
   late final TextEditingController _customerPhoneController;
@@ -189,13 +190,11 @@ class _OrderFormPageState extends State<OrderFormPage> {
   }
 
   Future<void> _pickShippingDate() async {
-    final today = _shanghaiToday();
-    final initialDate = _shippingDate.isBefore(today) ? today : _shippingDate;
     final picked = await showDatePicker(
       context: context,
-      firstDate: today,
+      firstDate: DateTime(1),
       lastDate: DateTime(9999, 12, 31),
-      initialDate: initialDate,
+      initialDate: _shippingDate,
       locale: const Locale('zh', 'CN'),
     );
     if (picked == null) {
@@ -418,6 +417,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
     _orderDate = now;
     _orderDateController.text = formatDate(now);
     _shippingDate = _shanghaiToday().add(const Duration(days: 1));
+    _shippingDateMode = scheduledShippingDateMode;
     _shippingDateManuallySpecified = false;
     _shippingDateController.text = formatDate(_shippingDate);
     _selectedCustomer = null;
@@ -448,8 +448,11 @@ class _OrderFormPageState extends State<OrderFormPage> {
     final payload = <String, dynamic>{
       'orderType': _orderEntryOrderType,
       'orderDate': formatDate(_orderDate),
-      'shippingDate': formatDate(_shippingDate),
-      'shippingDateManuallySpecified': _shippingDateManuallySpecified,
+      'shippingDateMode': _shippingDateMode,
+      if (_shippingDateMode == scheduledShippingDateMode) ...{
+        'shippingDate': formatDate(_shippingDate),
+        'shippingDateManuallySpecified': _shippingDateManuallySpecified,
+      },
     };
     final travelGroupId = widget.travelGroupId?.trim() ?? '';
     if (validateRequired && travelGroupId.isEmpty) {
@@ -862,18 +865,55 @@ class _OrderFormPageState extends State<OrderFormPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    key: const ValueKey('order-shipping-date-field'),
-                    controller: _shippingDateController,
-                    readOnly: true,
-                    onTap: _pickShippingDate,
-                    decoration: const InputDecoration(
-                      labelText: '发货日期 *',
-                      suffixIcon: Icon(Icons.local_shipping_rounded),
-                    ),
+                  SegmentedButton<String>(
+                    key: const ValueKey('order-shipping-date-mode'),
+                    segments: const [
+                      ButtonSegment(
+                        value: scheduledShippingDateMode,
+                        label: Text(
+                          '选择发货日期',
+                          key: ValueKey('shipping-mode-scheduled'),
+                        ),
+                        icon: Icon(Icons.event_rounded),
+                      ),
+                      ButtonSegment(
+                        value: pendingCustomerNoticeShippingDateMode,
+                        label: Text(
+                          '待客人通知',
+                          key: ValueKey('shipping-mode-pending-notice'),
+                        ),
+                        icon: Icon(Icons.notifications_active_outlined),
+                      ),
+                    ],
+                    selected: {_shippingDateMode},
+                    onSelectionChanged: (selection) {
+                      setState(() => _shippingDateMode = selection.first);
+                    },
                   ),
-                  if (formatDate(_shippingDate) ==
-                      formatDate(_shanghaiToday())) ...[
+                  const SizedBox(height: 12),
+                  if (_shippingDateMode == scheduledShippingDateMode)
+                    TextField(
+                      key: const ValueKey('order-shipping-date-field'),
+                      controller: _shippingDateController,
+                      readOnly: true,
+                      onTap: _pickShippingDate,
+                      decoration: const InputDecoration(
+                        labelText: '发货日期 *',
+                        suffixIcon: Icon(Icons.local_shipping_rounded),
+                      ),
+                    )
+                  else
+                    const InputDecorator(
+                      key: ValueKey('order-shipping-pending-notice'),
+                      decoration: InputDecoration(
+                        labelText: '发货安排',
+                        prefixIcon: Icon(Icons.notifications_none_rounded),
+                      ),
+                      child: Text('待客人通知'),
+                    ),
+                  if (_shippingDateMode == scheduledShippingDateMode &&
+                      formatDate(_shippingDate) ==
+                          formatDate(_shanghaiToday())) ...[
                     const SizedBox(height: 10),
                     const _InlineNotice(
                       message: '该订单计划当天发货，请确认仓库可及时处理。',
@@ -948,6 +988,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
           ),
           secondary: _OrderSummary(
             orderDate: _orderDate,
+            shippingDateMode: _shippingDateMode,
             shippingDate: _shippingDate,
             customerName: _customerNameController.text,
             customerPhone: _customerPhoneController.text,
@@ -1297,6 +1338,7 @@ class _ItemRow extends StatelessWidget {
 class _OrderSummary extends StatelessWidget {
   const _OrderSummary({
     required this.orderDate,
+    required this.shippingDateMode,
     required this.shippingDate,
     required this.customerName,
     required this.customerPhone,
@@ -1306,6 +1348,7 @@ class _OrderSummary extends StatelessWidget {
   });
 
   final DateTime orderDate;
+  final String shippingDateMode;
   final DateTime shippingDate;
   final String customerName;
   final String customerPhone;
@@ -1324,7 +1367,12 @@ class _OrderSummary extends StatelessWidget {
         ],
         _SummaryLine(label: '订单日期', value: formatDate(orderDate)),
         const SizedBox(height: 10),
-        _SummaryLine(label: '发货日期', value: formatDate(shippingDate)),
+        _SummaryLine(
+          label: '发货日期',
+          value: shippingDateMode == pendingCustomerNoticeShippingDateMode
+              ? '待客人通知'
+              : formatDate(shippingDate),
+        ),
         const SizedBox(height: 10),
         _SummaryLine(
           label: '客户',

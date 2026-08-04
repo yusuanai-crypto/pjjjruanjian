@@ -1,11 +1,99 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
+import 'package:jiangjiu_mobile_desktop/core/business/business_api.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_entry_page.dart';
 import 'package:jiangjiu_mobile_desktop/features/sales_orders/order_form_page.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
+  testWidgets('shipping date picker accepts past, today and future dates',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    final today = DateTime.now().toUtc().add(const Duration(hours: 8));
+    final shanghaiToday = DateTime(today.year, today.month, today.day);
+    final dates = [
+      shanghaiToday.subtract(const Duration(days: 20)),
+      shanghaiToday,
+      shanghaiToday.add(const Duration(days: 20)),
+    ];
+    for (final date in dates) {
+      await _chooseShippingDate(tester, date);
+      final field = tester.widget<TextField>(
+        find.byKey(const ValueKey('order-shipping-date-field')),
+      );
+      expect(field.controller?.text, formatDate(date));
+      expect(
+        find.text('该订单计划当天发货，请确认仓库可及时处理。'),
+        date == shanghaiToday ? findsOneWidget : findsNothing,
+      );
+    }
+  });
+
+  testWidgets(
+      'pending notice omits date, switches both ways, and clear restores tomorrow',
+      (tester) async {
+    _useLargeOrderFormViewport(tester);
+    final apiClient = _FakeApiClient();
+    await _pumpOrderForm(tester, apiClient);
+
+    await tester
+        .tap(find.byKey(const ValueKey('shipping-mode-pending-notice')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('order-shipping-date-field')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('order-shipping-pending-notice')),
+      findsOneWidget,
+    );
+    expect(find.text('待客人通知'), findsNWidgets(3));
+
+    await tester.tap(find.byKey(const ValueKey('shipping-mode-scheduled')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('order-shipping-date-field')),
+      findsOneWidget,
+    );
+    await tester
+        .tap(find.byKey(const ValueKey('shipping-mode-pending-notice')));
+    await tester.pumpAndSettle();
+
+    await _selectExistingCustomer(tester);
+    await _selectProductForItem(tester, 0, 'product-1');
+    await tester.enterText(
+      find.byKey(const ValueKey('order-item-subtotal-0')),
+      '100',
+    );
+    final saveButton = find.widgetWithText(FilledButton, '保存订单');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      apiClient.lastSalesOrderBody?['shippingDateMode'],
+      pendingCustomerNoticeShippingDateMode,
+    );
+    expect(apiClient.lastSalesOrderBody?.containsKey('shippingDate'), isFalse);
+    expect(
+      apiClient.lastSalesOrderBody
+          ?.containsKey('shippingDateManuallySpecified'),
+      isFalse,
+    );
+    final mode = tester.widget<SegmentedButton<String>>(
+      find.byKey(const ValueKey('order-shipping-date-mode')),
+    );
+    expect(mode.selected, {scheduledShippingDateMode});
+    final tomorrow =
+        DateTime.now().toUtc().add(const Duration(hours: 8, days: 1));
+    expect(find.text(formatDate(tomorrow)), findsWidgets);
+  });
+
   testWidgets('keeps removed metadata and travel group controls hidden',
       (tester) async {
     final apiClient = _FakeApiClient();
@@ -612,10 +700,14 @@ void main() {
       find.byKey(const ValueKey('travel-group-search-button')),
     );
     await tester.pumpAndSettle();
+    expect(find.text('TG-FUTURE-NOT-ALLOWED'), findsNothing);
+    expect(find.text('TG-HISTORICAL-INCOMPLETE'), findsNothing);
+    expect(find.text('已结束'), findsOneWidget);
     await tester.tap(find.text('TG20260630001').last);
     await tester.pumpAndSettle();
 
     final searchUri = Uri.parse(apiClient.travelGroupListPaths.last);
+    expect(searchUri.path, '/api/travel-groups/order-entry-options');
     expect(searchUri.queryParameters['tasterId'], 'taster-1');
     expect(searchUri.queryParameters.containsKey('groupNo'), isFalse);
     expect(searchUri.queryParameters.containsKey('keyword'), isFalse);
@@ -673,6 +765,12 @@ Future<void> _pumpOrderForm(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('zh', 'CN')],
       home: Scaffold(
         body: OrderFormPage(
           apiClient: apiClient,
@@ -683,6 +781,25 @@ Future<void> _pumpOrderForm(
       ),
     ),
   );
+  await tester.pumpAndSettle();
+}
+
+Future<void> _chooseShippingDate(
+  WidgetTester tester,
+  DateTime date,
+) async {
+  final field = find.byKey(const ValueKey('order-shipping-date-field'));
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  final picker = tester.widget<CalendarDatePicker>(
+    find.byType(CalendarDatePicker),
+  );
+  expect(picker.firstDate, DateTime(1));
+  expect(picker.lastDate, DateTime(9999, 12, 31));
+  picker.onDateChanged(date);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('确定').last);
   await tester.pumpAndSettle();
 }
 
@@ -846,11 +963,33 @@ class _FakeApiClient extends ApiClient {
         },
       };
     }
-    if (path.startsWith('/api/travel-groups')) {
+    if (path.startsWith('/api/travel-groups/order-entry-options')) {
       travelGroupListPaths.add(path);
       return {
         'data': {
           'travelGroups': [_travelGroupJson()],
+        },
+      };
+    }
+    if (path.startsWith('/api/travel-groups')) {
+      travelGroupListPaths.add(path);
+      return {
+        'data': {
+          'travelGroups': [
+            {
+              ..._travelGroupJson(),
+              'id': 'group-future',
+              'groupNo': 'TG-FUTURE-NOT-ALLOWED',
+              'visitDate': '2099-01-01',
+              'isHistoricalCompleted': false,
+            },
+            {
+              ..._travelGroupJson(),
+              'id': 'group-historical-incomplete',
+              'groupNo': 'TG-HISTORICAL-INCOMPLETE',
+              'isHistoricalCompleted': false,
+            },
+          ],
         },
       };
     }
@@ -946,6 +1085,8 @@ Map<String, dynamic> _salesOrderJson(Map<String, dynamic> body) {
     'orderNo': 'SO20260630001',
     'orderType': body['orderType'] ?? 'external',
     'orderDate': body['orderDate'] ?? '2026-06-30',
+    'shippingDateMode': body['shippingDateMode'] ?? scheduledShippingDateMode,
+    'shippingDate': body['shippingDate'],
     'customerId': body['customerId'] ?? customer['id'],
     'customer': customer,
     'customerName': customer['name'],
@@ -992,6 +1133,7 @@ Map<String, dynamic> _travelGroupJson() {
     'guestCount': 20,
     'status': 'unmarked',
     'financeMark': false,
+    'isHistoricalCompleted': true,
     'tastingItems': const [],
     'salesOrders': const [],
     'orderSummary': const {

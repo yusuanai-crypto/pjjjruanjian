@@ -143,7 +143,7 @@ export class ProductsNestService {
     return dto;
   }
 
-  async activateQuantityInventoryTracking(
+  async activateInventoryTracking(
     actor: any,
     productId: string,
     payload: any,
@@ -154,6 +154,7 @@ export class ProductsNestService {
       productId,
       payload,
     );
+    assertInventoryModeActivationPermission(actor, command.targetMode);
 
     const replay = await this.findInventoryModeChangeByIdempotencyKey(
       command.idempotencyKey,
@@ -211,7 +212,7 @@ export class ProductsNestService {
             throw createHttpError(
               409,
               'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
-              '该商品已存在库存事实或逐瓶记录，不能在线启用普通数量库存，请联系超级管理员核查。',
+              '该商品已存在库存事实或逐瓶记录，不能启用库存模式，请核查商品历史数据。',
             );
           }
 
@@ -235,7 +236,7 @@ export class ProductsNestService {
               appliedByNameSnapshot: null,
               appliedByRoleSnapshot: null,
               appliedAt: null,
-              reason: '在线启用普通数量库存',
+              reason: inventoryModeActivationReason(command.targetMode),
               createdAt: now,
               updatedAt: now,
             },
@@ -721,7 +722,7 @@ function normalizeInventoryTrackingMode(value: unknown) {
 interface NormalizedInventoryModeActivationCommand {
   productId: string;
   expectedCurrentMode: 'NONE';
-  targetMode: 'QUANTITY';
+  targetMode: 'QUANTITY' | 'SERIALIZED';
   effectiveAt: Date;
   sourceKey: string;
   idempotencyKey: string;
@@ -751,11 +752,14 @@ function normalizeInventoryModeActivationCommand(
     payload.expectedCurrentMode,
   );
   const targetMode = normalizeInventoryTrackingMode(payload.targetMode);
-  if (expectedCurrentMode !== 'NONE' || targetMode !== 'QUANTITY') {
+  if (
+    expectedCurrentMode !== 'NONE' ||
+    (targetMode !== 'QUANTITY' && targetMode !== 'SERIALIZED')
+  ) {
     throw createHttpError(
       400,
       'PRODUCT_INVENTORY_MODE_TRANSITION_NOT_ALLOWED',
-      '当前仅允许通过此命令执行 NONE → QUANTITY，不能启用逐瓶模式或切回未启用库存。',
+      '当前仅允许通过此命令执行 NONE → QUANTITY 或 NONE → SERIALIZED。',
     );
   }
   const effectiveAt = normalizeEffectiveAt(payload.effectiveAt);
@@ -776,7 +780,7 @@ function normalizeInventoryModeActivationCommand(
   return {
     productId,
     expectedCurrentMode: 'NONE',
-    targetMode: 'QUANTITY',
+    targetMode,
     effectiveAt,
     sourceKey,
     idempotencyKey,
@@ -1150,6 +1154,27 @@ function requireAnyRole(actor: any, roles: string[]) {
       'You do not have permission to perform this action.',
     );
   }
+}
+
+function assertInventoryModeActivationPermission(
+  actor: any,
+  targetMode: 'QUANTITY' | 'SERIALIZED',
+) {
+  if (targetMode === 'SERIALIZED' && actor?.role !== 'super_admin') {
+    throw createHttpError(
+      403,
+      'PRODUCT_SERIALIZED_INVENTORY_PERMISSION_DENIED',
+      '只有超级管理员可以启用逐瓶库存。',
+    );
+  }
+}
+
+function inventoryModeActivationReason(
+  targetMode: 'QUANTITY' | 'SERIALIZED',
+) {
+  return targetMode === 'SERIALIZED'
+    ? '在线启用逐瓶库存'
+    : '在线启用普通数量库存';
 }
 
 function validationError(message: string) {

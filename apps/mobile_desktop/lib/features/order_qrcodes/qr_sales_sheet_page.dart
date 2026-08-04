@@ -829,7 +829,13 @@ class _SalesSheetCoreInfo extends StatelessWidget {
         const _SectionTitle('核心信息'),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
-        _InfoRow(label: '发货日期', value: _display(sheet.order.shippingDate)),
+        _InfoRow(
+          label: '发货日期',
+          value: displayShippingDate(
+            sheet.order.shippingDateMode,
+            sheet.order.shippingDate,
+          ),
+        ),
         _InfoRow(label: '订单状态', value: _statusLabel(sheet.status)),
         _InfoRow(label: '客户姓名', value: _display(sheet.customer.name)),
         _InfoRow(label: '客户电话', value: _display(sheet.customer.phone)),

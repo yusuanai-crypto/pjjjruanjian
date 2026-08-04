@@ -1244,7 +1244,7 @@ class _FinanceQueryPageState extends State<FinanceQueryPage> {
               meta: [
                 for (final reason in record.reasons)
                   _pendingLogisticsReasonLabel(reason),
-                '发货日期 ${_fieldValue(record.order!.shippingDate)}',
+                '发货日期 ${displayShippingDate(record.order!.shippingDateMode, record.order!.shippingDate)}',
                 '物流单号 ${_fieldValue(record.order!.logisticsNo)}',
                 '运费 ${formatMoneyCents(record.order!.logisticsFeeCents)}',
                 _invoiceLabel(record.order!),
@@ -2228,7 +2228,9 @@ class _FinanceOrderInlineEditorState extends State<_FinanceOrderInlineEditor> {
                   label: Text(widget.order.orderNo),
                 ),
                 Text(widget.order.customerName),
-                Text('发货 ${_fieldValue(widget.order.shippingDate)}'),
+                Text(
+                  '发货 ${displayShippingDate(widget.order.shippingDateMode, widget.order.shippingDate)}',
+                ),
                 Text(
                   widget.order.travelGroup?.groupNo ??
                       _orderTypeLabel(widget.order.orderType),

@@ -21,6 +21,7 @@ test('GET /api/public/sales-sheets/:token returns mobile-friendly HTML without l
       assert.equal(result.html.trim().startsWith('{'), false);
       assert.match(result.html, /销售单/);
       assert.match(result.html, /SO-PUBLIC-001/);
+      assert.match(result.html, /待客人通知/);
       assert.equal(result.html.includes('SF-PUBLIC-001'), false);
       assert.match(result.html, /13812340000/);
       assert.match(result.html, /GuizhouZunyiRenhuaiTest Road 1/);
@@ -211,6 +212,8 @@ function buildPublicSalesSheetPrismaOptions() {
         qrCodeTokenHash: tokenHash('public-token-success'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
         qrCodeExpiresAt: '2099-07-01T10:00:00.000Z',
+        shippingDateMode: 'PENDING_CUSTOMER_NOTICE',
+        shippingDate: null,
       }),
       buildPublicSalesSheetOrder({
         id: 'order_public_expired',
@@ -264,6 +267,8 @@ function buildPublicSalesSheetOrder(overrides = {}) {
     district: 'Renhuai',
     address: 'Test Road 1',
     orderDate: '2026-07-01T00:00:00.000Z',
+    shippingDateMode: 'SCHEDULED',
+    shippingDate: '2026-07-02T00:00:00.000Z',
     salesFormNo: 'SF-PUBLIC',
     totalAmountCents: 99900,
     cashOnDeliveryAmountCents: 20000,

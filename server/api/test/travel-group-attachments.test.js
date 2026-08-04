@@ -29,6 +29,11 @@ const {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHANGHAI_TODAY = formatShanghaiBusinessDate(new Date());
+const SHANGHAI_YESTERDAY = new Date(
+  Date.parse(`${SHANGHAI_TODAY}T00:00:00.000Z`) - 24 * 60 * 60 * 1000,
+)
+  .toISOString()
+  .slice(0, 10);
 const SHANGHAI_TOMORROW = new Date(
   Date.parse(`${SHANGHAI_TODAY}T00:00:00.000Z`) + 24 * 60 * 60 * 1000,
 )
@@ -689,6 +694,99 @@ test('travel group attachments upload, authorize download, delete, sanitize DTOs
         assert.equal(deleteLogs.response.status, 200);
         assert.equal(deleteLogs.body.data.logs.length, 4);
         assertNoStorageLocation(deleteLogs.body.data.logs);
+      },
+      { env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot } },
+    );
+  });
+});
+
+test('front desk cannot read or mutate yesterday travel group attachments by guessed IDs', async () => {
+  await withTemporaryAttachmentStorage(async (storageRoot) => {
+    await withPhase1Server(
+      async (baseUrl) => {
+        const admin = await login(baseUrl);
+        const frontDeskUser = await createUser(baseUrl, admin.token, {
+          name: 'Historical Attachment Front Desk',
+          username: 'historical-attachment-front-desk',
+          password: 'Password123',
+          role: 'front_desk',
+        });
+        const frontDesk = await login(
+          baseUrl,
+          frontDeskUser.username,
+          'Password123',
+        );
+        const group = await createTravelGroup(baseUrl, admin.token, {
+          visitDate: SHANGHAI_YESTERDAY,
+        });
+        const uploaded = await uploadFiles(
+          baseUrl,
+          admin.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('historical attachment'),
+              name: 'historical.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assert.equal(uploaded.response.status, 201);
+        const attachment = uploaded.body.data.attachments[0];
+
+        const hiddenDetail = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}`,
+          { token: frontDesk.token },
+        );
+        assertErrorContract(
+          hiddenDetail,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+
+        const hiddenDownload = await downloadFile(
+          baseUrl,
+          frontDesk.token,
+          group.id,
+          attachment.id,
+        );
+        assert.equal(hiddenDownload.response.status, 404);
+        assert.equal(
+          JSON.parse(hiddenDownload.buffer.toString()).error.code,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+
+        const hiddenUpload = await uploadFiles(
+          baseUrl,
+          frontDesk.token,
+          group.id,
+          'guest_info',
+          [
+            {
+              content: Buffer.from('must not upload'),
+              name: 'hidden.txt',
+              type: 'text/plain',
+            },
+          ],
+        );
+        assertErrorContract(
+          hiddenUpload,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
+
+        const hiddenDelete = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${group.id}/attachments/${attachment.id}`,
+          { method: 'DELETE', token: frontDesk.token },
+        );
+        assertErrorContract(
+          hiddenDelete,
+          404,
+          'TRAVEL_GROUP_NOT_FOUND',
+        );
       },
       { env: { TRAVEL_GROUP_ATTACHMENT_DIR: storageRoot } },
     );

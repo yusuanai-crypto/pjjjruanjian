@@ -51,7 +51,7 @@ export class ProductsNestController {
     @Req() request: any,
   ) {
     const actor = await this.authService.authenticateRequest(request);
-    return this.productsService.activateQuantityInventoryTracking(
+    return this.productsService.activateInventoryTracking(
       actor,
       id,
       body,

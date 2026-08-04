@@ -1635,6 +1635,13 @@ enum SalesOrderShippingDateSource {
   @@map("sales_order_shipping_date_source")
 }
 
+enum SalesOrderShippingDateMode {
+  SCHEDULED               @map("scheduled")
+  PENDING_CUSTOMER_NOTICE @map("pending_customer_notice")
+
+  @@map("sales_order_shipping_date_mode")
+}
+
 enum SalesOrderPointsDestination {
   TRAVEL_AGENCY  @map("travel_agency")
   GUIDE_PERSONAL @map("guide_personal")
@@ -2056,6 +2063,7 @@ model SalesOrder {
   district                                 String?                        @db.VarChar(60)
   address                                  String?                        @db.VarChar(255)
   orderDate                                DateTime                       @map("order_date") @db.Date
+  shippingDateMode                         SalesOrderShippingDateMode     @default(SCHEDULED) @map("shipping_date_mode")
   shippingDate                             DateTime?                      @map("shipping_date") @db.Date
   shippingDateSource                       SalesOrderShippingDateSource?  @map("shipping_date_source")
   shippingDateBackfillBatchId              String?                        @map("shipping_date_backfill_batch_id") @db.VarChar(64)
@@ -2181,6 +2189,7 @@ model SalesOrder {
   @@index([profitFeeSnapshottedById])
   @@index([orderType])
   @@index([orderDate])
+  @@index([shippingDateMode])
   @@index([shippingDate])
   @@index([customerPhone])
   @@index([status])

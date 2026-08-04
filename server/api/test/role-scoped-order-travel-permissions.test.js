@@ -8,12 +8,245 @@ const {
   requestJsonWithStage10ProductFixtures: requestJson,
   withPhase1Server,
 } = require('./helpers/phase1-api');
+const {
+  buildFrontDeskTravelGroupReadScope,
+  canFrontDeskReadTravelGroup,
+} = require('../src/modules/business-data/front-desk-travel-group-read-policy.helper');
 
 const SALES_ONE_ID = 'usr_scope_sales_one';
 const SALES_TWO_ID = 'usr_scope_sales_two';
 const TASTER_RECEPTION_ID = 'usr_scope_taster_reception';
 const TASTER_LIAISON_ID = 'usr_scope_taster_liaison';
 const TASTER_OTHER_ID = 'usr_scope_taster_other';
+
+test('front-desk travel group policy uses the Asia/Shanghai natural-day boundary', () => {
+  const beforeShanghaiMidnight = new Date('2026-08-04T15:59:59.999Z');
+  const atShanghaiMidnight = new Date('2026-08-04T16:00:00.000Z');
+  const actor = { role: 'front_desk' };
+
+  assert.equal(
+    buildFrontDeskTravelGroupReadScope(actor, beforeShanghaiMidnight)
+      .visitDate.gte.toISOString(),
+    '2026-08-04T00:00:00.000Z',
+  );
+  assert.equal(
+    buildFrontDeskTravelGroupReadScope(actor, atShanghaiMidnight)
+      .visitDate.gte.toISOString(),
+    '2026-08-05T00:00:00.000Z',
+  );
+  assert.equal(
+    canFrontDeskReadTravelGroup(
+      actor,
+      { visitDate: '2026-08-04' },
+      beforeShanghaiMidnight,
+    ),
+    true,
+  );
+  assert.equal(
+    canFrontDeskReadTravelGroup(
+      actor,
+      { visitDate: '2026-08-04' },
+      atShanghaiMidnight,
+    ),
+    false,
+  );
+});
+
+test('contract: front desk reads all and only Shanghai today/future travel groups across list, pending, detail, filters, and writes', async () => {
+  const dates = shanghaiFixtureDates();
+  const pastId = 'front-policy-yesterday';
+  const todayId = 'front-policy-today';
+  const tomorrowId = 'front-policy-tomorrow';
+  const unmarkedTomorrowId = 'front-policy-unmarked-tomorrow';
+  const travelGroups = [
+    {
+      ...group(pastId, dates.yesterday, TASTER_RECEPTION_ID),
+      createdAt: `${dates.tomorrow}T04:00:00.000Z`,
+      updatedAt: `${dates.tomorrow}T05:00:00.000Z`,
+      createdById: 'usr_scope_front_policy',
+    },
+    {
+      ...group(todayId, dates.today, TASTER_OTHER_ID),
+      createdAt: '2020-01-01T00:00:00.000Z',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+      createdById: SALES_TWO_ID,
+    },
+    {
+      ...group(tomorrowId, dates.tomorrow, TASTER_LIAISON_ID),
+      createdById: SALES_ONE_ID,
+    },
+    {
+      ...group(
+        unmarkedTomorrowId,
+        dates.tomorrow,
+        TASTER_RECEPTION_ID,
+      ),
+      financeMark: false,
+      createdById: SALES_TWO_ID,
+    },
+  ];
+
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const frontDesk = await login(
+        baseUrl,
+        'scope-front-policy',
+        'Password123',
+      );
+      const boss = await login(baseUrl, 'scope-boss', 'Password123');
+      const finance = await login(
+        baseUrl,
+        'scope-finance-policy',
+        'Password123',
+      );
+
+      const list = await requestJson(baseUrl, '/api/travel-groups', {
+        token: frontDesk.token,
+      });
+      assert.equal(list.response.status, 200);
+      assert.deepEqual(
+        new Set(list.body.data.travelGroups.map((item) => item.id)),
+        new Set([todayId, tomorrowId, unmarkedTomorrowId]),
+      );
+
+      const pending = await requestJson(
+        baseUrl,
+        '/api/pending-travel-groups',
+        { token: frontDesk.token },
+      );
+      assert.equal(pending.response.status, 200);
+      assert.equal(
+        pending.body.data.pendingTravelGroups.some(
+          (item) => item.id === pastId,
+        ),
+        false,
+      );
+      assert.equal(
+        pending.body.data.pendingTravelGroups.some(
+          (item) => item.id === todayId,
+        ),
+        true,
+      );
+
+      for (const path of [
+        `/api/travel-groups?keyword=${encodeURIComponent(pastId)}`,
+        `/api/travel-groups?dateTo=${dates.yesterday}`,
+      ]) {
+        const filtered = await requestJson(baseUrl, path, {
+          token: frontDesk.token,
+        });
+        assert.equal(filtered.response.status, 200);
+        assert.deepEqual(filtered.body.data.travelGroups, []);
+      }
+
+      for (const path of [
+        `/api/travel-groups?dateFrom=${dates.yesterday}&dateTo=${dates.tomorrow}`,
+        `/api/travel-groups?tasterId=${TASTER_RECEPTION_ID}`,
+      ]) {
+        const filtered = await requestJson(baseUrl, path, {
+          token: frontDesk.token,
+        });
+        assert.equal(filtered.response.status, 200);
+        assert.equal(
+          filtered.body.data.travelGroups.every(
+            (item) => item.visitDate >= dates.today,
+          ),
+          true,
+        );
+      }
+
+      const hiddenDetail = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${pastId}`,
+        { token: frontDesk.token },
+      );
+      assertErrorContract(
+        hiddenDetail,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+      );
+      const hiddenPatch = await requestJson(
+        baseUrl,
+        `/api/travel-groups/${pastId}`,
+        {
+          method: 'PATCH',
+          token: frontDesk.token,
+          body: { remarks: 'must remain hidden' },
+        },
+      );
+      assertErrorContract(hiddenPatch, 404, 'TRAVEL_GROUP_NOT_FOUND');
+
+      const legacyPending = await requestJson(
+        baseUrl,
+        '/api/pending-travel-groups',
+        {
+          method: 'POST',
+          token: admin.token,
+          body: {
+            groupNo: 'LEGACY-PENDING-HISTORICAL',
+            visitDate: dates.yesterday,
+            travelAgency: 'Legacy pending agency',
+          },
+        },
+      );
+      assert.equal(legacyPending.response.status, 201);
+      const hiddenLegacyPending = await requestJson(
+        baseUrl,
+        `/api/pending-travel-groups/${legacyPending.body.data.pendingTravelGroup.id}`,
+        { token: frontDesk.token },
+      );
+      assertErrorContract(
+        hiddenLegacyPending,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
+      );
+
+      for (const session of [admin, boss, finance]) {
+        const historical = await requestJson(
+          baseUrl,
+          `/api/travel-groups/${pastId}`,
+          { token: session.token },
+        );
+        assert.equal(historical.response.status, 200);
+        assert.equal(historical.body.data.travelGroup.id, pastId);
+      }
+
+      await requestJson(
+        baseUrl,
+        '/api/settings/global-mark-query/enable',
+        { method: 'POST', token: admin.token },
+      );
+      const markedOnly = await requestJson(
+        baseUrl,
+        '/api/travel-groups',
+        { token: frontDesk.token },
+      );
+      assert.deepEqual(
+        new Set(markedOnly.body.data.travelGroups.map((item) => item.id)),
+        new Set([todayId, tomorrowId]),
+      );
+    },
+    {
+      prisma: {
+        users: [
+          ...fixtureUsers(),
+          user(
+            'usr_scope_front_policy',
+            'scope-front-policy',
+            'front_desk',
+          ),
+          user(
+            'usr_scope_finance_policy',
+            'scope-finance-policy',
+            'finance',
+          ),
+        ],
+        travelGroups,
+      },
+    },
+  );
+});
 
 test('contract: sales and taster retain their own data scopes under global mark filtering', async () => {
   const dates = shanghaiFixtureDates();
@@ -129,6 +362,7 @@ test('contract: sales and taster retain their own data scopes under global mark 
         new Set(tasterGroups.body.data.travelGroups.map((group) => group.id)),
         new Set([
           'group-yesterday',
+          'group-yesterday-completed',
           'group-today-reception',
           'group-future-reception',
         ]),
@@ -964,6 +1198,9 @@ test('contract: boss and after-sales are order read-only and sales cannot use le
           orderType: 'travel_group',
           travelGroupId: 'group-today-reception',
           orderDate: dates.today,
+          shippingDateMode: 'scheduled',
+          shippingDate: dates.yesterday,
+          shippingDateManuallySpecified: true,
           salesUserId: SALES_TWO_ID,
           customer: {
             name: 'sales forced owner customer',
@@ -982,6 +1219,172 @@ test('contract: boss and after-sales are order read-only and sales cannot use le
       assert.equal(
         salesCreate.body.data.salesOrder.salesUserId,
         SALES_ONE_ID,
+      );
+      assert.equal(
+        salesCreate.body.data.salesOrder.shippingDate,
+        dates.yesterday,
+      );
+      assert.equal(
+        salesCreate.body.data.salesOrder.shippingDateMode,
+        'scheduled',
+      );
+      for (const [shippingPayload, expectedCode] of [
+        [
+          {
+            shippingDateMode: 'pending_customer_notice',
+            shippingDate: dates.tomorrow,
+          },
+          'SHIPPING_DATE_MODE_CONFLICT',
+        ],
+        [
+          {
+            shippingDateMode: 'scheduled',
+            shippingDate: '2026-02-30',
+          },
+          'VALIDATION_FAILED',
+        ],
+        [
+          { shippingDateMode: 'scheduled' },
+          'SHIPPING_DATE_REQUIRED',
+        ],
+      ]) {
+        const invalidShipping = await requestJson(
+          baseUrl,
+          '/api/sales-orders',
+          {
+            method: 'POST',
+            token: actors[0].token,
+            body: {
+              orderType: 'travel_group',
+              travelGroupId: 'group-today-reception',
+              orderDate: dates.today,
+              ...shippingPayload,
+              customer: { name: '非法发货组合客户' },
+              items: [
+                {
+                  productName: '非法发货组合商品',
+                  quantity: 1,
+                  unitPriceCents: 100,
+                  deliveryType: 'self_pickup',
+                },
+              ],
+            },
+          },
+        );
+        assertErrorContract(invalidShipping, 400, expectedCode);
+      }
+      const orderEntryOptions = await requestJson(
+        baseUrl,
+        '/api/travel-groups/order-entry-options',
+        { token: actors[0].token },
+      );
+      assert.equal(orderEntryOptions.response.status, 200);
+      assert.deepEqual(
+        new Set(
+          orderEntryOptions.body.data.travelGroups.map((group) => group.id),
+        ),
+        new Set([
+          'group-today-liaison',
+          'group-today-reception',
+          'group-global-unmarked',
+          'group-yesterday-completed',
+        ]),
+      );
+      assert.equal(
+        orderEntryOptions.body.data.travelGroups.at(-1).id,
+        'group-yesterday-completed',
+      );
+      const completedOption =
+        orderEntryOptions.body.data.travelGroups.find(
+          (group) => group.id === 'group-yesterday-completed',
+        );
+      assert.equal(completedOption.isHistoricalCompleted, true);
+      assert.deepEqual(
+        Object.keys(completedOption).sort(),
+        [
+          'financeMark',
+          'groupNo',
+          'id',
+          'isHistoricalCompleted',
+          'kind',
+          'tasterId',
+          'tasterName',
+          'tastingRoomNo',
+          'visitDate',
+        ],
+      );
+      const roomSearch = await requestJson(
+        baseUrl,
+        '/api/travel-groups/order-entry-options?tastingRoomNo=B02',
+        { token: actors[0].token },
+      );
+      assert.deepEqual(
+        roomSearch.body.data.travelGroups.map((group) => group.id),
+        ['group-yesterday-completed'],
+      );
+      const tasterSearch = await requestJson(
+        baseUrl,
+        `/api/travel-groups/order-entry-options?tasterId=${TASTER_OTHER_ID}`,
+        { token: actors[0].token },
+      );
+      assert.deepEqual(
+        tasterSearch.body.data.travelGroups.map((group) => group.id),
+        ['group-today-liaison'],
+      );
+      const completedGroupCreate = await requestJson(
+        baseUrl,
+        '/api/sales-orders',
+        {
+          method: 'POST',
+          token: actors[0].token,
+          body: {
+            orderType: 'travel_group',
+            travelGroupId: 'group-yesterday-completed',
+            orderDate: dates.today,
+            shippingDateMode: 'pending_customer_notice',
+            customer: { name: '历史已结束团客户' },
+            items: [
+              {
+                productName: '历史团补录商品',
+                quantity: 1,
+                unitPriceCents: 100,
+                deliveryType: 'self_pickup',
+              },
+            ],
+          },
+        },
+      );
+      assert.equal(completedGroupCreate.response.status, 201);
+      const completedGroupOrder =
+        completedGroupCreate.body.data.salesOrder;
+      assert.equal(
+        completedGroupOrder.shippingDateMode,
+        'pending_customer_notice',
+      );
+      assert.equal(completedGroupOrder.shippingDate, null);
+      const completedGroupEdit = await requestJson(
+        baseUrl,
+        `/api/sales-orders/${completedGroupOrder.id}/sales-edit`,
+        {
+          method: 'PATCH',
+          token: actors[0].token,
+          body: { travelGroupId: 'group-yesterday-completed' },
+        },
+      );
+      assert.equal(completedGroupEdit.response.status, 200);
+      const hiddenHistoricalGroupPatch = await requestJson(
+        baseUrl,
+        '/api/travel-groups/group-yesterday-completed',
+        {
+          method: 'PATCH',
+          token: actors[0].token,
+          body: { remarks: '不得扩大历史团资料修改权限' },
+        },
+      );
+      assertErrorContract(
+        hiddenHistoricalGroupPatch,
+        404,
+        'TRAVEL_GROUP_NOT_FOUND',
       );
       const pastGroupCreate = await requestJson(
         baseUrl,
@@ -1008,8 +1411,33 @@ test('contract: boss and after-sales are order read-only and sales cannot use le
       assertErrorContract(
         pastGroupCreate,
         403,
-        'SALES_ORDER_TRAVEL_GROUP_DATE_NOT_ALLOWED',
+        'SALES_ORDER_TRAVEL_GROUP_NOT_ELIGIBLE',
       );
+      for (const travelGroupId of ['group-future-reception']) {
+        const denied = await requestJson(baseUrl, '/api/sales-orders', {
+          method: 'POST',
+          token: actors[0].token,
+          body: {
+            orderType: 'travel_group',
+            travelGroupId,
+            orderDate: dates.today,
+            customer: { name: '不可选旅行团客户' },
+            items: [
+              {
+                productName: '不可选旅行团商品',
+                quantity: 1,
+                unitPriceCents: 100,
+                deliveryType: 'self_pickup',
+              },
+            ],
+          },
+        });
+        assertErrorContract(
+          denied,
+          403,
+          'SALES_ORDER_TRAVEL_GROUP_NOT_ELIGIBLE',
+        );
+      }
     },
     {
       prisma: buildScopeFixture(dates),
@@ -1314,6 +1742,16 @@ function buildScopeFixture(dates) {
     users: fixtureUsers(),
     travelGroups: [
       group('group-yesterday', dates.yesterday, TASTER_RECEPTION_ID),
+      {
+        ...group(
+          'group-yesterday-completed',
+          dates.yesterday,
+          TASTER_RECEPTION_ID,
+        ),
+        tastingRoomNo: 'B02',
+        departureTime: '11:30',
+        lossStatus: 'NO_LOSS',
+      },
       group('group-today-reception', dates.today, TASTER_RECEPTION_ID),
       group(
         'group-today-liaison',

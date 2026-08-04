@@ -7,10 +7,20 @@ const productInventoryTrackingActivationCommand =
 
 Map<String, dynamic> buildProductInventoryTrackingActivationRequest({
   required String productId,
+  required String targetMode,
   required DateTime effectiveAt,
   required String sourceKey,
   required String idempotencyKey,
 }) {
+  final normalizedTargetMode = targetMode.trim().toUpperCase();
+  if (normalizedTargetMode != 'QUANTITY' &&
+      normalizedTargetMode != 'SERIALIZED') {
+    throw ArgumentError.value(
+      targetMode,
+      'targetMode',
+      'must be QUANTITY or SERIALIZED',
+    );
+  }
   final normalizedEffectiveAt = DateTime.utc(
     effectiveAt.toUtc().year,
     effectiveAt.toUtc().month,
@@ -21,7 +31,7 @@ Map<String, dynamic> buildProductInventoryTrackingActivationRequest({
   ).toIso8601String();
   final body = <String, dynamic>{
     'expectedCurrentMode': 'NONE',
-    'targetMode': 'QUANTITY',
+    'targetMode': normalizedTargetMode,
     'effectiveAt': normalizedEffectiveAt,
     'sourceKey': sourceKey.trim().toLowerCase(),
     'idempotencyKey': idempotencyKey.trim().toLowerCase(),

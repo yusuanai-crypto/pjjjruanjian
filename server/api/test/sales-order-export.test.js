@@ -178,6 +178,7 @@ test('GET /api/sales-orders/export.xlsx reuses sales order filters and exports d
       assert.equal(row['系统单号'], 'SO-EXPORT-ALPHA');
       assert.equal(row['销售单号'], 'SF-EXPORT-ALPHA');
       assert.equal(row['订单日期'], '2026-07-01');
+      assert.equal(row['发货日期'], '待客人通知');
       assert.equal(row['客户姓名'], 'Alpha Customer');
       assert.equal(row['客户电话'], '13800001111');
       assert.equal(row['地址'], '贵州省贵阳市观山湖区测试路 1 号');
@@ -287,6 +288,37 @@ test('GET /api/sales-orders/export.xlsx floors entry amount at zero', async () =
       assert.equal(row['上单金额'], 0);
       assert.equal(typeof row['上单金额'], 'number');
       assert.equal(worksheet.getCell('O2').numFmt, '0.00');
+    },
+    {
+      prisma: buildSalesOrderExportPrismaOptions(),
+    },
+  );
+});
+
+test('shipping date ranges exclude pending-customer-notice orders', async () => {
+  await withPhase1Server(
+    async (baseUrl) => {
+      const admin = await login(baseUrl);
+      const withoutRange = await requestJson(
+        baseUrl,
+        '/api/sales-orders?query=SO-EXPORT-ALPHA&status=valid',
+        { token: admin.token },
+      );
+      assert.deepEqual(
+        withoutRange.body.data.salesOrders.map((order) => order.orderNo),
+        ['SO-EXPORT-ALPHA'],
+      );
+      assert.equal(
+        withoutRange.body.data.salesOrders[0].shippingDateMode,
+        'pending_customer_notice',
+      );
+
+      const withRange = await requestJson(
+        baseUrl,
+        '/api/sales-orders?query=SO-EXPORT-ALPHA&status=valid&shippingDateFrom=2026-07-01&shippingDateTo=2026-07-31',
+        { token: admin.token },
+      );
+      assert.deepEqual(withRange.body.data.salesOrders, []);
     },
     {
       prisma: buildSalesOrderExportPrismaOptions(),
@@ -566,6 +598,8 @@ function buildSalesOrderExportPrismaOptions() {
         district: '观山湖区',
         address: '测试路 1 号',
         totalAmountCents: 99800,
+        shippingDateMode: 'PENDING_CUSTOMER_NOTICE',
+        shippingDate: null,
         personalAmountCents: 30000,
         pointsDestination: 'GUIDE_PERSONAL',
         cashOnDeliveryAmountCents: 20000,
@@ -709,6 +743,8 @@ function buildExportOrder(overrides = {}) {
   return {
     orderType: 'EXTERNAL',
     orderDate: '2026-07-01T00:00:00.000Z',
+    shippingDateMode: 'SCHEDULED',
+    shippingDate: '2026-07-02T00:00:00.000Z',
     packingStatus: 'PACKED',
     status: 'VALID',
     financeMark: false,

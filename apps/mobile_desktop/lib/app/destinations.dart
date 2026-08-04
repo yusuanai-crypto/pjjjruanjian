@@ -48,6 +48,11 @@ const appDestinations = <AppDestination>[
       icon: Icons.directions_bus_rounded,
       phase: 3),
   AppDestination(
+      id: 'today_travel_groups',
+      label: '今日旅行团',
+      icon: Icons.today_rounded,
+      phase: 3),
+  AppDestination(
       id: 'travel_group_query',
       label: '旅行团管理',
       icon: Icons.manage_search_rounded,
@@ -242,6 +247,9 @@ void _applyRoleMenuRules(Set<String> ids, UserRole role) {
       role != UserRole.admin &&
       role != UserRole.frontDesk) {
     ids.remove('guide_management');
+  }
+  if (!canViewTodayTravelGroups(role)) {
+    ids.remove('today_travel_groups');
   }
   switch (role) {
     case UserRole.sales:

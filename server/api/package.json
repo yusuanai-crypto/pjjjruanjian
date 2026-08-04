@@ -20,6 +20,7 @@
     "seed:stage10-products": "node scripts/seed-stage10-products.js",
     "sample:moutai-logistics": "node --require ts-node/register scripts/generate-moutai-logistics-samples.js",
     "retention:cleanup": "ts-node scripts/cleanup-retained-data.ts",
+    "security:reset-admin-password": "node scripts/reset-admin-password.js",
     "migrate:legacy-json": "node scripts/migrate-legacy-json.js",
     "backfill:sales-order-customers": "node scripts/backfill-sales-order-customers.js",
     "backfill:sales-order-shipping-dates": "ts-node scripts/backfill-sales-order-shipping-dates.ts",

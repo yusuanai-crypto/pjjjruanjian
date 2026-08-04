@@ -109,7 +109,7 @@ test('GET /api/sales-orders/:id/sales-sheet returns active QR metadata without e
       );
       assert.equal(
         salesSheet.qrCode.expiresAt,
-        '2026-08-01T10:00:00.000Z',
+        '2099-08-01T10:00:00.000Z',
       );
       assert.equal(salesSheet.public.qrCode.generatedAt, salesSheet.qrCode.generatedAt);
       assert.equal(salesSheet.public.qrCode.expiresAt, salesSheet.qrCode.expiresAt);
@@ -230,7 +230,7 @@ function buildSalesSheetPrismaOptions() {
         salesFormNo: 'SF-TOKEN',
         qrCodeTokenHash: tokenHash('sheet-token-123'),
         qrCodeGeneratedAt: '2026-07-01T10:00:00.000Z',
-        qrCodeExpiresAt: '2026-08-01T10:00:00.000Z',
+        qrCodeExpiresAt: '2099-08-01T10:00:00.000Z',
       }),
       buildSalesSheetOrder({
         id: 'order_sheet_beta_token',
@@ -239,7 +239,7 @@ function buildSalesSheetPrismaOptions() {
         salesUserId: 'usr_sales_beta',
         createdById: 'usr_sales_beta',
         qrCodeTokenHash: tokenHash('sheet-token-beta'),
-        qrCodeExpiresAt: '2026-08-01T10:00:00.000Z',
+        qrCodeExpiresAt: '2099-08-01T10:00:00.000Z',
       }),
     ],
   };

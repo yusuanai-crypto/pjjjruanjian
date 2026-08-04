@@ -1,5 +1,7 @@
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
+bool canViewTodayTravelGroups(UserRole role) => role == UserRole.frontDesk;
+
 bool canViewFinanceMark(UserRole role) {
   return role == UserRole.superAdmin ||
       role == UserRole.admin ||

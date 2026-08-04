@@ -487,6 +487,9 @@ async function main() {
       district: markedCustomer.district,
       address: markedCustomer.address,
       orderDate: businessDate('2026-06-22'),
+      shippingDateMode: 'SCHEDULED',
+      shippingDate: businessDate('2026-06-23'),
+      shippingDateSource: 'SYSTEM_DEFAULT',
       salesFormNo: 'SMOKE-FORM-20260622-031',
       totalAmountCents: 647800,
       cashOnDeliveryAmountCents: 150000,
@@ -545,6 +548,9 @@ async function main() {
       district: markedCustomer.district,
       address: markedCustomer.address,
       orderDate: businessDate('2026-06-22'),
+      shippingDateMode: 'SCHEDULED',
+      shippingDate: businessDate('2026-06-23'),
+      shippingDateSource: 'SYSTEM_DEFAULT',
       salesFormNo: 'SMOKE-FORM-20260622-031',
       totalAmountCents: 647800,
       cashOnDeliveryAmountCents: 150000,
@@ -609,6 +615,9 @@ async function main() {
       district: unmarkedCustomer.district,
       address: unmarkedCustomer.address,
       orderDate: businessDate('2026-06-23'),
+      shippingDateMode: 'SCHEDULED',
+      shippingDate: businessDate('2026-06-24'),
+      shippingDateSource: 'SYSTEM_DEFAULT',
       salesFormNo: 'SMOKE-FORM-SHIP-001',
       totalAmountCents: 199900,
       cashOnDeliveryAmountCents: 0,
@@ -657,6 +666,9 @@ async function main() {
       district: unmarkedCustomer.district,
       address: unmarkedCustomer.address,
       orderDate: businessDate('2026-06-23'),
+      shippingDateMode: 'SCHEDULED',
+      shippingDate: businessDate('2026-06-24'),
+      shippingDateSource: 'SYSTEM_DEFAULT',
       salesFormNo: 'SMOKE-FORM-SHIP-001',
       totalAmountCents: 199900,
       cashOnDeliveryAmountCents: 0,
@@ -1375,6 +1387,9 @@ async function upsertSeedSalesOrder(
     district: customer.district ?? null,
     address: customer.address ?? null,
     orderDate: order.orderDate,
+    shippingDateMode: 'SCHEDULED' as const,
+    shippingDate: nextBusinessDate(order.orderDate),
+    shippingDateSource: 'SYSTEM_DEFAULT' as const,
     salesFormNo: order.salesFormNo,
     totalAmountCents: order.totalAmountCents,
     cashOnDeliveryAmountCents: order.cashOnDeliveryAmountCents ?? 0,
@@ -4044,6 +4059,12 @@ function formatYmd(year: number, month: number, day: number) {
 
 function businessDate(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function nextBusinessDate(value: Date) {
+  const result = new Date(value);
+  result.setUTCDate(result.getUTCDate() + 1);
+  return result;
 }
 
 function readRequiredSeedPassword(

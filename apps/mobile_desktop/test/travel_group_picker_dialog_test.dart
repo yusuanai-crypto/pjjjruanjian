@@ -160,6 +160,22 @@ void main() {
     expect(find.text('未标记'), findsOneWidget);
   });
 
+  testWidgets('labels and selects a completed historical travel group',
+      (tester) async {
+    TravelGroupRecord? selected;
+    await _openPicker(
+      tester,
+      loadTravelGroups: (_) async => _groups,
+      onSelected: (group) => selected = group,
+    );
+
+    expect(find.text('已结束'), findsOneWidget);
+    await tester.tap(find.text('TG20260629001'));
+    await tester.pumpAndSettle();
+    expect(selected?.id, 'group-1');
+    expect(selected?.isHistoricalCompleted, true);
+  });
+
   testWidgets('shows empty state when no travel groups match', (tester) async {
     await _openPicker(
       tester,
@@ -294,6 +310,7 @@ final _groups = <TravelGroupRecord>[
     tasterName: '测试品鉴师',
     tastingRoomNo: '5',
     financeMark: true,
+    isHistoricalCompleted: true,
   ),
   _group(
     id: 'group-2',
@@ -310,6 +327,7 @@ TravelGroupRecord _group({
   String? tasterName,
   String? tastingRoomNo,
   bool financeMark = false,
+  bool isHistoricalCompleted = false,
 }) {
   return TravelGroupRecord.fromJson({
     'id': id,
@@ -322,6 +340,7 @@ TravelGroupRecord _group({
     'guestCount': 24,
     'status': 'unmarked',
     'financeMark': financeMark,
+    'isHistoricalCompleted': isHistoricalCompleted,
     'tastingItems': const [],
     'salesOrders': const [],
     'orderSummary': const {

@@ -392,6 +392,17 @@ test('contract: product inventory activation hash stays aligned with Flutter', (
     }),
     '0ce33e1cfd539334db90bc0d13d969071378569a83a5d6f47bb534d9edaa54a8',
   );
+  assert.equal(
+    calculateInventoryModeActivationRequestHash({
+      productId: 'product-1',
+      expectedCurrentMode: 'NONE',
+      targetMode: 'SERIALIZED',
+      effectiveAt: '2026-08-03T01:02:03.000Z',
+      sourceKey: 'source:key',
+      idempotencyKey: 'idem:source:key',
+    }),
+    'a7fd64e483b53a1e856495cd3913b65e247e830b837bf42a699295fc4310e98e',
+  );
 });
 
 test('contract: dedicated quantity-inventory activation is authorized, atomic, idempotent, and usable by inbound', async () => {
@@ -410,30 +421,53 @@ test('contract: dedicated quantity-inventory activation is authorized, atomic, i
     );
     assert.equal(product.inventoryTrackingMode, 'none');
 
-    const deniedBody = activationBody(product.id, 'denied');
-    for (const token of [sessions.finance.token, sessions.warehouse.token]) {
-      const denied = await requestJson(
-        baseUrl,
-        `/api/products/${product.id}/inventory-tracking/activate`,
-        { method: 'POST', token, body: deniedBody },
+    for (const targetMode of ['QUANTITY', 'SERIALIZED']) {
+      const deniedBody = activationBody(
+        product.id,
+        `denied-${targetMode.toLowerCase()}`,
+        { targetMode },
       );
-      assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      for (const token of [sessions.finance.token, sessions.warehouse.token]) {
+        const denied = await requestJson(
+          baseUrl,
+          `/api/products/${product.id}/inventory-tracking/activate`,
+          { method: 'POST', token, body: deniedBody },
+        );
+        assertErrorContract(denied, 403, 'PERMISSION_DENIED');
+      }
     }
 
-    const invalidTargetBody = activationBody(product.id, 'serialized', {
+    const serializedDeniedBody = activationBody(product.id, 'serialized', {
       targetMode: 'SERIALIZED',
     });
-    const invalidTarget = await requestJson(
+    const serializedDenied = await requestJson(
       baseUrl,
       `/api/products/${product.id}/inventory-tracking/activate`,
       {
         method: 'POST',
         token: sessions.admin.token,
-        body: invalidTargetBody,
+        body: serializedDeniedBody,
       },
     );
     assertErrorContract(
-      invalidTarget,
+      serializedDenied,
+      403,
+      'PRODUCT_SERIALIZED_INVENTORY_PERMISSION_DENIED',
+    );
+
+    const invalidTransition = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(product.id, 'invalid-transition', {
+          expectedCurrentMode: 'QUANTITY',
+        }),
+      },
+    );
+    assertErrorContract(
+      invalidTransition,
       400,
       'PRODUCT_INVENTORY_MODE_TRANSITION_NOT_ALLOWED',
     );
@@ -478,6 +512,22 @@ test('contract: dedicated quantity-inventory activation is authorized, atomic, i
     );
     assertErrorContract(
       factConflict,
+      409,
+      'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
+    );
+    const serializedFactConflict = await requestJson(
+      baseUrl,
+      `/api/products/${productWithBottle.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(productWithBottle.id, 'serialized-facts', {
+          targetMode: 'SERIALIZED',
+        }),
+      },
+    );
+    assertErrorContract(
+      serializedFactConflict,
       409,
       'PRODUCT_INVENTORY_MODE_FACTS_EXIST',
     );
@@ -605,6 +655,22 @@ test('contract: dedicated quantity-inventory activation is authorized, atomic, i
       409,
       'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
     );
+    const quantityToSerialized = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(product.id, 'quantity-to-serialized', {
+          targetMode: 'SERIALIZED',
+        }),
+      },
+    );
+    assertErrorContract(
+      quantityToSerialized,
+      409,
+      'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+    );
 
     const protectedPatch = await requestJson(
       baseUrl,
@@ -693,6 +759,218 @@ test('contract: dedicated quantity-inventory activation is authorized, atomic, i
     );
     assert.equal(activationLogs.length, 1);
     assert.equal(activationLogs[0].ipAddress, '203.0.113.28');
+  });
+});
+
+test('contract: super_admin can activate generic serialized inventory with audit, replay, options, and quantity-inbound isolation', async () => {
+  await withPhase1Server(async (baseUrl, { prisma }) => {
+    const superAdmin = await login(baseUrl);
+    const sessions = await createRoleSessions(baseUrl, superAdmin.token, [
+      'admin',
+      'warehouse',
+    ]);
+    const product = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Generic Serialized Product',
+    );
+
+    const adminDenied = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: activationBody(product.id, 'admin-serialized-denied', {
+          targetMode: 'SERIALIZED',
+        }),
+      },
+    );
+    assertErrorContract(
+      adminDenied,
+      403,
+      'PRODUCT_SERIALIZED_INVENTORY_PERMISSION_DENIED',
+    );
+
+    const inactive = await createProduct(
+      baseUrl,
+      superAdmin.token,
+      'Inactive Serialized Product',
+      false,
+    );
+    const inactiveResult = await requestJson(
+      baseUrl,
+      `/api/products/${inactive.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(inactive.id, 'inactive-serialized', {
+          targetMode: 'SERIALIZED',
+        }),
+      },
+    );
+    assertErrorContract(inactiveResult, 409, 'PRODUCT_INACTIVE');
+
+    const body = activationBody(product.id, 'serialized-success', {
+      targetMode: 'SERIALIZED',
+    });
+    const activated = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        headers: { 'x-forwarded-for': '203.0.113.29' },
+        body,
+      },
+    );
+    assert.equal(activated.response.status, 201);
+    assert.equal(
+      activated.body.data.product.inventoryTrackingMode,
+      'serialized',
+    );
+    assert.equal(
+      activated.body.data.inventoryModeChange.targetMode,
+      'serialized',
+    );
+    assert.equal(
+      activated.body.data.inventoryModeChange.requestedByRoleSnapshot,
+      'super_admin',
+    );
+    assert.equal(
+      activated.body.data.inventoryModeChange.appliedByRoleSnapshot,
+      'super_admin',
+    );
+    assert.equal(
+      activated.body.data.inventoryModeChange.reason,
+      '在线启用逐瓶库存',
+    );
+
+    const storedChange = await prisma.productInventoryModeChange.findUnique({
+      where: { id: activated.body.data.inventoryModeChange.id },
+    });
+    assert.equal(storedChange.expectedCurrentMode, 'NONE');
+    assert.equal(storedChange.targetMode, 'SERIALIZED');
+    assert.equal(storedChange.sourceKey, body.sourceKey);
+    assert.equal(storedChange.idempotencyKey, body.idempotencyKey);
+    assert.equal(storedChange.requestHash, body.requestHash);
+    assert.equal(storedChange.reason, '在线启用逐瓶库存');
+
+    const options = await requestJson(baseUrl, '/api/products/options', {
+      token: sessions.warehouse.token,
+    });
+    assert.equal(options.response.status, 200);
+    assert.equal(
+      options.body.data.products.find((item) => item.id === product.id)
+        .inventoryTrackingMode,
+      'serialized',
+    );
+
+    const replay = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      { method: 'POST', token: superAdmin.token, body },
+    );
+    assert.equal(replay.response.status, 201);
+    assert.equal(
+      replay.body.data.inventoryModeChange.id,
+      activated.body.data.inventoryModeChange.id,
+    );
+
+    const differentTarget = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(product.id, 'serialized-different-target', {
+          targetMode: 'QUANTITY',
+          idempotencyKey: body.idempotencyKey,
+        }),
+      },
+    );
+    assertErrorContract(
+      differentTarget,
+      409,
+      'PRODUCT_INVENTORY_MODE_IDEMPOTENCY_CONFLICT',
+    );
+
+    const modeSwitch = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(product.id, 'serialized-to-quantity', {
+          targetMode: 'QUANTITY',
+        }),
+      },
+    );
+    assertErrorContract(
+      modeSwitch,
+      409,
+      'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+    );
+    const serializedReactivation = await requestJson(
+      baseUrl,
+      `/api/products/${product.id}/inventory-tracking/activate`,
+      {
+        method: 'POST',
+        token: superAdmin.token,
+        body: activationBody(product.id, 'serialized-reactivation', {
+          targetMode: 'SERIALIZED',
+        }),
+      },
+    );
+    assertErrorContract(
+      serializedReactivation,
+      409,
+      'PRODUCT_INVENTORY_MODE_EXPECTATION_MISMATCH',
+    );
+
+    const warehouse = await requestJson(baseUrl, '/api/inventory/warehouses', {
+      method: 'POST',
+      token: sessions.admin.token,
+      body: { code: 'SERIAL-MODE-WH', name: 'Serialized Mode Warehouse' },
+    });
+    assert.equal(warehouse.response.status, 201);
+    const inboundPayload = {
+      sourceKey: 'serialized-mode:quantity-inbound:1',
+      idempotencyKey: 'idem:serialized-mode:quantity-inbound:1',
+      kind: 'PURCHASE_RECEIPT',
+      warehouseId: warehouse.body.data.warehouse.id,
+      productId: product.id,
+      quantity: 1,
+      batch: { sourceLineKey: 'serialized-mode:quantity-inbound:line:1' },
+    };
+    const rejectedInbound = await requestJson(
+      baseUrl,
+      '/api/inventory/inbounds',
+      {
+        method: 'POST',
+        token: sessions.admin.token,
+        body: {
+          ...inboundPayload,
+          requestHash: calculateInventoryRequestHash('INBOUND', inboundPayload),
+        },
+      },
+    );
+    assertErrorContract(
+      rejectedInbound,
+      409,
+      'INVENTORY_SERIALIZED_ADAPTER_REQUIRED',
+    );
+
+    const logs = await requestJson(
+      baseUrl,
+      '/api/operation-logs?entityType=product_inventory_mode_change',
+      { token: superAdmin.token },
+    );
+    const activationLog = logs.body.data.logs.find(
+      (log) => log.afterData?.product?.id === product.id,
+    );
+    assert.equal(activationLog.requestSummary.targetMode, 'SERIALIZED');
+    assert.equal(activationLog.ipAddress, '203.0.113.29');
   });
 });
 

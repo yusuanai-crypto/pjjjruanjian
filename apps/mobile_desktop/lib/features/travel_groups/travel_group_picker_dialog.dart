@@ -407,6 +407,11 @@ class _TravelGroupListTile extends StatelessWidget {
               label: group.financeMark ? '已标记' : '未标记',
               tone: group.financeMark ? StatusTone.success : StatusTone.neutral,
             ),
+          if (group.isHistoricalCompleted)
+            const StatusTag(
+              label: '已结束',
+              tone: StatusTone.neutral,
+            ),
         ],
       ),
       subtitle: Padding(

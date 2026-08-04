@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 import '../core/api/api_client.dart';
+import '../core/auth/role_access.dart';
 import '../features/after_sales/after_sales_form_page.dart';
 import '../features/ai_assistant/ai_assistant_page.dart';
 import '../features/analytics/analytics_page.dart';
@@ -26,6 +27,7 @@ import '../features/taster_commissions/taster_commission_page.dart';
 import '../features/taster_summary/taster_summary_page.dart';
 import '../features/todo_reminders/todo_reminder_controller.dart';
 import '../features/todo_reminders/todo_reminders_page.dart';
+import '../features/today_travel_groups/today_travel_groups_page.dart';
 import '../features/travel_agency_management/travel_agency_management_page.dart';
 import '../features/travel_group_attachments/attachment_picker_service.dart';
 import '../features/travel_group_attachments/incoming_attachment_service.dart';
@@ -84,6 +86,17 @@ Widget buildPageForDestination({
         role: role,
         attachmentPickerService: attachmentPickerService,
         incomingAttachmentService: incomingAttachmentService,
+      );
+    case 'today_travel_groups':
+      if (!canViewTodayTravelGroups(role)) {
+        return const Center(
+          key: ValueKey('today-travel-groups-access-denied'),
+          child: Text('当前账号没有访问今日旅行团的权限。'),
+        );
+      }
+      return TodayTravelGroupsPage(
+        apiClient: apiClient,
+        token: token,
       );
     case 'travel_group_query':
       return TravelGroupQueryPage(

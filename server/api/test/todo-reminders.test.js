@@ -57,7 +57,6 @@ test('rule engine reuses business findings and applies the 24/8/2 hour SLAs', ()
   assert.deepEqual(
     new Set(travelRules.map((rule) => rule.ruleCode)),
     new Set([
-      'TRAVEL_GROUP_FRONT_DESK_DETAILS',
       'TRAVEL_GROUP_TASTER_SUMMARY',
       'TRAVEL_GROUP_FINANCE_MARK',
     ]),
@@ -108,7 +107,7 @@ test('reconcile is idempotent, copies to every active role account and backfills
     travelGroups: [pendingFrontDeskGroup()],
   });
   const service = createService(store);
-  const now = new Date('2026-07-26T01:00:00.000Z');
+  const now = new Date();
 
   await service.reconcileSource('TRAVEL_GROUP', 'group-1', now);
   await service.reconcileSource('TRAVEL_GROUP', 'group-1', now);
@@ -139,19 +138,20 @@ test('not-entered confirmation resolves travel todos and revoke reactivates them
     travelGroups: [pendingFrontDeskGroup()],
   });
   const service = createService(store);
-  const now = new Date('2026-07-26T01:00:00.000Z');
+  const now = new Date();
 
   await service.reconcileSource('TRAVEL_GROUP', 'group-1', now);
   assert.equal(store.businessTodos.length, 1);
   assert.equal(store.businessTodos[0].status, 'ACTIVE');
 
-  store.travelGroups[0].notEnteredConfirmedAt =
-    new Date('2026-07-26T01:05:00.000Z');
+  store.travelGroups[0].notEnteredConfirmedAt = new Date(
+    now.getTime() + 5 * 60 * 1000,
+  );
   store.travelGroups[0].notEnteredConfirmedById = 'front-1';
   await service.reconcileSource(
     'TRAVEL_GROUP',
     'group-1',
-    new Date('2026-07-26T01:05:00.000Z'),
+    new Date(now.getTime() + 5 * 60 * 1000),
   );
   assert.equal(store.businessTodos.length, 1);
   assert.equal(store.businessTodos[0].status, 'RESOLVED');
@@ -161,7 +161,7 @@ test('not-entered confirmation resolves travel todos and revoke reactivates them
   await service.reconcileSource(
     'TRAVEL_GROUP',
     'group-1',
-    new Date('2026-07-26T01:10:00.000Z'),
+    new Date(now.getTime() + 10 * 60 * 1000),
   );
   assert.equal(store.businessTodos.length, 1);
   assert.equal(store.businessTodos[0].status, 'ACTIVE');
@@ -213,7 +213,7 @@ test('recipient APIs isolate users, reject fake completion and active archive, a
   await service.reconcileSource(
     'TRAVEL_GROUP',
     'group-1',
-    new Date('2026-07-26T01:00:00.000Z'),
+    new Date(),
   );
   const recipient = store.todoRecipients[0];
   const own = await service.getForUser({ id: recipient.userId }, recipient.id);
@@ -263,7 +263,7 @@ test('recipient list, summary and personal actions stay scoped and paginate corr
   const secondTodo = store.businessTodos.find(
     (item) => item.sourceId === 'order-2',
   );
-  firstTodo.dueAt = new Date();
+  firstTodo.dueAt = new Date(Date.now() - 1000);
   secondTodo.dueAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
   const secondRecipient = store.todoRecipients.find(
     (item) => item.todoId === secondTodo.id,
@@ -329,6 +329,55 @@ test('recipient list, summary and personal actions stay scoped and paginate corr
       'todo_reminders.snooze',
       'todo_reminders.archive',
     ],
+  );
+});
+
+test('front-desk reminder APIs hide historical travel group numbers and content', async () => {
+  const dates = shanghaiFixtureDates();
+  const historical = {
+    ...pendingFrontDeskGroup(),
+    id: 'historical-group',
+    groupNo: 'TG-HISTORICAL',
+    visitDate: new Date(`${dates.yesterday}T00:00:00.000Z`),
+  };
+  const current = {
+    ...pendingFrontDeskGroup(),
+    id: 'current-group',
+    groupNo: 'TG-CURRENT',
+    visitDate: new Date(`${dates.today}T00:00:00.000Z`),
+  };
+  const store = createTodoStore({
+    users: [user('front-1', 'FRONT_DESK', true)],
+    travelGroups: [historical, current],
+  });
+  const service = createService(store);
+  await service.reconcileSource(
+    'TRAVEL_GROUP',
+    historical.id,
+    new Date(`${dates.yesterday}T04:00:00.000Z`),
+  );
+  await service.reconcileSource('TRAVEL_GROUP', current.id, new Date());
+  const historicalTodo = store.businessTodos.find(
+    (todo) => todo.sourceId === historical.id,
+  );
+  const historicalRecipient = store.todoRecipients.find(
+    (recipient) => recipient.todoId === historicalTodo.id,
+  );
+  const actor = { id: 'front-1', role: 'front_desk' };
+
+  const list = await service.listForUser(actor);
+  assert.equal(list.total, 1);
+  assert.equal(list.reminders[0].sourceNumber, 'TG-CURRENT');
+  assert.equal(JSON.stringify(list).includes('TG-HISTORICAL'), false);
+  const summary = await service.summaryForUser(actor);
+  assert.equal(summary.unfinished, 1);
+  await assert.rejects(
+    service.getForUser(actor, historicalRecipient.id),
+    (error) => error.code === 'TODO_REMINDER_NOT_FOUND',
+  );
+  await assert.rejects(
+    service.markRead(actor, historicalRecipient.id),
+    (error) => error.code === 'TODO_REMINDER_NOT_FOUND',
   );
 });
 
@@ -649,10 +698,16 @@ function user(id, role, isActive) {
 }
 
 function pendingFrontDeskGroup() {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
   return {
     id: 'group-1',
     groupNo: 'TG-001',
-    visitDate: new Date('2026-07-26T00:00:00.000Z'),
+    visitDate: new Date(`${today}T00:00:00.000Z`),
     expectedArrivalTime: '09:00',
     licensePlate: null,
     tastingRoomNo: null,
@@ -890,7 +945,9 @@ function createTodoStore(seed = {}) {
       },
       findFirst: async ({ where, include }) => {
         const row =
-          store.todoRecipients.find((item) => matches(item, where)) || null;
+          store.todoRecipients.find((item) =>
+            matchesRecipient(store, item, where),
+          ) || null;
         return row && include?.todo ? withTodo(store, row) : row;
       },
       findMany: async ({ where, include, skip = 0, take } = {}) => {
@@ -926,11 +983,45 @@ function withTodo(store, recipient) {
 }
 
 function matchesRecipient(store, recipient, where = {}) {
-  if (!matches(recipient, without(where, 'todo'))) return false;
+  if (
+    where.AND &&
+    !where.AND.every((item) => matchesRecipient(store, recipient, item))
+  ) {
+    return false;
+  }
+  if (
+    where.OR &&
+    !where.OR.some((item) => matchesRecipient(store, recipient, item))
+  ) {
+    return false;
+  }
+  const scalarWhere = without(
+    without(without(where, 'todo'), 'AND'),
+    'OR',
+  );
+  if (!matches(recipient, scalarWhere)) return false;
   const todoWhere = where?.todo?.is;
   if (!todoWhere) return true;
   const todo = store.businessTodos.find((item) => item.id === recipient.todoId);
   return Boolean(todo && matches(todo, todoWhere));
+}
+
+function shanghaiFixtureDates() {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const todayUtc = Date.parse(`${today}T00:00:00.000Z`);
+  const atOffset = (offset) =>
+    new Date(todayUtc + offset * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+  return {
+    yesterday: atOffset(-1),
+    today,
+  };
 }
 
 function matches(row, where = {}) {

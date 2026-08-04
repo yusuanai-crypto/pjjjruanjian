@@ -260,6 +260,7 @@ class OperationLogPresentation {
     'deliveryStatus': '发货状态',
     'reviewStatus': '审核状态',
     'shippingDate': '发货日期',
+    'shippingDateMode': '发货方式',
     'reason': '修改原因',
   };
 
@@ -320,7 +321,7 @@ class OperationLogPresentation {
     'update': '修改',
     'edit': '修改',
     'sales_edit': '修改',
-    'shipping_date.update': '修改发货日期',
+    'shipping_date.update': '修改发货信息',
     'upsert': '修改',
     'delete': '删除',
     'remove': '删除',
@@ -360,6 +361,8 @@ class OperationLogPresentation {
   };
 
   static const _valueLabels = <String, String>{
+    'scheduled': '选择发货日期',
+    'pending_customer_notice': '待客人通知',
     'SUCCESS': '成功',
     'FAILURE': '失败',
     'ACTIVE': '正常使用',

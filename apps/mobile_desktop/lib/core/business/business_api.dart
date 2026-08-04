@@ -424,6 +424,33 @@ class BusinessApi {
         .toList();
   }
 
+  Future<List<TravelGroupRecord>> listSalesOrderEntryTravelGroups({
+    int limit = 30,
+    String? tasterId,
+    String? tastingRoomNo,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    _putNonEmpty(query, 'tasterId', tasterId);
+    _putNonEmpty(query, 'tastingRoomNo', tastingRoomNo);
+    final payload = await _apiClient.getJson(
+      _path('/api/travel-groups/order-entry-options', query),
+      token: _token,
+    );
+    return _list(_data(payload)['travelGroups'])
+        .map(TravelGroupRecord.fromJson)
+        .toList();
+  }
+
+  Future<List<TodayTravelGroupRecord>> listTodayTravelGroups() async {
+    final payload = await _apiClient.getJson(
+      '/api/travel-groups/today',
+      token: _token,
+    );
+    return _list(_data(payload)['travelGroups'])
+        .map(TodayTravelGroupRecord.fromJson)
+        .toList();
+  }
+
   Future<DownloadedFile> downloadTravelGroupsExcel({
     int? limit,
     DateTime? start,
@@ -747,7 +774,7 @@ class BusinessApi {
     return ProductRecord.fromJson(_map(_data(payload)['product']));
   }
 
-  Future<ProductInventoryModeActivationResult> activateProductQuantityInventory(
+  Future<ProductInventoryModeActivationResult> activateProductInventoryTracking(
     String id,
     Map<String, dynamic> body,
   ) async {
@@ -1590,13 +1617,15 @@ class BusinessApi {
 
   Future<SalesOrderRecord> updateSalesOrderShippingDate(
     String id, {
-    required String shippingDate,
+    required String shippingDateMode,
+    String? shippingDate,
     String? reason,
   }) async {
     final payload = await _apiClient.patchJson(
       '/api/sales-orders/${Uri.encodeComponent(id)}/shipping-date',
       body: {
-        'shippingDate': shippingDate,
+        'shippingDateMode': shippingDateMode,
+        if (shippingDate != null) 'shippingDate': shippingDate,
         if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
       },
       token: _token,
@@ -3635,6 +3664,31 @@ enum TravelGroupAttachmentCategory {
   final String apiValue;
 }
 
+class TodayTravelGroupRecord {
+  const TodayTravelGroupRecord({
+    required this.licensePlate,
+    required this.tasterName,
+    required this.tastingRoomNo,
+    required this.cigaretteFeeCents,
+  });
+
+  final String? licensePlate;
+  final String? tasterName;
+  final String? tastingRoomNo;
+  final int? cigaretteFeeCents;
+
+  factory TodayTravelGroupRecord.fromJson(Map<String, dynamic> json) {
+    return TodayTravelGroupRecord(
+      licensePlate: _stringOrNull(json['licensePlate']),
+      tasterName: _stringOrNull(json['tasterName']),
+      tastingRoomNo: _stringOrNull(json['tastingRoomNo']),
+      cigaretteFeeCents: json['cigaretteFeeCents'] == null
+          ? null
+          : _intValue(json['cigaretteFeeCents']),
+    );
+  }
+}
+
 class TravelGroupAttachmentRecord {
   const TravelGroupAttachmentRecord({
     required this.id,
@@ -3816,6 +3870,7 @@ class TravelGroupRecord {
     this.tasterEditRemaining,
     this.tasterEditUnlimited = true,
     this.canEditByCurrentUser = false,
+    this.isHistoricalCompleted = false,
     required this.tastingItems,
     required this.salesOrders,
     required this.orderSummary,
@@ -3887,6 +3942,7 @@ class TravelGroupRecord {
   final int? tasterEditRemaining;
   final bool tasterEditUnlimited;
   final bool canEditByCurrentUser;
+  final bool isHistoricalCompleted;
   final List<TravelGroupTastingItemRecord> tastingItems;
   final List<TravelGroupOrderRecord> salesOrders;
   final TravelGroupOrderSummary orderSummary;
@@ -4004,6 +4060,7 @@ class TravelGroupRecord {
           : json['tasterEditLimit'] == null &&
               json['tasterEditRemaining'] == null,
       canEditByCurrentUser: _boolValue(json['canEditByCurrentUser']),
+      isHistoricalCompleted: _boolValue(json['isHistoricalCompleted']),
       tastingItems: _list(json['tastingItems'])
           .map((item) => TravelGroupTastingItemRecord.fromJson(item))
           .toList(),
@@ -4567,6 +4624,7 @@ class SalesOrderRecord {
     required this.city,
     required this.district,
     required this.orderDate,
+    required this.shippingDateMode,
     required this.shippingDate,
     required this.shippingRiskWarnings,
     required this.canEditShippingDate,
@@ -4657,6 +4715,7 @@ class SalesOrderRecord {
   final String? city;
   final String? district;
   final String orderDate;
+  final String shippingDateMode;
   final String? shippingDate;
   final List<SalesOrderShippingRiskWarning> shippingRiskWarnings;
   final bool canEditShippingDate;
@@ -4804,6 +4863,7 @@ class SalesOrderRecord {
       city: _stringOrNull(json['city']),
       district: _stringOrNull(json['district']),
       orderDate: '${json['orderDate'] ?? ''}',
+      shippingDateMode: _shippingDateMode(json['shippingDateMode']),
       shippingDate: _stringOrNull(json['shippingDate']),
       shippingRiskWarnings: _list(json['shippingRiskWarnings'])
           .map((item) => SalesOrderShippingRiskWarning.fromJson(_map(item)))
@@ -7494,12 +7554,10 @@ class ProfitComponentDiagnostic {
   factory ProfitComponentDiagnostic.fromJson(Map<String, dynamic> json) {
     return ProfitComponentDiagnostic(
       status: _stringOrNull(json['status']) ?? 'not_applicable',
-      amountCents: json['amountCents'] == null
-          ? null
-          : _intValue(json['amountCents']),
-      issues: _list(json['issues'])
-          .map(ProfitCalculationIssue.fromJson)
-          .toList(),
+      amountCents:
+          json['amountCents'] == null ? null : _intValue(json['amountCents']),
+      issues:
+          _list(json['issues']).map(ProfitCalculationIssue.fromJson).toList(),
     );
   }
 }
@@ -7527,9 +7585,8 @@ class ProfitRecalculationResult {
       failureCount: _intValue(json['failureCount']),
       changedCount: _intValue(json['changedCount']),
       unchangedCount: _intValue(json['unchangedCount']),
-      issues: _list(json['issues'])
-          .map(ProfitCalculationIssue.fromJson)
-          .toList(),
+      issues:
+          _list(json['issues']).map(ProfitCalculationIssue.fromJson).toList(),
       profit: TravelGroupProfitRecord.fromJson(_map(json['profit'])),
     );
   }
@@ -8268,6 +8325,7 @@ class SalesSheetOrderRecord {
     required this.orderTypeLabel,
     required this.salesFormNo,
     required this.orderDate,
+    required this.shippingDateMode,
     required this.shippingDate,
     required this.remark,
   });
@@ -8278,6 +8336,7 @@ class SalesSheetOrderRecord {
   final String? orderTypeLabel;
   final String? salesFormNo;
   final String? orderDate;
+  final String shippingDateMode;
   final String? shippingDate;
   final String? remark;
 
@@ -8289,6 +8348,7 @@ class SalesSheetOrderRecord {
       orderTypeLabel: _stringOrNull(json['orderTypeLabel']),
       salesFormNo: _stringOrNull(json['salesFormNo']),
       orderDate: _stringOrNull(json['orderDate']),
+      shippingDateMode: _shippingDateMode(json['shippingDateMode']),
       shippingDate: _stringOrNull(json['shippingDate']),
       remark: _stringOrNull(json['remark']),
     );
@@ -9990,6 +10050,29 @@ String _travelGroupEntryStatus(
 String? _stringOrNull(Object? value) {
   final text = value == null ? '' : '$value'.trim();
   return text.isEmpty ? null : text;
+}
+
+const scheduledShippingDateMode = 'scheduled';
+const pendingCustomerNoticeShippingDateMode = 'pending_customer_notice';
+
+String displayShippingDate(
+  String? shippingDateMode,
+  String? shippingDate, {
+  String fallback = '--',
+}) {
+  if (_shippingDateMode(shippingDateMode) ==
+      pendingCustomerNoticeShippingDateMode) {
+    return '待客人通知';
+  }
+  final date = shippingDate?.trim() ?? '';
+  return date.isEmpty ? fallback : date;
+}
+
+String _shippingDateMode(Object? value) {
+  return '${value ?? ''}'.trim().toLowerCase() ==
+          pendingCustomerNoticeShippingDateMode
+      ? pendingCustomerNoticeShippingDateMode
+      : scheduledShippingDateMode;
 }
 
 String _normalizePaymentMethodCategory(Object? value) {

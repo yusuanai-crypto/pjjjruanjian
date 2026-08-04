@@ -66,6 +66,26 @@ void main() {
     );
   });
 
+  testWidgets('serialized product options appear in the inbound product picker',
+      (tester) async {
+    tester.view.physicalSize = const Size(1500, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeInventoryApiClient();
+    await tester.pumpWidget(_page(client, UserRole.admin));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('moutai-inbound-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('茅台逐瓶入库'), findsOneWidget);
+    expect(find.text('测试逐瓶商品 · 瓶'), findsOneWidget);
+    expect(client.productOptionCalls, 1);
+  });
+
   testWidgets('expanded serialized statuses use stable Chinese labels',
       (tester) async {
     tester.view.physicalSize = const Size(1500, 900);
@@ -279,12 +299,28 @@ class _FakeInventoryApiClient extends ApiClient {
   final String status;
   int exportCalls = 0;
   int getCalls = 0;
+  int productOptionCalls = 0;
   List<String> exportedUnitIds = const [];
   Completer<ApiDownloadedFile>? pendingExport;
   ApiException? exportError;
 
   @override
   Future<Map<String, dynamic>> getJson(String path, {String? token}) async {
+    if (path == '/api/products/options') {
+      productOptionCalls += 1;
+      return {
+        'data': {
+          'products': [
+            {
+              'id': 'product-serialized',
+              'name': '测试逐瓶商品',
+              'unit': '瓶',
+              'inventoryTrackingMode': 'serialized',
+            },
+          ],
+        },
+      };
+    }
     if (path.startsWith('/api/serialized-inventory')) {
       getCalls += 1;
       return {

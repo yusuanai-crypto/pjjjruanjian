@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jiangjiu_mobile_desktop/core/api/api_client.dart';
@@ -19,6 +21,32 @@ void main() {
         },
       ),
       '0ce33e1cfd539334db90bc0d13d969071378569a83a5d6f47bb534d9edaa54a8',
+    );
+    expect(
+      calculateProductInventoryTrackingActivationHash(
+        productId: 'product-1',
+        body: const {
+          'expectedCurrentMode': 'NONE',
+          'targetMode': 'SERIALIZED',
+          'effectiveAt': '2026-08-03T01:02:03.000Z',
+          'sourceKey': 'source:key',
+          'idempotencyKey': 'idem:source:key',
+        },
+      ),
+      'a7fd64e483b53a1e856495cd3913b65e247e830b837bf42a699295fc4310e98e',
+    );
+  });
+
+  test('product inventory activation builder accepts only supported targets', () {
+    expect(
+      () => buildProductInventoryTrackingActivationRequest(
+        productId: 'product-1',
+        targetMode: 'NONE',
+        effectiveAt: DateTime.utc(2026, 8, 3),
+        sourceKey: 'source:key',
+        idempotencyKey: 'idem:source:key',
+      ),
+      throwsArgumentError,
     );
   });
 
@@ -216,15 +244,15 @@ void main() {
     await tester.tap(activate);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('普通入库、调拨、盘点和库存占用'), findsOneWidget);
-    expect(find.textContaining('不支持在线切回'), findsOneWidget);
+    expect(find.textContaining('入库、出库、调拨、盘点和库存占用'), findsOneWidget);
+    expect(find.textContaining('不能在线切换'), findsOneWidget);
     expect(find.textContaining('记录审计信息'), findsOneWidget);
+    expect(find.text('逐瓶库存'), findsNothing);
 
     final confirm = find.byKey(
       const ValueKey('product-activate-quantity-inventory-confirm'),
     );
     await tester.tap(confirm);
-    await tester.tap(confirm, warnIfMissed: false);
     await tester.pumpAndSettle();
 
     expect(client.activationBodies, hasLength(1));
@@ -246,6 +274,164 @@ void main() {
     );
     expect(find.text('库存模式：普通数量库存'), findsOneWidget);
     expect(activate, findsNothing);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+      'super_admin must choose quantity mode and sends target-aware keys and hash',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeProductApiClient();
+    await tester.pumpWidget(_page(client, UserRole.superAdmin));
+    await tester.pumpAndSettle();
+
+    final activate = find.byKey(
+      const ValueKey('product-inventory-mode-activation-button'),
+    );
+    expect(activate, findsOneWidget);
+    expect(find.text('设置库存模式'), findsOneWidget);
+    await tester.tap(activate);
+    await tester.pumpAndSettle();
+
+    expect(find.text('普通数量库存'), findsOneWidget);
+    expect(find.text('逐瓶库存'), findsOneWidget);
+    expect(find.textContaining('真实物流码逐瓶入库和追踪'), findsOneWidget);
+    expect(
+      find.text('库存模式启用后不能在线切换，请确认商品库存管理方式无误。'),
+      findsOneWidget,
+    );
+    final confirm = find.byKey(
+      const ValueKey('product-inventory-mode-activation-confirm'),
+    );
+    expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-quantity-option'),
+    ));
+    await tester.pump();
+    expect(tester.widget<FilledButton>(confirm).onPressed, isNotNull);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(client.activationBodies, hasLength(1));
+    final body = client.activationBodies.single;
+    expect(body['targetMode'], 'QUANTITY');
+    expect(body['sourceKey'], contains('product-1:quantity:'));
+    expect(body['idempotencyKey'], startsWith('idem:'));
+    expect(
+      body['requestHash'],
+      calculateProductInventoryTrackingActivationHash(
+        productId: 'product-1',
+        body: body,
+      ),
+    );
+    expect(find.text('库存模式：普通数量库存'), findsOneWidget);
+    expect(activate, findsNothing);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+      'super_admin serialized activation refreshes detail and product options',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = _FakeProductApiClient();
+    await tester.pumpWidget(_page(client, UserRole.superAdmin));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-activation-button'),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-serialized-option'),
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-activation-confirm'),
+    ));
+    await tester.pumpAndSettle();
+
+    final body = client.activationBodies.single;
+    expect(body['targetMode'], 'SERIALIZED');
+    expect(body['sourceKey'], contains('product-1:serialized:'));
+    expect(
+      body['requestHash'],
+      calculateProductInventoryTrackingActivationHash(
+        productId: 'product-1',
+        body: body,
+      ),
+    );
+    expect(
+      client.getUris.where((uri) => uri.path == '/api/products/options'),
+      isNotEmpty,
+    );
+    expect(find.text('库存模式：逐瓶库存'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('product-inventory-mode-activation-button'),
+      ),
+      findsNothing,
+    );
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('activation in flight disables mode, cancel, and duplicate submit',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final pending = Completer<void>();
+    final client = _FakeProductApiClient()..pendingActivation = pending;
+    await tester.pumpWidget(_page(client, UserRole.superAdmin));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-activation-button'),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      const ValueKey('product-inventory-mode-serialized-option'),
+    ));
+    await tester.pump();
+    final confirm = find.byKey(
+      const ValueKey('product-inventory-mode-activation-confirm'),
+    );
+    await tester.tap(confirm);
+    await tester.pump();
+    await tester.tap(confirm, warnIfMissed: false);
+    await tester.pump();
+
+    expect(client.activationBodies, hasLength(1));
+    expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+    expect(
+      tester
+          .widget<RadioListTile<String>>(find.byKey(const ValueKey(
+            'product-inventory-mode-serialized-option',
+          )))
+          .enabled,
+      isFalse,
+    );
+    expect(
+      tester.widget<TextButton>(find.widgetWithText(TextButton, '取消')).onPressed,
+      isNull,
+    );
+
+    pending.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('库存模式：逐瓶库存'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('activation failure stays visible and retries the same command',
@@ -297,6 +483,21 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets('already configured products never show an activation button',
+      (tester) async {
+    for (final mode in ['quantity', 'serialized']) {
+      final client = _FakeProductApiClient(initialMode: mode);
+      await tester.pumpWidget(_page(client, UserRole.superAdmin));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const ValueKey('product-inventory-mode-activation-button'),
+        ),
+        findsNothing,
+      );
+    }
+  });
 }
 
 Widget _page(ApiClient client, UserRole role) {
@@ -317,8 +518,11 @@ Widget _page(ApiClient client, UserRole role) {
 }
 
 class _FakeProductApiClient extends ApiClient {
-  _FakeProductApiClient()
-      : _currentProduct = Map<String, dynamic>.from(_product),
+  _FakeProductApiClient({String initialMode = 'none'})
+      : _currentProduct = {
+          ..._product,
+          'inventoryTrackingMode': initialMode,
+        },
         super(baseUrl: 'http://127.0.0.1:3000');
 
   final getUris = <Uri>[];
@@ -326,6 +530,7 @@ class _FakeProductApiClient extends ApiClient {
   final Map<String, dynamic> _currentProduct;
   bool failCostPostWithOverlap = false;
   bool failActivation = false;
+  Completer<void>? pendingActivation;
   String? lastPostPath;
   Map<String, dynamic>? lastPostBody;
   Map<String, dynamic>? lastPatchBody;
@@ -397,6 +602,7 @@ class _FakeProductApiClient extends ApiClient {
     lastPostBody = Map<String, dynamic>.from(body ?? const {});
     if (lastPostPath == '/api/products/product-1/inventory-tracking/activate') {
       activationBodies.add(Map<String, dynamic>.from(lastPostBody!));
+      if (pendingActivation != null) await pendingActivation!.future;
       if (failActivation) {
         throw const ApiException(
           statusCode: 409,
@@ -404,7 +610,8 @@ class _FakeProductApiClient extends ApiClient {
           message: 'stale mode',
         );
       }
-      _currentProduct['inventoryTrackingMode'] = 'quantity';
+      final targetMode = '${body?['targetMode'] ?? 'QUANTITY'}'.toLowerCase();
+      _currentProduct['inventoryTrackingMode'] = targetMode;
       return {
         'data': {
           'product': _currentProduct,
@@ -412,7 +619,7 @@ class _FakeProductApiClient extends ApiClient {
             'id': 'mode-change-1',
             'productId': 'product-1',
             'expectedCurrentMode': 'none',
-            'targetMode': 'quantity',
+            'targetMode': targetMode,
             'effectiveAt': body?['effectiveAt'],
             'sourceKey': body?['sourceKey'],
             'idempotencyKey': body?['idempotencyKey'],

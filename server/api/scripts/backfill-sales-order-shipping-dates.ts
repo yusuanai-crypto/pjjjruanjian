@@ -36,6 +36,9 @@ export async function backfillSalesOrderShippingDates(
   while (true) {
     const rows = await prisma.salesOrder.findMany({
       where: {
+        shippingDateMode: {
+          not: 'PENDING_CUSTOMER_NOTICE',
+        },
         shippingDate: null,
         ...(cursorId ? { id: { gt: cursorId } } : {}),
       },
@@ -60,9 +63,13 @@ export async function backfillSalesOrderShippingDates(
         const updateResult = await prisma.salesOrder.updateMany({
           where: {
             id: row.id,
+            shippingDateMode: {
+              not: 'PENDING_CUSTOMER_NOTICE',
+            },
             shippingDate: null,
           },
           data: {
+            shippingDateMode: 'SCHEDULED',
             shippingDate,
             shippingDateSource: 'MIGRATION',
             shippingDateBackfillBatchId: batchId,

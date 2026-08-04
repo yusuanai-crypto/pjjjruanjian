@@ -2,6 +2,9 @@ import {
   buildFinancePendingLogisticsReasons,
   calculateGroupPendingState,
 } from '../business-data/business-data.nest.service';
+import {
+  isTravelGroupOnOrAfterShanghaiToday,
+} from '../business-data/front-desk-travel-group-read-policy.helper';
 
 export type TodoSourceType =
   | 'TRAVEL_GROUP'
@@ -100,7 +103,10 @@ export class TodoRuleEngine {
       'missing_arrival_time',
       'missing_group_type',
     ].filter((reason) => reasons.has(reason));
-    if (frontDeskReasons.length > 0) {
+    if (
+      frontDeskReasons.length > 0 &&
+      isTravelGroupOnOrAfterShanghaiToday(group, now)
+    ) {
       matches.push(
         match({
           ruleCode: 'TRAVEL_GROUP_FRONT_DESK_DETAILS',

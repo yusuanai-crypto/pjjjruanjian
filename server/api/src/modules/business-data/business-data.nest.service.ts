@@ -71,13 +71,14 @@ import {
   normalizeLogisticsProviderCode,
 } from './logistics-provider.helper';
 import {
-  assertShippingDateNotBeforeSubmission,
   defaultBackfillShippingDate,
   formatDateOnly,
   isSameShanghaiNaturalDay,
-  parseRequiredShippingDate,
   resolveSubmissionShippingDate,
+  resolveShippingDateUpdate,
   SAME_DAY_SHIPPING_WARNING,
+  shippingDateDisplayText,
+  toShippingDateModeApi,
 } from './sales-order-shipping-date.helper';
 import {
   assertAttachmentAggregateSize,
@@ -97,6 +98,11 @@ import {
   writeTravelGroupAttachmentFile,
 } from './travel-group-attachment-storage.helper';
 import { withGeneratedTravelGroupNo } from './travel-group-no.helper';
+import {
+  buildShanghaiTodayDatabaseRange,
+  buildFrontDeskTravelGroupReadScope,
+  canFrontDeskReadTravelGroup,
+} from './front-desk-travel-group-read-policy.helper';
 
 const GROUP_TABLES: any = {
   travel: {
@@ -710,6 +716,85 @@ export class BusinessDataNestService {
       ),
       filters,
     ).slice(0, take);
+  }
+
+  async listTodayTravelGroups(actor: any, now = new Date()) {
+    requireAnyRole(actor, ['front_desk']);
+    const { start, end } = buildShanghaiTodayDatabaseRange(now);
+    const groups = await this.prisma.travelGroup.findMany({
+      where: await this.buildScopedGroupWhere(
+        'travel',
+        actor,
+        {
+          visitDate: {
+            gte: start,
+            lt: end,
+          },
+        },
+      ),
+      orderBy: [
+        { arrivalTime: 'asc' },
+        { id: 'asc' },
+      ],
+      select: {
+        licensePlate: true,
+        tasterName: true,
+        tastingRoomNo: true,
+        cigaretteFeeCents: true,
+      },
+    });
+    return groups.map(toTodayTravelGroupDto);
+  }
+
+  async listSalesOrderEntryTravelGroups(
+    actor: any,
+    filters: any = {},
+    now = new Date(),
+  ) {
+    requireAnyRole(actor, ['admin', 'sales', 'finance']);
+    const baseWhere = buildGroupWhere(
+      {
+        tasterId: filters.tasterId,
+        tastingRoomNo: filters.tastingRoomNo,
+      },
+      'travel',
+    );
+    const where = andWhere(
+      andWhere(baseWhere, buildSalesOrderEntryTravelGroupScope(now)),
+      await this.buildGlobalGroupMarkScope(actor),
+    );
+    const groups = await this.prisma.travelGroup.findMany({
+      where,
+      orderBy: [
+        { visitDate: 'desc' },
+        { id: 'desc' },
+      ],
+      take: normalizeTake(filters.limit, 30),
+      select: {
+        id: true,
+        groupNo: true,
+        visitDate: true,
+        tasterId: true,
+        tasterName: true,
+        tastingRoomNo: true,
+        departureTime: true,
+        lossStatus: true,
+        financeMark: true,
+      },
+    });
+    return groups.map((group: any) => ({
+      id: group.id,
+      kind: 'travel',
+      groupNo: group.groupNo,
+      visitDate: formatDate(group.visitDate),
+      tasterId: group.tasterId || null,
+      tasterName: group.tasterName || null,
+      tastingRoomNo: group.tastingRoomNo || null,
+      financeMark: Boolean(group.financeMark),
+      isHistoricalCompleted:
+        getTravelGroupShanghaiDateRelation(group, now) === 'past' &&
+        isSalesSupplementCompleted(group),
+    }));
   }
 
   async exportTravelGroupsXlsx(actor: any, filters: any = {}) {
@@ -3128,7 +3213,7 @@ export class BusinessDataNestService {
   ) {
     requireAnyRole(actor, ['sales', 'finance', 'after_sales', 'warehouse']);
     assertShippingDatePatchAllowedFields(payload);
-    const shippingDate = parseRequiredShippingDate(payload.shippingDate);
+    const shipping = resolveShippingDateUpdate(payload);
     const reason = normalizeOptionalString(payload.reason);
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
@@ -3145,16 +3230,19 @@ export class BusinessDataNestService {
       }
       assertCanUpdateSalesOrderShippingDate(actor, current);
       await this.assertPassesGlobalSalesOrderMarkScope(actor, current);
-      assertShippingDateNotBeforeSubmission(shippingDate, current.createdAt);
       if (current.packingStatus === 'PACKED') {
         throw salesOrderAlreadyOutboundError();
       }
 
+      const previousMode = toShippingDateModeApi(current.shippingDateMode);
       const previousDate = current.shippingDate
         ? formatDateOnly(current.shippingDate)
         : null;
-      const nextDate = formatDateOnly(shippingDate);
-      if (previousDate === nextDate) {
+      const nextMode = toShippingDateModeApi(shipping.mode);
+      const nextDate = shipping.shippingDate
+        ? formatDateOnly(shipping.shippingDate)
+        : null;
+      if (previousMode === nextMode && previousDate === nextDate) {
         return current;
       }
 
@@ -3166,8 +3254,9 @@ export class BusinessDataNestService {
           },
         },
         data: {
-          shippingDate,
-          shippingDateSource: 'USER_SPECIFIED',
+          shippingDateMode: shipping.mode,
+          shippingDate: shipping.shippingDate,
+          shippingDateSource: shipping.source,
           shippingDateBackfillBatchId: null,
           updatedById: actor.id,
           updatedAt: new Date(),
@@ -3198,11 +3287,13 @@ export class BusinessDataNestService {
           beforeData: {
             id,
             orderNo: current.orderNo,
+            shippingDateMode: previousMode,
             shippingDate: previousDate,
           },
           afterData: {
             id,
             orderNo: updatedOrder.orderNo,
+            shippingDateMode: nextMode,
             shippingDate: nextDate,
             reason,
           },
@@ -5647,8 +5738,11 @@ export class BusinessDataNestService {
         : { tasterId: actor.id };
     }
 
-    if (actor?.role === 'front_desk' && kind === 'travel') {
-      return null;
+    if (
+      actor?.role === 'front_desk' &&
+      ['travel', 'pending'].includes(kind)
+    ) {
+      return buildFrontDeskTravelGroupReadScope(actor);
     }
 
     if (actor?.role === 'sales') {
@@ -5666,7 +5760,7 @@ export class BusinessDataNestService {
       return buildTasterTravelGroupReadScope(actor);
     }
     if (actor?.role === 'front_desk') {
-      return null;
+      return buildFrontDeskTravelGroupReadScope(actor);
     }
 
     if (actor?.role === 'sales') {
@@ -5699,6 +5793,11 @@ export class BusinessDataNestService {
         kind === 'travel'
           ? canTasterReadTravelGroup(group, actor)
           : group.tasterId === actor.id;
+    } else if (
+      actor?.role === 'front_desk' &&
+      ['travel', 'pending'].includes(kind)
+    ) {
+      canRead = canFrontDeskReadTravelGroup(actor, group);
     } else if (actor?.role === 'sales') {
       if (kind === 'travel') {
         canRead = canSalesHandleTravelGroup(group);
@@ -6058,6 +6157,7 @@ function buildSalesOrderWhere(filters: any = {}) {
     filters.shippingDateTo,
   );
   if (shippingDateRange) {
+    where.shippingDateMode = 'SCHEDULED';
     where.shippingDate = shippingDateRange;
   }
   return where;
@@ -6471,7 +6571,11 @@ function assertShippingDatePatchAllowedFields(payload: any) {
       'Request body must be an object.',
     );
   }
-  const allowedFields = new Set(['shippingDate', 'reason']);
+  const allowedFields = new Set([
+    'shippingDateMode',
+    'shippingDate',
+    'reason',
+  ]);
   const deniedFields = Object.keys(payload).filter(
     (field) => !allowedFields.has(field),
   );
@@ -6740,7 +6844,7 @@ function salesOrderAlreadyOutboundError() {
   return createHttpError(
     409,
     'SALES_ORDER_ALREADY_OUTBOUND',
-    '订单已出库，发货日期不可修改。',
+    '订单已出库，发货信息不可修改。',
   );
 }
 
@@ -7438,6 +7542,7 @@ function buildSalesOrderData(
     orderType: toPrismaOrderType(payload?.orderType || 'travel_group'),
     travelGroupId: normalizeOptionalString(payload?.travelGroupId),
     orderDate: parseDate(payload?.orderDate, 'orderDate', true),
+    shippingDateMode: shippingDate.mode,
     shippingDate: shippingDate.shippingDate,
     shippingDateSource: shippingDate.source,
     shippingDateBackfillBatchId: null,
@@ -7900,6 +8005,7 @@ function buildAfterSalesSalesOrderCreateData(options: any) {
     district: source.district || null,
     address: source.address || null,
     orderDate: options.orderDate,
+    shippingDateMode: 'SCHEDULED',
     shippingDate,
     shippingDateSource: 'SYSTEM_DEFAULT',
     shippingDateBackfillBatchId: null,
@@ -9885,6 +9991,19 @@ function getEffectiveSalesOrders(salesOrders: any[]) {
   );
 }
 
+function toTodayTravelGroupDto(group: any) {
+  return {
+    licensePlate: normalizeOptionalString(group?.licensePlate),
+    tasterName: normalizeOptionalString(group?.tasterName),
+    tastingRoomNo: normalizeOptionalString(group?.tastingRoomNo),
+    cigaretteFeeCents:
+      group?.cigaretteFeeCents === null ||
+      group?.cigaretteFeeCents === undefined
+        ? null
+        : Number(group.cigaretteFeeCents),
+  };
+}
+
 function sumAmountCents(rows: any[], fieldName: string) {
   return (Array.isArray(rows) ? rows : []).reduce(
     (sum: number, row: any) => sum + Number(row?.[fieldName] || 0),
@@ -10552,6 +10671,7 @@ function toSalesOrderDto(order: any) {
     district: order.district,
     address: order.address,
     orderDate: formatDate(order.orderDate),
+    shippingDateMode: toShippingDateModeApi(order.shippingDateMode),
     shippingDate: formatDate(order.shippingDate),
     shippingRiskWarnings: buildSalesOrderShippingRiskWarnings(order),
     canEditShippingDate: false,
@@ -11366,7 +11486,10 @@ function toSalesOrderExportRow(
     orderType: String(order.orderType || '').toLowerCase(),
     salesFormNo: order.salesFormNo || '',
     orderDate: formatDate(order.orderDate) || '',
-    shippingDate: formatDate(order.shippingDate) || '',
+    shippingDate: shippingDateDisplayText(
+      order.shippingDateMode,
+      order.shippingDate,
+    ),
     customerName: order.customerName || order.customer?.name || '',
     customerPhone: order.customerPhone || order.customer?.phone || '',
     address: buildSalesOrderExportAddress(order),
@@ -12533,6 +12656,16 @@ function buildTravelGroupSalesSupplementIncompleteScope() {
   };
 }
 
+function buildTravelGroupSalesSupplementCompletedScope() {
+  return {
+    AND: [
+      { departureTime: { not: null } },
+      { departureTime: { not: '' } },
+      { lossStatus: { not: 'PENDING' } },
+    ],
+  };
+}
+
 function buildTasterTravelGroupReadScope(actor: any, now = new Date()) {
   const today = getShanghaiTodayDate(now);
   return {
@@ -12652,15 +12785,17 @@ function assertSalesCanUseTravelGroup(actor: any, travelGroup: any) {
   if (actor?.role !== 'sales') {
     return;
   }
+  const relation = getTravelGroupShanghaiDateRelation(travelGroup);
   if (
-    formatDate(travelGroup?.visitDate) === getShanghaiTodayBusinessDate()
+    relation === 'today' ||
+    (relation === 'past' && isSalesSupplementCompleted(travelGroup))
   ) {
     return;
   }
   throw createHttpError(
     403,
-    'SALES_ORDER_TRAVEL_GROUP_DATE_NOT_ALLOWED',
-    'Sales can only create or edit orders for today travel groups.',
+    'SALES_ORDER_TRAVEL_GROUP_NOT_ELIGIBLE',
+    '销售只能为当天旅行团或已结束的历史旅行团录入订单。',
   );
 }
 
@@ -13369,6 +13504,21 @@ async function findActiveRoleUser(
     );
   }
   return user;
+}
+
+function buildSalesOrderEntryTravelGroupScope(now = new Date()) {
+  const today = getShanghaiTodayDate(now);
+  return {
+    OR: [
+      { visitDate: today },
+      {
+        AND: [
+          { visitDate: { lt: today } },
+          buildTravelGroupSalesSupplementCompletedScope(),
+        ],
+      },
+    ],
+  };
 }
 
 function buildActiveCommissionRuleWhere(calculationDate: Date) {

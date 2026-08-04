@@ -1375,7 +1375,9 @@ class _WarehouseOrderList extends StatelessWidget {
                 Text(
                   '履约仓 ${_display(order.fulfillmentWarehouseName)}',
                 ),
-                Text('发货 ${_display(order.shippingDate)}'),
+                Text(
+                  '发货 ${displayShippingDate(order.shippingDateMode, order.shippingDate)}',
+                ),
                 Text('物流单号 ${_display(order.logisticsNo)}'),
                 Text('件数 ${order.packageCount}'),
               ],
@@ -1510,7 +1512,10 @@ class _SelectedOrderSummary extends StatelessWidget {
             _InfoRow(label: '订单号', value: order.orderNo),
             _InfoRow(
               label: '发货日期',
-              value: _display(order.shippingDate),
+              value: displayShippingDate(
+                order.shippingDateMode,
+                order.shippingDate,
+              ),
             ),
             _InfoRow(label: '客户', value: _display(order.customerName)),
             _InfoRow(label: '电话', value: _display(order.customerPhone)),

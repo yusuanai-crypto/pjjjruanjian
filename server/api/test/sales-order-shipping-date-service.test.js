@@ -11,6 +11,7 @@ function buildOrder(overrides = {}) {
     orderNo: 'SO-20260727-001',
     orderType: 'EXTERNAL',
     orderDate: new Date('2026-07-27T00:00:00.000Z'),
+    shippingDateMode: 'SCHEDULED',
     shippingDate: new Date('2026-07-28T00:00:00.000Z'),
     shippingDateSource: 'SYSTEM_DEFAULT',
     shippingDateBackfillBatchId: null,
@@ -119,11 +120,69 @@ test('sales, finance, after-sales and warehouse can update before outbound and e
     assert.equal(log.actorRoleSnapshot, actors[index].role);
     assert.equal(log.beforeData.orderNo, order.orderNo);
     assert.equal(log.afterData.orderNo, order.orderNo);
+    assert.equal(log.beforeData.shippingDateMode, 'scheduled');
+    assert.equal(log.afterData.shippingDateMode, 'scheduled');
     assert.equal(log.afterData.reason, `角色验证 ${actors[index].role}`);
     assert.ok(log.beforeData.shippingDate);
     assert.ok(log.afterData.shippingDate);
     assert.ok(log.createdAt instanceof Date);
   }
+});
+
+test('shipping mode switches in both directions, accepts a past date, and audits mode plus date', async () => {
+  const order = buildOrder();
+  const { service, logs } = buildService(order);
+  const actor = { id: 'sales-1', role: 'sales' };
+
+  const pending = await service.updateSalesOrderShippingDate(
+    actor,
+    order.id,
+    {
+      shippingDateMode: 'pending_customer_notice',
+      reason: '等待客人确认',
+    },
+  );
+  assert.equal(pending.shippingDateMode, 'pending_customer_notice');
+  assert.equal(pending.shippingDate, null);
+  assert.equal(order.shippingDateMode, 'PENDING_CUSTOMER_NOTICE');
+  assert.equal(order.shippingDateSource, null);
+
+  const scheduled = await service.updateSalesOrderShippingDate(
+    actor,
+    order.id,
+    {
+      shippingDateMode: 'scheduled',
+      shippingDate: '2026-07-01',
+      reason: '补录历史发货日期',
+    },
+  );
+  assert.equal(scheduled.shippingDateMode, 'scheduled');
+  assert.equal(scheduled.shippingDate, '2026-07-01');
+  assert.equal(order.shippingDateMode, 'SCHEDULED');
+  assert.equal(order.shippingDateSource, 'USER_SPECIFIED');
+
+  assert.deepEqual(
+    logs.map((log) => ({
+      beforeMode: log.beforeData.shippingDateMode,
+      beforeDate: log.beforeData.shippingDate,
+      afterMode: log.afterData.shippingDateMode,
+      afterDate: log.afterData.shippingDate,
+    })),
+    [
+      {
+        beforeMode: 'scheduled',
+        beforeDate: '2026-07-28',
+        afterMode: 'pending_customer_notice',
+        afterDate: null,
+      },
+      {
+        beforeMode: 'pending_customer_notice',
+        beforeDate: null,
+        afterMode: 'scheduled',
+        afterDate: '2026-07-01',
+      },
+    ],
+  );
 });
 
 test('an unrelated role cannot update the shipping date', async () => {
@@ -151,12 +210,12 @@ test('an outbound order cannot be updated', async () => {
     service.updateSalesOrderShippingDate(
       { id: 'finance-1', role: 'finance' },
       order.id,
-      { shippingDate: '2026-08-01' },
+      { shippingDateMode: 'pending_customer_notice' },
     ),
     (error) =>
       error?.statusCode === 409 &&
       error?.code === 'SALES_ORDER_ALREADY_OUTBOUND' &&
-      error?.message === '订单已出库，发货日期不可修改。',
+      error?.message === '订单已出库，发货信息不可修改。',
   );
   assert.equal(logs.length, 0);
 });

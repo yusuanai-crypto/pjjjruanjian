@@ -2,6 +2,7 @@ import {
   logisticsProviderName,
   normalizeLogisticsProviderCode,
 } from './logistics-provider.helper';
+import { toShippingDateModeApi } from './sales-order-shipping-date.helper';
 import { SALES_SHEET_BRAND } from './sales-sheet-brand.config';
 
 const ORDER_TYPE_FROM_PRISMA: any = {
@@ -128,6 +129,7 @@ export function buildSalesSheetDto(
       orderTypeLabel: labelFor(ORDER_TYPE_LABELS, orderType),
       salesFormNo: order?.salesFormNo || null,
       orderDate: formatDate(order?.orderDate),
+      shippingDateMode: toShippingDateModeApi(order?.shippingDateMode),
       shippingDate: formatDate(order?.shippingDate),
       remark: order?.remark || null,
     },
@@ -234,6 +236,7 @@ export function buildPublicSalesSheetDto(source: any) {
     order: {
       orderNo: salesSheet.order.orderNo,
       orderDate: salesSheet.order.orderDate,
+      shippingDateMode: salesSheet.order.shippingDateMode,
       shippingDate: salesSheet.order.shippingDate,
     },
     customer: {

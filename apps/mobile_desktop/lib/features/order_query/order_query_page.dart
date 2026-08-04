@@ -544,51 +544,62 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
   }
 
   Future<void> _openShippingDateDialog(SalesOrderRecord order) async {
-    final submittedAt = DateTime.tryParse(order.createdAt ?? '');
-    final shanghaiSubmittedAt =
-        submittedAt?.toUtc().add(const Duration(hours: 8));
-    final minimumDate = shanghaiSubmittedAt == null
-        ? _shanghaiToday()
-        : DateTime(
-            shanghaiSubmittedAt.year,
-            shanghaiSubmittedAt.month,
-            shanghaiSubmittedAt.day,
-          );
-    var selectedDate =
-        DateTime.tryParse(order.shippingDate ?? '') ?? minimumDate;
-    if (selectedDate.isBefore(minimumDate)) {
-      selectedDate = minimumDate;
-    }
+    var selectedMode = order.shippingDateMode;
+    var selectedDate = DateTime.tryParse(order.shippingDate ?? '') ??
+        _shanghaiToday().add(const Duration(days: 1));
     final reasonController = TextEditingController();
     final result = await showDialog<_ShippingDateEditResult>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text('修改 ${order.orderNo} 发货日期'),
+          title: Text('修改 ${order.orderNo} 发货信息'),
           content: SizedBox(
             width: 420,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('order-shipping-date-edit-picker'),
-                  onPressed: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      firstDate: minimumDate,
-                      lastDate: DateTime(9999, 12, 31),
-                      initialDate: selectedDate,
-                      locale: const Locale('zh', 'CN'),
-                    );
-                    if (picked != null) {
-                      setDialogState(() => selectedDate = picked);
-                    }
+                SegmentedButton<String>(
+                  key: const ValueKey('order-shipping-date-edit-mode'),
+                  segments: const [
+                    ButtonSegment(
+                      value: scheduledShippingDateMode,
+                      label: Text('选择发货日期'),
+                    ),
+                    ButtonSegment(
+                      value: pendingCustomerNoticeShippingDateMode,
+                      label: Text('待客人通知'),
+                    ),
+                  ],
+                  selected: {selectedMode},
+                  onSelectionChanged: (selection) {
+                    setDialogState(() => selectedMode = selection.first);
                   },
-                  icon: const Icon(Icons.local_shipping_rounded),
-                  label: Text('发货日期 ${formatDate(selectedDate)}'),
                 ),
-                if (formatDate(selectedDate) == formatDate(minimumDate)) ...[
+                const SizedBox(height: 12),
+                if (selectedMode == scheduledShippingDateMode)
+                  OutlinedButton.icon(
+                    key: const ValueKey('order-shipping-date-edit-picker'),
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        firstDate: DateTime(1),
+                        lastDate: DateTime(9999, 12, 31),
+                        initialDate: selectedDate,
+                        locale: const Locale('zh', 'CN'),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => selectedDate = picked);
+                      }
+                    },
+                    icon: const Icon(Icons.local_shipping_rounded),
+                    label: Text('发货日期 ${formatDate(selectedDate)}'),
+                  )
+                else
+                  const Text('发货安排：待客人通知'),
+                if (selectedMode == scheduledShippingDateMode &&
+                    formatDate(selectedDate) ==
+                        formatDate(_shanghaiToday())) ...[
                   const SizedBox(height: 10),
                   const StatusTag(
                     label: '该订单计划当天发货，请确认仓库可及时处理。',
@@ -616,7 +627,10 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
               key: const ValueKey('order-shipping-date-save-button'),
               onPressed: () => Navigator.of(context).pop(
                 _ShippingDateEditResult(
-                  shippingDate: formatDate(selectedDate),
+                  shippingDateMode: selectedMode,
+                  shippingDate: selectedMode == scheduledShippingDateMode
+                      ? formatDate(selectedDate)
+                      : null,
                   reason: reasonController.text.trim(),
                 ),
               ),
@@ -637,6 +651,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
     try {
       final updated = await _businessApi.updateSalesOrderShippingDate(
         order.id,
+        shippingDateMode: result.shippingDateMode,
         shippingDate: result.shippingDate,
         reason: result.reason,
       );
@@ -644,7 +659,7 @@ class _OrderQueryPageState extends State<OrderQueryPage> {
       _replaceOrder(updated);
       setState(() => _busyOrderIds.remove(order.id));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${updated.orderNo} 发货日期已更新。')),
+        SnackBar(content: Text('${updated.orderNo} 发货信息已更新。')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1200,7 +1215,9 @@ class _OrderList extends StatelessWidget {
                 Text(
                     '${order.customerName} · ${order.customerPhone ?? '未填电话'}'),
                 Text(_travelGroupLabel(order)),
-                Text('发货 ${_display(order.shippingDate)}'),
+                Text(
+                  '发货 ${displayShippingDate(order.shippingDateMode, order.shippingDate)}',
+                ),
                 if (showPersonalSplit)
                   Text(
                     order.isGuidePersonal
@@ -1332,14 +1349,14 @@ class _OrderDetailPanel extends StatelessWidget {
                   key: const ValueKey('order-edit-shipping-date-button'),
                   onPressed: orderBusy ? null : onEditShippingDate,
                   icon: const Icon(Icons.edit_calendar_rounded),
-                  label: const Text('修改发货日期'),
+                  label: const Text('修改发货信息'),
                 ),
               )
             else if (order.packingStatus == PackingStatus.packed.value)
               const Align(
                 alignment: Alignment.centerLeft,
                 child: StatusTag(
-                  label: '订单已出库，发货日期只读',
+                  label: '订单已出库，发货信息只读',
                   tone: StatusTone.neutral,
                 ),
               ),
@@ -1395,7 +1412,10 @@ class _OrderDetailPanel extends StatelessWidget {
             _InfoRow(label: '订单日期', value: order.orderDate),
             _InfoRow(
               label: '发货日期',
-              value: _display(order.shippingDate),
+              value: displayShippingDate(
+                order.shippingDateMode,
+                order.shippingDate,
+              ),
             ),
             _InfoRow(label: '订单类型', value: _orderTypeLabel(order.orderType)),
             _InfoRow(label: '旅行团', value: _travelGroupLabel(order)),
@@ -2678,7 +2698,13 @@ class _SalesSheetDialogDetails extends StatelessWidget {
         const SizedBox(height: 10),
         _InfoRow(label: '系统单号', value: _display(sheet.order.orderNo)),
         _InfoRow(label: '订单日期', value: _display(sheet.order.orderDate)),
-        _InfoRow(label: '发货日期', value: _display(sheet.order.shippingDate)),
+        _InfoRow(
+          label: '发货日期',
+          value: displayShippingDate(
+            sheet.order.shippingDateMode,
+            sheet.order.shippingDate,
+          ),
+        ),
         _InfoRow(
           label: '客户姓名',
           value: _display(sheet.customer.name),
@@ -2947,11 +2973,13 @@ class _OrderEditResult {
 
 class _ShippingDateEditResult {
   const _ShippingDateEditResult({
+    required this.shippingDateMode,
     required this.shippingDate,
     required this.reason,
   });
 
-  final String shippingDate;
+  final String shippingDateMode;
+  final String? shippingDate;
   final String reason;
 }
 

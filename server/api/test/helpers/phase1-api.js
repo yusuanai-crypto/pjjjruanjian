@@ -3382,6 +3382,11 @@ function seedSalesOrders(rows, seeds, now, salesOrderItems = []) {
       district: seed.district ?? null,
       address: seed.address ?? null,
       orderDate: asDate(seed.orderDate) || now,
+      shippingDateMode: seed.shippingDateMode || 'SCHEDULED',
+      shippingDate: asDate(seed.shippingDate) || null,
+      shippingDateSource: seed.shippingDateSource ?? null,
+      shippingDateBackfillBatchId:
+        seed.shippingDateBackfillBatchId ?? null,
       salesFormNo: seed.salesFormNo ?? null,
       qrCodeTokenHash: seed.qrCodeTokenHash ?? null,
       qrCodeGeneratedAt: asDate(seed.qrCodeGeneratedAt) || null,

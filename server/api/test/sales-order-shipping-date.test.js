@@ -19,6 +19,7 @@ test('submission default is the next Shanghai natural day', () => {
   const result = resolve({}, '2026-07-27T04:00:00.000Z');
 
   assert.equal(formatDateOnly(result.shippingDate), '2026-07-28');
+  assert.equal(result.mode, 'SCHEDULED');
   assert.equal(result.source, 'SYSTEM_DEFAULT');
   assert.equal(result.manuallySpecified, false);
 });
@@ -49,19 +50,59 @@ test('a manually selected future date is preserved', () => {
   assert.equal(result.source, 'USER_SPECIFIED');
 });
 
-test('a manual date before the actual submission day is rejected', () => {
+test('a manually selected past date is accepted', () => {
+  const result = resolve(
+    {
+      shippingDateMode: 'scheduled',
+      shippingDate: '2026-07-27',
+      shippingDateManuallySpecified: true,
+    },
+    '2026-07-28T04:00:00.000Z',
+  );
+
+  assert.equal(formatDateOnly(result.shippingDate), '2026-07-27');
+  assert.equal(result.mode, 'SCHEDULED');
+  assert.equal(result.source, 'USER_SPECIFIED');
+});
+
+test('pending customer notice has an explicit mode and a null date', () => {
+  const result = resolve(
+    { shippingDateMode: 'pending_customer_notice' },
+    '2026-07-28T04:00:00.000Z',
+  );
+
+  assert.equal(result.mode, 'PENDING_CUSTOMER_NOTICE');
+  assert.equal(result.shippingDate, null);
+  assert.equal(result.source, null);
+});
+
+test('invalid dates and conflicting mode/date combinations are rejected', () => {
+  for (const payload of [
+    { shippingDateMode: 'scheduled', shippingDate: '2026-02-30' },
+    { shippingDateMode: 'scheduled', shippingDate: '2026/02/28' },
+  ]) {
+    assert.throws(
+      () => resolve(payload, '2026-07-28T04:00:00.000Z'),
+      (error) => error?.statusCode === 400 && error?.code === 'VALIDATION_FAILED',
+    );
+  }
   assert.throws(
     () =>
       resolve(
         {
-          shippingDate: '2026-07-27',
-          shippingDateManuallySpecified: true,
+          shippingDateMode: 'pending_customer_notice',
+          shippingDate: '2026-07-29',
         },
-        '2026-07-27T16:30:00.000Z',
+        '2026-07-28T04:00:00.000Z',
       ),
     (error) =>
       error?.statusCode === 400 &&
-      error?.code === 'SHIPPING_DATE_BEFORE_SUBMISSION',
+      error?.code === 'SHIPPING_DATE_MODE_CONFLICT',
+  );
+  assert.throws(
+    () => resolve({ shippingDateMode: 'scheduled' }, '2026-07-28T04:00:00.000Z'),
+    (error) =>
+      error?.statusCode === 400 && error?.code === 'SHIPPING_DATE_REQUIRED',
   );
 });
 
@@ -103,6 +144,7 @@ test('historical backfill only fills null values and is repeatable', async () =>
     {
       id: 'a',
       createdAt: new Date('2026-07-27T04:00:00.000Z'),
+      shippingDateMode: 'SCHEDULED',
       shippingDate: null,
       shippingDateSource: null,
       shippingDateBackfillBatchId: null,
@@ -110,8 +152,17 @@ test('historical backfill only fills null values and is repeatable', async () =>
     {
       id: 'b',
       createdAt: new Date('2026-07-27T04:00:00.000Z'),
+      shippingDateMode: 'SCHEDULED',
       shippingDate: new Date('2026-08-20T00:00:00.000Z'),
       shippingDateSource: 'USER_SPECIFIED',
+      shippingDateBackfillBatchId: null,
+    },
+    {
+      id: 'c',
+      createdAt: new Date('2026-07-27T04:00:00.000Z'),
+      shippingDateMode: 'PENDING_CUSTOMER_NOTICE',
+      shippingDate: null,
+      shippingDateSource: null,
       shippingDateBackfillBatchId: null,
     },
   ];
@@ -122,16 +173,23 @@ test('historical backfill only fills null values and is repeatable', async () =>
           .filter(
             (row) =>
               row.shippingDate === null &&
+              row.shippingDateMode !== 'PENDING_CUSTOMER_NOTICE' &&
               (!where.id?.gt || row.id > where.id.gt),
           )
           .sort((left, right) => left.id.localeCompare(right.id))
           .slice(0, take)
-          .map(({ id, createdAt }) => ({ id, createdAt }));
+          .map(({ id, createdAt, shippingDateMode }) => ({
+            id,
+            createdAt,
+            shippingDateMode,
+          }));
       },
       async updateMany({ where, data }) {
         const row = rows.find(
           (candidate) =>
-            candidate.id === where.id && candidate.shippingDate === null,
+            candidate.id === where.id &&
+            candidate.shippingDate === null &&
+            candidate.shippingDateMode !== 'PENDING_CUSTOMER_NOTICE',
         );
         if (!row) return { count: 0 };
         Object.assign(row, data);
@@ -156,4 +214,6 @@ test('historical backfill only fills null values and is repeatable', async () =>
   assert.equal(rows[0].shippingDateBackfillBatchId, 'shipping-date-test');
   assert.equal(formatDateOnly(rows[1].shippingDate), '2026-08-20');
   assert.equal(rows[1].shippingDateSource, 'USER_SPECIFIED');
+  assert.equal(rows[2].shippingDate, null);
+  assert.equal(rows[2].shippingDateMode, 'PENDING_CUSTOMER_NOTICE');
 });

@@ -42,6 +42,32 @@ export class TravelGroupsNestController {
     };
   }
 
+  @Get('today')
+  @UseGuards(AuthUserGuard, RolesGuard)
+  @RequireRoles('front_desk')
+  async listToday(@Req() request: any) {
+    return {
+      travelGroups: await this.businessDataService.listTodayTravelGroups(
+        request.currentUser,
+      ),
+    };
+  }
+
+  @Get('order-entry-options')
+  async listOrderEntryOptions(
+    @Query() query: any,
+    @Req() request: any,
+  ) {
+    const actor = await this.authService.authenticateRequest(request);
+    return {
+      travelGroups:
+        await this.businessDataService.listSalesOrderEntryTravelGroups(
+          actor,
+          query,
+        ),
+    };
+  }
+
   @Post()
   async create(@Body() body: unknown, @Req() request: any) {
     const actor = await this.authService.authenticateRequest(request);

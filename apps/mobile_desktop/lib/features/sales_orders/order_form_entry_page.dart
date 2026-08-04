@@ -56,6 +56,12 @@ class _OrderFormEntryPageState extends State<OrderFormEntryPage> {
       context: context,
       builder: (context) => TravelGroupPickerDialog(
         businessApi: _businessApi,
+        loadTravelGroups: (query) =>
+            _businessApi.listSalesOrderEntryTravelGroups(
+          limit: query.limit,
+          tasterId: query.tasterId,
+          tastingRoomNo: query.tastingRoomNo,
+        ),
         showFinanceMark: canViewFinanceMark(widget.role),
       ),
     );

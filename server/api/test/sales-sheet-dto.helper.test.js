@@ -23,6 +23,8 @@ test('unit: sales sheet DTO builds internal and public views for a normal multi-
   assert.equal(salesSheet.order.orderNo, 'SO20260701001');
   assert.equal(salesSheet.order.orderType, 'travel_group');
   assert.equal(salesSheet.order.orderTypeLabel, '旅行团订单');
+  assert.equal(salesSheet.order.shippingDateMode, 'scheduled');
+  assert.equal(salesSheet.order.shippingDate, '2026-07-02');
   assert.equal(salesSheet.customer.phone, '13812340000');
   assert.equal(salesSheet.customer.phoneMasked, '138****0000');
   assert.equal(salesSheet.customer.fullAddress, '贵州省贵阳市观山湖区测试路 1 号');
@@ -147,6 +149,26 @@ test('unit: sales sheet DTO supports orders without a travel group', () => {
   assert.equal(salesSheet.paymentDetails.length, 2);
 });
 
+test('unit: pending customer notice is preserved in internal and public sales sheets', () => {
+  const salesSheet = buildSalesSheetDto(
+    buildOrderFixture({
+      shippingDateMode: 'PENDING_CUSTOMER_NOTICE',
+      shippingDate: null,
+    }),
+  );
+
+  assert.equal(
+    salesSheet.order.shippingDateMode,
+    'pending_customer_notice',
+  );
+  assert.equal(salesSheet.order.shippingDate, null);
+  assert.equal(
+    salesSheet.public.order.shippingDateMode,
+    'pending_customer_notice',
+  );
+  assert.equal(salesSheet.public.order.shippingDate, null);
+});
+
 test('unit: sales sheet payment summary falls back to compatibility amounts', () => {
   const salesSheet = buildSalesSheetDto(
     buildOrderFixture({
@@ -254,6 +276,8 @@ function buildOrderFixture(overrides = {}) {
     district: '观山湖区',
     address: '测试路 1 号',
     orderDate: new Date('2026-07-01T00:00:00.000Z'),
+    shippingDateMode: 'SCHEDULED',
+    shippingDate: new Date('2026-07-02T00:00:00.000Z'),
     salesFormNo: 'XS-001',
     totalAmountCents: 59800,
     cashOnDeliveryAmountCents: 10000,

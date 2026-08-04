@@ -8,6 +8,7 @@ import { CommissionRecordsNestService } from '../commissions/commission-records.
 import { SpecialOrderCommissionService } from '../commissions/special-order-commission.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import { withGeneratedSalesOrderNo } from '../business-data/sales-order-no.helper';
+import { defaultBackfillShippingDate } from '../business-data/sales-order-shipping-date.helper';
 import {
   assertAllowedFields,
   claimSpecialOrderTransition,
@@ -394,8 +395,9 @@ export class SpecialOrdersNestService {
                 district: input.customer?.district || null,
                 address: input.customer?.address || null,
                 orderDate: input.orderDate,
-                shippingDate: null,
-                shippingDateSource: null,
+                shippingDateMode: 'SCHEDULED',
+                shippingDate: defaultBackfillShippingDate(now),
+                shippingDateSource: 'SYSTEM_DEFAULT',
                 totalAmountCents: input.totalAmountCents,
                 cashOnDeliveryAmountCents: 0,
                 logisticsMethod: null,

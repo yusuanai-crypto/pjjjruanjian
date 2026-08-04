@@ -5832,7 +5832,17 @@ test('contract: pending travel groups are computed from travel group rules and p
       assert.equal(adminPending.response.status, 200);
       assert.deepEqual(
         groupNos(frontDeskPending.body.data.pendingTravelGroups),
-        groupNos(adminPending.body.data.pendingTravelGroups),
+        groupNos(
+          adminPending.body.data.pendingTravelGroups.filter(
+            (group) => group.visitDate >= SHANGHAI_TODAY,
+          ),
+        ),
+      );
+      assert.equal(
+        frontDeskPending.body.data.pendingTravelGroups.some(
+          (group) => group.groupNo === 'PEND-FINANCE-OLD',
+        ),
+        false,
       );
 
       const tasterPending = await requestJson(

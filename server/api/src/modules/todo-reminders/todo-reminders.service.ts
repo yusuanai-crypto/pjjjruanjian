@@ -5,6 +5,10 @@ import { createHttpError } from '../../common/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OperationLogsNestService } from '../operation-logs/operation-log.nest.service';
 import {
+  buildFrontDeskTravelGroupReadScope,
+  isFrontDeskActor,
+} from '../business-data/front-desk-travel-group-read-policy.helper';
+import {
   TodoRuleEngine,
   TodoRuleMatch,
   TodoSourceType,
@@ -47,7 +51,7 @@ export class TodoRemindersService {
   async listForUser(actor: any, input: any = {}) {
     const filters = parseListFilters(input);
     const todoWhere = buildTodoWhere(filters);
-    const where: any = {
+    const baseWhere: any = {
       userId: actor.id,
       ...(filters.archived === null
         ? {}
@@ -56,6 +60,7 @@ export class TodoRemindersService {
         ? { todo: { is: todoWhere } }
         : {}),
     };
+    const where = await this.buildVisibleRecipientWhere(actor, baseWhere);
     const [total, recipients] = await Promise.all([
       this.prisma.todoRecipient.count({ where }),
       this.prisma.todoRecipient.findMany({
@@ -82,10 +87,10 @@ export class TodoRemindersService {
   async summaryForUser(actor: any) {
     const now = new Date();
     const { start, end } = shanghaiDayBounds(now);
-    const base = {
+    const base = await this.buildVisibleRecipientWhere(actor, {
       userId: actor.id,
       archivedAt: null,
-    };
+    });
     const [unfinished, unread, todayDue, overdue, urgent] = await Promise.all([
       this.prisma.todoRecipient.count({
         where: { ...base, todo: { is: { status: 'ACTIVE' } } },
@@ -125,12 +130,12 @@ export class TodoRemindersService {
   }
 
   async getForUser(actor: any, id: string) {
-    const recipient = await this.findRecipientForUser(actor.id, id);
+    const recipient = await this.findRecipientForUser(actor, id);
     return toReminderDto(recipient);
   }
 
   async markRead(actor: any, id: string) {
-    const current = await this.findRecipientForUser(actor.id, id);
+    const current = await this.findRecipientForUser(actor, id);
     if (current.readAt) {
       return toReminderDto(current);
     }
@@ -144,7 +149,7 @@ export class TodoRemindersService {
 
   async updatePreferences(actor: any, id: string, payload: any) {
     assertOnlyFields(payload, ['personalNote', 'personalRemindAt']);
-    const current = await this.findRecipientForUser(actor.id, id);
+    const current = await this.findRecipientForUser(actor, id);
     const data: any = {};
     if (Object.prototype.hasOwnProperty.call(payload || {}, 'personalNote')) {
       data.personalNote = optionalBoundedText(
@@ -176,7 +181,7 @@ export class TodoRemindersService {
 
   async snooze(actor: any, id: string, payload: any) {
     assertOnlyFields(payload, ['until']);
-    const current = await this.findRecipientForUser(actor.id, id);
+    const current = await this.findRecipientForUser(actor, id);
     if (current.todo.status !== 'ACTIVE') {
       throw createHttpError(
         400,
@@ -202,12 +207,12 @@ export class TodoRemindersService {
   }
 
   async verifyCompletion(actor: any, id: string) {
-    const current = await this.findRecipientForUser(actor.id, id);
+    const current = await this.findRecipientForUser(actor, id);
     await this.reconcileSource(
       current.todo.sourceType as TodoSourceType,
       current.todo.sourceId,
     );
-    const updated = await this.findRecipientForUser(actor.id, id);
+    const updated = await this.findRecipientForUser(actor, id);
     if (updated.todo.status === 'ACTIVE') {
       throw createHttpError(
         409,
@@ -219,7 +224,7 @@ export class TodoRemindersService {
   }
 
   async archive(actor: any, id: string) {
-    const current = await this.findRecipientForUser(actor.id, id);
+    const current = await this.findRecipientForUser(actor, id);
     if (current.todo.status === 'ACTIVE') {
       throw createHttpError(
         409,
@@ -858,9 +863,46 @@ export class TodoRemindersService {
     });
   }
 
-  private async findRecipientForUser(userId: string, id: string) {
+  private async buildVisibleRecipientWhere(actor: any, baseWhere: any) {
+    if (!isFrontDeskActor(actor)) {
+      return baseWhere;
+    }
+    const visibleTravelGroups = await this.prisma.travelGroup.findMany({
+      where: buildFrontDeskTravelGroupReadScope(actor),
+      select: { id: true },
+    });
+    const visibilityWhere = {
+      OR: [
+        {
+          todo: {
+            is: {
+              sourceType: { not: 'TRAVEL_GROUP' },
+            },
+          },
+        },
+        {
+          todo: {
+            is: {
+              sourceType: 'TRAVEL_GROUP',
+              sourceId: {
+                in: visibleTravelGroups.map((group: any) => group.id),
+              },
+            },
+          },
+        },
+      ],
+    };
+    return {
+      AND: [baseWhere, visibilityWhere],
+    };
+  }
+
+  private async findRecipientForUser(actor: any, id: string) {
     const recipient = await this.prisma.todoRecipient.findFirst({
-      where: { id: normalizeId(id), userId },
+      where: await this.buildVisibleRecipientWhere(actor, {
+        id: normalizeId(id),
+        userId: actor.id,
+      }),
       include: { todo: true },
     });
     if (!recipient) {

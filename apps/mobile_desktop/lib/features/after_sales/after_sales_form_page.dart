@@ -1197,7 +1197,7 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
                 '${order.customerName} · ${_fieldValue(order.customerPhone)}',
             meta: [
               '订单金额 ${formatMoneyCents(order.totalAmountCents)}',
-              '发货日期 ${_fieldValue(order.shippingDate)}',
+              '发货日期 ${displayShippingDate(order.shippingDateMode, order.shippingDate)}',
               _deliverySummaryLabel(order.deliverySummary),
               if (canViewFinanceMark(widget.role)) _customerMarkLabel(order),
               if (order.travelGroup?.groupNo != null)
@@ -1226,7 +1226,10 @@ class _AfterSalesFormPageState extends State<AfterSalesFormPage> {
         _InfoLine(label: '关联订单', value: order.orderNo),
         _InfoLine(
           label: '发货日期',
-          value: _fieldValue(order.shippingDate),
+          value: displayShippingDate(
+            order.shippingDateMode,
+            order.shippingDate,
+          ),
         ),
         _InfoLine(label: '客户', value: order.customerName),
         _InfoLine(label: '电话', value: _fieldValue(order.customerPhone)),
