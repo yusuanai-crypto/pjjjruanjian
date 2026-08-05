@@ -719,31 +719,40 @@ export class BusinessDataNestService {
   }
 
   async listTodayTravelGroups(actor: any, now = new Date()) {
-    requireAnyRole(actor, ['front_desk']);
+    requireAnyRole(actor, [
+      'admin',
+      'boss',
+      'front_desk',
+      'sales',
+      'taster',
+    ]);
     const { start, end } = buildShanghaiTodayDatabaseRange(now);
     const groups = await this.prisma.travelGroup.findMany({
-      where: await this.buildScopedGroupWhere(
-        'travel',
-        actor,
+      where: andWhere(
         {
           visitDate: {
             gte: start,
             lt: end,
           },
         },
+        await this.buildGlobalGroupMarkScope(actor),
       ),
       orderBy: [
-        { arrivalTime: 'asc' },
-        { id: 'asc' },
+        { arrivalTime: { sort: 'asc', nulls: 'last' } },
+        { expectedArrivalTime: { sort: 'asc', nulls: 'last' } },
+        { groupNo: 'asc' },
       ],
       select: {
+        arrivalTime: true,
         licensePlate: true,
         tasterName: true,
         tastingRoomNo: true,
         cigaretteFeeCents: true,
+        groupNo: true,
+        expectedArrivalTime: true,
       },
     });
-    return groups.map(toTodayTravelGroupDto);
+    return groups.sort(compareTodayTravelGroups).map(toTodayTravelGroupDto);
   }
 
   async listSalesOrderEntryTravelGroups(
@@ -9993,6 +10002,7 @@ function getEffectiveSalesOrders(salesOrders: any[]) {
 
 function toTodayTravelGroupDto(group: any) {
   return {
+    arrivalTime: normalizeOptionalString(group?.arrivalTime),
     licensePlate: normalizeOptionalString(group?.licensePlate),
     tasterName: normalizeOptionalString(group?.tasterName),
     tastingRoomNo: normalizeOptionalString(group?.tastingRoomNo),
@@ -10001,7 +10011,37 @@ function toTodayTravelGroupDto(group: any) {
       group?.cigaretteFeeCents === undefined
         ? null
         : Number(group.cigaretteFeeCents),
+    groupNo: normalizeOptionalString(group?.groupNo),
+    expectedArrivalTime: normalizeOptionalString(
+      group?.expectedArrivalTime,
+    ),
   };
+}
+
+function compareTodayTravelGroups(left: any, right: any) {
+  const leftArrival = normalizeOptionalString(left?.arrivalTime);
+  const rightArrival = normalizeOptionalString(right?.arrivalTime);
+  if (leftArrival !== null || rightArrival !== null) {
+    if (leftArrival === null) return 1;
+    if (rightArrival === null) return -1;
+    const arrivalComparison = leftArrival.localeCompare(rightArrival);
+    if (arrivalComparison !== 0) return arrivalComparison;
+  }
+
+  if (leftArrival === null && rightArrival === null) {
+    const leftExpected = normalizeOptionalString(left?.expectedArrivalTime);
+    const rightExpected = normalizeOptionalString(right?.expectedArrivalTime);
+    if (leftExpected !== null || rightExpected !== null) {
+      if (leftExpected === null) return 1;
+      if (rightExpected === null) return -1;
+      const expectedComparison = leftExpected.localeCompare(rightExpected);
+      if (expectedComparison !== 0) return expectedComparison;
+    }
+  }
+
+  return String(left?.groupNo || '').localeCompare(
+    String(right?.groupNo || ''),
+  );
 }
 
 function sumAmountCents(rows: any[], fieldName: string) {

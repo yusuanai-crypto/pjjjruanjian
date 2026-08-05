@@ -10,19 +10,22 @@ import 'package:jiangjiu_mobile_desktop/features/today_travel_groups/today_trave
 import 'package:jiangjiu_shared/jiangjiu_shared.dart';
 
 void main() {
-  test('today travel groups destination is available only to front desk', () {
-    expect(
-      destinationsForRole(UserRole.frontDesk)
-          .map((destination) => destination.id),
-      contains('today_travel_groups'),
-    );
+  test('today travel groups destination follows the allowed role matrix', () {
+    const allowedRoles = {
+      UserRole.superAdmin,
+      UserRole.admin,
+      UserRole.boss,
+      UserRole.frontDesk,
+      UserRole.sales,
+      UserRole.taster,
+    };
 
-    for (final role in UserRole.values.where(
-      (role) => role != UserRole.frontDesk,
-    )) {
+    for (final role in UserRole.values) {
       expect(
         destinationsForRole(role).map((destination) => destination.id),
-        isNot(contains('today_travel_groups')),
+        allowedRoles.contains(role)
+            ? contains('today_travel_groups')
+            : isNot(contains('today_travel_groups')),
         reason: role.value,
       );
       expect(
@@ -36,30 +39,38 @@ void main() {
           ],
           role,
         ).map((destination) => destination.id),
-        isNot(contains('today_travel_groups')),
+        allowedRoles.contains(role)
+            ? contains('today_travel_groups')
+            : isNot(contains('today_travel_groups')),
         reason: '${role.value} injected backend menu',
       );
-    }
 
-    final frontDeskPage = buildPageForDestination(
-      destinationId: 'today_travel_groups',
-      apiClient: _TodayApiClient((_) async => _payload(const [])),
-      token: 'front-token',
-      role: UserRole.frontDesk,
-      allowedDestinations: const [],
-      onOpenDestination: (_) {},
-    );
-    expect(frontDeskPage, isA<TodayTravelGroupsPage>());
+      final page = buildPageForDestination(
+        destinationId: 'today_travel_groups',
+        apiClient: _TodayApiClient((_) async => _payload(const [])),
+        token: '${role.value}-token',
+        role: role,
+        allowedDestinations: const [],
+        onOpenDestination: (_) {},
+      );
+      expect(
+        page,
+        allowedRoles.contains(role)
+            ? isA<TodayTravelGroupsPage>()
+            : isNot(isA<TodayTravelGroupsPage>()),
+        reason: '${role.value} direct route',
+      );
+    }
   });
 
-  testWidgets('direct page construction still blocks non-front-desk roles',
+  testWidgets('direct page construction still blocks disallowed roles',
       (tester) async {
     final apiClient = _TodayApiClient((_) async => _payload(const []));
     final page = buildPageForDestination(
       destinationId: 'today_travel_groups',
       apiClient: apiClient,
-      token: 'admin-token',
-      role: UserRole.admin,
+      token: 'finance-token',
+      role: UserRole.finance,
       allowedDestinations: const [],
       onOpenDestination: (_) {},
     );
@@ -70,7 +81,7 @@ void main() {
     expect(apiClient.callCount, 0);
   });
 
-  testWidgets('shows loading then a read-only table with exactly four columns',
+  testWidgets('shows loading then the exact seven-column read-only table',
       (tester) async {
     final response = Completer<Map<String, dynamic>>();
     final apiClient = _TodayApiClient((_) => response.future);
@@ -82,16 +93,22 @@ void main() {
     response.complete(
       _payload([
         {
+          'arrivalTime': '09:05',
           'licensePlate': '贵A12345',
           'tasterName': '王品鉴师',
           'tastingRoomNo': 'A01',
           'cigaretteFeeCents': 2050,
+          'groupNo': 'TG-001',
+          'expectedArrivalTime': '09:00',
         },
         {
+          'arrivalTime': null,
           'licensePlate': null,
           'tasterName': null,
           'tastingRoomNo': null,
           'cigaretteFeeCents': null,
+          'groupNo': null,
+          'expectedArrivalTime': null,
         },
       ]),
     );
@@ -101,16 +118,99 @@ void main() {
     final table = tester.widget<DataTable>(
       find.byKey(const ValueKey('today-travel-groups-table')),
     );
-    expect(table.columns, hasLength(4));
+    expect(table.columns, hasLength(7));
+    expect(
+      table.columns.map((column) => (column.label as Text).data),
+      [
+        '进店时间',
+        '车牌号',
+        '接待品鉴师',
+        '品鉴馆号',
+        '香烟费用',
+        '团号',
+        '预计进店时间',
+      ],
+    );
+    expect(find.text('进店时间'), findsOneWidget);
     expect(find.text('车牌号'), findsOneWidget);
     expect(find.text('接待品鉴师'), findsOneWidget);
     expect(find.text('品鉴馆号'), findsOneWidget);
     expect(find.text('香烟费用'), findsOneWidget);
+    expect(find.text('团号'), findsOneWidget);
+    expect(find.text('预计进店时间'), findsOneWidget);
+    expect(find.text('09:05'), findsOneWidget);
+    expect(find.text('未进店'), findsOneWidget);
     expect(find.text('¥20.50'), findsOneWidget);
-    expect(find.text('—'), findsNWidgets(4));
-    for (final forbiddenText in ['团名', '人数', '旅行社', '联系人', '日期', '编辑', '删除', '新增']) {
+    expect(find.text('TG-001'), findsOneWidget);
+    expect(find.text('—'), findsNWidgets(6));
+    for (final forbiddenText in [
+      '团名',
+      '人数',
+      '旅行社',
+      '联系人',
+      '日期',
+      '编辑',
+      '删除',
+      '新增'
+    ]) {
       expect(find.text(forbiddenText), findsNothing);
     }
+    expect(find.text('刷新'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('defensively keeps entered-first expected-time stable sorting',
+      (tester) async {
+    final apiClient = _TodayApiClient((_) async => _payload([
+          _group('pending-none'),
+          _group('entered-0900-b', arrivalTime: '09:00'),
+          _group('pending-0800-b', expectedArrivalTime: '08:00'),
+          _group('entered-0900-a', arrivalTime: '09:00'),
+          _group('entered-0700', arrivalTime: '07:00'),
+          _group('pending-0800-a', expectedArrivalTime: '08:00'),
+        ]));
+
+    await _pumpPage(tester, apiClient);
+    await tester.pump();
+
+    final table = tester.widget<DataTable>(
+      find.byKey(const ValueKey('today-travel-groups-table')),
+    );
+    expect(
+      table.rows.map(
+        (row) => ((row.cells[5].child as Text).data),
+      ),
+      [
+        'entered-0700',
+        'entered-0900-a',
+        'entered-0900-b',
+        'pending-0800-a',
+        'pending-0800-b',
+        'pending-none',
+      ],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('manual refresh replaces table data without reloading the page',
+      (tester) async {
+    final apiClient = _TodayApiClient(
+      (call) async => _payload([_group('manual-$call')]),
+    );
+
+    await _pumpPage(tester, apiClient);
+    await tester.pump();
+    expect(find.text('manual-1'), findsOneWidget);
+
+    await tester.tap(find.text('刷新'));
+    await tester.pump();
+    await tester.pump();
+    expect(apiClient.callCount, 2);
+    expect(find.text('manual-1'), findsNothing);
+    expect(find.text('manual-2'), findsOneWidget);
+    expect(find.byType(TodayTravelGroupsPage), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -198,6 +298,37 @@ void main() {
     await tester.pump(const Duration(seconds: 60));
     expect(apiClient.callCount, 6);
   });
+
+  testWidgets('does not overlap periodic or resume refresh requests',
+      (tester) async {
+    final pendingRefresh = Completer<Map<String, dynamic>>();
+    final apiClient = _TodayApiClient((call) {
+      if (call == 1) {
+        return Future.value(_payload([_group('initial')]));
+      }
+      return pendingRefresh.future;
+    });
+
+    await _pumpPage(tester, apiClient);
+    await tester.pump();
+
+    await tester.pump(const Duration(seconds: 30));
+    expect(apiClient.callCount, 2);
+    expect(find.text('initial'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 60));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(apiClient.callCount, 2);
+    expect(find.text('initial'), findsOneWidget);
+
+    pendingRefresh.complete(_payload([_group('refreshed')]));
+    await tester.pump();
+    expect(find.text('refreshed'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
 
 Future<void> _pumpPage(
@@ -225,9 +356,24 @@ Map<String, dynamic> _payload(List<Map<String, dynamic>> groups) {
   };
 }
 
+Map<String, dynamic> _group(
+  String groupNo, {
+  String? arrivalTime,
+  String? expectedArrivalTime,
+}) {
+  return {
+    'arrivalTime': arrivalTime,
+    'licensePlate': '贵A-$groupNo',
+    'tasterName': '品鉴师',
+    'tastingRoomNo': 'A01',
+    'cigaretteFeeCents': 100,
+    'groupNo': groupNo,
+    'expectedArrivalTime': expectedArrivalTime,
+  };
+}
+
 class _TodayApiClient extends ApiClient {
-  _TodayApiClient(this.responder)
-      : super(baseUrl: 'http://127.0.0.1:3000');
+  _TodayApiClient(this.responder) : super(baseUrl: 'http://127.0.0.1:3000');
 
   final Future<Map<String, dynamic>> Function(int call) responder;
   final List<String> paths = [];

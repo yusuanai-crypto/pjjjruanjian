@@ -12,22 +12,26 @@ const {
   withPhase1Server,
 } = require('./helpers/phase1-api');
 
-test('today travel group menu is exposed only to front desk', () => {
-  const frontDeskMenu = getRoleMenus('front_desk').find(
-    (item) => item.id === 'today_travel_groups',
-  );
-  assert.ok(frontDeskMenu);
-  assert.equal(frontDeskMenu.title, '今日旅行团');
-
+test('today travel group menu is exposed only to the allowed role matrix', () => {
   for (const role of [
     'super_admin',
     'admin',
     'boss',
+    'front_desk',
     'sales',
+    'taster',
+  ]) {
+    const menu = getRoleMenus(role).find(
+      (item) => item.id === 'today_travel_groups',
+    );
+    assert.ok(menu, role);
+    assert.equal(menu.title, '今日旅行团');
+  }
+
+  for (const role of [
     'finance',
     'warehouse',
     'after_sales',
-    'taster',
   ]) {
     assert.equal(
       getRoleMenus(role).some((item) => item.id === 'today_travel_groups'),
@@ -51,7 +55,7 @@ test('today database range follows the Asia/Shanghai natural-day boundary and us
   assert.equal(atMidnight.end.toISOString(), '2026-08-06T00:00:00.000Z');
 });
 
-test('contract: front desk today endpoint filters dates, sorts by arrival time and id, and returns only display fields', async () => {
+test('contract: allowed roles receive only today display fields in entered-first stable order', async () => {
   const dates = shanghaiFixtureDates();
   await withPhase1Server(
     async (baseUrl) => {
@@ -61,78 +65,127 @@ test('contract: front desk today endpoint filters dates, sorts by arrival time a
       );
       assertErrorContract(missingToken, 401, 'AUTH_TOKEN_REQUIRED');
 
-      const admin = await login(baseUrl);
-      const adminResult = await requestJson(
-        baseUrl,
-        '/api/travel-groups/today',
-        { token: admin.token },
-      );
-      assertErrorContract(adminResult, 403, 'PERMISSION_DENIED');
+      const allowedAccounts = [
+        ['super_admin', 'today-super-admin'],
+        ['admin', null],
+        ['boss', 'today-boss'],
+        ['front_desk', 'today-front-desk'],
+        ['sales', 'today-sales'],
+        ['taster', 'today-taster'],
+      ];
+      const expectedGroupNos = [
+        'entered-0800',
+        'entered-0900-a',
+        'entered-0900-b',
+        'pending-0700',
+        'pending-1000-a',
+        'pending-1000-b',
+        'pending-no-time',
+      ];
+      let result;
+      for (const [role, username] of allowedAccounts) {
+        const session = username
+          ? await login(baseUrl, username, 'Password123')
+          : await login(baseUrl);
+        const roleResult = await requestJson(
+          baseUrl,
+          '/api/travel-groups/today',
+          { token: session.token },
+        );
+        assert.equal(roleResult.response.status, 200, role);
+        assert.deepEqual(
+          roleResult.body.data.travelGroups.map((group) => group.groupNo),
+          expectedGroupNos,
+          role,
+        );
+        result ||= roleResult;
+      }
 
-      const sales = await login(baseUrl, 'today-sales', 'Password123');
-      const salesResult = await requestJson(
-        baseUrl,
-        '/api/travel-groups/today',
-        { token: sales.token },
-      );
-      assertErrorContract(salesResult, 403, 'PERMISSION_DENIED');
+      for (const [role, username] of [
+        ['finance', 'today-finance'],
+        ['warehouse', 'today-warehouse'],
+        ['after_sales', 'today-after-sales'],
+      ]) {
+        const session = await login(baseUrl, username, 'Password123');
+        const forbidden = await requestJson(
+          baseUrl,
+          '/api/travel-groups/today',
+          { token: session.token },
+        );
+        assertErrorContract(forbidden, 403, 'PERMISSION_DENIED');
+      }
 
-      const frontDesk = await login(
-        baseUrl,
-        'today-front-desk',
-        'Password123',
-      );
-      const result = await requestJson(
-        baseUrl,
-        '/api/travel-groups/today',
-        { token: frontDesk.token },
-      );
-      assert.equal(result.response.status, 200);
       assert.deepEqual(Object.keys(result.body.data), ['travelGroups']);
       assert.deepEqual(
-        result.body.data.travelGroups.map((group) => group.licensePlate),
-        ['贵A0800', '贵A0900A', '贵A0900B', null],
+        result.body.data.travelGroups.map((group) => group.groupNo),
+        expectedGroupNos,
       );
       for (const group of result.body.data.travelGroups) {
         assert.deepEqual(Object.keys(group).sort(), [
+          'arrivalTime',
           'cigaretteFeeCents',
+          'expectedArrivalTime',
+          'groupNo',
           'licensePlate',
           'tasterName',
           'tastingRoomNo',
         ]);
       }
       assert.deepEqual(result.body.data.travelGroups[0], {
+        arrivalTime: '08:00',
         licensePlate: '贵A0800',
         tasterName: '早班品鉴师',
         tastingRoomNo: 'A08',
         cigaretteFeeCents: 2050,
+        groupNo: 'entered-0800',
+        expectedArrivalTime: '07:45',
       });
       assert.deepEqual(result.body.data.travelGroups.at(-1), {
+        arrivalTime: null,
         licensePlate: null,
         tasterName: null,
         tastingRoomNo: null,
         cigaretteFeeCents: null,
+        groupNo: 'pending-no-time',
+        expectedArrivalTime: null,
       });
     },
     {
       prisma: {
         users: [
+          user('today-super-admin', 'super_admin'),
+          user('today-boss', 'boss'),
           user('today-front-desk', 'front_desk'),
           user('today-sales', 'sales'),
+          user('today-taster', 'taster'),
+          user('today-finance', 'finance'),
+          user('today-warehouse', 'warehouse'),
+          user('today-after-sales', 'after_sales'),
         ],
         travelGroups: [
           group('yesterday', dates.yesterday, '23:59', '贵A昨天'),
-          group('today-early', dates.today, '08:00', '贵A0800', {
+          group('entered-0800', dates.today, '08:00', '贵A0800', {
             tasterName: '早班品鉴师',
             tastingRoomNo: 'A08',
             cigaretteFeeCents: 2050,
+            expectedArrivalTime: '07:45',
           }),
-          group('today-same-b', dates.today, '09:00', '贵A0900B'),
-          group('today-same-a', dates.today, '09:00', '贵A0900A'),
-          group('today-empty', dates.today, '10:00', null, {
+          group('entered-0900-b', dates.today, '09:00', '贵A0900B'),
+          group('entered-0900-a', dates.today, '09:00', '贵A0900A'),
+          group('pending-1000-b', dates.today, null, '贵A1000B', {
+            expectedArrivalTime: '10:00',
+          }),
+          group('pending-0700', dates.today, '', '贵A0700', {
+            expectedArrivalTime: '07:00',
+          }),
+          group('pending-1000-a', dates.today, null, '贵A1000A', {
+            expectedArrivalTime: '10:00',
+          }),
+          group('pending-no-time', dates.today, null, null, {
             tasterName: null,
             tastingRoomNo: null,
             cigaretteFeeCents: null,
+            expectedArrivalTime: null,
           }),
           group('tomorrow-cross-midnight', dates.tomorrow, '00:01', '贵A明天'),
           group('future', dates.future, '12:00', '贵A未来'),

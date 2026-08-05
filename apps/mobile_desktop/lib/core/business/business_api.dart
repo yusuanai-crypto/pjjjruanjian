@@ -446,9 +446,11 @@ class BusinessApi {
       '/api/travel-groups/today',
       token: _token,
     );
-    return _list(_data(payload)['travelGroups'])
+    final groups = _list(_data(payload)['travelGroups'])
         .map(TodayTravelGroupRecord.fromJson)
         .toList();
+    groups.sort(_compareTodayTravelGroupRecords);
+    return groups;
   }
 
   Future<DownloadedFile> downloadTravelGroupsExcel({
@@ -3666,27 +3668,63 @@ enum TravelGroupAttachmentCategory {
 
 class TodayTravelGroupRecord {
   const TodayTravelGroupRecord({
+    required this.arrivalTime,
     required this.licensePlate,
     required this.tasterName,
     required this.tastingRoomNo,
     required this.cigaretteFeeCents,
+    required this.groupNo,
+    required this.expectedArrivalTime,
   });
 
+  final String? arrivalTime;
   final String? licensePlate;
   final String? tasterName;
   final String? tastingRoomNo;
   final int? cigaretteFeeCents;
+  final String? groupNo;
+  final String? expectedArrivalTime;
 
   factory TodayTravelGroupRecord.fromJson(Map<String, dynamic> json) {
     return TodayTravelGroupRecord(
+      arrivalTime: _stringOrNull(json['arrivalTime']),
       licensePlate: _stringOrNull(json['licensePlate']),
       tasterName: _stringOrNull(json['tasterName']),
       tastingRoomNo: _stringOrNull(json['tastingRoomNo']),
       cigaretteFeeCents: json['cigaretteFeeCents'] == null
           ? null
           : _intValue(json['cigaretteFeeCents']),
+      groupNo: _stringOrNull(json['groupNo']),
+      expectedArrivalTime: _stringOrNull(json['expectedArrivalTime']),
     );
   }
+}
+
+int _compareTodayTravelGroupRecords(
+  TodayTravelGroupRecord left,
+  TodayTravelGroupRecord right,
+) {
+  final leftArrival = left.arrivalTime;
+  final rightArrival = right.arrivalTime;
+  if (leftArrival != null || rightArrival != null) {
+    if (leftArrival == null) return 1;
+    if (rightArrival == null) return -1;
+    final arrivalComparison = leftArrival.compareTo(rightArrival);
+    if (arrivalComparison != 0) return arrivalComparison;
+  }
+
+  if (leftArrival == null && rightArrival == null) {
+    final leftExpected = left.expectedArrivalTime;
+    final rightExpected = right.expectedArrivalTime;
+    if (leftExpected != null || rightExpected != null) {
+      if (leftExpected == null) return 1;
+      if (rightExpected == null) return -1;
+      final expectedComparison = leftExpected.compareTo(rightExpected);
+      if (expectedComparison != 0) return expectedComparison;
+    }
+  }
+
+  return (left.groupNo ?? '').compareTo(right.groupNo ?? '');
 }
 
 class TravelGroupAttachmentRecord {

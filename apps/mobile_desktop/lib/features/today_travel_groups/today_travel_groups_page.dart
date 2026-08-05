@@ -22,8 +22,7 @@ class TodayTravelGroupsPage extends StatefulWidget {
   final Duration refreshInterval;
 
   @override
-  State<TodayTravelGroupsPage> createState() =>
-      _TodayTravelGroupsPageState();
+  State<TodayTravelGroupsPage> createState() => _TodayTravelGroupsPageState();
 }
 
 class _TodayTravelGroupsPageState extends State<TodayTravelGroupsPage>
@@ -100,6 +99,7 @@ class _TodayTravelGroupsPageState extends State<TodayTravelGroupsPage>
       if (!mounted) {
         return;
       }
+      _requestInFlight = false;
       setState(() {
         _groups = groups;
         _loading = false;
@@ -111,6 +111,7 @@ class _TodayTravelGroupsPageState extends State<TodayTravelGroupsPage>
       if (!mounted) {
         return;
       }
+      _requestInFlight = false;
       setState(() {
         _loading = false;
         _refreshing = false;
@@ -154,6 +155,12 @@ class _TodayTravelGroupsPageState extends State<TodayTravelGroupsPage>
           const SizedBox(width: 8),
         ],
         Text(_hasSuccessfulLoad ? '${_groups.length} 个团' : '每 30 秒刷新'),
+        const SizedBox(width: 12),
+        OutlinedButton.icon(
+          onPressed: _requestInFlight ? null : () => unawaited(_refresh()),
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: const Text('刷新'),
+        ),
       ],
     );
   }
@@ -201,15 +208,19 @@ class _TodayTravelGroupsTable extends StatelessWidget {
       child: DataTable(
         key: const ValueKey('today-travel-groups-table'),
         columns: const [
+          DataColumn(label: Text('进店时间')),
           DataColumn(label: Text('车牌号')),
           DataColumn(label: Text('接待品鉴师')),
           DataColumn(label: Text('品鉴馆号')),
           DataColumn(label: Text('香烟费用')),
+          DataColumn(label: Text('团号')),
+          DataColumn(label: Text('预计进店时间')),
         ],
         rows: [
           for (final group in groups)
             DataRow(
               cells: [
+                DataCell(Text(group.arrivalTime ?? '未进店')),
                 DataCell(Text(_displayValue(group.licensePlate))),
                 DataCell(Text(_displayValue(group.tasterName))),
                 DataCell(Text(_displayValue(group.tastingRoomNo))),
@@ -220,6 +231,8 @@ class _TodayTravelGroupsTable extends StatelessWidget {
                         : formatMoneyCents(group.cigaretteFeeCents!),
                   ),
                 ),
+                DataCell(Text(_displayValue(group.groupNo))),
+                DataCell(Text(_displayValue(group.expectedArrivalTime))),
               ],
             ),
         ],

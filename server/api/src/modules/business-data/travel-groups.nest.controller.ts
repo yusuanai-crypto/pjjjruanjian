@@ -44,7 +44,7 @@ export class TravelGroupsNestController {
 
   @Get('today')
   @UseGuards(AuthUserGuard, RolesGuard)
-  @RequireRoles('front_desk')
+  @RequireRoles('admin', 'boss', 'front_desk', 'sales', 'taster')
   async listToday(@Req() request: any) {
     return {
       travelGroups: await this.businessDataService.listTodayTravelGroups(
